@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import * as fileOps from "./file-ops";
 import { logError, logInfo } from "./logger";
+import { getSiteUrlsFromEnv } from "./paths";
 import * as printer from "./printer";
 import { runSidecarJob, type SidecarJobPayload } from "./sidecar";
 import { checkForUpdatesManual, quitAndInstall, setupAutoUpdater } from "./updater";
@@ -48,6 +49,8 @@ export function registerIpc(mainWindow: BrowserWindow): void {
   ipcMain.handle("file:exists", (_evt: IpcMainInvokeEvent, p: string) => fileOps.fileExists(p));
   ipcMain.handle("file:openFolder", (_evt: IpcMainInvokeEvent, p: string) => fileOps.openFolder(p));
   ipcMain.handle("file:selectFolder", async () => fileOps.selectFolder());
+
+  ipcMain.handle("config:siteUrls", () => getSiteUrlsFromEnv());
 
   ipcMain.handle("updater:install", () => {
     logInfo("updater: user requested install and restart");

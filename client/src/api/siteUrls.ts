@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import { isElectron } from "../electron";
 
 export interface SiteUrls {
   dms_base_url: string;
@@ -11,7 +12,14 @@ export interface SiteUrls {
   insurance_base_url: string;
 }
 
-/** Backend/.env DMS, Vahan, Insurance bases (required server-side; no client-side fallbacks). */
+/**
+ * Backend/.env DMS, Vahan, Insurance bases.
+ * In Electron (file:// origin) the HTTP endpoint is unreachable, so we
+ * read the .env directly via the main-process IPC bridge.
+ */
 export async function getSiteUrls(): Promise<SiteUrls> {
+  if (isElectron()) {
+    return window.electronAPI!.config.getSiteUrls();
+  }
   return apiFetch<SiteUrls>("/settings/site-urls");
 }

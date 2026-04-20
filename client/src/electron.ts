@@ -34,6 +34,16 @@ export interface ElectronAPI {
     openFolder: (p: string) => Promise<void>;
     selectFolder: () => Promise<string | null>;
   };
+  config: {
+    getSiteUrls: () => Promise<{
+      dms_base_url: string;
+      dms_mode: string;
+      dms_real_siebel: boolean;
+      dms_real_contact_url_configured: boolean;
+      vahan_base_url: string;
+      insurance_base_url: string;
+    }>;
+  };
   updater: {
     install: () => Promise<void>;
     check: () => Promise<void>;

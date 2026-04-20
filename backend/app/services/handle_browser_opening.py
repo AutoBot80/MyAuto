@@ -213,11 +213,13 @@ def _launch_managed_browser_for_site(
             if hasattr(subprocess, "DETACHED_PROCESS"):
                 creation_flags |= subprocess.DETACHED_PROCESS
             startupinfo = None
-            # Warm-browser: start minimized on Windows so the SPA keeps keyboard focus (best-effort).
+            # Warm-browser: start minimized-no-activate on Windows so the Electron SPA keeps focus.
+            # SW_SHOWMINNOACTIVE (7) avoids the grey/unresponsive window that SW_MINIMIZE (6) can cause
+            # when combined with DETACHED_PROCESS and CDP attachment.
             if launch_background and os.name == "nt":
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = 6  # SW_MINIMIZE
+                startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE
             subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,

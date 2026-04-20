@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     openFolder: (p: string) => ipcRenderer.invoke("file:openFolder", p),
     selectFolder: () => ipcRenderer.invoke("file:selectFolder"),
   },
+  config: {
+    getSiteUrls: () => ipcRenderer.invoke("config:siteUrls"),
+  },
   updater: {
     install: () => ipcRenderer.invoke("updater:install"),
     check: () => ipcRenderer.invoke("updater:check"),

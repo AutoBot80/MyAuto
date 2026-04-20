@@ -67,13 +67,20 @@ function longProxy(target: string): ProxyOptions {
 // Production builds must use a relative base so `file://` loads work in the Electron shell
 // (absolute "/assets/..." breaks when opening packaged `client-dist/index.html`).
 function readAppVersion(): string {
-  try {
-    const p = path.resolve(__dirname, '..', 'electron', 'package.json')
-    const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'))
-    return pkg.version || '0.0.0'
-  } catch {
-    return '0.0.0'
+  const candidates = [
+    path.resolve(__dirname, '..', 'electron', 'package.json'),
+    path.resolve(process.cwd(), '..', 'electron', 'package.json'),
+    path.resolve(process.cwd(), 'electron', 'package.json'),
+  ]
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const pkg = JSON.parse(fs.readFileSync(p, 'utf-8'))
+        return pkg.version || '0.0.0'
+      }
+    } catch { /* skip */ }
   }
+  return '0.0.0'
 }
 
 export default defineConfig(({ command }) => ({
