@@ -1,0 +1,59 @@
+appId: co.in.dealersaathi.desktop
+productName: Dealer Saathi
+copyright: Copyright © 2026
+
+# Distribution: Windows x64 + NSIS only (no macOS/Linux artifacts, no universal installer).
+# Custom icons: run `npm run build:icon` (mesh assets if present, else generate_app_icon.py).
+win:
+  icon: icon.png
+  # Unsigned local builds: avoids signing toolchain that extracts winCodeSign (symlink errors without Developer Mode).
+  signDlls: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+directories:
+  buildResources: resources
+  output: release
+
+files:
+  - dist/**/*
+  - package.json
+
+extraResources:
+  - from: ../client/dist
+    to: client-dist
+    filter:
+      - "**/*"
+  - from: sidecar/dist
+    to: sidecar
+    filter:
+      - "**/*"
+  # Runtime icons (getAppIconPath): .ico on Windows, .png elsewhere.
+  - from: resources/icon.ico
+    to: icon.ico
+  - from: resources/icon.png
+    to: icon.png
+  # Auto-update token (generated at build time by CI; skipped if missing for local builds).
+  - from: resources/update-token.json
+    to: update-token.json
+    filter:
+      - "**/*"
+
+nsis:
+  # electron-builder 25.x: no `compression` / `buildUniversalInstaller` here (schema moved — use win.target + --x64 only).
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # Desktop shortcut uses the same branding as win.icon.
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Dealer Saathi
+  # customInit: D:\Saathi if D: exists, else C:\Saathi; customInstall: scanner\landing, scanner\processed
+  include: build/installer.nsh
+
+publish:
+  provider: github
+  owner: AutoBot80
+  repo: MyAuto
+  private: true

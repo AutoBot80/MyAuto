@@ -1,0 +1,27 @@
+{
+  "name": "dealersaathi-desktop",
+  "version": "0.5.5",
+  "private": true,
+  "description": "Dealer Saathi Electron shell (React + job-based Python sidecar)",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build:icon": "python scripts/build_icon.py",
+    "build:ts": "node ../client/node_modules/typescript/bin/tsc -p tsconfig.json",
+    "generate:icon": "python scripts/generate_app_icon.py",
+    "dev": "npm run build:ts && electron .",
+    "build:client": "cd ../client && npm run build",
+    "build:sidecar": "cd sidecar && python build_sidecar.py",
+    "clean:release": "node scripts/clean-release.js",
+    "build:electron": "npm run build:ts && node scripts/run-electron-builder-win.js",
+    "build:all": "npm run build:client && npm run build:sidecar && npm run build:electron",
+    "package": "npm run build:all"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
+  }
+}

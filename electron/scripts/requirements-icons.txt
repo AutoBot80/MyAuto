@@ -1,0 +1,2 @@
+# Used only by build_app_icon.py (one-off / CI asset generation).
+pillow>=10.0.0
