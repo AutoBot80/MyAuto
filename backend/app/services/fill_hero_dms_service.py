@@ -86,20 +86,7 @@ logger = logging.getLogger(__name__)
 _PLAYWRIGHT_DMS_LOG_TZ = ZoneInfo("Asia/Kolkata")
 
 
-def _git_commit_short() -> str:
-    """Return the short git commit hash of the running backend code, or '' on failure."""
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(Path(__file__).resolve().parent),
-            timeout=5,
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-    except Exception:
-        return ""
-
-
-_GIT_COMMIT_SHORT: str = _git_commit_short()
+from app.version import GIT_COMMIT_SHORT as _GIT_COMMIT_SHORT
 
 
 def playwright_dms_execution_log_filename() -> str:

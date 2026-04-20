@@ -531,3 +531,48 @@ async def upload_artifacts(
     else:
         sync_ocr_file_to_s3(did, dest)
     return UploadArtifactResponse(ok=True, rel_path=safe_rel, tree=t)
+
+
+# ---------------------------------------------------------------------------
+# Script sync (hot-reload backend/app for thin sidecar)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/scripts/version")
+def scripts_version() -> dict:
+    """Return the git commit of the running server code. Cheap, called often."""
+    from app.version import GIT_COMMIT_SHORT
+
+    return {"git_commit": GIT_COMMIT_SHORT}
+
+
+@router.get("/scripts/bundle")
+def scripts_bundle(
+    principal: Principal = Depends(get_principal),
+):
+    """
+    Stream a zip of ``backend/app/**/*.py`` so the sidecar can hot-sync
+    automation scripts without a full Electron rebuild.
+    """
+    import io
+    import zipfile
+
+    from fastapi.responses import StreamingResponse
+
+    from app.version import GIT_COMMIT_SHORT
+
+    app_dir = Path(__file__).resolve().parent.parent  # backend/app/
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in app_dir.rglob("*.py"):
+            arc_name = f"backend/app/{f.relative_to(app_dir)}"
+            zf.write(f, arc_name)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "X-Git-Commit": GIT_COMMIT_SHORT,
+            "Content-Disposition": "attachment; filename=backend_app.zip",
+        },
+    )
