@@ -1,4 +1,6 @@
-import { apiFetch } from "./client";
+import { apiFetch, getBaseUrl } from "./client";
+import { getAccessToken } from "../auth/token";
+import { isElectron } from "../electron";
 
 export interface FillDmsCustomer {
   name?: string | null;
@@ -72,6 +74,24 @@ export interface FillDmsResponse {
   dms_step_messages?: string[];
   /** My Orders grid already had Invoice# — operator can use Create Invoice in the app. */
   ready_for_client_create_invoice?: boolean | null;
+  /** When the API uses S3 storage, presigned PDF URLs for Electron to print locally. */
+  print_jobs?: ApiPrintJob[];
+}
+
+/** Server-returned print targets when ``STORAGE_BACKEND=s3`` (Electron prints via presigned URL). */
+export interface ApiPrintJob {
+  filename?: string;
+  presigned_url: string;
+  kind?: string;
+}
+
+/** Fire-and-forget: print PDFs in Electron when ``print_jobs`` is present (no-op in browser-only). */
+export function dispatchPrintJobsFromApi(jobs: ApiPrintJob[] | undefined | null): void {
+  if (!jobs?.length) return;
+  if (typeof window === "undefined") return;
+  const fn = window.electronAPI?.print?.printPdfsFromUrls;
+  if (!fn) return;
+  void fn(jobs);
 }
 
 /** DMS full flow / Create Invoice — keep in sync with `vite.config.ts` LONG_RUNNING_MS + fetch abort. */
@@ -102,6 +122,28 @@ export async function warmDmsBrowser(req: WarmDmsBrowserRequest): Promise<WarmDm
     });
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Electron-aware warm browser: routes through the local sidecar (Playwright on the dealer PC)
+ * when running inside Electron, falls back to the cloud API otherwise.
+ */
+export async function warmDmsBrowserLocal(req: WarmDmsBrowserRequest): Promise<WarmDmsBrowserResponse> {
+  if (!isElectron()) return warmDmsBrowser(req);
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "warm_browser",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: { dms_base_url: req.dms_base_url ?? undefined },
+    });
+    if (result.timedOut) return { success: false, error: "Sidecar warm-browser timed out." };
+    const data = (result.parsed as { data?: WarmDmsBrowserResponse })?.data;
+    if (data) return data;
+    return { success: result.success, error: result.error ?? undefined };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -144,6 +186,7 @@ export interface FillHeroInsuranceResponse {
   page_url?: string | null;
   login_url?: string | null;
   match_base?: string | null;
+  print_jobs?: ApiPrintJob[];
 }
 
 /** Run only DMS section (login, enquiry, vehicle search, scrape, PDFs). Independent process. */
@@ -160,6 +203,44 @@ export async function fillDmsOnly(req: FillDmsRequest): Promise<FillDmsResponse>
     return res;
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Electron-aware Create Invoice: routes through the local sidecar (Playwright on the dealer PC)
+ * when running inside Electron, falls back to the cloud API otherwise.
+ */
+export async function fillDmsLocal(req: FillDmsRequest): Promise<FillDmsResponse> {
+  if (!isElectron()) return fillDmsOnly(req);
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "fill_dms",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: { ...req },
+      timeoutMs: FILL_FORMS_TIMEOUT_MS,
+    });
+    if (result.timedOut) {
+      throw new Error("Create Invoice request timed out. Check the upload folder for PDFs.");
+    }
+    const data = (result.parsed as { data?: FillDmsResponse })?.data;
+    if (data) return data;
+    const empty: FillDmsResponse = {
+      success: false,
+      vehicle: {},
+      pdfs_saved: [],
+      error: result.error ?? "Sidecar returned no data.",
+    };
+    return empty;
+  } catch (err) {
+    if (isFillDmsAbortError(err)) throw err;
+    const empty: FillDmsResponse = {
+      success: false,
+      vehicle: {},
+      pdfs_saved: [],
+      error: err instanceof Error ? err.message : String(err),
+    };
+    return empty;
   }
 }
 
@@ -210,6 +291,7 @@ export interface PrintForm20Response {
   success: boolean;
   pdfs_saved: string[];
   error?: string | null;
+  print_jobs?: ApiPrintJob[];
 }
 
 /** Generate Form 20 (all pages) and save to Uploaded scans. Called from Print forms button. */
@@ -247,4 +329,49 @@ export function isFillDmsAbortError(err: unknown): boolean {
     return m.includes("abort") || m.includes("aborted");
   }
   return false;
+}
+
+/**
+ * Electron-aware Generate Insurance: routes through the local sidecar when in Electron,
+ * falls back to the cloud API otherwise.
+ */
+export async function fillHeroInsuranceLocal(req: FillHeroInsuranceRequest): Promise<FillHeroInsuranceResponse> {
+  if (!isElectron()) return fillHeroInsurance(req);
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "fill_insurance",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: { ...req },
+      timeoutMs: FILL_HERO_INSURANCE_TIMEOUT_MS,
+    });
+    if (result.timedOut) return { success: false, error: "Insurance sidecar timed out." };
+    const data = (result.parsed as { data?: FillHeroInsuranceResponse })?.data;
+    if (data) return data;
+    return { success: result.success, error: result.error ?? undefined };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Electron-aware Warm Vahan Browser: routes through the local sidecar when in Electron,
+ * falls back to the cloud API otherwise.
+ */
+export async function warmVahanBrowserLocal(): Promise<WarmVahanBrowserResponse> {
+  if (!isElectron()) return warmVahanBrowser();
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "warm_vahan",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: {},
+    });
+    if (result.timedOut) return { success: false, error: "Vahan warm-browser timed out." };
+    const data = (result.parsed as { data?: WarmVahanBrowserResponse })?.data;
+    if (data) return data;
+    return { success: result.success, error: result.error ?? undefined };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }

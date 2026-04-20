@@ -7,7 +7,14 @@ import { ManualFallbackSplitReview } from "../components/ManualFallbackSplitRevi
 import type { ManualFallbackPayload } from "../types";
 import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
-import { fillDmsOnly, fillHeroInsurance, printGatePass, isFillDmsAbortError, warmDmsBrowser } from "../api/fillForms";
+import {
+  dispatchPrintJobsFromApi,
+  fillDmsLocal,
+  fillHeroInsuranceLocal,
+  printGatePass,
+  isFillDmsAbortError,
+  warmDmsBrowserLocal,
+} from "../api/fillForms";
 import { fetchCreateInvoiceEligibility } from "../api/addSales";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
@@ -392,7 +399,7 @@ export function AddSalesPage({
       if (!sf || !url || siteUrlsLoading || siteUrlsError) return;
       if (dmsWarmSubfolderRef.current === sf) return;
       dmsWarmSubfolderRef.current = sf;
-      void warmDmsBrowser({ dms_base_url: url }).catch((err) => {
+      void warmDmsBrowserLocal({ dms_base_url: url }).catch((err) => {
         setFillDmsStatus(`DMS warm-up did not finish: ${formatWarmBrowserFailure(err)}`);
       });
     },
@@ -940,9 +947,9 @@ export function AddSalesPage({
     setDmsMilestones([]);
     setDmsBannerIsStepMessages(false);
     setDmsRunEndedWithError(false);
-    let dmsRes: Awaited<ReturnType<typeof fillDmsOnly>> | null = null;
+    let dmsRes: Awaited<ReturnType<typeof fillDmsLocal>> | null = null;
     try {
-      dmsRes = await fillDmsOnly(
+      dmsRes = await fillDmsLocal(
         lastStagingId
           ? { staging_id: lastStagingId }
           : {
@@ -1027,6 +1034,7 @@ export function AddSalesPage({
       }
       if (dmsRes.success) {
         setCreateInvoiceCompleted(true);
+        dispatchPrintJobsFromApi(dmsRes.print_jobs);
         if (savedTo && dealerId > 0) {
           void openCreateInvoicePdfsInBrowser(savedTo, dealerId, dmsRes.pdfs_saved ?? []).then((r) => {
             if (r.candidateCount > 0) {
@@ -1119,7 +1127,7 @@ export function AddSalesPage({
     setIsFillInsuranceLoading(true);
     setFillInsuranceStatus(null);
     try {
-      const insuranceRes = await fillHeroInsurance(
+      const insuranceRes = await fillHeroInsuranceLocal(
         lastStagingId
           ? { staging_id: lastStagingId }
           : {
@@ -1134,6 +1142,7 @@ export function AddSalesPage({
       } else {
         setFillInsuranceStatus("Hero Insurance run completed (pre + main + post). Browser may remain open for operator.");
         setGenerateInsuranceCompleted(true);
+        dispatchPrintJobsFromApi(insuranceRes.print_jobs);
       }
     } catch (insuranceErr) {
       if (isFillDmsAbortError(insuranceErr)) {
@@ -1252,6 +1261,7 @@ export function AddSalesPage({
       gatePassSucceeded = !!gatePassRes.success;
       if (gatePassRes.success) {
         setHasPrintedForms(true);
+        dispatchPrintJobsFromApi(gatePassRes.print_jobs);
         statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
       } else if (gatePassRes.error) {
         statusLines.push(`Gate Pass: ${gatePassRes.error}`);

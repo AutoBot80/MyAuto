@@ -11,6 +11,8 @@ from app.config import (
     CORS_ORIGINS,
     DEALER_ID,
     JWT_SECRET,
+    S3_DATA_BUCKET,
+    STORAGE_USE_S3,
     get_add_sales_pre_ocr_work_dir,
     get_bulk_input_scans_dir,
     get_bulk_processing_dir,
@@ -43,6 +45,7 @@ from app.routers import (
     admin_router,
     add_sales_router,
     subdealer_challan_router,
+    sidecar_proxy_router,
 )
 from app.routers.auth import router as auth_router
 
@@ -50,6 +53,10 @@ from app.routers.auth import router as auth_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_external_site_urls()
+    if STORAGE_USE_S3 and not S3_DATA_BUCKET:
+        raise RuntimeError(
+            "STORAGE_BACKEND=s3 requires S3_DATA_BUCKET to be set (bucket name for uploaded scans and OCR artifacts)."
+        )
     if not AUTH_DISABLED and len(JWT_SECRET) < 32:
         raise RuntimeError(
             "JWT_SECRET must be set to at least 32 characters when AUTH_DISABLED is false. "
@@ -78,6 +85,9 @@ get_bulk_processing_dir(DEALER_ID).mkdir(parents=True, exist_ok=True)
 (get_bulk_upload_dir(DEALER_ID) / "Rejected scans").mkdir(parents=True, exist_ok=True)
 CHALLANS_DIR.mkdir(parents=True, exist_ok=True)
 
+# CORS applies to all routes (middleware). If CORS_ORIGINS is set in .env, only those origins are
+# allowed and allow_origin_regex is disabled — list every SPA origin (S3 website, CloudFront,
+# http://localhost:5173 for dev-against-prod, etc.). See deploy/ec2/dotenv.production.example.
 _cors_origins = CORS_ORIGINS if CORS_ORIGINS else [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -85,7 +95,7 @@ _cors_origins = CORS_ORIGINS if CORS_ORIGINS else [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(_cors_origins),
-    # Dev: Vite on LAN IP when CORS_ORIGINS is unset
+    # Dev-only: LAN Vite when CORS_ORIGINS is unset (not used when CORS_ORIGINS is set).
     allow_origin_regex=None if CORS_ORIGINS else r"^http://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
@@ -111,3 +121,4 @@ app.include_router(bulk_loads_router)
 app.include_router(admin_router)
 app.include_router(add_sales_router)
 app.include_router(subdealer_challan_router)
+app.include_router(sidecar_proxy_router)

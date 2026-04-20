@@ -1,10 +1,10 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { warmVahanBrowser } from "../api/fillForms";
+import { warmVahanBrowserLocal } from "../api/fillForms";
 import {
   getRtoBatchStatus,
   listRtoPayments,
   retryRtoQueueRow,
-  startRtoBatch,
+  startRtoBatchLocal,
   submitOperatorMobileChange,
   submitOperatorOtp,
   type RtoBatchStatus,
@@ -104,7 +104,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
       setStartingBatch(true);
       setVahanWarmMessage(null);
       try {
-        const warm = await warmVahanBrowser();
+        const warm = await warmVahanBrowserLocal();
         if (!warm.success) {
           setBatchError(warm.error ?? "Could not open Vahan site");
           return;
@@ -127,7 +127,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     setVahanWarmMessage(null);
     setVahanReadyForBatch(false);
     try {
-      const res = await startRtoBatch({ dealer_id: dealerId });
+      const res = await startRtoBatchLocal({ dealer_id: dealerId });
       if (!res.started) {
         setStartingBatch(false);
         setBatchError(res.message || "Batch was not started");

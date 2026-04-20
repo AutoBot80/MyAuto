@@ -3,11 +3,17 @@
 
 # --- Required for production API startup ---
 DATABASE_URL=postgresql://user:pass@host:5432/saathi
+# Generate e.g. python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+# Optional: if set, overrides JWT_SECRET from SSM at process start (see deploy/ec2/DEPLOY.md).
+# JWT_SSM_PARAMETER_NAME=/saathi/production/jwt_secret
 JWT_SECRET=
 AUTH_DISABLED=false
 ENVIRONMENT=production
 
-# Comma-separated browser/Electron origins allowed to call the API (no wildcards in prod).
+# Comma-separated origins (no spaces around commas; no trailing slash on each origin).
+# Every hostname that serves the SPA must be listed — CORS is global to all API routes, not per-path.
+# Examples: S3 website endpoint, CloudFront HTTPS URL, optional local dev testing against prod API:
+# CORS_ORIGINS=http://dealersaathi-prod-1980.s3-website.ap-south-1.amazonaws.com,https://d1234567890.cloudfront.net,http://localhost:5173,http://127.0.0.1:5173
 CORS_ORIGINS=https://app.example.com
 
 # Portal bases (validated at startup) — set to your real production URLs.
@@ -17,5 +23,14 @@ VAHAN_BASE_URL=
 INSURANCE_BASE_URL=
 
 # Optional: same layout as local dev; defaults assume repo-root sibling folders of backend/
-# UPLOADS_DIR=
-# OCR_OUTPUT_DIR=
+# On EC2, set SAATHI_BASE_DIR to a persistent path (e.g. /opt/saathi/data) so uploads land on disk before S3 sync.
+# SAATHI_BASE_DIR=/opt/saathi/data
+
+# Object storage: ``local`` (default) or ``s3`` (recommended for production — durable, per-dealer prefixes).
+# After `terraform apply`, set S3_DATA_BUCKET to the output `s3_data_bucket_id`.
+# STORAGE_BACKEND=s3
+# S3_DATA_BUCKET=saathi-data-123456789012
+# Optional prefixes (defaults: uploaded-scans, ocr-output):
+# S3_UPLOADS_PREFIX=uploaded-scans
+# S3_OCR_PREFIX=ocr-output
+# S3_PRESIGNED_EXPIRES_SEC=3600

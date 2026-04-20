@@ -9,7 +9,9 @@ User=root
 Group=root
 WorkingDirectory=/opt/saathi/backend
 EnvironmentFile=-/opt/saathi/backend/.env
-ExecStart=/opt/saathi/venv/bin/gunicorn -c /opt/saathi/deploy/ec2/gunicorn.conf.py app.main:app
+# So ec2-user can `pip install -r requirements.txt` without sudo after someone used `sudo pip` or mixed owners.
+ExecStartPre=/bin/chown -R ec2-user:ec2-user /opt/saathi/backend/venv
+ExecStart=/opt/saathi/deploy/ec2/run-gunicorn.sh
 Restart=on-failure
 RestartSec=5
 

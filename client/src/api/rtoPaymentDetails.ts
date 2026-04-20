@@ -1,4 +1,6 @@
-import { apiFetch } from "./client";
+import { apiFetch, getBaseUrl } from "./client";
+import { getAccessToken } from "../auth/token";
+import { isElectron } from "../electron";
 import { DEALER_ID } from "./dealerId";
 
 export interface RtoPaymentInsertPayload {
@@ -147,4 +149,39 @@ export async function retryRtoQueueRow(rtoQueueId: number): Promise<{ ok: boolea
       headers: { "Content-Type": "application/json" },
     }
   );
+}
+
+const RTO_BATCH_TIMEOUT_MS = 900_000; // 15 min
+
+/**
+ * Electron-aware RTO batch: routes through the local sidecar when in Electron,
+ * falls back to the cloud API otherwise.
+ */
+export async function startRtoBatchLocal(payload?: {
+  dealer_id?: number;
+  limit?: number;
+}): Promise<{ started: boolean; session_id: string; message: string }> {
+  if (!isElectron()) return startRtoBatch(payload);
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "fill_vahan_batch",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: { ...(payload ?? {}) },
+      timeoutMs: RTO_BATCH_TIMEOUT_MS,
+    });
+    if (result.timedOut) return { started: false, session_id: "", message: "Vahan batch timed out." };
+    const data = result.parsed as { data?: { success: boolean; total: number; completed: number; failed: number } } | null;
+    const d = data?.data;
+    if (d) {
+      return {
+        started: true,
+        session_id: "",
+        message: `Batch done: ${d.completed} completed, ${d.failed} failed of ${d.total}`,
+      };
+    }
+    return { started: result.success, session_id: "", message: result.error ?? "Sidecar returned no data." };
+  } catch (err) {
+    return { started: false, session_id: "", message: err instanceof Error ? err.message : String(err) };
+  }
 }

@@ -24,7 +24,7 @@ locals {
     # ── 1. System packages ───────────────────────────────────────────────
     dnf install -y nginx amazon-cloudwatch-agent git \
       python3.11 python3.11-devel python3.11-pip \
-      gcc pkg-config cairo-devel
+      gcc pkg-config cairo-devel nano htop postgresql15
 
     # ── 2. CloudWatch Agent ──────────────────────────────────────────────
     mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
@@ -71,6 +71,8 @@ locals {
     ln -sfn /opt/saathi/backend/venv /opt/saathi/venv
     /opt/saathi/backend/venv/bin/pip install --upgrade pip
     /opt/saathi/backend/venv/bin/pip install -r /opt/saathi/backend/requirements.txt
+    # Deployments over SSH use ec2-user; pip must not require sudo (avoid root-owned site-packages).
+    chown -R ec2-user:ec2-user /opt/saathi/backend/venv
 
     # ── 6. .env from SSM (optional) ──────────────────────────────────────
     %{if var.app_dotenv_ssm_param != ""}
