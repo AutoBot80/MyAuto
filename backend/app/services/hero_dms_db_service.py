@@ -81,7 +81,6 @@ def persist_masters_after_create_order(
         _inv_ready
         and preexisting_customer_id is None
         and preexisting_vehicle_id is None
-        and not order_scraped.get("ready_for_client_create_invoice")
     ):
         try:
             _cid_out, _vid_out, _sid_out = insert_dms_masters_from_siebel_scrape(
@@ -100,11 +99,6 @@ def persist_masters_after_create_order(
         except Exception as _p_exc:
             _atomic_err = str(_p_exc)
             logger.warning("siebel_dms: master INSERT after Create Invoice failed: %s", _p_exc)
-    elif order_scraped.get("ready_for_client_create_invoice"):
-        note(
-            "My Orders grid already showed Invoice# — skipping atomic master INSERT from Siebel scrape; "
-            "client Create Invoice flow applies."
-        )
     elif _inv_ready and (preexisting_customer_id is not None or preexisting_vehicle_id is not None):
         note(
             "Invoice# present but customer_id/vehicle_id already set — skipping DB "

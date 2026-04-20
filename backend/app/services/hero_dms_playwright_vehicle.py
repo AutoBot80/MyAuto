@@ -3527,8 +3527,14 @@ def _grid_cells_suggest_in_transit(texts: list[str]) -> bool:
     return False
 
 
+_MIN_PLAUSIBLE_EX_SHOWROOM = 5000
+
+
 def _looks_like_ex_showroom_price(s: str) -> bool:
-    """True when ``s`` looks like a numeric ex-showroom / order value (not a model colour name)."""
+    """True when ``s`` looks like a numeric ex-showroom / order value (not a model colour name).
+
+    Rejects values below ``_MIN_PLAUSIBLE_EX_SHOWROOM`` (e.g. ``2,026`` is a year, not a price).
+    """
     t = (s or "").strip()
     if not t or len(t) > 24:
         return False
@@ -3536,15 +3542,21 @@ def _looks_like_ex_showroom_price(s: str) -> bool:
     digits = sum(1 for c in t if c.isdigit())
     if digits == 0:
         return False
-    # Mostly alphabetic phrase (e.g. variant / colour description)
     if letters >= 8 and letters > digits * 2:
         return False
     compact = re.sub(r"[\s,₹RsINRinr]", "", t)
-    if re.fullmatch(r"\d+\.?\d*", compact):
-        return True
-    if digits >= 4 and letters <= max(2, digits // 3):
-        return True
-    return False
+    looks_numeric = re.fullmatch(r"\d+\.?\d*", compact) or (
+        digits >= 4 and letters <= max(2, digits // 3)
+    )
+    if not looks_numeric:
+        return False
+    try:
+        num = float(re.sub(r"[^\d.]", "", compact))
+        if num < _MIN_PLAUSIBLE_EX_SHOWROOM:
+            return False
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 def _best_chassis_str(*candidates: str | None) -> str:
@@ -3757,16 +3769,148 @@ def _js_best_grid_row(frame: Frame) -> dict | None:
         return None
 
 
+_JS_VEHICLE_GRID_ROW_WITH_HEADERS = """() => {
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 1 && r.height > 1;
+    };
+    const tables = Array.from(document.querySelectorAll(
+        'table.ui-jqgrid-btable, table[id^="s_"][id$="_l"]'
+    ));
+    if (tables.length === 0) {
+        document.querySelectorAll('table').forEach((t) => {
+            if (t.querySelector('tbody tr td') && vis(t)) tables.push(t);
+        });
+    }
+    let best = null;
+    for (const t of tables) {
+        if (!vis(t)) continue;
+        const headerRow = t.querySelector('thead tr.ui-jqgrid-labels')
+            || t.querySelector('thead tr');
+        const colHeaders = [];
+        if (headerRow) {
+            headerRow.querySelectorAll('th').forEach((th) => {
+                const adb = (th.getAttribute('id') || '').toLowerCase();
+                const txt = (th.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                colHeaders.push({ id: adb, text: txt });
+            });
+        }
+        const tbody = t.querySelector('tbody');
+        if (!tbody) continue;
+        const dataRows = tbody.querySelectorAll('tr.jqgrow, tr[role="row"], tr');
+        for (const tr of dataRows) {
+            if (tr.classList.contains('jqgfirstrow')) continue;
+            if (!vis(tr)) continue;
+            const cells = tr.querySelectorAll('td[role="gridcell"], td');
+            if (cells.length < 6) continue;
+            let nonempty = 0;
+            const texts = [];
+            const cellHeaders = [];
+            cells.forEach((td, i) => {
+                const tx = (td.innerText || '').trim();
+                texts.push(tx);
+                if (tx.length > 0) nonempty++;
+                const adb = (td.getAttribute('aria-describedby') || '').toLowerCase();
+                const hdr = (colHeaders[i] || {});
+                cellHeaders.push({
+                    aria: adb,
+                    thId: hdr.id || '',
+                    thText: hdr.text || ''
+                });
+            });
+            if (nonempty < 4) continue;
+            if (!best || texts.length > best.len) {
+                best = { texts, headers: cellHeaders, len: texts.length };
+            }
+        }
+    }
+    return best;
+}"""
+
+
+_VEHICLE_GRID_HEADER_MAP: tuple[tuple[str, tuple[re.Pattern, ...]], ...] = (
+    ("key_num",          (re.compile(r"\bkey\b"),)),
+    ("frame_num",        (re.compile(r"\bframe\b"), re.compile(r"\bchassis\b"), re.compile(r"\bvin\b"))),
+    ("engine_num",       (re.compile(r"\bengine\b"),)),
+    ("model",            (re.compile(r"\bmodel\b"),)),
+    ("color",            (re.compile(r"\bcolo[u]?r\b"),)),
+    ("cubic_capacity",   (re.compile(r"\bcubic\b"), re.compile(r"\bcc\b"), re.compile(r"\bdisplacement\b"))),
+    ("seating_capacity", (re.compile(r"\bseat"),)),
+    ("body_type",        (re.compile(r"\bbody\b"),)),
+    ("vehicle_type",     (re.compile(r"\bvehicle.type\b"), re.compile(r"\bveh.type\b"))),
+    ("num_cylinders",    (re.compile(r"\bcylinder"), re.compile(r"\bcyl\b"))),
+    ("vehicle_price",    (re.compile(r"ex.?showroom"), re.compile(r"\bshowroom\b"),
+                          re.compile(r"\bprice\b"), re.compile(r"\bamount\b"),
+                          re.compile(r"\border.value\b"))),
+    ("year_of_mfg",      (re.compile(r"\byear\b"), re.compile(r"\bmfg\b"),
+                          re.compile(r"\bmanufactur"), re.compile(r"\bdispatch\b"))),
+)
+
+
+def _match_header_to_field(aria: str, th_id: str, th_text: str) -> str | None:
+    """Map a single grid column header to a vehicle field key, or ``None`` if unrecognised."""
+    blob = f"{aria} {th_id} {th_text}".lower()
+    blob = re.sub(r"[^a-z0-9_\s/-]", " ", blob)
+    for field_key, patterns in _VEHICLE_GRID_HEADER_MAP:
+        for pat in patterns:
+            if pat.search(blob):
+                return field_key
+    return None
+
+
+def _map_vehicle_row_by_headers(
+    texts: list[str],
+    headers: list[dict],
+) -> dict | None:
+    """
+    Build a vehicle dict by matching each column's header metadata to a known field.
+
+    Returns ``None`` when fewer than 3 fields are matched (header data unusable).
+    """
+    row: dict[str, str] = {}
+    matched = 0
+    for i, hdr in enumerate(headers):
+        if i >= len(texts):
+            break
+        val = texts[i].strip()
+        if not val:
+            continue
+        field = _match_header_to_field(
+            hdr.get("aria", ""), hdr.get("thId", ""), hdr.get("thText", ""),
+        )
+        if field is None:
+            continue
+        if field == "cubic_capacity":
+            val = _normalize_cubic_cc_digits(val) or val
+        if field == "vehicle_price":
+            if not _looks_like_ex_showroom_price(val):
+                continue
+        row[field] = val
+        matched += 1
+    if matched < 3:
+        return None
+    return row
+
+
 def scrape_siebel_vehicle_row(page: Page, *, content_frame_selector: str | None) -> dict:
     """
     Best-effort scrape of first wide row from Siebel list / grid in any frame.
-    Maps 13+ columns from the Siebel vehicle grid when possible.
+
+    Primary path: read jqGrid column headers (``aria-describedby`` on ``<td>`` cells and
+    ``<th>`` id / text in ``<thead>``) and map each column by name.  Falls back to
+    positional index mapping only when header metadata is unavailable or too sparse.
     """
-    _ = content_frame_selector  # reserved if we scope evaluate to frame_locator later
+    _ = content_frame_selector
     best: dict | None = None
     best_len = 0
     for frame in _ordered_frames(page):
-        row = _js_best_grid_row(frame)
+        try:
+            row = frame.evaluate(_JS_VEHICLE_GRID_ROW_WITH_HEADERS)
+        except Exception:
+            row = None
         if row and row.get("len", 0) > best_len:
             best = row
             best_len = row["len"]
@@ -3775,7 +3919,21 @@ def scrape_siebel_vehicle_row(page: Page, *, content_frame_selector: str | None)
         return {}
 
     texts: list[str] = best["texts"]
+    headers: list[dict] = best.get("headers") or []
     in_tr = _grid_cells_suggest_in_transit(texts)
+
+    if headers and len(headers) >= 6:
+        mapped = _map_vehicle_row_by_headers(texts, headers)
+        if mapped is not None:
+            mapped["in_transit"] = in_tr
+            _strip_invalid_grid_small_int_fields(
+                mapped, seating_key="seating_capacity", cyl_key="num_cylinders"
+            )
+            return mapped
+        logger.debug(
+            "vehicle_grid: header-based mapping matched < 3 fields; falling back to index."
+        )
+
     if len(texts) >= 13:
         ex_show = texts[11].strip()
         _cc = _normalize_cubic_cc_digits(texts[5].strip()) or texts[5].strip()

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { UpdateBanner } from "./UpdateBanner";
 
 export function AppChrome({ children }: { children: ReactNode }) {
   return (
@@ -7,6 +8,7 @@ export function AppChrome({ children }: { children: ReactNode }) {
       onContextMenu={(e) => e.preventDefault()}
     >
       {children}
+      <UpdateBanner />
     </div>
   );
 }

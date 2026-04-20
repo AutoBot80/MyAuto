@@ -26,6 +26,8 @@ client/node_modules/
 client/dist/
 electron/node_modules/
 electron/release/
+electron/release-*/
+electron/resources/update-token.json
 
 
 # IDE and OS

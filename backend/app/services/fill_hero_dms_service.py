@@ -1502,6 +1502,23 @@ def insert_dms_masters_from_siebel_scrape(
                     file_location, gender, date_of_birth, dms_contact_id
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (aadhar, mobile_number) DO UPDATE SET
+                    name = COALESCE(EXCLUDED.name, customer_master.name),
+                    address = COALESCE(EXCLUDED.address, customer_master.address),
+                    pin = COALESCE(EXCLUDED.pin, customer_master.pin),
+                    city = COALESCE(EXCLUDED.city, customer_master.city),
+                    state = COALESCE(EXCLUDED.state, customer_master.state),
+                    alt_phone_num = COALESCE(EXCLUDED.alt_phone_num, customer_master.alt_phone_num),
+                    profession = COALESCE(EXCLUDED.profession, customer_master.profession),
+                    financier = COALESCE(EXCLUDED.financier, customer_master.financier),
+                    marital_status = COALESCE(EXCLUDED.marital_status, customer_master.marital_status),
+                    dms_relation_prefix = COALESCE(EXCLUDED.dms_relation_prefix, customer_master.dms_relation_prefix),
+                    dms_contact_path = COALESCE(EXCLUDED.dms_contact_path, customer_master.dms_contact_path),
+                    care_of = COALESCE(EXCLUDED.care_of, customer_master.care_of),
+                    file_location = COALESCE(EXCLUDED.file_location, customer_master.file_location),
+                    gender = COALESCE(EXCLUDED.gender, customer_master.gender),
+                    date_of_birth = COALESCE(EXCLUDED.date_of_birth, customer_master.date_of_birth),
+                    dms_contact_id = COALESCE(EXCLUDED.dms_contact_id, customer_master.dms_contact_id)
                 RETURNING customer_id
                 """,
                 (
@@ -1528,7 +1545,24 @@ def insert_dms_masters_from_siebel_scrape(
             cid_row = cur.fetchone()
             customer_id = int(cid_row["customer_id"] if isinstance(cid_row, dict) else cid_row[0])
 
-            sql_v = """
+            _vehicle_coalesce_set = """
+                    chassis = COALESCE(EXCLUDED.chassis, vehicle_master.chassis),
+                    engine = COALESCE(EXCLUDED.engine, vehicle_master.engine),
+                    key_num = COALESCE(EXCLUDED.key_num, vehicle_master.key_num),
+                    battery = COALESCE(EXCLUDED.battery, vehicle_master.battery),
+                    model = COALESCE(EXCLUDED.model, vehicle_master.model),
+                    colour = COALESCE(EXCLUDED.colour, vehicle_master.colour),
+                    cubic_capacity = COALESCE(EXCLUDED.cubic_capacity, vehicle_master.cubic_capacity),
+                    seating_capacity = COALESCE(EXCLUDED.seating_capacity, vehicle_master.seating_capacity),
+                    body_type = COALESCE(EXCLUDED.body_type, vehicle_master.body_type),
+                    vehicle_type = COALESCE(EXCLUDED.vehicle_type, vehicle_master.vehicle_type),
+                    num_cylinders = COALESCE(EXCLUDED.num_cylinders, vehicle_master.num_cylinders),
+                    year_of_mfg = COALESCE(EXCLUDED.year_of_mfg, vehicle_master.year_of_mfg),
+                    vehicle_ex_showroom_price = COALESCE(EXCLUDED.vehicle_ex_showroom_price, vehicle_master.vehicle_ex_showroom_price),
+                    place_of_registeration = COALESCE(EXCLUDED.place_of_registeration, vehicle_master.place_of_registeration),
+                    oem_name = COALESCE(EXCLUDED.oem_name, vehicle_master.oem_name)
+            """
+            sql_v = f"""
                 INSERT INTO vehicle_master (
                     chassis, engine, key_num, battery,
                     raw_frame_num, raw_engine_num, raw_key_num,
@@ -1537,6 +1571,9 @@ def insert_dms_masters_from_siebel_scrape(
                     vehicle_ex_showroom_price, place_of_registeration, oem_name
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (raw_frame_num, raw_engine_num, raw_key_num) DO UPDATE SET
+                    {_vehicle_coalesce_set},
+                    variant = COALESCE(EXCLUDED.variant, vehicle_master.variant)
                 RETURNING vehicle_id
                 """
             params_v = (
@@ -1565,7 +1602,7 @@ def insert_dms_masters_from_siebel_scrape(
             except Exception as exc:
                 msg = str(exc).lower()
                 if "variant" in msg and ("column" in msg or "undefined" in msg):
-                    sql_v_nv = """
+                    sql_v_nv = f"""
                 INSERT INTO vehicle_master (
                     chassis, engine, key_num, battery,
                     raw_frame_num, raw_engine_num, raw_key_num,
@@ -1574,6 +1611,8 @@ def insert_dms_masters_from_siebel_scrape(
                     vehicle_ex_showroom_price, place_of_registeration, oem_name
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (raw_frame_num, raw_engine_num, raw_key_num) DO UPDATE SET
+                    {_vehicle_coalesce_set}
                 RETURNING vehicle_id
                 """
                     cur.execute(
@@ -1600,7 +1639,7 @@ def insert_dms_masters_from_siebel_scrape(
                         ),
                     )
                     logger.info(
-                        "fill_dms: vehicle_master insert without variant column (DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql)"
+                        "fill_dms: vehicle_master upsert without variant column (DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql)"
                     )
                 else:
                     raise
@@ -1613,6 +1652,12 @@ def insert_dms_masters_from_siebel_scrape(
                     order_number, invoice_number, enquiry_number
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (customer_id, vehicle_id) DO UPDATE SET
+                    dealer_id = COALESCE(EXCLUDED.dealer_id, sales_master.dealer_id),
+                    file_location = COALESCE(EXCLUDED.file_location, sales_master.file_location),
+                    order_number = COALESCE(EXCLUDED.order_number, sales_master.order_number),
+                    invoice_number = COALESCE(EXCLUDED.invoice_number, sales_master.invoice_number),
+                    enquiry_number = COALESCE(EXCLUDED.enquiry_number, sales_master.enquiry_number)
                 RETURNING sales_id
                 """
             try:
@@ -1630,11 +1675,16 @@ def insert_dms_masters_from_siebel_scrape(
                             order_number, invoice_number
                         )
                         VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (customer_id, vehicle_id) DO UPDATE SET
+                            dealer_id = COALESCE(EXCLUDED.dealer_id, sales_master.dealer_id),
+                            file_location = COALESCE(EXCLUDED.file_location, sales_master.file_location),
+                            order_number = COALESCE(EXCLUDED.order_number, sales_master.order_number),
+                            invoice_number = COALESCE(EXCLUDED.invoice_number, sales_master.invoice_number)
                         RETURNING sales_id
                         """,
                         (customer_id, vehicle_id, sale_dealer_id, loc_sales, order_n, inv_n),
                     )
-                    logger.info("fill_dms: sales_master insert without enquiry_number column")
+                    logger.info("fill_dms: sales_master upsert without enquiry_number column")
                 else:
                     raise
             sid_row = cur.fetchone()
@@ -1656,7 +1706,7 @@ def insert_dms_masters_from_siebel_scrape(
 
         conn.commit()
         logger.info(
-            "fill_dms: inserted customer_id=%s vehicle_id=%s sales_id=%s (Siebel scrape)",
+            "fill_dms: upserted customer_id=%s vehicle_id=%s sales_id=%s (Siebel scrape)",
             customer_id,
             vehicle_id,
             sales_id,
@@ -1666,7 +1716,7 @@ def insert_dms_masters_from_siebel_scrape(
         conn.rollback()
         logger.warning("fill_dms: insert_dms_masters_from_siebel_scrape integrity error: %s", exc)
         raise ValueError(
-            "Cannot insert masters: duplicate key or constraint violation (customer/vehicle/sales). "
+            "Cannot upsert masters: constraint violation (customer/vehicle/sales). "
             f"{exc!s}"
         ) from exc
     except Exception:
@@ -2531,7 +2581,12 @@ def Playwright_Hero_DMS_fill(
         if out.get("error"):
             return out
 
-        if out.get("dms_master_persist_committed") is True:
+        _inv_num_for_report = (str((out.get("vehicle") or {}).get("invoice_number") or "")).strip()
+        _should_run_reports = (
+            out.get("dms_master_persist_committed") is True
+            or bool(_inv_num_for_report)
+        )
+        if _should_run_reports:
             try:
                 _frame_sel_pf = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
                 _dl_dir_pf = get_uploaded_scans_sale_folder(int(DEALER_ID), mobile).resolve()
@@ -2539,7 +2594,7 @@ def Playwright_Hero_DMS_fill(
                     page,
                     mobile=mobile,
                     order_number=(str((out.get("vehicle") or {}).get("order_number") or "")).strip(),
-                    invoice_number=(str((out.get("vehicle") or {}).get("invoice_number") or "")).strip(),
+                    invoice_number=_inv_num_for_report,
                     action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
                     content_frame_selector=_frame_sel_pf,
                     note=note,

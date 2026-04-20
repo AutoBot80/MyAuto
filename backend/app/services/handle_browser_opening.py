@@ -36,10 +36,18 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _browser_profile_dir() -> Path:
-    """Stable, project-local browser profile so session cookies survive backend restarts.
+    """Stable browser profile so session cookies / saved passwords survive backend restarts.
 
-    Falls back to ``<project>/.browser-profile``.  The directory is git-ignored.
+    Under the Electron sidecar (PyInstaller), ``__file__`` resolves inside a temporary
+    extract directory that changes every launch — so ``_PROJECT_ROOT`` is ephemeral and
+    the browser would get a fresh profile each time (no saved passwords → no autofill).
+
+    Using ``SAATHI_BASE_DIR`` (set by the sidecar / Electron main process) gives a fixed,
+    dealer-machine-local path (e.g. ``D:\\Saathi\\.browser-profile``) that persists.
     """
+    saathi = os.environ.get("SAATHI_BASE_DIR", "").strip()
+    if saathi:
+        return Path(saathi) / ".browser-profile"
     return _PROJECT_ROOT / ".browser-profile"
 
 

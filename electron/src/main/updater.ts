@@ -1,6 +1,22 @@
 import { app } from "electron";
+import fs from "fs";
+import path from "path";
 import { autoUpdater } from "electron-updater";
 import { logError, logInfo } from "./logger";
+
+function resolveGhToken(): string {
+  const env = (process.env.GH_TOKEN || "").trim();
+  if (env) return env;
+  try {
+    const p = app.isPackaged
+      ? path.join(process.resourcesPath, "update-token.json")
+      : path.join(__dirname, "..", "..", "resources", "update-token.json");
+    const data = JSON.parse(fs.readFileSync(p, "utf-8"));
+    return (data.token || "").trim();
+  } catch {
+    return "";
+  }
+}
 
 export type UpdateSender = (channel: string, payload?: unknown) => void;
 
@@ -9,6 +25,18 @@ export function setupAutoUpdater(send: UpdateSender): void {
     logInfo("updater: skipped (development build)");
     return;
   }
+  const token = resolveGhToken();
+  if (!token) {
+    logInfo("updater: no GH_TOKEN found — auto-update disabled");
+    return;
+  }
+  autoUpdater.setFeedURL({
+    provider: "github",
+    owner: "AutoBot80",
+    repo: "MyAuto",
+    private: true,
+    token,
+  });
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 
