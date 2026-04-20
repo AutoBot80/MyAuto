@@ -1,0 +1,57 @@
+name: Electron Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Run from Actions tab to rebuild/publish without a new tag (pick branch, e.g. main).
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Install electron dependencies
+        working-directory: electron
+        run: npm ci
+
+      - name: Build client
+        working-directory: electron
+        run: npm run build:client
+
+      - name: Build sidecar (PyInstaller)
+        working-directory: electron
+        run: npm run build:sidecar
+
+      - name: Embed update token
+        working-directory: electron
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path resources | Out-Null
+          @{ token = "${{ secrets.GH_TOKEN2 }}" } | ConvertTo-Json | Set-Content resources/update-token.json
+
+      - name: Build & publish Electron app
+        working-directory: electron
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN2 }}
+        run: |
+          npm run build:ts
+          npx electron-builder --publish always
