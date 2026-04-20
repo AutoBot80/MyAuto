@@ -144,8 +144,11 @@ def _dispatch_fill_dms(params: dict) -> dict:
     dms_values = ctx["dms_values"]
     staging_payload = ctx.get("staging_payload")
     dms_base_url = ctx["dms_base_url"]
-    uploads_dir = Path(ctx["uploads_dir"])
-    ocr_output_dir = Path(ctx["ocr_output_dir"])
+
+    from app.config import get_uploads_dir, get_ocr_output_dir
+    dealer_id = params.get("dealer_id") or int(os.getenv("DEALER_ID", "100001"))
+    uploads_dir = get_uploads_dir(int(dealer_id))
+    ocr_output_dir = get_ocr_output_dir(int(dealer_id))
 
     from app.services.fill_hero_dms_service import run_fill_dms_only, dms_automation_is_real_siebel
     from app.services.handle_browser_opening import get_or_open_site_page
@@ -247,7 +250,10 @@ def _dispatch_fill_insurance(params: dict) -> dict:
     insurance_base_url = ctx["insurance_base_url"]
     staging_payload = ctx.get("staging_payload")
     staging_id = ctx.get("staging_id")
-    ocr_dir = Path(ctx["ocr_output_dir"])
+
+    from app.config import get_ocr_output_dir as _get_ocr
+    ins_dealer_id = params.get("dealer_id") or int(os.getenv("DEALER_ID", "100001"))
+    ocr_dir = _get_ocr(int(ins_dealer_id))
 
     # Monkey-patch DB-dependent functions so pre_process / main_process can run
     # without DATABASE_URL. The sidecar delegates all DB writes to /sidecar/insurance/commit.
