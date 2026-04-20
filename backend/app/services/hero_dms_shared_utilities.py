@@ -1437,12 +1437,15 @@ def _siebel_note_frame_focus_snapshot(
     content_frame_selector: str | None = None,
 ) -> None:
     """
-    Historical hook for per-frame focus / URL JSON (``[frame-focus]``) after Serial → Features →
-    Pre-check / PDI. **No longer written** to ``Playwright_DMS*.txt`` — it was verbose and rarely
-    used by operators. Call sites remain for a possible future opt-in (e.g. env flag) or debugger.
+    Log ``page.url`` at Siebel navigation milestones (Serial / Pre-check / PDI) for diagnostics.
+    ``content_frame_selector`` is reserved for future frame-scoped URL capture.
     """
-    _ = (page, note, step, log_prefix, content_frame_selector)
-    return
+    _ = content_frame_selector
+    try:
+        _url = (page.url or "")[:400]
+        note(f"{log_prefix}: [frame-focus] {step} url={_url!r}")
+    except Exception:
+        pass
 
 
 def _siebel_scrape_text_by_id_anywhere(

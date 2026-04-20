@@ -1644,6 +1644,12 @@ def _recover_pdi_view_via_swe_goto(
         return False
 
     try:
+        _pre_nav_url = (page.url or "")[:400]
+        note(f"{log_prefix}: SWE recovery — pre-navigation url={_pre_nav_url!r}")
+    except Exception:
+        pass
+
+    try:
         from urllib.parse import urlparse
         _parsed = urlparse(page.url or "")
         _base = f"{_parsed.scheme}://{_parsed.netloc}{_parsed.path}"
@@ -1673,6 +1679,12 @@ def _recover_pdi_view_via_swe_goto(
     except Exception as _ni_exc:
         if _is_browser_disconnected_error(_ni_exc):
             raise
+
+    try:
+        _post_nav_url = (page.url or "")[:400]
+        note(f"{log_prefix}: SWE recovery — post-navigation url={_post_nav_url!r}")
+    except Exception:
+        pass
 
     _recovered = False
     for _rp in range(10):
@@ -1814,6 +1826,24 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         content_frame_selector=content_frame_selector,
     )
 
+    _safe_page_wait(page, 1000, log_label="precheck_tab_post_networkidle_settle")
+
+    _on_wrong_precheck_view = False
+    try:
+        _post_precheck_url = (page.url or "").replace(" ", "+")
+        _on_wrong_precheck_view = (
+            "PDIPre+Assessment" in _post_precheck_url
+            or "Precheck+List+Applet" in _post_precheck_url
+        )
+        if _on_wrong_precheck_view:
+            note(
+                f"{log_prefix}: Pre-check tab click navigated to wrong Siebel view "
+                f"(PDIPre Assessment). URL={_post_precheck_url[:300]!r}. "
+                "Third-level tabs will not be present on this view."
+            )
+    except Exception:
+        pass
+
     _precheck_existing_rows = 0
     _precheck_existing_signal = ""
     _precheck_third_level_tabs_loaded = False
@@ -1838,22 +1868,23 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         });
         return { loaded: hasTabs, tabs };
     }"""
-    for _settle in range(3):
-        for _root in _roots():
-            try:
-                _settle_res = _root.evaluate(_settle_poll_js)
-                if isinstance(_settle_res, dict) and _settle_res.get("loaded"):
-                    _precheck_third_level_tabs_loaded = True
-                    note(
-                        f"{log_prefix}: third-level tabs visible after settle poll "
-                        f"(attempt {_settle + 1}/3) tabs={_settle_res.get('tabs')!r}"
-                    )
-                    break
-            except Exception:
-                continue
-        if _precheck_third_level_tabs_loaded:
-            break
-        _safe_page_wait(page, 500, log_label=f"precheck_tab_settle_{_settle}")
+    if not _on_wrong_precheck_view:
+        for _settle in range(3):
+            for _root in _roots():
+                try:
+                    _settle_res = _root.evaluate(_settle_poll_js)
+                    if isinstance(_settle_res, dict) and _settle_res.get("loaded"):
+                        _precheck_third_level_tabs_loaded = True
+                        note(
+                            f"{log_prefix}: third-level tabs visible after settle poll "
+                            f"(attempt {_settle + 1}/3) tabs={_settle_res.get('tabs')!r}"
+                        )
+                        break
+                except Exception:
+                    continue
+            if _precheck_third_level_tabs_loaded:
+                break
+            _safe_page_wait(page, 500, log_label=f"precheck_tab_settle_{_settle}")
     _precheck_probe_js = """() => {
                 const vis = (el) => {
                     if (!el) return false;
@@ -2722,9 +2753,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         break
                 except Exception:
                     continue
+            try:
+                _poll_exhaust_url = (page.url or "")[:400]
+            except Exception:
+                _poll_exhaust_url = ""
             note(
                 f"{log_prefix}: third_level_tab_poll exhausted (20 × 500ms) — "
-                f"last={_last_tabs!r}. Attempting SWE GotoView recovery for PDI Assessment."
+                f"last={_last_tabs!r} url={_poll_exhaust_url!r}. "
+                "Attempting SWE GotoView recovery for PDI Assessment."
             )
             _dump_frames_and_elements_for_debug(
                 page, content_frame_selector=content_frame_selector,
@@ -2857,6 +2893,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     try:
         _post_pdi_url = page.url or ""
         _post_pdi_url_norm = _post_pdi_url.replace(" ", "+")
+        note(f"{log_prefix}: post-PDI-tab-click url={_post_pdi_url_norm[:400]!r}")
         if "PDIPre+Assessment" in _post_pdi_url_norm or "Precheck+List+Applet" in _post_pdi_url_norm:
             note(
                 f"{log_prefix}: WARNING — PDI tab click navigated to PDIPre Assessment / "
