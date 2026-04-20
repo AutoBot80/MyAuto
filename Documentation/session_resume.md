@@ -1,6 +1,6 @@
 # Session resume — AWS production / beta (Terraform)
 
-**Saved:** 2026-04-15 (IST). **Region:** `ap-south-1`. **Purpose:** Continue from here after this chat or Cursor window is closed.
+**Saved:** 2026-04-18 (IST). **Region:** `ap-south-1`. **Purpose:** Continue from here after this chat or Cursor window is closed.
 
 ---
 
@@ -13,7 +13,7 @@
 - **Edge:** **CloudFront** + **WAF** (ACM in `us-east-1`) in front of ALB; **`https://api.dealersaathi.co.in`** live.
 - **Database:** RDS database name aligned; **core tables** for auth + dealers seeded (**`oem_ref`**, **`dealer_ref`**, **`roles_ref`**, **`login_ref`**, **`login_roles_ref`**). **`argon2-cffi`** on EC2 for password verification.
 - **Frontend:** Vite build with **`VITE_API_URL`**, deploy to **S3** `dealersaathi-prod-1980`; **login works** from browser (S3 website origin in **`CORS_ORIGINS`**).
-- **Docs:** [`troubleshooting-8000-error.md`](troubleshooting-8000-error.md) (decision tree + EC2/psql commands); [`deploy/frontend-s3-cloudfront.md`](../deploy/frontend-s3-cloudfront.md); [`deploy/ec2/dotenv.production.example`](../deploy/ec2/dotenv.production.example) CORS notes.
+- **Docs:** [`troubleshooting-8000-error.md`](troubleshooting-8000-error.md) (decision tree + EC2/psql commands); [`deploy/frontend-s3-cloudfront.md`](../deploy/frontend-s3-cloudfront.md); [`deploy/ec2/dotenv.production.example`](../deploy/ec2/dotenv.production.example) CORS notes. **As-built AWS (RDS, SNS, alarms, scaling, CW Agent):** [`Production_cloud_design.md`](Production_cloud_design.md) **§7** — also noted in [`docs_changelog.md`](docs_changelog.md) *Last synced* (2026-04-18).
 
 **Pending (migration / ops)**
 
@@ -65,7 +65,7 @@ Define a **short backlog** (3–5 items) to replace ranges with a single estimat
 
 - **Terraform `terraform/network/`** has been applied; core networking, RDS PostgreSQL **16.13**, public ALB, private ASG + launch template, IAM instance profile, and bootstrap **Nginx** (`/health` → 200, `/` → 503) are in place.
 - **ALB health check verified:** HTTP **200** from the ALB DNS on `/health` (use PowerShell or `curl.exe` — see below).
-- **Canonical design + snapshot:** `[Production_cloud_design.md](Production_cloud_design.md)` (v0.3) — §7 has IDs, ARNs, and DNS; **do not** paste secrets; use `terraform output` / Secrets Manager for `rds_master_user_secret_arn`.
+- **Canonical design + snapshot:** [`Production_cloud_design.md`](Production_cloud_design.md) (**§7** as-built, **§8** versioning — e.g. v0.2) — §7 summarizes Terraform/runtime decisions; for live IDs/ARNs/DNS use `terraform output` (not the doc); **do not** paste secrets; Secrets Manager for `rds_master_user_secret_arn`.
 - **Remote state:** S3 bucket `saathi-tfstate-261399254938` + DynamoDB lock table `terraform-locks` (lock table is **only** for Terraform state, not the app database).
 
 ---

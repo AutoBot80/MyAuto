@@ -1,8 +1,6 @@
-/** Persist View Customer search so it survives tab navigation. */
-
 import type { CustomerSearchResult } from "../api/customerSearch";
 
-const KEY = "viewCustomerPage";
+const STORAGE_KEY = "saathi_view_customer_v1";
 
 export interface ViewCustomerStored {
   mobile: string;
@@ -11,15 +9,17 @@ export interface ViewCustomerStored {
   selectedVehicleId: number | null;
 }
 
-function load(): ViewCustomerStored {
+export function loadViewCustomer(): ViewCustomerStored {
   try {
-    const raw = sessionStorage.getItem(KEY);
-    if (!raw) return { mobile: "", plateNum: "", result: null, selectedVehicleId: null };
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return { mobile: "", plateNum: "", result: null, selectedVehicleId: null };
+    }
     const parsed = JSON.parse(raw) as Partial<ViewCustomerStored>;
     return {
       mobile: typeof parsed.mobile === "string" ? parsed.mobile : "",
       plateNum: typeof parsed.plateNum === "string" ? parsed.plateNum : "",
-      result: parsed.result && typeof parsed.result === "object" ? parsed.result : null,
+      result: parsed.result ?? null,
       selectedVehicleId:
         typeof parsed.selectedVehicleId === "number" ? parsed.selectedVehicleId : null,
     };
@@ -28,18 +28,10 @@ function load(): ViewCustomerStored {
   }
 }
 
-function save(data: ViewCustomerStored): void {
+export function saveViewCustomer(state: ViewCustomerStored): void {
   try {
-    sessionStorage.setItem(KEY, JSON.stringify(data));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
-    // ignore
+    // Quota or private mode — ignore
   }
-}
-
-export function loadViewCustomer(): ViewCustomerStored {
-  return load();
-}
-
-export function saveViewCustomer(data: ViewCustomerStored): void {
-  save(data);
 }

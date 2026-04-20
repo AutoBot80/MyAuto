@@ -1578,6 +1578,128 @@ def _dump_frames_and_elements_for_debug(
             note(f"{log_prefix}: frame dump failed — {exc!r}")
 
 
+def _recover_pdi_view_via_swe_goto(
+    page: Page,
+    *,
+    roots: Callable[[], list],
+    content_frame_selector: str | None,
+    note,
+    log_prefix: str,
+    action_timeout_ms: int,
+    third_level_poll_js: str,
+) -> bool:
+    """
+    When the third-level tab bar (``#s_vctrl_div``) is empty after Pre-check — typically because
+    Siebel navigated away from the serial-detail view — reconstruct the ``HHML Auto Vehicle PDI
+    Assessment View`` URL with the current vehicle's ``SWERowId0`` and navigate directly via
+    ``SWECmd=GotoView``.
+
+    Extracts the ``Auto Vehicle Entry Applet`` row ID from the page URL or from a JS probe on the
+    applet DOM, then issues ``page.goto`` to the PDI Assessment View. Returns True if the
+    third-level tabs (including PDI) are visible after navigation.
+    """
+    _extract_row_id_js = """() => {
+        const href = String(window.location.href || '');
+        const m0 = href.match(/SWEApplet0=Auto\\+Vehicle\\+Entry\\+Applet&SWERowId0=([^&]+)/);
+        if (m0) return { rowId: m0[1], src: 'url_applet0' };
+        const m1 = href.match(/SWERowId0=([^&]+)/);
+        if (m1) return { rowId: m1[1], src: 'url_rowid0' };
+        const vis = (el) => {
+            if (!el) return false;
+            try {
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            } catch(e) { return false; }
+        };
+        for (const id of ['s_3_1_81_0', 's_3_rc']) {
+            const el = document.getElementById(id);
+            if (el && vis(el)) {
+                const txt = (el.textContent || '').trim();
+                if (txt && txt.length > 3) return { rowId: '', src: 'dom_hint_' + id, hint: txt };
+            }
+        }
+        return { rowId: '', src: 'none' };
+    }"""
+
+    _row_id = ""
+    _src = ""
+    for _root in roots():
+        try:
+            _res = _root.evaluate(_extract_row_id_js)
+            if isinstance(_res, dict):
+                _row_id = str(_res.get("rowId") or "").strip()
+                _src = str(_res.get("src") or "")
+                if _row_id:
+                    break
+        except Exception:
+            continue
+
+    if not _row_id:
+        note(
+            f"{log_prefix}: SWE recovery — could not extract SWERowId0 for Vehicle Entry Applet "
+            f"(src={_src!r}). Cannot navigate directly to PDI Assessment View."
+        )
+        return False
+
+    try:
+        from urllib.parse import urlparse
+        _parsed = urlparse(page.url or "")
+        _base = f"{_parsed.scheme}://{_parsed.netloc}{_parsed.path}"
+    except Exception:
+        _base = "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/"
+
+    _pdi_view_url = (
+        f"{_base}?SWECmd=GotoView"
+        f"&SWEView=HHML+Auto+Vehicle+PDI+Assessment+View"
+        f"&SWERF=1&SWEHo=&SWEBU=1"
+        f"&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0={_row_id}"
+    )
+    note(
+        f"{log_prefix}: SWE recovery — navigating to PDI Assessment View "
+        f"(rowId0={_row_id!r}, src={_src!r})."
+    )
+    try:
+        page.goto(_pdi_view_url, wait_until="domcontentloaded", timeout=min(action_timeout_ms * 5, 45000))
+    except Exception as _nav_exc:
+        if _is_browser_disconnected_error(_nav_exc):
+            raise
+        note(f"{log_prefix}: SWE recovery goto raised {_nav_exc!r} — continuing.")
+
+    _siebel_after_goto_wait(page, floor_ms=3000)
+    try:
+        _pv_networkidle(note, page, 12_000, f"{log_prefix}_swe_pdi_recovery")
+    except Exception as _ni_exc:
+        if _is_browser_disconnected_error(_ni_exc):
+            raise
+
+    _recovered = False
+    for _rp in range(10):
+        for _root in roots():
+            try:
+                _tl = _root.evaluate(third_level_poll_js, "PDI")
+                if isinstance(_tl, dict) and _tl.get("found"):
+                    _recovered = True
+                    note(
+                        f"{log_prefix}: SWE recovery — PDI tab found in third-level bar "
+                        f"(poll {_rp + 1}/10) tabs={_tl.get('tabs')!r}."
+                    )
+                    break
+            except Exception:
+                continue
+        if _recovered:
+            break
+        _safe_page_wait(page, 500, log_label=f"swe_pdi_recovery_poll_{_rp}")
+
+    if not _recovered:
+        note(
+            f"{log_prefix}: SWE recovery — PDI tab NOT found after GotoView navigation. "
+            "Third-level tabs still absent."
+        )
+    return _recovered
+
+
 def _siebel_run_vehicle_serial_detail_precheck_pdi(
     page: Page,
     *,
@@ -1695,9 +1817,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     _precheck_existing_rows = 0
     _precheck_existing_signal = ""
     _precheck_third_level_tabs_loaded = False
-    for _ri, _root in enumerate(_roots()):
-        try:
-            _probe = _root.evaluate("""() => {
+    _precheck_probe_js = """() => {
                 const vis = (el) => {
                     if (!el) return false;
                     const st = window.getComputedStyle(el);
@@ -1839,7 +1959,28 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     dataCellHit, precheckColumnHeaders, fallbackRows,
                     hasPrecheckRowId, thirdLevelTabsLoaded,
                 };
-            }""")
+            }"""
+    _third_level_poll_js = """(needle) => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const compact = (s) => s.replace(/[-\\s]+/g, '').toLowerCase();
+        const bar = document.getElementById('s_vctrl_div');
+        if (!bar || !vis(bar)) return { found: false, tabs: [] };
+        const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
+            .filter(t => vis(t))
+            .map(t => (t.innerText || t.textContent || '').trim())
+            .filter(t => t.length > 0 && t.length < 40);
+        const hasPdi = tabs.some(t => compact(t) === compact(needle));
+        return { found: hasPdi, tabs };
+    }"""
+    for _ri, _root in enumerate(_roots()):
+        try:
+            _probe = _root.evaluate(_precheck_probe_js)
             if isinstance(_probe, dict):
                 _rows = int(_probe.get("maxRows") or 0)
                 if _rows > _precheck_existing_rows:
@@ -1869,6 +2010,96 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         except Exception:
             continue
     logger.debug("precheck_existing: rows=%d signal=%s", _precheck_existing_rows, _precheck_existing_signal)
+
+    _precheck_fallback_only = (
+        not _precheck_third_level_tabs_loaded
+        and _precheck_existing_rows > 0
+        and "fallbackRows" in _precheck_existing_signal
+    )
+    if _precheck_fallback_only:
+        note(
+            f"{log_prefix}: precheck_row_probe found rows={_precheck_existing_rows} "
+            f"via UNSCOPED fallback ({_precheck_existing_signal!r}) but third-level tabs "
+            "are NOT loaded — this is likely a false positive (wrong Siebel view). "
+            "Discounting fallbackRows."
+        )
+        _precheck_existing_rows = 0
+        _precheck_existing_signal = ""
+
+    if not _precheck_third_level_tabs_loaded:
+        note(
+            f"{log_prefix}: third-level tabs (PreCheck/PDI) NOT loaded after Pre-check tab click — "
+            "attempting SWE GotoView recovery to reach serial-detail view."
+        )
+        _dump_frames_and_elements_for_debug(
+            page, content_frame_selector=content_frame_selector,
+            output_dir=_debug_dump_dir, label="precheck_wrong_view",
+            note=note, log_prefix=log_prefix,
+        )
+        _swe_precheck_recovery = _recover_pdi_view_via_swe_goto(
+            page,
+            roots=_roots,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            log_prefix=log_prefix,
+            action_timeout_ms=action_timeout_ms,
+            third_level_poll_js=_third_level_poll_js,
+        )
+        if _swe_precheck_recovery:
+            _precheck_third_level_tabs_loaded = True
+            note(
+                f"{log_prefix}: SWE recovery succeeded — now on PDI Assessment View with "
+                "third-level tabs. Re-clicking Pre-check tab and re-probing."
+            )
+            _precheck_tab_ok = _click_third_level_view_bar_tab(
+                page, "Pre-check", wait_ms=1500,
+                content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
+            )
+            if _precheck_tab_ok:
+                try:
+                    _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab_recovery")
+                except Exception as _e:
+                    if _is_browser_disconnected_error(_e):
+                        raise
+                _precheck_existing_rows = 0
+                _precheck_existing_signal = ""
+                for _ri2, _root2 in enumerate(_roots()):
+                    try:
+                        _probe2 = _root2.evaluate(_precheck_probe_js)
+                        if isinstance(_probe2, dict):
+                            _rows2 = int(_probe2.get("maxRows") or 0)
+                            if _rows2 > _precheck_existing_rows:
+                                _precheck_existing_rows = _rows2
+                                _precheck_existing_signal = f"root[{_ri2}]:maxRows={_rows2}(recovery)"
+                            _did2 = int(_probe2.get("directIdRows") or 0)
+                            if _did2 > 0 and _did2 > _precheck_existing_rows:
+                                _precheck_existing_rows = _did2
+                                _precheck_existing_signal = f"root[{_ri2}]:directId_s_3_l={_did2}(recovery)"
+                            _rc2 = int(_probe2.get("rowCounterRows") or 0)
+                            if _rc2 > 0 and _precheck_existing_rows == 0:
+                                _precheck_existing_rows = _rc2
+                                _precheck_existing_signal = f"root[{_ri2}]:rowCounter(recovery)"
+                            if _probe2.get("dataCellHit") and _precheck_existing_rows == 0:
+                                _precheck_existing_rows = 1
+                                _precheck_existing_signal = f"root[{_ri2}]:dataCellId(recovery)"
+                            if _probe2.get("containerHasData") and _precheck_existing_rows == 0:
+                                _precheck_existing_rows = 1
+                                _precheck_existing_signal = f"root[{_ri2}]:containerText(recovery)"
+                            _fb2 = int(_probe2.get("fallbackRows") or 0)
+                            if _fb2 > 0 and _precheck_existing_rows == 0:
+                                _precheck_existing_rows = _fb2
+                                _precheck_existing_signal = f"root[{_ri2}]:fallbackRows={_fb2}(recovery)"
+                    except Exception:
+                        continue
+                note(
+                    f"{log_prefix}: re-probe after recovery: precheck rows={_precheck_existing_rows} "
+                    f"signal={_precheck_existing_signal or 'none'}"
+                )
+            else:
+                note(
+                    f"{log_prefix}: Pre-check tab re-click failed after SWE recovery — "
+                    "will continue to PDI directly."
+                )
 
     _precheck_already_present = _precheck_existing_rows > 0
     note(
@@ -2409,24 +2640,23 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
         note(f"{log_prefix}: Pre-check completed.")
 
-    _third_level_poll_js = """(needle) => {
-        const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden') return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        };
-        const compact = (s) => s.replace(/[-\\s]+/g, '').toLowerCase();
-        const bar = document.getElementById('s_vctrl_div');
-        if (!bar || !vis(bar)) return { found: false, tabs: [] };
-        const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
-            .filter(t => vis(t))
-            .map(t => (t.innerText || t.textContent || '').trim())
-            .filter(t => t.length > 0 && t.length < 40);
-        const hasPdi = tabs.some(t => compact(t) === compact(needle));
-        return { found: hasPdi, tabs };
-    }"""
+    if _precheck_third_level_tabs_loaded:
+        _post_precheck_tabs_ok = False
+        for _root in _roots():
+            try:
+                _tl_recheck = _root.evaluate(_third_level_poll_js, "PDI")
+                if isinstance(_tl_recheck, dict) and _tl_recheck.get("found"):
+                    _post_precheck_tabs_ok = True
+                    break
+            except Exception:
+                continue
+        if not _post_precheck_tabs_ok:
+            note(
+                f"{log_prefix}: third-level tabs were loaded before Pre-check but PDI tab "
+                "is no longer visible after Pre-check — resetting flag."
+            )
+            _precheck_third_level_tabs_loaded = False
+
     if not _precheck_third_level_tabs_loaded:
         note(f"{log_prefix}: third-level tabs not loaded after Pre-check — polling for PDI tab in s_vctrl_div.")
         for _tl_poll in range(20):
@@ -2457,8 +2687,24 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     continue
             note(
                 f"{log_prefix}: third_level_tab_poll exhausted (20 × 500ms) — "
-                f"last={_last_tabs!r}. Will attempt PDI tab click anyway."
+                f"last={_last_tabs!r}. Attempting SWE GotoView recovery for PDI Assessment."
             )
+            _dump_frames_and_elements_for_debug(
+                page, content_frame_selector=content_frame_selector,
+                output_dir=_debug_dump_dir, label="pdi_tab_poll_exhausted",
+                note=note, log_prefix=log_prefix,
+            )
+            _swe_recovery_ok = _recover_pdi_view_via_swe_goto(
+                page,
+                roots=_roots,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                log_prefix=log_prefix,
+                action_timeout_ms=action_timeout_ms,
+                third_level_poll_js=_third_level_poll_js,
+            )
+            if _swe_recovery_ok:
+                _precheck_third_level_tabs_loaded = True
 
     _pdi_tab_clicked = _click_third_level_view_bar_tab(
         page, "PDI", wait_ms=1500,
@@ -2556,6 +2802,11 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             except Exception:
                 continue
     if not _pdi_tab_clicked:
+        _dump_frames_and_elements_for_debug(
+            page, content_frame_selector=content_frame_selector,
+            output_dir=_debug_dump_dir, label="pdi_tab_not_found",
+            note=note, log_prefix=log_prefix,
+        )
         return False, "Could not click PDI tab."
     note(f"{log_prefix}: clicked PDI tab.")
     _safe_page_wait(page, 300, log_label="after_pdi_tab_click_refresh")

@@ -79,6 +79,8 @@ flowchart LR
 | Max | 2 |
 
 - **Launch Template:** OS, instance type, IAM instance profile, **user-data** (bootstrap), security groups.
+- **Health check:** **ELB**-based; **grace period** 300s; **default cooldown** 300s; **scale-in protection** off unless changed.
+- **Step scaling (no target tracking):** scale-out **+1** (step policy, warmup 300s) on load signals; scale-in **-1** (cooldown 900s) only on sustained low average CPU (see §7.4). **Max size capped at 2** in Terraform validation.
 - **Application stack on instance:** **Nginx** → **Gunicorn** → **FastAPI**; **systemd** processes for **watcher** and other automation (see §5).
 
 ### 2.5 Gunicorn and Nginx (locked per instance)
@@ -93,11 +95,17 @@ flowchart LR
 
 ### 2.6 RDS (PostgreSQL)
 
-- Small instance class to start; **automated backups**, **encryption at rest**, **private subnets**, access only from application security group.
+- **Instance class:** **`db.t4g.micro`** (as deployed; Terraform default aligned to this).
+- **Storage:** **gp3**, **20 GiB** initial, **storage autoscaling** up to **100 GiB** (`max_allocated_storage`); encryption at rest.
+- **Backups:** retention **15 days**; **deletion protection** enabled (Terraform).
+- **Credentials:** master password in **Secrets Manager** (`manage_master_user_password`); app **`DATABASE_URL`** built via **`deploy/ec2/write-database-url.sh`** where used.
+- **Private subnets**; access only from application security group.
+- **Alarm context:** **`rds_max_connections_for_alarms`** = **45** for connection-threshold alarms; **free-disk** alarm when **`FreeStorageSpace`** &lt; **5 GiB** (see §7.3–7.4).
 
 ### 2.7 S3
 
 - **Artifacts** (uploads, OCR output, challans, bulk uploads): **object keys** with **per-dealer** prefixes; **block public access**; encryption at rest.
+- **Terraform:** `terraform/network/s3_data.tf` defines the data bucket (name `"{project_name}-data-{account_id}"`). EC2 IAM allows `GetObject` / `PutObject` / `ListBucket` on that bucket only. Set **`S3_DATA_BUCKET`** on the app host and **`STORAGE_BACKEND=s3`** so the API syncs `Uploaded scans/` and `ocr_output/` trees under keys `uploaded-scans/{dealer_id}/…` and `ocr-output/{dealer_id}/…`. **Presigned GET URLs** are returned in **`print_jobs`** on Fill DMS / Insurance / Gate Pass responses for the Electron client to print locally (the server does not print to dealer printers).
 
 ### 2.8 SQS
 
@@ -109,7 +117,8 @@ flowchart LR
 
 ### 2.10 CloudWatch
 
-- Logs and metrics from EC2 (agent), **ALB**, **RDS**, **WAF**, optional **CloudFront**; **alarms** on error rates and resource saturation.
+- **Unified agent on EC2** (user_data): **`mem_used_percent`**, **`disk_used_percent`** → namespace **`CWAgent`** (see §7.5).
+- **Alarms** (warning + critical where defined) on **EC2** (CPU, memory), **ALB** (latency, 5xx, request rate per target, healthy hosts), **RDS** (CPU, free memory, connections, **free disk**), **SQS** (optional, when queue names set in Terraform). **SNS topic** for email; **step scaling** policies wired to scale-out signals; scale-in from low CPU only. Detail in **§7.4**.
 
 ### 2.11 Terraform
 
@@ -179,11 +188,76 @@ These **restate** constraints that affect how we deploy and scale; numbered busi
 | [technical-architecture.md](technical-architecture.md) | Technical architecture |
 | [Database DDL.md](Database%20DDL.md) | Schema |
 | [aws-setup-step-by-step.md](aws-setup-step-by-step.md) | Historical/local AWS setup; **production** uses Terraform per plan |
+| [rds-backup-recovery.md](rds-backup-recovery.md) | RDS backups, PITR, snapshots |
+| [`deploy/ec2/README.md`](../deploy/ec2/README.md) | EC2 app layout, Gunicorn, Nginx, systemd |
+| [`deploy/ec2/DEPLOY.md`](../deploy/ec2/DEPLOY.md) | Deploy runbook (pull, pip, restart) |
+| [`deploy/POST_ELECTRON_TODO.md`](../deploy/POST_ELECTRON_TODO.md) | Post–Electron backlog (deploy scripts, daily health check) |
 
 ---
 
-## 7. Versioning
+## 7. As-built production decisions (April 2026)
+
+This section records **what we configured in Terraform and runtime**, not every possible future option.
+
+### 7.1 Region and IaC
+
+- **Primary region:** **`ap-south-1`** for VPC, ALB, ASG, RDS, etc.
+- **Terraform:** `terraform/network/` (single stack for this beta/prod pattern). **Remote state:** S3 + DynamoDB locking (see `terraform/network/versions.tf`).
+- **Edge:** **CloudFront** + **WAF** (ACM viewer cert in **us-east-1**); API hostname example **`api.dealersaathi.co.in`** when enabled.
+
+### 7.2 RDS (operational values)
+
+| Decision | Choice |
+|----------|--------|
+| Instance class | **`db.t4g.micro`** |
+| Engine | PostgreSQL (version pinned in Terraform, e.g. 16.x) |
+| Allocated storage | **20 GiB** gp3 |
+| Storage autoscaling ceiling | **100 GiB** |
+| Backup retention | **15 days** |
+| Deletion protection | **On** (Terraform) |
+| Free-disk alarm | CloudWatch **`FreeStorageSpace`**: alarm when **free space &lt; 5 GiB** (metric is free bytes remaining; at a 100 GiB volume, ~5 GiB free corresponds to ~95 GiB used) |
+| Connection alarms | **`rds_max_connections_for_alarms` = 45** for % thresholds |
+| FreeableMemory alarms | Derived from instance class memory map in Terraform (**no** separate memory override variable) |
+
+### 7.3 SNS and email
+
+- **Topic name:** **`autoscaling-notifications`** (default; overridable via `sns_autoscaling_notifications_topic_name`).
+- **Subscription:** **email** endpoint configured in Terraform (`alarm_notification_email`); **subscription must be confirmed** in the inbox before delivery.
+- **Topic policy:** allows **CloudWatch** and **Auto Scaling** to **publish** (plus app use for alarm + ASG lifecycle notifications).
+- **ASG lifecycle** (launch, terminate, launch/terminate errors) → same topic via **`aws_autoscaling_notification`**.
+
+### 7.4 CloudWatch alarms and Auto Scaling policies
+
+- **SNS:** Alarms use the topic for **alarm** and **OK** notifications (where configured).
+- **Scale-out (+1 instance, step scaling, warmup 300s):** triggered by **any** of: EC2 CPU warning/critical (max across instances), ALB **TargetResponseTime** warning/critical, ALB **RequestCountPerTarget** warning/critical, SQS **ApproximateNumberOfVisibleMessages** warning/critical (when `sqs_alarm_queue_names` is set). **Not** target tracking.
+- **Scale-in (−1 instance, simple scaling, cooldown 900s):** only when **average** EC2 CPU **&lt; 35%** over **15 minutes** (single alarm).
+- **Healthy hosts:** always alarm when **`HealthyHostCount` &lt; 1** (down). Second alarm (**degraded**: exactly one healthy target) is created **only if `asg_min_size >= 2`** (when min=1 the second alarm is omitted by design).
+- **RDS:** CPU, FreeableMemory, DatabaseConnections, **free disk** — **SNS only** (no scaling hooks).
+- **ALB HTTP 5xx:** SNS only (no ASG scaling from 5xx alone).
+
+### 7.5 EC2 bootstrap and CloudWatch Agent
+
+- **User data** installs **`amazon-cloudwatch-agent`** alongside **Nginx** bootstrap.
+- **Config file:** `/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json` — namespace **`CWAgent`**, **`append_dimensions`** **`InstanceId`** (`${aws:InstanceId}`), metrics **`mem_used_percent`**, **`disk_used_percent`** (all mounted filesystems via `resources: ["*"]`).
+- **IAM:** **`CloudWatchAgentServerPolicy`** attached to the EC2 role (in addition to SSM, Secrets Manager, SSM parameters for JWT, etc.).
+- **Replacement:** new instances (launch template / instance refresh) pick up agent changes; old instances do not retroactively.
+
+### 7.6 Access model
+
+- **Primary:** **SSM Session Manager** (no inbound SSH required; **`AmazonSSMManagedInstanceCore`** on the role).
+- **SSH:** optional; would require SG rules + key on the launch template if introduced later.
+
+### 7.7 Deferred / backlog (not blocking current prod)
+
+- **SQS queue names** in Terraform (`sqs_alarm_queue_names`) when async queues are wired — enables SQS alarms + scale-out from backlog.
+- **Deploy automation scripts** and **daily 08:00 synthetic health check** — tracked in **[`deploy/POST_ELECTRON_TODO.md`](../deploy/POST_ELECTRON_TODO.md)** (after Electron build stabilization).
+- **Routine smoke tests** (health, login) — operational validation, not infra.
+
+---
+
+## 8. Versioning
 
 | Version | Date | Notes |
 |---------|------|--------|
 | 0.1 | 2026-04-15 | Initial production cloud design: CloudFront, WAF, ALB, ASG 1/1/2, Gunicorn settings, BR/deployment rules |
+| 0.2 | 2026-04-18 | §7 as-built: RDS t4g.micro + storage/autoscale/backups, SNS `autoscaling-notifications`, CW alarms + step scaling, CW Agent mem/disk, healthy-host logic, access model, pointers to deploy/RDS docs |

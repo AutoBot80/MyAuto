@@ -1,42 +1,26 @@
-import { useEffect, useState, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { getAiReaderQueue } from "../api/aiReaderQueue";
 import type { AiReaderQueueItem } from "../types";
 
-export function useAiReaderQueue(active: boolean, pollIntervalMs = 5000) {
+export function useAiReaderQueue(enabled: boolean) {
   const [items, setItems] = useState<AiReaderQueueItem[]>([]);
-  const [error, setError] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
 
   const refetch = useCallback(async () => {
+    if (!enabled) return;
     try {
-      setError("");
+      setError(null);
       const data = await getAiReaderQueue();
       setItems(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load queue.");
+      setError(e instanceof Error ? e.message : "Failed to load AI reader queue");
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-
-    async function load() {
-      try {
-        const data = await getAiReaderQueue();
-        if (!cancelled) setItems(data);
-      } catch (e) {
-        if (!cancelled)
-          setError(e instanceof Error ? e.message : "Failed to load queue.");
-      }
-    }
-
-    load();
-    const t = window.setInterval(load, pollIntervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, [active, pollIntervalMs]);
+    if (!enabled) return;
+    void refetch();
+  }, [enabled, refetch]);
 
   return { items, error, refetch };
 }

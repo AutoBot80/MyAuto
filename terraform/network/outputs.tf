@@ -99,6 +99,11 @@ output "rds_identifier" {
   value = aws_db_instance.main.identifier
 }
 
+output "rds_backup_retention_period" {
+  description = "Automated backup retention (days) on the RDS instance."
+  value       = var.rds_backup_retention_period
+}
+
 output "rds_engine_version" {
   description = "Engine version on the RDS instance (matches var.rds_engine_version unless AWS normalizes minor)."
   value       = aws_db_instance.main.engine_version
@@ -108,6 +113,26 @@ output "rds_master_user_secret_arn" {
   description = "Secrets Manager ARN for the master password (retrieve to build DATABASE_URL or rotate)."
   value       = aws_db_instance.main.master_user_secret[0].secret_arn
   sensitive   = true
+}
+
+output "jwt_ssm_parameter_name_example" {
+  description = "Example SSM Parameter Store name for JWT_SECRET; IAM allows ssm:GetParameter under the project prefix."
+  value       = "/${var.project_name}/production/jwt_secret"
+}
+
+output "alarm_notification_sns_topic_arn" {
+  description = "SNS topic ARN for CloudWatch, scaling, and ASG lifecycle (confirm email subscription after apply)."
+  value       = local.sns_topic_arn_effective
+}
+
+output "autoscaling_scale_out_policy_arn" {
+  description = "Step scaling policy ARN wired to load alarms (+1 instance)."
+  value       = aws_autoscaling_policy.scale_out.arn
+}
+
+output "autoscaling_scale_in_policy_arn" {
+  description = "Simple scaling policy ARN wired to low-CPU alarm (-1 instance)."
+  value       = aws_autoscaling_policy.scale_in.arn
 }
 
 # --- CloudFront + WAF (optional; enable_cloudfront_waf + FQDN + Route 53 zone) ---
@@ -140,4 +165,14 @@ output "acm_cloudfront_certificate_arn" {
 output "cloudfront_origin_note" {
   description = "Operational note for tightening the ALB security group after CloudFront is live."
   value       = "Consider restricting ALB:80 ingress to the CloudFront origin-facing managed prefix list (com.amazonaws.global.cloudfront.origin-facing) so the load balancer is not reachable directly from the internet."
+}
+
+output "s3_data_bucket_id" {
+  description = "S3 bucket for uploaded scans and OCR output (set S3_DATA_BUCKET on the app to this value when STORAGE_BACKEND=s3)."
+  value       = aws_s3_bucket.data.id
+}
+
+output "s3_data_bucket_arn" {
+  description = "S3 data bucket ARN (IAM policy scope)."
+  value       = aws_s3_bucket.data.arn
 }

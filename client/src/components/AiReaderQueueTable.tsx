@@ -4,7 +4,7 @@ import { reprocessQueueItem } from "../api/aiReaderQueue";
 
 interface AiReaderQueueTableProps {
   items: AiReaderQueueItem[];
-  error: string;
+  error: string | null;
   onReprocess?: () => void;
 }
 

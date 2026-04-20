@@ -77,6 +77,10 @@ resource "aws_wafv2_web_acl" "cloudfront" {
     allow {}
   }
 
+  # Exclude body-inspection rules that false-positive on multipart file uploads
+  # (image/PDF binary data triggers SizeRestrictions_BODY, CrossSiteScripting_BODY,
+  #  etc.). Scoped to /uploads and /textract paths only so all other routes stay
+  #  fully protected.
   rule {
     name     = "AWSManagedRulesCommonRuleSet"
     priority = 10
@@ -89,12 +93,121 @@ resource "aws_wafv2_web_acl" "cloudfront" {
       managed_rule_group_statement {
         name        = "AWSManagedRulesCommonRuleSet"
         vendor_name = "AWS"
+
+        scope_down_statement {
+          not_statement {
+            statement {
+              or_statement {
+                statement {
+                  byte_match_statement {
+                    search_string         = "/uploads"
+                    positional_constraint = "STARTS_WITH"
+                    field_to_match {
+                      uri_path {}
+                    }
+                    text_transformation {
+                      priority = 0
+                      type     = "LOWERCASE"
+                    }
+                  }
+                }
+                statement {
+                  byte_match_statement {
+                    search_string         = "/textract"
+                    positional_constraint = "STARTS_WITH"
+                    field_to_match {
+                      uri_path {}
+                    }
+                    text_transformation {
+                      priority = 0
+                      type     = "LOWERCASE"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
 
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "${var.project_name}-CommonRuleSet"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Separate rule: apply CommonRuleSet to /uploads and /textract paths but
+  # exclude the body-inspection rules that break multipart binary uploads.
+  rule {
+    name     = "CommonRuleSetUploadsExclusions"
+    priority = 11
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+
+        rule_action_override {
+          name = "SizeRestrictions_BODY"
+          action_to_use {
+            count {}
+          }
+        }
+        rule_action_override {
+          name = "CrossSiteScripting_BODY"
+          action_to_use {
+            count {}
+          }
+        }
+        rule_action_override {
+          name = "GenericRFI_BODY"
+          action_to_use {
+            count {}
+          }
+        }
+
+        scope_down_statement {
+          or_statement {
+            statement {
+              byte_match_statement {
+                search_string         = "/uploads"
+                positional_constraint = "STARTS_WITH"
+                field_to_match {
+                  uri_path {}
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "LOWERCASE"
+                }
+              }
+            }
+            statement {
+              byte_match_statement {
+                search_string         = "/textract"
+                positional_constraint = "STARTS_WITH"
+                field_to_match {
+                  uri_path {}
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "LOWERCASE"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.project_name}-CommonRuleSet-Uploads"
       sampled_requests_enabled   = true
     }
   }
@@ -111,6 +224,13 @@ resource "aws_wafv2_web_acl" "cloudfront" {
       managed_rule_group_statement {
         name        = "AWSManagedRulesKnownBadInputsRuleSet"
         vendor_name = "AWS"
+
+        rule_action_override {
+          name = "Log4JRCE_BODY"
+          action_to_use {
+            count {}
+          }
+        }
       }
     }
 

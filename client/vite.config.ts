@@ -62,7 +62,10 @@ function longProxy(target: string): ProxyOptions {
 }
 
 // https://vite.dev/config/
-export default defineConfig({
+// Production builds must use a relative base so `file://` loads work in the Electron shell
+// (absolute "/assets/..." breaks when opening packaged `client-dist/index.html`).
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? './' : '/',
   plugins: [react(), devServerDisableRequestTimeout()],
   server: {
     proxy: {
@@ -87,4 +90,4 @@ export default defineConfig({
       '/documents': 'http://127.0.0.1:8000',
     },
   },
-})
+}))

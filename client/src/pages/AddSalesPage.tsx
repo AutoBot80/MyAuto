@@ -378,7 +378,7 @@ export function AddSalesPage({
   });
   const [formResetKey, setFormResetKey] = useState(0);
 
-  /** DMS warm-browser runs only after OCR text has been applied to the form (upload response or poll), or on restore when persisted extraction exists — not before. */
+  /** User-facing message when DMS warm-browser fails (sidecar or API). */
   const formatWarmBrowserFailure = useCallback((err: unknown): string => {
     const raw = err instanceof Error ? err.message : String(err);
     const unreachable =
@@ -914,11 +914,11 @@ export function AddSalesPage({
     }
   }, [savedTo]);
 
+  /** Pre-open DMS browser as soon as upload has a subfolder and site URLs are ready (before OCR completes). */
   useEffect(() => {
-    if (!savedTo || !pageVisible) return;
-    if (!hasMeaningfulCustomer(c) && !hasVehicleData(v ?? null) && !hasMeaningfulInsurance(ins)) return;
+    if (!savedTo) return;
     triggerWarmBrowser(savedTo);
-  }, [savedTo, pageVisible, c, v, ins, triggerWarmBrowser]);
+  }, [savedTo, triggerWarmBrowser]);
 
   useEffect(() => {
     if (hasSuppliedInsuranceDoc) {

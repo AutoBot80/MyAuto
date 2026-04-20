@@ -24,6 +24,9 @@ build/
 node_modules/
 client/node_modules/
 client/dist/
+electron/node_modules/
+electron/release/
+
 
 # IDE and OS
 .idea/

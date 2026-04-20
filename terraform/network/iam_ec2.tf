@@ -24,6 +24,11 @@ resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+resource "aws_iam_role_policy_attachment" "ec2_cloudwatch_agent" {
+  role       = aws_iam_role.ec2_app.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+
 resource "aws_iam_role_policy" "ec2_app_data_plane" {
   name = "${var.project_name}-ec2-app-data-plane"
   role = aws_iam_role.ec2_app.id
@@ -44,12 +49,12 @@ resource "aws_iam_role_policy" "ec2_app_data_plane" {
         ])
       },
       {
-        Sid    = "S3ArtifactsBeta"
+        Sid    = "S3DataBucketArtifacts"
         Effect = "Allow"
         Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
         Resource = [
-          "arn:aws:s3:::*",
-          "arn:aws:s3:::*/*",
+          aws_s3_bucket.data.arn,
+          "${aws_s3_bucket.data.arn}/*",
         ]
       },
       {
@@ -63,6 +68,17 @@ resource "aws_iam_role_policy" "ec2_app_data_plane" {
         Effect   = "Allow"
         Action   = ["kms:Decrypt", "kms:DescribeKey"]
         Resource = ["*"]
+      },
+      {
+        Sid    = "SSMJwtParameter"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+        ]
+        Resource = [
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/*",
+        ]
       },
     ]
   })
