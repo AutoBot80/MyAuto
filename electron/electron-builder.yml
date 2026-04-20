@@ -57,3 +57,4 @@ publish:
   owner: AutoBot80
   repo: MyAuto
   private: true
+  releaseType: release
