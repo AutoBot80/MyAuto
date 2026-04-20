@@ -671,7 +671,50 @@ def dispatch(payload: dict) -> dict:
     return {"success": False, "error": f"Unknown job type: {job_type}"}
 
 
+def main_daemon() -> None:
+    """Read newline-delimited JSON jobs from stdin; write one JSON response line per job (stdout)."""
+    logging_initialized = False
+    bootstrapped = False
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as e:
+            print(json.dumps({"success": False, "error": f"Invalid JSON: {e}"}), flush=True)
+            continue
+        saathi = str(payload.get("saathi_base_dir") or os.environ.get("SAATHI_BASE_DIR") or r"D:\Saathi")
+        saathi_path = Path(saathi)
+        saathi_path.mkdir(parents=True, exist_ok=True)
+        if not logging_initialized:
+            _setup_logging(saathi_path)
+            logging_initialized = True
+        job_type = payload.get("type") or payload.get("job")
+        try:
+            if job_type == "ping":
+                out = dispatch(payload)
+            else:
+                if not bootstrapped:
+                    _bootstrap_imports(saathi)
+                    bootstrapped = True
+                logging.info("Daemon job start: %s", job_type)
+                out = dispatch(payload)
+                logging.info("Daemon job end: success=%s", out.get("success"))
+            print(json.dumps(out, default=str), flush=True)
+        except Exception:
+            logging.exception("Daemon job failed")
+            print(
+                json.dumps({"success": False, "error": traceback.format_exc()}),
+                flush=True,
+            )
+
+
 def main() -> None:
+    if "--daemon" in sys.argv:
+        main_daemon()
+        return
+
     raw = sys.stdin.read()
     try:
         payload = json.loads(raw) if raw.strip() else {}

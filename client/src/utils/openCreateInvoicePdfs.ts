@@ -37,7 +37,9 @@ function sortDmsPdfOpenOrder(names: string[]): string[] {
   return [...names].sort((a, b) => rank(a) - rank(b));
 }
 
-async function openPdfBlobInNewTab(subfolder: string, filename: string, dealerId: number): Promise<void> {
+const PDF_TAB_STAGGER_MS = 150;
+
+async function fetchPdfBlob(subfolder: string, filename: string, dealerId: number): Promise<Blob> {
   const base = getBaseUrl().replace(/\/$/, "");
   const params = new URLSearchParams({ dealer_id: String(dealerId) });
   const url = `${base}/documents/${encodeURIComponent(subfolder)}/${encodeURIComponent(filename)}?${params}`;
@@ -49,7 +51,10 @@ async function openPdfBlobInNewTab(subfolder: string, filename: string, dealerId
     const t = await res.text().catch(() => "");
     throw new Error(t.trim() || `HTTP ${res.status}`);
   }
-  const blob = await res.blob();
+  return res.blob();
+}
+
+function openBlobInNewTab(blob: Blob): void {
   const objUrl = URL.createObjectURL(blob);
   const w = window.open(objUrl, "_blank", "noopener,noreferrer");
   if (!w) {
@@ -93,13 +98,23 @@ export async function openCreateInvoicePdfsInBrowser(
     return { opened: 0, candidateCount: 0, hint: "no DMS PDFs found in folder yet" };
   }
 
+  const blobs = await Promise.all(
+    ordered.map((name) =>
+      fetchPdfBlob(subfolder, name, dealerId).catch(() => null)
+    )
+  );
+
   let opened = 0;
   for (let i = 0; i < ordered.length; i++) {
+    const blob = blobs[i];
+    if (!blob) {
+      continue;
+    }
     try {
-      await openPdfBlobInNewTab(subfolder, ordered[i], dealerId);
+      openBlobInNewTab(blob);
       opened++;
       if (i < ordered.length - 1) {
-        await new Promise((r) => setTimeout(r, 450));
+        await new Promise((r) => setTimeout(r, PDF_TAB_STAGGER_MS));
       }
     } catch {
       /* try next */

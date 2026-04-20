@@ -34,6 +34,10 @@ export function logInfo(message: string): void {
   logAppLine("INFO", message);
 }
 
+export function logWarn(message: string): void {
+  logAppLine("WARN", message);
+}
+
 export function logError(message: string, err?: unknown): void {
   const extra = err instanceof Error ? err.stack || err.message : err ? String(err) : "";
   logAppLine("ERROR", extra ? `${message} ${extra}` : message);

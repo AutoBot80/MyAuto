@@ -18,13 +18,16 @@ launches a fresh process with exactly one tab.
 from __future__ import annotations
 
 import atexit
+import concurrent.futures
 import logging
 import os
 import shutil
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
@@ -70,6 +73,10 @@ _PW_THREAD_ID: int | None = None
 _KEEP_OPEN_BROWSERS: list = []
 _CDP_BROWSERS_BY_URL: dict[str, object] = {}
 _RETAINED_BROWSERS_NO_CLOSE: list = []
+_CDP_REFRESH_LOCK = threading.Lock()
+_LAST_CDP_REFRESH_MONO: float = 0.0
+_CDP_REFRESH_TTL_SEC = 2.0
+_CDP_PROBE_TIMEOUT_SEC = 0.35
 
 
 def _retain_browsers_without_closing() -> None:
@@ -131,9 +138,53 @@ def _candidate_cdp_urls() -> list[str]:
     return unique_urls
 
 
+def _cdp_url_http_reachable(cdp_url: str) -> bool:
+    """Fast probe: Chrome/Edge CDP serves ``/json/version`` over HTTP without Playwright."""
+    base = (cdp_url or "").strip().rstrip("/")
+    if not base:
+        return False
+    probe = f"{base}/json/version"
+    try:
+        with urllib.request.urlopen(probe, timeout=_CDP_PROBE_TIMEOUT_SEC) as resp:
+            return 200 <= int(getattr(resp, "status", 200)) < 300
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return False
+
+
+def _ordered_cdp_urls_for_connect(candidates: list[str], reachable: dict[str, bool]) -> list[str]:
+    """Prefer URLs that responded to HTTP probe (parallel), then try the rest in original order."""
+    yes = [u for u in candidates if reachable.get(u) is True]
+    no = [u for u in candidates if reachable.get(u) is not True]
+    return yes + no
+
+
 def _refresh_cdp_browsers() -> None:
+    global _LAST_CDP_REFRESH_MONO
+    now = time.monotonic()
+    with _CDP_REFRESH_LOCK:
+        if now - _LAST_CDP_REFRESH_MONO < _CDP_REFRESH_TTL_SEC:
+            return
+        _LAST_CDP_REFRESH_MONO = time.monotonic()
+
+    candidates = _candidate_cdp_urls()
+    reachable: dict[str, bool] = {}
+    if len(candidates) > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(candidates))) as pool:
+            future_map = {pool.submit(_cdp_url_http_reachable, u): u for u in candidates}
+            for fut in concurrent.futures.as_completed(future_map):
+                u = future_map[fut]
+                try:
+                    reachable[u] = bool(fut.result())
+                except Exception:
+                    reachable[u] = False
+    else:
+        for u in candidates:
+            reachable[u] = _cdp_url_http_reachable(u)
+
+    connect_order = _ordered_cdp_urls_for_connect(candidates, reachable)
+
     pw = _get_playwright()
-    for cdp_url in _candidate_cdp_urls():
+    for cdp_url in connect_order:
         existing = _CDP_BROWSERS_BY_URL.get(cdp_url)
         if existing is not None:
             try:
@@ -229,7 +280,7 @@ def _launch_managed_browser_for_site(
             )
             logger.info("handle_browser_opening: launched %s independently (port %s)", channel, port)
             _cdp_t0 = time.monotonic()
-            _cdp_deadline = _cdp_t0 + 8.0
+            _cdp_deadline = _cdp_t0 + 5.0
             while time.monotonic() < _cdp_deadline:
                 try:
                     browser = pw.chromium.connect_over_cdp(cdp_url)
@@ -327,15 +378,9 @@ def _launch_managed_browser_for_site(
                         continue
                 except Exception:
                     pass
-                _elapsed = time.monotonic() - _cdp_t0
-                if _elapsed < 1.2:
-                    time.sleep(0.06)
-                elif _elapsed < 3.5:
-                    time.sleep(0.14)
-                else:
-                    time.sleep(0.28)
+                time.sleep(0.05)
             logger.warning(
-                "handle_browser_opening: launched %s but could not connect via CDP at %s within ~8s",
+                "handle_browser_opening: launched %s but could not connect via CDP at %s within ~5s",
                 channel,
                 cdp_url,
             )
@@ -480,7 +525,9 @@ def _try_auto_login_if_prefilled(page) -> bool:
             return False
 
     prefilled = None
-    for _attempt in range(6):
+    for _attempt in range(3):
+        if _attempt > 0:
+            time.sleep(0.25)
         try:
             prefilled = page.evaluate(_detect_js)
         except Exception:
@@ -489,7 +536,6 @@ def _try_auto_login_if_prefilled(page) -> bool:
             break
         if prefilled and prefilled.get("status") == "no_form":
             break
-        time.sleep(1)
 
     if prefilled and prefilled.get("status") == "no_form" and not _is_login_url():
         logger.info("handle_browser_opening: no login form detected; continuing with existing logged-in session.")
@@ -517,7 +563,7 @@ def _try_auto_login_if_prefilled(page) -> bool:
     ):
         try:
             loc = page.locator(sel).first
-            if loc.count() > 0 and loc.is_visible(timeout=800):
+            if loc.count() > 0 and loc.is_visible(timeout=200):
                 loc.click(timeout=3000)
                 login_clicked = True
                 break
@@ -608,11 +654,11 @@ def _wait_login_or_prompt_after_open(page, site_label: str):
     After opening or reusing a tab, wait briefly for session/login to clear.
     Returns ``(page, None)`` when ready, or ``(None, operator_message)`` when login is still required.
     """
-    for _ in range(5):
+    for _ in range(3):
         if _is_ready_after_login_page(page):
             logger.info("handle_browser_opening: login/session became ready in same request.")
             return page, None
-        time.sleep(1)
+        time.sleep(0.5)
 
     try:
         ul = (page.url or "").lower()
