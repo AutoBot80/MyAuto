@@ -108,6 +108,16 @@ if (-not $SkipCommit) {
         Write-Ok "Nothing to commit (working tree matches HEAD for tracked files)"
     } else {
         $verMsg = Get-NextDeployVersionMessage
+        $semver = $verMsg.TrimStart("v")
+        $versionPath = Join-Path $RepoRoot "backend\VERSION"
+        $utf8Ver = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($versionPath, $semver, $utf8Ver)
+        Write-Host "Wrote backend/VERSION -> $semver" -ForegroundColor DarkGray
+        git add "backend/VERSION"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "git add backend/VERSION failed."
+            exit 1
+        }
         git add -u
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "git add -u failed."

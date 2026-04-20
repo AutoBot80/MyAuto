@@ -540,10 +540,10 @@ async def upload_artifacts(
 
 @router.get("/scripts/version")
 def scripts_version() -> dict:
-    """Return the git commit of the running server code. Cheap, called often."""
-    from app.version import GIT_COMMIT_SHORT
+    """Return semver + git commit of the running server code. Cheap, called often."""
+    from app.version import BACKEND_SEMVER, GIT_COMMIT_SHORT
 
-    return {"git_commit": GIT_COMMIT_SHORT}
+    return {"version": BACKEND_SEMVER, "git_commit": GIT_COMMIT_SHORT}
 
 
 @router.get("/scripts/bundle")
@@ -562,11 +562,15 @@ def scripts_bundle(
     from app.version import GIT_COMMIT_SHORT
 
     app_dir = Path(__file__).resolve().parent.parent  # backend/app/
+    backend_root = app_dir.parent
+    version_file = backend_root / "VERSION"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in app_dir.rglob("*.py"):
             arc_name = f"backend/app/{f.relative_to(app_dir)}"
             zf.write(f, arc_name)
+        if version_file.is_file():
+            zf.write(version_file, "backend/VERSION")
     buf.seek(0)
     return StreamingResponse(
         buf,

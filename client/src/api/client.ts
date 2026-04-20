@@ -105,3 +105,22 @@ export async function apiFetch<T>(
     throw new Error(`Expected valid JSON response for ${path}, but received non-JSON content.`);
   }
 }
+
+/** Public ``GET /health`` (no JWT). Used for backend semver on the home page. */
+export async function fetchHealth(): Promise<{
+  status: string;
+  version?: string;
+  git_commit?: string;
+}> {
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/health`);
+  } catch (err) {
+    throwMappedFetchError(err);
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new ApiHttpError(res.status, text || `HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ status: string; version?: string; git_commit?: string }>;
+}

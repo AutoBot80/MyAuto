@@ -13,6 +13,21 @@ import subprocess
 from pathlib import Path
 
 _APP_DIR = Path(__file__).resolve().parent
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+_VERSION_FILE = _BACKEND_ROOT / "VERSION"
+
+
+def read_backend_semver() -> str:
+    """Semver from ``backend/VERSION`` (deploy script); fallback ``0.0.0``."""
+    try:
+        if _VERSION_FILE.is_file():
+            return _VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    return "0.0.0"
+
+
+BACKEND_SEMVER: str = read_backend_semver()
 
 
 def _resolve_git_commit() -> str:

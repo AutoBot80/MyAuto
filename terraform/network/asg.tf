@@ -82,26 +82,23 @@ locals {
     # ── 6. .env from Secrets Manager (preferred) or SSM (legacy) ──────────
     # Inline (do not rely on deploy/ec2/load-dotenv.sh in git — remote branch may omit it).
     %{if var.app_dotenv_secret_arn != ""}
-    DOTENV_SECRET_ARN="${var.app_dotenv_secret_arn}"
-    ENV_FILE="/opt/saathi/backend/.env"
-    mkdir -p "$$(dirname "$$ENV_FILE")"
-    TMP=$$(mktemp)
-    trap 'rm -f "$$TMP"' EXIT
+    DOTENV_TMP=$(mktemp)
+    trap 'rm -f "$DOTENV_TMP"' EXIT
     if ! aws --region ${var.aws_region} secretsmanager get-secret-value \
-      --secret-id "$$DOTENV_SECRET_ARN" \
+      --secret-id "${var.app_dotenv_secret_arn}" \
       --query SecretString \
-      --output text > "$$TMP"; then
+      --output text > "$DOTENV_TMP"; then
       echo "aws secretsmanager get-secret-value failed (IAM, ARN, region)." >&2
       exit 1
     fi
-    if [[ ! -s "$$TMP" ]]; then
+    if [[ ! -s "$DOTENV_TMP" ]]; then
       echo "SecretString was empty — refusing to write .env" >&2
       exit 1
     fi
-    mv -f "$$TMP" "$$ENV_FILE"
+    mv -f "$DOTENV_TMP" /opt/saathi/backend/.env
     trap - EXIT
-    chmod 600 "$$ENV_FILE"
-    echo "Wrote .env from Secrets Manager to $$ENV_FILE"
+    chmod 600 /opt/saathi/backend/.env
+    echo "Wrote .env from Secrets Manager ($(wc -l < /opt/saathi/backend/.env) lines)"
     %{else}
     %{if var.app_dotenv_ssm_param != ""}
     aws ssm get-parameter --name "${var.app_dotenv_ssm_param}" \
