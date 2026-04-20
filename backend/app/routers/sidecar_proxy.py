@@ -9,6 +9,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/insurance/commit``  → insert/update insurance_master
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
   - ``/sidecar/vahan/row-result``  → report per-row result (completed/failed/pending)
+  - ``/sidecar/upload-artifacts`` → multipart upload of one file into uploads or ocr tree (syncs to S3)
 
 All endpoints are JWT-protected via ``get_principal`` / ``resolve_dealer_id``.
 """
@@ -19,11 +20,10 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.config import (
-    DEALER_ID,
     DMS_BASE_URL,
     INSURANCE_BASE_URL,
     VAHAN_BASE_URL,
@@ -35,6 +35,7 @@ from app.config import (
 from app.db import get_connection
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
+from app.services.dealer_storage import sync_ocr_file_to_s3, sync_uploads_file_to_s3
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,21 @@ class VahanRowResultRequest(BaseModel):
 
 class VahanRowResultResponse(BaseModel):
     ok: bool
+
+
+class UploadArtifactResponse(BaseModel):
+    ok: bool
+    rel_path: str
+    tree: str
+
+
+def _sanitize_sidecar_rel_path(raw: str) -> str:
+    """Reject path traversal; return posix relative path under dealer root."""
+    p = (raw or "").strip().replace("\\", "/")
+    parts = [x for x in p.split("/") if x and x != "."]
+    if any(x == ".." for x in parts):
+        raise HTTPException(status_code=400, detail="Invalid rel_path")
+    return "/".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -471,3 +487,47 @@ async def vahan_row_result(
         raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
 
     return VahanRowResultResponse(ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Artifact upload (sidecar → EC2 disk + optional S3 sync)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/upload-artifacts", response_model=UploadArtifactResponse)
+async def upload_artifacts(
+    dealer_id: int = Form(),
+    tree: str = Form(),
+    rel_path: str = Form(),
+    file: UploadFile = File(),
+    principal: Principal = Depends(get_principal),
+) -> UploadArtifactResponse:
+    """
+    Multipart upload of one file from the dealer PC Playwright run. Writes under
+    ``get_uploads_dir`` or ``get_ocr_output_dir`` and syncs to S3 when configured.
+    """
+    did = resolve_dealer_id(principal, dealer_id)
+    t = (tree or "").strip().lower()
+    if t not in ("uploads", "ocr"):
+        raise HTTPException(status_code=400, detail='tree must be "uploads" or "ocr"')
+    safe_rel = _sanitize_sidecar_rel_path(rel_path)
+    root = get_uploads_dir(did) if t == "uploads" else get_ocr_output_dir(did)
+    dest = root / safe_rel
+    try:
+        dest = dest.resolve()
+        root_res = root.resolve()
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
+        dest.relative_to(root_res)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Path escapes dealer directory") from e
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    body = await file.read()
+    dest.write_bytes(body)
+    if t == "uploads":
+        sync_uploads_file_to_s3(did, dest)
+    else:
+        sync_ocr_file_to_s3(did, dest)
+    return UploadArtifactResponse(ok=True, rel_path=safe_rel, tree=t)

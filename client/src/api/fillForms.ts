@@ -78,7 +78,10 @@ export interface FillDmsResponse {
   print_jobs?: ApiPrintJob[];
 }
 
-/** Server-returned print targets when ``STORAGE_BACKEND=s3`` (Electron prints via presigned URL). */
+/**
+ * Server ``print_jobs``: presigned HTTPS URLs when ``STORAGE_BACKEND=s3``.
+ * Electron sidecar runs may use absolute local PDF paths in ``presigned_url`` instead.
+ */
 export interface ApiPrintJob {
   filename?: string;
   presigned_url: string;

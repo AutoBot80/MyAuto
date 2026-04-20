@@ -226,6 +226,105 @@ def collect_invoice_print_jobs_s3(
     return jobs
 
 
+def collect_invoice_print_jobs_electron_local(
+    dealer_id: int,
+    subfolder: str,
+    mobile: str,
+    pdfs_saved: list[str] | None = None,
+) -> list[dict]:
+    """
+    Same PDF selection as :func:`collect_invoice_print_jobs_s3`, but return absolute local paths
+    in ``presigned_url`` for Electron to print without downloading from S3 (sidecar / dealer PC).
+    """
+    base = get_uploads_dir(dealer_id) / subfolder
+    saved_list = [Path(s).resolve() for s in (pdfs_saved or []) if s and str(s).strip()]
+    mob = _digits_10(mobile) or _mobile_from_subfolder(subfolder)
+    jobs: list[dict] = []
+
+    for report in _DMS_REPORTS_AFTER_INVOICE:
+        chosen: Path | None = None
+        expected: Path | None = None
+        if mob:
+            expected = base / _mobile_report_pdf_filename(mob, report)
+            if expected.is_file():
+                chosen = expected
+        if chosen is None:
+            for p in saved_list:
+                if not p.is_file():
+                    continue
+                low = p.name.lower()
+                if report == "GST Retail Invoice" and "gst" in low and "retail" in low:
+                    chosen = p
+                    break
+                if report == "Sale Certificate" and "sale" in low and "certificate" in low:
+                    chosen = p
+                    break
+        if chosen is None or not chosen.is_file():
+            continue
+        kind = "gst_retail_invoice" if report == "GST Retail Invoice" else "sale_certificate"
+        jobs.append(_print_job(chosen.name, str(chosen.resolve()), kind))
+
+    if mob:
+        try:
+            from app.services.form20_pencil_overlay import form20_pencil_overlay_write_only
+
+            stamped = form20_pencil_overlay_write_only(base, mob)
+            if stamped is not None and stamped.is_file():
+                jobs.append(_print_job(stamped.name, str(stamped.resolve()), "form20_pencil"))
+        except Exception as exc:
+            logger.warning("collect_invoice_print_jobs_electron_local: pencil overlay: %s", exc)
+
+    return jobs
+
+
+def collect_insurance_print_jobs_electron_local(dealer_id: int, subfolder: str) -> list[dict]:
+    """
+    Same resolution as :func:`collect_insurance_print_jobs_s3`, but return a local path for Electron printing.
+    """
+    uploads_base = get_uploads_dir(dealer_id) / subfolder
+    ocr_base = get_ocr_output_dir(dealer_id) / subfolder
+
+    def _try_path(base: Path) -> dict | None:
+        if not base.is_dir():
+            return None
+        mob = _mobile_from_subfolder(str(base.name))
+        if mob:
+            for name in (f"{mob}_Insurance.pdf", f"{mob}_Insurance_Policy.pdf"):
+                p = base / name
+                if p.is_file():
+                    return {"path": p, "name": name}
+        for name in ("Insurance.pdf", "Insurance_Policy.pdf", "Hero_Insurance.pdf", "MISP_Insurance.pdf"):
+            p = base / name
+            if p.is_file():
+                return {"path": p, "name": name}
+        skip_parts = ("gst_retail", "sale_certificate", "form22", "form_20", "booking_receipt", "invoice_details")
+        scored: list[tuple[float, Path]] = []
+        for p in base.glob("*.pdf"):
+            low = p.name.lower()
+            if any(sp in low.replace(" ", "_") for sp in skip_parts):
+                continue
+            if any(k in low for k in ("insurance", "proposal", "policy", "misp")):
+                try:
+                    scored.append((p.stat().st_mtime, p))
+                except OSError:
+                    continue
+        if scored:
+            best = max(scored, key=lambda x: x[0])[1]
+            return {"path": best, "name": best.name}
+        return None
+
+    for attempt in range(15):
+        for folder in (uploads_base, ocr_base):
+            hit = _try_path(folder)
+            if hit is None:
+                continue
+            p = hit["path"]
+            return [_print_job(p.name, str(p.resolve()), "insurance")]
+        time.sleep(0.35)
+
+    return []
+
+
 def collect_insurance_print_jobs_s3(dealer_id: int, subfolder: str) -> list[dict]:
     """After insurance automation, sync and return a presigned URL for the policy PDF if found."""
     sync_uploads_subfolder_to_s3(dealer_id, subfolder)
