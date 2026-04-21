@@ -1191,9 +1191,17 @@ def _siebel_click_service_request_list_new_record(
         "[aria-label='Pdi List:New']",
         "button[aria-label='PDI List:New']",
         "a[aria-label='PDI List:New']",
+        "[aria-label='HHML PDI List:New']",
+        "button[aria-label='HHML PDI List:New']",
+        "a[aria-label='HHML PDI List:New']",
         "[aria-label*='PDI' i][aria-label*='List' i][aria-label*='New' i]",
         "[title='PDI List:New']",
+        "[title='HHML PDI List:New']",
         "[title*='PDI List:New' i]",
+        "button[data-display='New'][aria-label*='Service Request' i]",
+        "button[data-display='New'][aria-label*='PDI' i]",
+        "button[data-display='New'][title*='Service Request' i]",
+        "button[data-display='New'][title*='PDI' i]",
         "[aria-label='Precheck List:New']",
         "[aria-label='Pre-check List:New']",
         "a[aria-label='Precheck List:New']",
@@ -1263,9 +1271,10 @@ def _siebel_click_service_request_list_new_record(
             const al = (el.getAttribute('aria-label') || '').toLowerCase();
             const tt = (el.getAttribute('title') || '').toLowerCase();
             const isSrToolbarSpan = (hid === 's_2_1_12_0' || hid === 's_3_1_12_0');
+            const dd = (el.getAttribute('data-display') || '').trim();
             const idOk = hasNr || isListNewNotMenu(el)
                 || (isSrToolbarSpan && (al.includes('new') || tt.includes('new') || al.includes('list') || tt.includes('list')))
-                || (isSrToolbarSpan && vis(el));
+                || (isSrToolbarSpan && dd === 'New');
             if (!idOk) { diag.tried.push(hid + ':span-label-mismatch'); return false; }
             if (!vis(el)) { diag.tried.push(hid + ':not-visible'); return false; }
             try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
@@ -1276,7 +1285,11 @@ def _siebel_click_service_request_list_new_record(
         const allBtns = Array.from(document.querySelectorAll(
             'button.siebui-icon-newrecord, span.siebui-icon-newrecord, a.siebui-icon-newrecord'
         ));
-        for (const b of allBtns) {
+        const dataDisplayNewBtns = Array.from(document.querySelectorAll(
+            'button[data-display="New"], a[data-display="New"]'
+        )).filter((el) => !allBtns.includes(el));
+        const combinedBtns = [...allBtns, ...dataDisplayNewBtns];
+        for (const b of combinedBtns) {
             const bid = b.id || '(no-id)';
             const al = (b.getAttribute('aria-label') || '').slice(0, 50);
             const tt = (b.getAttribute('title') || '').slice(0, 50);
@@ -1295,7 +1308,7 @@ def _siebel_click_service_request_list_new_record(
         for (const hid of ids) {
             if (tryClickSpanOrAnchorNew(hid)) return diag;
         }
-        for (const el of allBtns) {
+        for (const el of combinedBtns) {
             if (!vis(el) || !isListNewNotMenu(el)) continue;
             try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
             el.click();
@@ -2892,9 +2905,20 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             const r = el.getBoundingClientRect();
             return r.width > 0 && r.height > 0;
         };
+        const isLeftSearchPane = (el) => {
+            let n = el;
+            for (let d = 0; d < 22 && n; d++) {
+                const pid = String(n.id || '').toLowerCase();
+                if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
+                    return true;
+                }
+                n = n.parentElement;
+            }
+            return false;
+        };
         let jqRows = 0;
         let gridId = '';
-        for (const gid of ['s_2_l', 's_3_l']) {
+        for (const gid of ['s_2_l', 's_3_l', 's_4_l', 's_5_l']) {
             const tbl = document.getElementById(gid);
             if (tbl && vis(tbl)) {
                 const rows = tbl.querySelectorAll('tbody tr.jqgrow').length;
@@ -2908,6 +2932,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             const btables = document.querySelectorAll('table.ui-jqgrid-btable');
             for (const tb of btables) {
                 if (!vis(tb)) continue;
+                if (isLeftSearchPane(tb)) continue;
                 const rows = tb.querySelectorAll('tbody tr.jqgrow').length;
                 if (rows > jqRows) {
                     jqRows = rows;
@@ -2917,7 +2942,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         }
         let rcTotal = 0;
         let rcText = '';
-        for (const rcId of ['s_2_rc', 's_3_rc']) {
+        for (const rcId of ['s_2_rc', 's_3_rc', 's_4_rc', 's_5_rc']) {
             const rc = document.getElementById(rcId);
             if (rc && vis(rc)) {
                 const txt = (rc.textContent || '').trim();
@@ -3007,8 +3032,12 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             '[aria-labelledby*="PDI_Expiry_Date"]',
             '[aria-labelledby*="s_2_l_altDateTime"]',
             '[aria-labelledby*="s_3_l_altDateTime"]',
+            '[aria-labelledby*="s_4_l_altDateTime"]',
+            '[aria-labelledby*="s_5_l_altDateTime"]',
             '[id*="s_2_l_altDateTime"]',
             '[id*="s_3_l_altDateTime"]',
+            '[id*="s_4_l_altDateTime"]',
+            '[id*="s_5_l_altDateTime"]',
             '[id*="HMCL_PDI_Expiry"]',
         ].join(', ');
         document.querySelectorAll(sel).forEach((el) => {
@@ -3102,6 +3131,12 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 if (id.includes('s_3_l') || id.includes('gview_s_3') || id === 'gbox_s_3_l') {
                     return true;
                 }
+                if (id.includes('s_4_l') || id.includes('gview_s_4') || id === 'gbox_s_4_l') {
+                    return true;
+                }
+                if (id.includes('s_5_l') || id.includes('gview_s_5') || id === 'gbox_s_5_l') {
+                    return true;
+                }
                 if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
                     return true;
                 }
@@ -3127,7 +3162,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             }).length;
         };
         let tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter((tb) => vis(tb) && isPdiListScoped(tb));
-        for (const directId of ['s_2_l', 's_3_l']) {
+        for (const directId of ['s_2_l', 's_3_l', 's_4_l', 's_5_l']) {
             const tbl = document.getElementById(directId);
             if (tbl && vis(tbl) && !tables.includes(tbl)) {
                 tables.push(tbl);
@@ -3138,7 +3173,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         }
         let rowCounterValue = '';
         let rowCounterRows = 0;
-        for (const rcId of ['s_2_rc', 's_3_rc']) {
+        for (const rcId of ['s_2_rc', 's_3_rc', 's_4_rc', 's_5_rc']) {
             const rcEl = document.getElementById(rcId);
             if (rcEl && vis(rcEl)) {
                 const txt = (rcEl.textContent || '').trim();
@@ -3158,6 +3193,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             '2_s_2_l_HMCL_PDI_Expiry_Date', '2_s_2_l_PDI_Expiry_Date',
             '1_s_3_l_HMCL_PDI_Expiry_Date', '1_s_3_l_PDI_Expiry_Date', '1_s_3_l_HHML_PDI_Expiry',
             '2_s_3_l_HMCL_PDI_Expiry_Date', '2_s_3_l_PDI_Expiry_Date',
+            '1_s_4_l_HMCL_PDI_Expiry_Date', '1_s_4_l_PDI_Expiry_Date', '1_s_4_l_HHML_PDI_Expiry',
+            '2_s_4_l_HMCL_PDI_Expiry_Date', '2_s_4_l_PDI_Expiry_Date',
+            '1_s_5_l_HMCL_PDI_Expiry_Date', '1_s_5_l_PDI_Expiry_Date', '1_s_5_l_HHML_PDI_Expiry',
+            '2_s_5_l_HMCL_PDI_Expiry_Date', '2_s_5_l_PDI_Expiry_Date',
         ];
         for (const cid of cellProbeIds) {
             const dc = document.getElementById(cid);
@@ -3166,7 +3205,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if (!pdiDataCellHit) {
             const probe = document.querySelector(
                 '[id^="1_s_2_l_"][id*="Expiry"], [id^="2_s_2_l_"][id*="Expiry"], '
-                + '[id^="1_s_3_l_"][id*="Expiry"], [id^="2_s_3_l_"][id*="Expiry"]'
+                + '[id^="1_s_3_l_"][id*="Expiry"], [id^="2_s_3_l_"][id*="Expiry"], '
+                + '[id^="1_s_4_l_"][id*="Expiry"], [id^="2_s_4_l_"][id*="Expiry"], '
+                + '[id^="1_s_5_l_"][id*="Expiry"], [id^="2_s_5_l_"][id*="Expiry"]'
             );
             if (probe && vis(probe)) pdiDataCellHit = true;
         }
@@ -3364,6 +3405,11 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         )
     elif _pdi_row_count == 0:
         note(f"{log_prefix}: PDI list has no data rows — adding new PDI row.")
+        _dump_frames_and_elements_for_debug(
+            page, content_frame_selector=content_frame_selector,
+            output_dir=_debug_dump_dir, label="pdi_scrape_zero_rows",
+            note=note, log_prefix=log_prefix,
+        )
 
     logger.debug(
         "pdi_existing: rows=%d header=%s need_new=%s expiry=%s",

@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS customer_master (
     pin CHAR(6),
     city TEXT,
     state TEXT,
-    mobile_number INTEGER,
+    mobile_number BIGINT,
     alt_phone_num VARCHAR(16),
     profession VARCHAR(16),
     file_location TEXT,

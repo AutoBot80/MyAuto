@@ -59,6 +59,7 @@ run alter/02h_customer_master_add_alt_phone_num.sql
 run alter/02i_customer_master_add_dms_automation_fields.sql
 run alter/02j_customer_master_add_care_of.sql
 run alter/02k_customer_master_add_dms_contact_id.sql
+run alter/02l_customer_master_mobile_number_bigint.sql
 
 # vehicle_master alters
 run alter/03a_vehicle_master_add_model_colour.sql
