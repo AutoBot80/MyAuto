@@ -9,7 +9,7 @@ alwaysApply: true
 
 ## In scope (examples)
 
-- [`Update-Prod-App-Backend.ps1`](Update-Prod-App-Backend.ps1) — git push + SSM to EC2 (`saathi-api`)
+- [`Update-Prod-App-Backend.ps1`](Update-Prod-App-Backend.ps1) — git push (main + version tag) + SSM to EC2 (`saathi-api`)
 - [`Update-Prod-App-Electron.ps1`](Update-Prod-App-Electron.ps1) or any similar script that pushes code and updates production hosts
 - Equivalent: `aws ssm send-command` targeting production app instances for deploy/restart, when used to ship app code
 

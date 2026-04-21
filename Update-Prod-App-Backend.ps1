@@ -11,6 +11,10 @@
   If no such tags exist yet, starts at v0.5.01. Writes backend/VERSION from that version.
   Use -SkipCommit to push only (no local commit).
 
+  After a version bump commit and git push to main, creates and pushes the matching vX.Y.Z
+  tag on HEAD (same pattern as Update-Prod-App-Electron.ps1) so the next run's semver
+  advances. Use -SkipTag to push main only without tagging.
+
   Prerequisites:
   - AWS CLI v2 installed and configured (default profile or AWS_PROFILE)
   - IAM permissions: ec2:DescribeInstances, ssm:SendCommand, ssm:GetCommandInvocation
@@ -27,6 +31,9 @@
 .PARAMETER SkipCommit
   Skip auto-commit (git add -u + version bump commit). Push/deploy only what is already committed.
 
+.PARAMETER SkipTag
+  Skip creating and pushing the vX.Y.Z git tag after push (main still pushes unless -SkipPush).
+
 .PARAMETER Region
   AWS region (default: ap-south-1).
 
@@ -37,6 +44,7 @@
 param(
     [switch] $SkipPush,
     [switch] $SkipCommit,
+    [switch] $SkipTag,
     [string] $Region = "ap-south-1",
     [string] $InstanceTag = "saathi-app"
 )
@@ -214,6 +222,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Ok "Tags synced from origin"
 
+$pushedVersionTag = $null
+
 # --- Phase 0.5: Auto-commit tracked changes (git add -u) with bumped version message ---
 if (-not $SkipCommit) {
     Write-Step "Phase 0.5: Auto-commit (tracked files, version message)"
@@ -250,6 +260,7 @@ if (-not $SkipCommit) {
             Write-Fail "git commit failed."
             Exit-Script 1
         }
+        $pushedVersionTag = $verMsg
         Write-Ok "Committed: $verMsg"
     }
 } else {
@@ -267,6 +278,55 @@ if (-not $SkipPush) {
     Write-Ok "Pushed origin main"
 } else {
     Write-Step "Phase 1: Skipped (-SkipPush)"
+}
+
+# --- Phase 1b: Tag and push tag (advances remote max semver for next bump; mirrors Electron) ---
+if (-not $SkipTag -and -not $SkipPush) {
+    if ($pushedVersionTag) {
+        Write-Step "Phase 1b: Tag $pushedVersionTag and push"
+        $tag = $pushedVersionTag
+        $headCommit = (git rev-parse HEAD 2>&1) | Out-String
+        $headCommit = $headCommit.Trim()
+
+        $remoteRef = (git ls-remote origin "refs/tags/$tag" 2>&1) | Out-String
+        $remoteRef = $remoteRef.Trim()
+
+        if ($remoteRef -match '^([a-f0-9]+)\s') {
+            $remoteCommit = $Matches[1]
+            if ($remoteCommit -eq $headCommit) {
+                Write-Ok "Tag $tag already on origin at HEAD - skipping."
+            } else {
+                Write-Host "Tag $tag on origin at $($remoteCommit.Substring(0,8)) but HEAD is $($headCommit.Substring(0,8)) - force-updating." -ForegroundColor DarkYellow
+                git tag -f $tag 2>&1 | ForEach-Object { Write-Host $_ }
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Fail "git tag -f $tag failed."
+                    Exit-Script 1
+                }
+                git push origin $tag --force 2>&1 | ForEach-Object { Write-Host $_ }
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Fail "git push origin $tag --force failed."
+                    Exit-Script 1
+                }
+                Write-Ok "Tag $tag force-pushed."
+            }
+        } else {
+            git tag -f $tag 2>&1 | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "git tag $tag failed."
+                Exit-Script 1
+            }
+            git push origin $tag 2>&1 | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Fail "git push origin $tag failed."
+                Exit-Script 1
+            }
+            Write-Ok "Tag $tag pushed."
+        }
+    } else {
+        Write-Step "Phase 1b: Skipped (no version bump commit this run)"
+    }
+} else {
+    Write-Step "Phase 1b: Skipped (-SkipTag or -SkipPush)"
 }
 
 # --- Phase 2: Find EC2 instance ---
