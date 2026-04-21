@@ -17,11 +17,10 @@
   The tag push triggers the GitHub Actions "Electron Release" workflow which
   publishes the installer to GitHub Releases for auto-update.
 
-  Version bumping: after "git fetch origin --tags --force" (remote tags win if local
-  tags pointed at different commits), finds the highest
-  semver-like tag matching vX.Y.Z (ignores other tag shapes), increments the
-  patch by one, writes that to electron/package.json (for electron-builder),
-  and uses it as the commit message and git tag.
+  Version bumping: after "git fetch origin --tags --force", finds the highest
+  semver-like vX.Y.Z on origin (git ls-remote --tags) and locally, takes the
+  greater of the two, then increments patch by one. This avoids picking a tag
+  that already exists on GitHub when local tag refs were incomplete.
 
   Prerequisites:
   - Node.js / npm in PATH
@@ -113,11 +112,71 @@ function Get-MaxSemVerFromGitTags {
     return "$bestMaj.$bestMin.$bestPat"
 }
 
+function Get-MaxSemVerFromRemoteTags {
+    <#
+      Highest X.Y.Z from origin via git ls-remote --tags (peeled ^{} lines skipped).
+    #>
+    $raw = @(git ls-remote --tags origin 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+    $bestMaj = -1
+    $bestMin = -1
+    $bestPat = -1
+    foreach ($line in $raw) {
+        $line = [string]$line.Trim()
+        if (-not $line) { continue }
+        if ($line -match '\^') { continue }
+        $parts = $line -split '\s+', 2
+        if ($parts.Count -lt 2) { continue }
+        $ref = $parts[1].Trim()
+        if ($ref -notmatch '^refs/tags/(v\d+\.\d+\.\d+)$') { continue }
+        $t = $Matches[1]
+        if ($t -match '^v(\d+)\.(\d+)\.(\d+)$') {
+            $maj = [int]$Matches[1]
+            $min = [int]$Matches[2]
+            $pat = [int]$Matches[3]
+            if ($maj -gt $bestMaj -or ($maj -eq $bestMaj -and $min -gt $bestMin) -or ($maj -eq $bestMaj -and $min -eq $bestMin -and $pat -gt $bestPat)) {
+                $bestMaj = $maj
+                $bestMin = $min
+                $bestPat = $pat
+            }
+        }
+    }
+    if ($bestMaj -lt 0) {
+        return $null
+    }
+    return "$bestMaj.$bestMin.$bestPat"
+}
+
+function Get-GreaterSemVerTriple {
+    param([string]$A, [string]$B)
+    if ($null -eq $A) { return $B }
+    if ($null -eq $B) { return $A }
+    if ($A -notmatch '^(\d+)\.(\d+)\.(\d+)$') { return $B }
+    $aM = [int]$Matches[1]; $aN = [int]$Matches[2]; $aP = [int]$Matches[3]
+    if ($B -notmatch '^(\d+)\.(\d+)\.(\d+)$') { return $A }
+    $bM = [int]$Matches[1]; $bN = [int]$Matches[2]; $bP = [int]$Matches[3]
+    if ($aM -gt $bM -or ($aM -eq $bM -and $aN -gt $bN) -or ($aM -eq $bM -and $aN -eq $bN -and $aP -gt $bP)) {
+        return $A
+    }
+    if ($bM -gt $aM -or ($bM -eq $aM -and $bN -gt $aN) -or ($bM -eq $aM -and $bN -eq $aN -and $bP -gt $aP)) {
+        return $B
+    }
+    return $A
+}
+
+function Get-MaxSemVerForRelease {
+    $remote = Get-MaxSemVerFromRemoteTags
+    $local = Get-MaxSemVerFromGitTags
+    return Get-GreaterSemVerTriple $remote $local
+}
+
 function Get-NextSemVerFromGitTags {
     <#
-      Max vX.Y.Z tag + 1 patch; if no such tags, returns 0.5.1
+      Max vX.Y.Z (remote + local) + 1 patch; if no such tags, returns 0.5.1
     #>
-    $max = Get-MaxSemVerFromGitTags
+    $max = Get-MaxSemVerForRelease
     if ($null -eq $max) {
         return "0.5.1"
     }
@@ -187,8 +246,8 @@ git fetch origin --tags --force 2>&1 | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) { Write-Fail "git fetch origin --tags --force failed." }
 Write-Ok "Tags synced from origin"
 
-# --- Version bump (from fetched tags, not package.json) ---
-$maxTagVer = Get-MaxSemVerFromGitTags
+# --- Version bump (from origin + local tags, not package.json) ---
+$maxTagVer = Get-MaxSemVerForRelease
 if ($BuildOnly) {
     if ($null -ne $maxTagVer) {
         $nextVer = $maxTagVer
@@ -200,7 +259,7 @@ if ($BuildOnly) {
 } else {
     $nextVer = Get-NextSemVerFromGitTags
     if ($null -ne $maxTagVer) {
-        Write-Host "Latest tag version: $maxTagVer" -ForegroundColor DarkGray
+        Write-Host "Latest vX.Y.Z (max of origin + local): $maxTagVer" -ForegroundColor DarkGray
     } else {
         Write-Host "No vX.Y.Z tags yet (starting from 0.5.1)" -ForegroundColor DarkGray
     }
