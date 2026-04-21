@@ -25,6 +25,10 @@
   At start (after branch check), runs "git fetch origin --tags --force" so local tags
   match the remote (overwrites local tag refs if they pointed at different commits).
 
+  Uses $ErrorActionPreference Continue (not Stop) so git/aws stderr does not terminate
+  the script before Exit-Script can pause the window; errors are handled via $LASTEXITCODE
+  and a trap for unexpected terminating errors.
+
 .PARAMETER SkipPush
   Skip local git push (use if you already pushed).
 
@@ -49,7 +53,14 @@ param(
     [string] $InstanceTag = "saathi-app"
 )
 
-$ErrorActionPreference = "Stop"
+# Do not use Stop: git/aws write to stderr; Stop can terminate before our Exit-Script pause.
+$ErrorActionPreference = "Continue"
+
+trap {
+    Write-Host ""
+    Write-Fail "Unhandled error: $($_.Exception.Message)"
+    Exit-Script 1
+}
 
 function Write-Step {
     param([string] $Message)
@@ -245,17 +256,17 @@ if (-not $SkipCommit) {
         $utf8Ver = New-Object System.Text.UTF8Encoding $false
         [System.IO.File]::WriteAllText($versionPath, $semver, $utf8Ver)
         Write-Host "Wrote backend/VERSION -> $semver" -ForegroundColor DarkGray
-        git add "backend/VERSION"
+        git add "backend/VERSION" 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "git add backend/VERSION failed."
             Exit-Script 1
         }
-        git add -u
+        git add -u 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "git add -u failed."
             Exit-Script 1
         }
-        git commit -m $verMsg
+        git commit -m $verMsg 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "git commit failed."
             Exit-Script 1
@@ -270,7 +281,7 @@ if (-not $SkipCommit) {
 # --- Phase 1: Git push ---
 if (-not $SkipPush) {
     Write-Step "Phase 1: Git push to origin/main"
-    git push origin main
+    git push origin main 2>&1 | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "git push failed."
         Exit-Script 1
