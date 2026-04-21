@@ -15,7 +15,7 @@ import {
   isFillDmsAbortError,
   warmDmsBrowserLocal,
 } from "../api/fillForms";
-import { fetchCreateInvoiceEligibility } from "../api/addSales";
+import { fetchCreateInvoiceEligibility, type CreateInvoiceEligibilityResponse } from "../api/addSales";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { markBulkLoadSuccess } from "../api/bulkLoads";
@@ -473,6 +473,8 @@ export function AddSalesPage({
   }, dealerId);
 
   const pollCountRef = useRef(0);
+  /** While true, `refreshCreateInvoiceEligibility()` from useEffect is skipped so a stale fetch cannot race the post–Create Invoice eligibility sync. */
+  const suppressPostDmsEligibilitySyncRef = useRef(false);
   /** Subfolder for which DMS warm-browser has already been triggered. */
   const dmsWarmSubfolderRef = useRef<string | null>(null);
   /** Fewer, slower polls to avoid hammering laptop / backend when OCR is slow. */
@@ -535,7 +537,10 @@ export function AddSalesPage({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [submitInfoActionsComplete, dmsPdfsDownloaded, hasPrintedForms]);
 
-  const refreshCreateInvoiceEligibility = useCallback(async () => {
+  const refreshCreateInvoiceEligibility = useCallback(async (opts?: { force?: boolean }) => {
+    if (!opts?.force && suppressPostDmsEligibilitySyncRef.current) {
+      return;
+    }
     if (!submitInfoActionsComplete) {
       setCreateInvoiceEligibilityLoading(false);
       setCreateInvoiceEnabled(false);
@@ -546,12 +551,17 @@ export function AddSalesPage({
       setGenerateInsuranceCompleted(false);
       return;
     }
+    const byIds =
+      lastSubmittedCustomerId != null &&
+      lastSubmittedVehicleId != null &&
+      lastSubmittedCustomerId > 0 &&
+      lastSubmittedVehicleId > 0;
     const dmsVeh = normalizeVehicleDetails(dmsScrapedVehicle) ?? dmsScrapedVehicle;
     const ocrVeh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
     const ch = (dmsVeh?.frame_no ?? ocrVeh?.frame_no ?? "").trim();
     const eng = (dmsVeh?.engine_no ?? ocrVeh?.engine_no ?? "").trim();
     const mob = mobile.trim();
-    if (!ch || !eng || !mob) {
+    if (!byIds && (!ch || !eng || !mob)) {
       setCreateInvoiceEligibilityLoading(false);
       setCreateInvoiceEnabled(false);
       setCreateInvoiceEligibilityReason(
@@ -563,11 +573,16 @@ export function AddSalesPage({
     }
     setCreateInvoiceEligibilityLoading(true);
     try {
-      const res = await fetchCreateInvoiceEligibility({
-        chassisNum: ch,
-        engineNum: eng,
-        mobile: mob,
-      });
+      const res = byIds
+        ? await fetchCreateInvoiceEligibility({
+            customerId: lastSubmittedCustomerId!,
+            vehicleId: lastSubmittedVehicleId!,
+          })
+        : await fetchCreateInvoiceEligibility({
+            chassisNum: ch,
+            engineNum: eng,
+            mobile: mob,
+          });
       setCreateInvoiceEnabled(res.create_invoice_enabled);
       setCreateInvoiceEligibilityReason(res.reason);
       setGenerateInsuranceEnabled(res.generate_insurance_enabled);
@@ -590,7 +605,14 @@ export function AddSalesPage({
     } finally {
       setCreateInvoiceEligibilityLoading(false);
     }
-  }, [submitInfoActionsComplete, mobile, extractedVehicle, dmsScrapedVehicle]);
+  }, [
+    submitInfoActionsComplete,
+    mobile,
+    extractedVehicle,
+    dmsScrapedVehicle,
+    lastSubmittedCustomerId,
+    lastSubmittedVehicleId,
+  ]);
 
   useEffect(() => {
     void refreshCreateInvoiceEligibility();
@@ -942,6 +964,7 @@ export function AddSalesPage({
     const c = extractedCustomer;
     const v = extractedVehicle;
 
+    suppressPostDmsEligibilitySyncRef.current = true;
     setIsFillDmsLoading(true);
     setFillDmsStatus(null);
     setDmsMilestones([]);
@@ -1066,36 +1089,74 @@ export function AddSalesPage({
     } finally {
       setIsFillDmsLoading(false);
       void (async () => {
-        const scraped = dmsRes?.vehicle;
-        const dmsFrame = (scraped?.full_chassis ?? scraped?.frame_num ?? "").trim();
-        const dmsEngine = (scraped?.full_engine ?? scraped?.engine_num ?? "").trim();
-        const ocrVeh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
-        const ch = dmsFrame || (ocrVeh?.frame_no ?? "").trim();
-        const eng = dmsEngine || (ocrVeh?.engine_no ?? "").trim();
-        const mob = mobile.trim();
-        if (ch && eng && mob) {
-          setCreateInvoiceEligibilityLoading(true);
-          try {
-            const res = await fetchCreateInvoiceEligibility({ chassisNum: ch, engineNum: eng, mobile: mob });
-            setCreateInvoiceEnabled(res.create_invoice_enabled);
-            setCreateInvoiceEligibilityReason(res.reason);
-            setGenerateInsuranceEnabled(res.generate_insurance_enabled);
-            setGenerateInsuranceReason(res.generate_insurance_reason);
-            if (res.resolved_customer_id != null) setLastSubmittedCustomerId(res.resolved_customer_id);
-            if (res.resolved_vehicle_id != null) setLastSubmittedVehicleId(res.resolved_vehicle_id);
-          } catch {
-            await refreshCreateInvoiceEligibility();
-          } finally {
-            setCreateInvoiceEligibilityLoading(false);
+        const applyEligibility = (res: CreateInvoiceEligibilityResponse) => {
+          setCreateInvoiceEnabled(res.create_invoice_enabled);
+          setCreateInvoiceEligibilityReason(res.reason);
+          setGenerateInsuranceEnabled(res.generate_insurance_enabled);
+          setGenerateInsuranceReason(res.generate_insurance_reason);
+          if (res.resolved_customer_id != null) setLastSubmittedCustomerId(res.resolved_customer_id);
+          if (res.resolved_vehicle_id != null) setLastSubmittedVehicleId(res.resolved_vehicle_id);
+        };
+        try {
+          const scraped = dmsRes?.vehicle;
+          const dmsFrame = (scraped?.full_chassis ?? scraped?.frame_num ?? "").trim();
+          const dmsEngine = (scraped?.full_engine ?? scraped?.engine_num ?? "").trim();
+          const ocrVeh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
+          const ch = dmsFrame || (ocrVeh?.frame_no ?? "").trim();
+          const eng = dmsEngine || (ocrVeh?.engine_no ?? "").trim();
+          const mob = mobile.trim();
+          const runEligibilityRetry = async (
+            fetchOne: () => Promise<CreateInvoiceEligibilityResponse>
+          ) => {
+            setCreateInvoiceEligibilityLoading(true);
+            try {
+              const delaysMs = [0, 400, 800, 1400, 2200];
+              let lastErr: unknown = null;
+              let synced = false;
+              for (let i = 0; i < delaysMs.length; i++) {
+                if (delaysMs[i] > 0) {
+                  await new Promise((r) => setTimeout(r, delaysMs[i]));
+                }
+                try {
+                  const res = await fetchOne();
+                  applyEligibility(res);
+                  if (res.invoice_recorded || res.generate_insurance_enabled) {
+                    synced = true;
+                    break;
+                  }
+                } catch (e) {
+                  lastErr = e;
+                }
+              }
+              if (!synced && lastErr != null) {
+                await refreshCreateInvoiceEligibility({ force: true });
+              }
+            } finally {
+              setCreateInvoiceEligibilityLoading(false);
+            }
+          };
+
+          const cid = dmsRes?.customer_id ?? null;
+          const vid = dmsRes?.vehicle_id ?? null;
+          if (dmsRes?.success && cid != null && vid != null) {
+            await runEligibilityRetry(() =>
+              fetchCreateInvoiceEligibility({ customerId: cid, vehicleId: vid })
+            );
+          } else if (ch && eng && mob) {
+            await runEligibilityRetry(() =>
+              fetchCreateInvoiceEligibility({ chassisNum: ch, engineNum: eng, mobile: mob })
+            );
+          } else {
+            await refreshCreateInvoiceEligibility({ force: true });
           }
-        } else {
-          await refreshCreateInvoiceEligibility();
-        }
-        if (dmsRes?.success && dmsRes.ready_for_client_create_invoice) {
-          setCreateInvoiceEnabled(true);
-          setCreateInvoiceEligibilityReason(
-            "Siebel My Orders already shows an invoice for this mobile — use Create Invoice to commit masters."
-          );
+          if (dmsRes?.success && dmsRes.ready_for_client_create_invoice) {
+            setCreateInvoiceEnabled(true);
+            setCreateInvoiceEligibilityReason(
+              "Siebel My Orders already shows an invoice for this mobile — use Create Invoice to commit masters."
+            );
+          }
+        } finally {
+          suppressPostDmsEligibilitySyncRef.current = false;
         }
       })();
     }

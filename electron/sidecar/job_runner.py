@@ -460,6 +460,8 @@ def _dispatch_fill_dms(params: dict) -> dict:
         "dealer_id": params.get("dealer_id"),
         "customer_id": result.get("customer_id") or params.get("customer_id"),
         "vehicle_id": result.get("vehicle_id") or params.get("vehicle_id"),
+        "sales_id": result.get("sales_id"),
+        "masters_committed_via_siebel": result.get("dms_master_persist_committed") is True,
     }
     try:
         commit_resp = _api_post(api_url, jwt, "/sidecar/dms/commit", commit_body)

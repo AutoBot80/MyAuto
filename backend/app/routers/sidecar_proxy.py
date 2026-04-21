@@ -72,6 +72,8 @@ class DmsCommitRequest(BaseModel):
     dealer_id: int | None = None
     customer_id: int | None = None
     vehicle_id: int | None = None
+    sales_id: int | None = None
+    masters_committed_via_siebel: bool | None = None
 
 
 class DmsCommitResponse(BaseModel):
@@ -229,7 +231,11 @@ async def dms_commit(
     sp = req.staging_payload
     scraped = req.scraped_vehicle or {}
 
-    from app.services.fill_hero_dms_service import invoice_number_ready_for_master_commit
+    from app.services.add_sales_commit_service import finalize_staging_row_with_master_ids
+    from app.services.fill_hero_dms_service import (
+        _merge_staging_payload_with_scrape_for_commit,
+        invoice_number_ready_for_master_commit,
+    )
     from app.services.hero_dms_db_service import persist_staging_masters_after_invoice
     from app.repositories.add_sales_staging import merge_staging_payload_on_cursor
 
@@ -240,7 +246,27 @@ async def dms_commit(
 
     inv_ready = invoice_number_ready_for_master_commit(scraped)
 
-    if sp and sid and inv_ready:
+    _siebel_done = req.masters_committed_via_siebel is True
+    _have_ids = req.customer_id is not None and req.vehicle_id is not None
+
+    if sp and sid and inv_ready and _siebel_done and _have_ids:
+        try:
+            merged = _merge_staging_payload_with_scrape_for_commit(sp, scraped)
+            finalize_staging_row_with_master_ids(
+                staging_id=sid,
+                merged_payload=merged,
+                customer_id=int(req.customer_id),
+                vehicle_id=int(req.vehicle_id),
+                sales_id=int(req.sales_id) if req.sales_id is not None else None,
+            )
+            cid_out = int(req.customer_id)
+            vid_out = int(req.vehicle_id)
+            if req.sales_id is not None:
+                sid_out = int(req.sales_id)
+        except Exception as exc:
+            error = f"Database commit after DMS failed: {exc!s}"
+            logger.warning("sidecar_proxy dms/commit (finalize staging only): %s", error)
+    elif sp and sid and inv_ready:
         try:
             cid_out, vid_out = persist_staging_masters_after_invoice(
                 staging_id=sid,

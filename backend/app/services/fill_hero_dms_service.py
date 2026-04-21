@@ -72,6 +72,7 @@ from app.repositories.add_sales_staging import merge_staging_payload_on_cursor
 from app.db import get_connection
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
+from app.services.add_sales_commit_service import finalize_staging_row_with_master_ids
 from app.services.hero_dms_db_service import persist_staging_masters_after_invoice
 from app.services.hero_dms_reports_service import run_hero_dms_reports
 from app.services.handle_browser_opening import get_or_open_site_page
@@ -740,6 +741,34 @@ def _load_customer_profession_from_master(customer_id: int | None) -> str:
         return ""
 
 
+def _load_customer_marital_from_master(customer_id: int | None) -> str:
+    """Marital status from customer_master for ``insert_dms_masters_from_siebel_scrape`` (same role as staging ``customer.marital_status``)."""
+    if customer_id is None:
+        return ""
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(BTRIM(marital_status), '') AS ms_val FROM customer_master WHERE customer_id = %s",
+                    (customer_id,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return ""
+                if isinstance(row, dict):
+                    return _clean_text(row.get("ms_val"))
+                try:
+                    return _clean_text(row[0])
+                except Exception:
+                    return ""
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("fill_dms_service: customer_master marital_status lookup failed customer_id=%s: %s", customer_id, exc)
+        return ""
+
+
 def _derive_gender_from_care_of_text(care_of_text: str) -> str:
     """
     Fallback only when DB gender is missing.
@@ -780,9 +809,12 @@ def _build_dms_fill_values(
     staging_payload: dict | None = None,
 ) -> dict:
     """
-    Build Playwright DMS values. **Staging path:** ``staging_payload`` (OCR merge in ``add_sales_staging``)
-    — no reads of ``customer_master`` / ``vehicle_master`` / ``sales_master``. **Legacy path:** master join
-    via ``form_dms_repo.get_by_customer_vehicle``.
+    Build Playwright DMS values. **Staging path:** ``staging_payload`` (OCR merge in ``add_sales_staging``);
+    name/mobile/address from the synthetic DMS row; gender, DOB, profession, **marital_status**, and Aadhaar
+    last‑4 from ``staging_payload['customer']`` (no ``customer_master`` read). **Legacy path:** master join
+    via ``form_dms_repo.get_by_customer_vehicle`` plus ``customer_master`` lookups for gender, DOB, profession,
+    **marital_status**, and Aadhaar last‑4 — same sources as ``insert_dms_masters_from_siebel_scrape`` expects
+    on ``dms_values``.
     """
     if staging_payload is not None:
         row = form_dms_repo.build_dms_fill_row_from_staging_payload(staging_payload)
@@ -791,6 +823,7 @@ def _build_dms_fill_values(
         dob_src = _clean_text(cust.get("date_of_birth"))
         aadhar_src = _aadhar_last4_from_customer(cust)
         profession_src = _clean_text(cust.get("profession"))[:16]
+        marital_src = _clean_text(cust.get("marital_status"))[:32]
     else:
         row = _load_required_form_dms_row(customer_id, vehicle_id)
         gender_master = _load_customer_gender_from_master(customer_id)
@@ -801,6 +834,7 @@ def _build_dms_fill_values(
         dob_src = _load_customer_dob_from_master(cid_for_aadhar)
         aadhar_src = _load_customer_aadhar_last4(cid_for_aadhar)
         profession_src = _load_customer_profession_from_master(cid_for_aadhar)
+        marital_src = _load_customer_marital_from_master(cid_for_aadhar)
 
     addr_full = _clean_text(row.get("Address Line 1"))
     pin_raw = _clean_text(row.get("Pin Code"))[:6]
@@ -862,6 +896,7 @@ def _build_dms_fill_values(
         "date_of_birth": dob_src,
         "aadhar_id": aadhar_src,
         "profession": profession_src,
+        "marital_status": marital_src,
         "customer_export": {
             "name": full_name,
             "address": _clean_text(inferred_addr.get("address")) or addr_full,
@@ -2148,11 +2183,31 @@ def run_fill_dms_only(
         and invoice_number_ready_for_master_commit(scraped_final)
     ):
         try:
-            cid_c, vid_c = persist_staging_masters_after_invoice(
-                staging_id=staging_id or "",
-                staging_payload=staging_payload,
-                scraped_vehicle=scraped_final,
+            _merged_for_staging = _merge_staging_payload_with_scrape_for_commit(
+                staging_payload, scraped_final
             )
+            _siebel_masters_done = result.get("dms_master_persist_committed") is True and (
+                result.get("customer_id") is not None and result.get("vehicle_id") is not None
+            )
+            if _siebel_masters_done:
+                # ``persist_masters_after_create_order`` already ran ``insert_dms_masters_from_siebel_scrape``
+                # inside Playwright; do not run ``upsert_customer_vehicle_sales`` again — raw_* lookup can
+                # differ from the Siebel insert and cause a duplicate ``uq_vehicle_engine_chassis`` failure.
+                finalize_staging_row_with_master_ids(
+                    staging_id=staging_id or "",
+                    merged_payload=_merged_for_staging,
+                    customer_id=int(result["customer_id"]),
+                    vehicle_id=int(result["vehicle_id"]),
+                    sales_id=int(result["sales_id"]) if result.get("sales_id") is not None else None,
+                )
+                cid_c = int(result["customer_id"])
+                vid_c = int(result["vehicle_id"])
+            else:
+                cid_c, vid_c = persist_staging_masters_after_invoice(
+                    staging_id=staging_id or "",
+                    staging_payload=staging_payload,
+                    scraped_vehicle=scraped_final,
+                )
             result["committed_customer_id"] = cid_c
             result["committed_vehicle_id"] = vid_c
             append_playwright_dms_masters_committed_log(
@@ -2160,7 +2215,9 @@ def run_fill_dms_only(
                 customer_id=cid_c,
                 vehicle_id=vid_c,
             )
-            if page is not None:
+            _print = result.get("hero_dms_form22_print")
+            _reports_already_ok = isinstance(_print, dict) and bool(_print.get("ok"))
+            if page is not None and not _reports_already_ok:
                 try:
                     _frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
                     _mob_pf = (dms_values.get("mobile_phone") or "").strip()

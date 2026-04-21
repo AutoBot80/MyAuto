@@ -280,6 +280,51 @@ def commit_staging_masters_and_finalize_row(
     return cid, vid
 
 
+def finalize_staging_row_with_master_ids(
+    *,
+    staging_id: str,
+    merged_payload: dict[str, Any],
+    customer_id: int,
+    vehicle_id: int,
+    sales_id: int | None,
+) -> None:
+    """
+    Mark ``add_sales_staging`` committed when ``customer_master`` / ``vehicle_master`` / ``sales_master``
+    were already written in the same run (e.g. ``insert_dms_masters_from_siebel_scrape`` inside
+    ``persist_masters_after_create_order``). Avoids a second upsert that can duplicate ``vehicle_master``
+    when raw-key lookup differs from the Siebel insert path.
+    """
+    from app.db import get_connection
+    from app.repositories.add_sales_staging import mark_staging_committed_on_cursor
+
+    sid = (staging_id or "").strip()
+    if not sid:
+        raise ValueError("staging_id required for master commit")
+
+    dealer_raw = merged_payload.get("dealer_id")
+    try:
+        dealer_id = int(dealer_raw) if dealer_raw is not None else int(DEALER_ID)
+    except (TypeError, ValueError):
+        dealer_id = int(DEALER_ID)
+
+    patch_obj: dict[str, Any] = {
+        "customer_id": int(customer_id),
+        "vehicle_id": int(vehicle_id),
+    }
+    if sales_id is not None:
+        patch_obj["sales_id"] = int(sales_id)
+    cust_m = merged_payload.get("customer") if isinstance(merged_payload.get("customer"), dict) else {}
+    fn = (cust_m.get("financier") or "").strip()
+    if fn:
+        patch_obj["customer"] = {"financier": fn[:255]}
+    patch = json.dumps(patch_obj, default=str)
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            mark_staging_committed_on_cursor(cur, sid, dealer_id, patch_json_fragment=patch)
+        conn.commit()
+
+
 def _parse_date_loose(s: str | None) -> date | None:
     if not s or not str(s).strip():
         return None
