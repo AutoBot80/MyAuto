@@ -13,13 +13,17 @@ export interface SiteUrls {
 }
 
 /**
- * Backend/.env DMS, Vahan, Insurance bases.
- * In Electron (file:// origin) the HTTP endpoint is unreachable, so we
- * read the .env directly via the main-process IPC bridge.
+ * DMS / Vahan / Insurance bases from the API (`GET /settings/site-urls`, same as server `.env`).
+ * Prefer the API; in Electron, fall back to main-process `D:\\Saathi\\.env` via IPC if fetch fails
+ * (offline, misconfigured `VITE_API_URL`, CORS).
  */
 export async function getSiteUrls(): Promise<SiteUrls> {
-  if (isElectron()) {
-    return window.electronAPI!.config.getSiteUrls();
+  try {
+    return await apiFetch<SiteUrls>("/settings/site-urls");
+  } catch (err) {
+    if (isElectron() && window.electronAPI?.config) {
+      return window.electronAPI.config.getSiteUrls();
+    }
+    throw err;
   }
-  return apiFetch<SiteUrls>("/settings/site-urls");
 }

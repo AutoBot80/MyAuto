@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-import { fetchHealth, getBaseUrl } from "../api/client";
-import { getAccessToken } from "../auth/token";
+import { fetchHealth } from "../api/client";
 import { isElectron } from "../electron";
 
 export function VersionBadge() {
@@ -34,20 +33,6 @@ export function VersionBadge() {
     api.onDownloaded(() => {
       setUpdateReady(true);
     });
-  }, []);
-
-  useEffect(() => {
-    if (!isElectron() || !window.electronAPI?.sidecar) return;
-    const token = getAccessToken();
-    if (!token) return;
-    void window.electronAPI.sidecar
-      .runJob({
-        type: "warm_browser",
-        api_url: getBaseUrl(),
-        jwt: token,
-        params: {},
-      })
-      .catch(() => {});
   }, []);
 
   const outdated = !!updateVersion;

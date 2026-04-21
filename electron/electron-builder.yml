@@ -49,7 +49,7 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Dealer Saathi
-  # customInit: D:\Saathi if D: exists, else C:\Saathi; customInstall: scanner\landing, scanner\processed
+  # resources/build/installer.nsh — Saathi data dir (D:\ or C:\), scanner folders, seed .env with DMS/VAHAN/Insurance if missing
   include: build/installer.nsh
 
 publish:

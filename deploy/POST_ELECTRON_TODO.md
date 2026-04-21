@@ -11,13 +11,15 @@ Terraform / SNS alarms are separate from this list.
 
 ---
 
-## Minimal dealer PC `.env` (`D:\Saathi\.env`)
+## Minimal dealer PC `.env` (`D:\Saathi\.env` or `C:\Saathi\.env`)
 
-The Electron sidecar now delegates all database operations to the cloud API.
-The dealer PC `.env` only needs Playwright behavioural flags:
+The Electron sidecar delegates database operations to the cloud API.
+
+**NSIS installer** (`electron/resources/build/installer.nsh`): on first install, if `.env` does not exist yet, it creates one with `DMS_MODE=real` and default **`DMS_BASE_URL`**, **`INSURANCE_BASE_URL`**, **`VAHAN_BASE_URL`** (Hero / production entry URLs). Upgrades do not overwrite an existing `.env`.
+
+Optional Playwright flags (add manually if needed):
 
 ```env
-DMS_MODE=real
 DMS_PLAYWRIGHT_HEADED=1
 ```
 
@@ -25,9 +27,9 @@ DMS_PLAYWRIGHT_HEADED=1
 - `DATABASE_URL` — no DB credentials leave the server
 - `JWT_SECRET` — sidecar authenticates with the operator's JWT from the logged-in session
 - `DMS_LOGIN_USER` / `DMS_LOGIN_PASSWORD` — browser memory / cookies on the dealer PC
-- `INSURANCE_BASE_URL` / `VAHAN_BASE_URL` — sent from the API's `/sidecar/*/resolve` response
-- `DMS_BASE_URL` — sent from the API's `/sidecar/dms/resolve` response
 - Any site login credentials — handled by browser session on the dealer PC
+
+**Site URLs:** The client prefers **`GET /settings/site-urls`** from the API when reachable. The local `.env` values above are used for **IPC fallback** (offline / misconfigured `VITE_API_URL`) and should stay aligned with the server `.env` when possible.
 
 The sidecar receives `api_url` and `jwt` from the Electron client for every job,
 so no API endpoint or auth configuration is stored on disk.
