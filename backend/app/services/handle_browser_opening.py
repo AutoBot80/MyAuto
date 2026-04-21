@@ -23,6 +23,8 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -38,20 +40,55 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+def _path_is_under_onedrive(p: Path) -> bool:
+    """Chromium ``--user-data-dir`` under OneDrive silently corrupts (SingletonLock / SQLite locks)."""
+    try:
+        s = str(p).lower()
+    except Exception:
+        return False
+    return ("\\onedrive\\" in s) or ("/onedrive/" in s) or ("\\onedrive - " in s)
+
+
 def _browser_profile_dir() -> Path:
     """Stable browser profile so session cookies / saved passwords survive backend restarts.
 
-    Under the Electron sidecar (PyInstaller), ``__file__`` resolves inside a temporary
-    extract directory that changes every launch — so ``_PROJECT_ROOT`` is ephemeral and
-    the browser would get a fresh profile each time (no saved passwords → no autofill).
+    Resolution order:
+    1. ``SAATHI_BROWSER_PROFILE_DIR`` env override.
+    2. ``SAATHI_BASE_DIR/.browser-profile`` (Electron sidecar / installer — e.g. ``D:\\Saathi``).
+    3. Windows: ``%LOCALAPPDATA%\\Saathi\\browser-profile`` (outside OneDrive, persistent).
+    4. POSIX: ``~/.local/share/saathi/browser-profile``.
+    5. Final fallback: ``<tempdir>/saathi-browser-profile`` (matches pre-AWS behavior).
 
-    Using ``SAATHI_BASE_DIR`` (set by the sidecar / Electron main process) gives a fixed,
-    dealer-machine-local path (e.g. ``D:\\Saathi\\.browser-profile``) that persists.
+    The repo-root path used previously broke when the repo lived in OneDrive
+    (Edge fails to take ``SingletonLock`` and CDP never comes up).
     """
+    override = os.environ.get("SAATHI_BROWSER_PROFILE_DIR", "").strip()
+    if override:
+        return Path(override)
+
     saathi = os.environ.get("SAATHI_BASE_DIR", "").strip()
     if saathi:
-        return Path(saathi) / ".browser-profile"
-    return _PROJECT_ROOT / ".browser-profile"
+        candidate = Path(saathi) / ".browser-profile"
+        if not _path_is_under_onedrive(candidate):
+            return candidate
+        logger.warning(
+            "handle_browser_opening: SAATHI_BASE_DIR %s is under OneDrive — falling back to LOCALAPPDATA",
+            saathi,
+        )
+
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            candidate = Path(local_app_data) / "Saathi" / "browser-profile"
+            if not _path_is_under_onedrive(candidate):
+                return candidate
+    else:
+        home = Path(os.path.expanduser("~"))
+        candidate = home / ".local" / "share" / "saathi" / "browser-profile"
+        if not _path_is_under_onedrive(candidate):
+            return candidate
+
+    return Path(tempfile.gettempdir()) / "saathi-browser-profile"
 
 
 def _hostname_for_site_match(url_or_base: str) -> str:
@@ -280,7 +317,7 @@ def _launch_managed_browser_for_site(
             )
             logger.info("handle_browser_opening: launched %s independently (port %s)", channel, port)
             _cdp_t0 = time.monotonic()
-            _cdp_deadline = _cdp_t0 + 5.0
+            _cdp_deadline = _cdp_t0 + 8.0
             while time.monotonic() < _cdp_deadline:
                 try:
                     browser = pw.chromium.connect_over_cdp(cdp_url)
@@ -380,15 +417,22 @@ def _launch_managed_browser_for_site(
                     pass
                 time.sleep(0.05)
             logger.warning(
-                "handle_browser_opening: launched %s but could not connect via CDP at %s within ~5s",
+                "handle_browser_opening: launched %s but could not connect via CDP at %s within ~8s — "
+                "falling back to Playwright-managed launch (Create Invoice still works; session is non-persistent).",
                 channel,
                 cdp_url,
             )
         except Exception as exc:
-            logger.warning("handle_browser_opening: independent launch of %s failed: %s", channel, exc)
+            logger.warning(
+                "handle_browser_opening: independent launch of %s failed: %s — falling back to Playwright-managed launch",
+                channel,
+                exc,
+            )
 
     if attempted_independent_launch:
-        return None, None
+        logger.info(
+            "handle_browser_opening: independent CDP attach unavailable; trying Playwright-managed launch fallback."
+        )
 
     channels = ["msedge", "chrome"]
     launch_args: list[str] = []

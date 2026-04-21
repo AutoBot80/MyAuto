@@ -52,21 +52,24 @@ git push origin main
 
 ---
 
-## Option 3: Daily startup (Git + uvicorn + npm run dev)
+## Option 3: Daily startup (uvicorn + npm run dev only)
 
-Run **daily_startup.bat** from the project root (double-click or from a terminal). It will:
+Run **`0_daily_startup.bat`** from the project root (double-click or from a terminal). It starts local dev only—it does **not** run Git. Use Option 1 or 2 above when you want to commit and push.
 
-1. Run a daily Git update (add, commit with today’s date, push).
+It will:
+
+1. Close prior “MyAuto Backend / Watcher / Client” cmd windows (if any).
 2. Start the backend (uvicorn) in a new Command Prompt window.
-3. Start the client (`npm run dev`) in another new Command Prompt window.
+3. Start the watcher in another window.
+4. Wait for the API on port 8000, then start the client (`npm run dev`).
 
-To create **daily_startup.exe** from the batch file:
+To create an **.exe** from the batch file:
 
 1. Use a Bat-to-EXE converter, e.g.:
    - **Bat to Exe Converter** (https://www.f2ko.de/en/b2e.php), or
    - **Quick Batch File Compiler**, or any similar tool.
-2. Open **daily_startup.bat** in the converter.
-3. Set output to **daily_startup.exe** and place the exe in the project root.
+2. Open **`0_daily_startup.bat`** in the converter.
+3. Set output (e.g. **daily_startup.exe**) and place the exe in the project root.
 4. When running the exe, start it from the project root (or set “Start in” to the project root in the converter so the script finds `venv`, `backend`, `client`).
 
 ---
@@ -76,3 +79,4 @@ To create **daily_startup.exe** from the batch file:
 | Version | Date       | Changes                |
 |---------|------------|------------------------|
 | 0.1     | March 2025 | Initial daily workflow |
+| 0.2     | April 2026 | Option 3: `0_daily_startup.bat` is dev-only; Git via Option 1/2 |

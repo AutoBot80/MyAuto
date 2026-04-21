@@ -1,5 +1,5 @@
 @echo off
-REM Daily startup: Git update, then start backend (uvicorn) and client (npm run dev).
+REM Daily startup: start backend (uvicorn), watcher, and client (npm run dev). Git sync: use scripts\daily-git-update.ps1 or Option 1/2 in Documentation\git-daily-workflow.md.
 REM Requires Python venv at "%ROOT%venv" (see Documentation\git-daily-workflow.md).
 REM If Vite shows ECONNREFUSED :8000, open "MyAuto Backend" and read the error (venv path, import, port in use).
 
@@ -12,19 +12,6 @@ taskkill /F /T /FI "IMAGENAME eq cmd.exe" /FI "WINDOWTITLE eq MyAuto Watcher*" >
 taskkill /F /T /FI "IMAGENAME eq cmd.exe" /FI "WINDOWTITLE eq MyAuto Client*" >nul 2>&1
 timeout /t 1 /nobreak >nul
 echo Old windows closed.
-echo.
-
-echo === Daily Git update ===
-git add .
-git status
-for /f "tokens=*" %%i in ('powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd'"') do set "DATE=%%i"
-git commit -m "Daily update: %DATE%" 2>nul
-echo Pushing all latest changes to remote...
-git push origin main 2>nul
-if %errorlevel% neq 0 (
-  git push origin master 2>nul
-)
-echo Git update done.
 echo.
 
 echo === Starting Backend (uvicorn) in new window ===
