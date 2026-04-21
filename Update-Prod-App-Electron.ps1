@@ -358,16 +358,31 @@ if (-not $SkipPush) {
 # --- Phase 6: Tag and push tag ---
 if (-not $SkipTag -and -not $SkipPush) {
     Write-Step "Phase 6: Tag $tag and push"
-    $existingTag = (git tag -l $tag 2>&1) | Out-String
-    if ($existingTag.Trim()) {
-        Write-Host "Tag $tag already exists locally - skipping tag create." -ForegroundColor DarkYellow
+    $headCommit = (git rev-parse HEAD 2>&1) | Out-String
+    $headCommit = $headCommit.Trim()
+
+    $remoteRef = (git ls-remote origin "refs/tags/$tag" 2>&1) | Out-String
+    $remoteRef = $remoteRef.Trim()
+
+    if ($remoteRef -match '^([a-f0-9]+)\s') {
+        $remoteCommit = $Matches[1]
+        if ($remoteCommit -eq $headCommit) {
+            Write-Ok "Tag $tag already on origin at HEAD - skipping (release workflow already triggered)."
+        } else {
+            Write-Host "Tag $tag on origin at $($remoteCommit.Substring(0,8)) but HEAD is $($headCommit.Substring(0,8)) - force-updating." -ForegroundColor DarkYellow
+            git tag -f $tag 2>&1 | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) { Write-Fail "git tag -f $tag failed." }
+            git push origin $tag --force 2>&1 | ForEach-Object { Write-Host $_ }
+            if ($LASTEXITCODE -ne 0) { Write-Fail "git push origin $tag --force failed." }
+            Write-Ok "Tag $tag force-pushed - GitHub Actions will build and publish the release."
+        }
     } else {
-        git tag $tag 2>&1 | ForEach-Object { Write-Host $_ }
+        git tag -f $tag 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) { Write-Fail "git tag $tag failed." }
+        git push origin $tag 2>&1 | ForEach-Object { Write-Host $_ }
+        if ($LASTEXITCODE -ne 0) { Write-Fail "git push origin $tag failed." }
+        Write-Ok "Tag $tag pushed - GitHub Actions will build and publish the release."
     }
-    git push origin $tag 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) { Write-Fail "git push origin $tag failed." }
-    Write-Ok "Tag $tag pushed - GitHub Actions will build and publish the release."
 } else {
     Write-Step "Phase 6: Skipped (-SkipTag or -SkipPush)"
 }

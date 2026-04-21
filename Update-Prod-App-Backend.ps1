@@ -59,6 +59,13 @@ function Write-Fail {
     Write-Host "FAIL: $Message" -ForegroundColor Red
 }
 
+function Exit-Script {
+    param([int] $Code = 0)
+    Write-Host ""
+    Read-Host "Press Enter to close"
+    exit $Code
+}
+
 function Get-MaxSemVerFromGitTags {
     <#
       Returns highest X.Y.Z from local tags matching ^v\d+\.\d+\.\d+$, or $null if none.
@@ -192,18 +199,18 @@ Write-Host "Prod-ec2-deploy - repo: $RepoRoot" -ForegroundColor Yellow
 $branch = git rev-parse --abbrev-ref HEAD 2>$null
 if ($LASTEXITCODE -ne 0 -or -not $branch) {
     Write-Fail "Not a git repository or git failed."
-    exit 1
+    Exit-Script 1
 }
 if ($branch -ne "main") {
     Write-Fail "Current branch is '$branch'. Checkout main first."
-    exit 1
+    Exit-Script 1
 }
 
 Write-Step "Fetch tags from origin"
 git fetch origin --tags --force 2>&1 | ForEach-Object { Write-Host $_ }
 if ($LASTEXITCODE -ne 0) {
     Write-Fail "git fetch origin --tags --force failed."
-    exit 1
+    Exit-Script 1
 }
 Write-Ok "Tags synced from origin"
 
@@ -231,17 +238,17 @@ if (-not $SkipCommit) {
         git add "backend/VERSION"
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "git add backend/VERSION failed."
-            exit 1
+            Exit-Script 1
         }
         git add -u
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "git add -u failed."
-            exit 1
+            Exit-Script 1
         }
         git commit -m $verMsg
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "git commit failed."
-            exit 1
+            Exit-Script 1
         }
         Write-Ok "Committed: $verMsg"
     }
@@ -255,7 +262,7 @@ if (-not $SkipPush) {
     git push origin main
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "git push failed."
-        exit 1
+        Exit-Script 1
     }
     Write-Ok "Pushed origin main"
 } else {
@@ -266,7 +273,7 @@ if (-not $SkipPush) {
 Write-Step ('Phase 2: Find running EC2 (Name={0}, region={1})' -f $InstanceTag, $Region)
 if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
     Write-Fail "AWS CLI not found in PATH. Install AWS CLI v2."
-    exit 1
+    Exit-Script 1
 }
 
 $describe = aws ec2 describe-instances `
@@ -277,13 +284,13 @@ $describe = aws ec2 describe-instances `
 
 if ($LASTEXITCODE -ne 0) {
     Write-Fail "aws ec2 describe-instances failed: $describe"
-    exit 1
+    Exit-Script 1
 }
 
 $ids = @($describe -split '\s+' | Where-Object { $_ -match '^i-' })
 if ($ids.Count -eq 0) {
     Write-Fail "No running EC2 instance with Name tag '$InstanceTag' in $Region."
-    exit 1
+    Exit-Script 1
 }
 
 $InstanceId = $ids[0]
@@ -327,13 +334,13 @@ try {
 
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "aws ssm send-command failed: $sendJson"
-        exit 1
+        Exit-Script 1
     }
     $sendObj = $sendJson | ConvertFrom-Json
     $CommandId = $sendObj.Command.CommandId
     if (-not $CommandId) {
         Write-Fail "No CommandId in response: $sendJson"
-        exit 1
+        Exit-Script 1
     }
 } finally {
     Remove-Item -Path $cliInputFile -ErrorAction SilentlyContinue
@@ -368,7 +375,7 @@ $final = aws ssm get-command-invocation `
 
 if ($LASTEXITCODE -ne 0) {
     Write-Fail "Could not read command result: $final"
-    exit 1
+    Exit-Script 1
 }
 
 $finalObj = $final | ConvertFrom-Json
@@ -380,8 +387,8 @@ Write-Host ($finalObj.StandardErrorContent)
 
 if ($finalObj.Status -eq "Success") {
     Write-Ok "SSM command Status=Success"
-    exit 0
+    Exit-Script 0
 }
 
 Write-Fail "SSM command Status=$($finalObj.Status)"
-exit 1
+Exit-Script 1

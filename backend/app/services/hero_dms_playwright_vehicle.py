@@ -1590,6 +1590,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     do_feature_id_scrape: bool = True,
     pdi_span_start_out: list[float] | None = None,
     debug_dump_dir: str | Path | None = None,
+    vehicle_url: str = "",
+    frame_partial: str = "",
+    engine_partial: str = "",
+    nav_timeout_ms: int = 30_000,
 ) -> tuple[bool, str | None]:
     """
     Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
@@ -1646,12 +1650,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         note(
             f"{log_prefix}: feature-id scrape cubic_capacity={_cc_log!r}, vehicle_type={vt!r}."
         )
-
-    _pre_precheck_url = ""
-    try:
-        _pre_precheck_url = page.url or ""
-    except Exception:
-        pass
 
     _safe_page_wait(page, 1000, log_label="before_precheck_pdi_tab_lookup_settle")
     note(f"{log_prefix}: 1s settle before Pre-check / third-level tab lookup.")
@@ -1976,7 +1974,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if not _precheck_third_level_tabs_loaded:
         note(
             f"{log_prefix}: third-level tabs (PreCheck/PDI) NOT loaded after Pre-check tab click — "
-            "attempting navigate-back recovery to serial-detail view."
+            "attempting chassis/VIN drilldown recovery (Vehicle List re-search, no forced GotoView URL)."
         )
         _dump_frames_and_elements_for_debug(
             page, content_frame_selector=content_frame_selector,
@@ -1984,275 +1982,138 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             note=note, log_prefix=log_prefix,
         )
 
-        _navback_recovered = False
-        if _pre_precheck_url and "SWECmd=GotoView" in _pre_precheck_url:
-            note(
-                f"{log_prefix}: navigate-back recovery — returning to pre-Pre-check URL "
-                f"({_pre_precheck_url[:300]!r})."
+        _chassis_rec = False
+        if scraped is not None:
+            _chassis_rec = _recover_serial_detail_via_left_chassis_vin(
+                page,
+                scraped,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                log_prefix=log_prefix,
+                vehicle_url=vehicle_url,
+                frame_partial=frame_partial,
+                engine_partial=engine_partial,
+                nav_timeout_ms=nav_timeout_ms,
             )
-            try:
-                page.goto(
-                    _pre_precheck_url,
-                    wait_until="domcontentloaded",
-                    timeout=min(action_timeout_ms * 5, 45000),
-                )
-            except Exception as _nb_exc:
-                if _is_browser_disconnected_error(_nb_exc):
-                    raise
-                note(f"{log_prefix}: navigate-back goto raised {_nb_exc!r} — continuing.")
-
-            _siebel_after_goto_wait(page, floor_ms=3000)
-            try:
-                _pv_networkidle(note, page, 12_000, f"{log_prefix}_navback_recovery")
-            except Exception as _nb_ni:
-                if _is_browser_disconnected_error(_nb_ni):
-                    raise
-
-            try:
-                _navback_post_url = (page.url or "")[:400]
-                note(f"{log_prefix}: navigate-back recovery — post-navigation url={_navback_post_url!r}")
-            except Exception:
-                pass
-
-            _safe_page_wait(page, 1000, log_label="navback_settle")
-
-            _navback_tabs_ok = False
-            for _nb_settle in range(5):
-                for _root in _roots():
-                    try:
-                        _nb_res = _root.evaluate(_settle_poll_js)
-                        if isinstance(_nb_res, dict) and _nb_res.get("loaded"):
-                            _navback_tabs_ok = True
-                            note(
-                                f"{log_prefix}: navigate-back recovery — third-level tabs visible "
-                                f"(poll {_nb_settle + 1}/5) tabs={_nb_res.get('tabs')!r}"
-                            )
-                            break
-                    except Exception:
-                        continue
-                if _navback_tabs_ok:
-                    break
-                _safe_page_wait(page, 500, log_label=f"navback_settle_poll_{_nb_settle}")
-
-            if _navback_tabs_ok:
-                note(f"{log_prefix}: navigate-back recovery — re-clicking Pre-check tab (attempt 1/1).")
-                _precheck_tab_ok = _click_third_level_view_bar_tab(
-                    page, "Pre-check", wait_ms=1500,
-                    content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
-                )
-                if _precheck_tab_ok:
-                    try:
-                        _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab_navback")
-                    except Exception as _nb_e:
-                        if _is_browser_disconnected_error(_nb_e):
-                            raise
-                    _safe_page_wait(page, 1000, log_label="navback_precheck_settle")
-
-                    _navback_wrong_again = False
-                    try:
-                        _nb_recheck_url = (page.url or "").replace(" ", "+")
-                        _navback_wrong_again = (
-                            "PDIPre+Assessment" in _nb_recheck_url
-                            or "Precheck+List+Applet" in _nb_recheck_url
-                        )
-                    except Exception:
-                        pass
-
-                    if _navback_wrong_again:
-                        note(
-                            f"{log_prefix}: navigate-back recovery — Pre-check click landed on "
-                            "wrong view AGAIN. Will try chassis/VIN drilldown recovery if tabs stay missing."
-                        )
-                    else:
-                        _navback_recovered = True
-                        _precheck_third_level_tabs_loaded = True
-                        note(
-                            f"{log_prefix}: navigate-back recovery SUCCEEDED — on correct view "
-                            "after Pre-check re-click. Re-probing rows."
-                        )
-                        _precheck_existing_rows = 0
-                        _precheck_existing_signal = ""
-                        for _ri2, _root2 in enumerate(_roots()):
-                            try:
-                                _probe2 = _root2.evaluate(_precheck_probe_js)
-                                if isinstance(_probe2, dict):
-                                    _rows2 = int(_probe2.get("maxRows") or 0)
-                                    if _rows2 > _precheck_existing_rows:
-                                        _precheck_existing_rows = _rows2
-                                        _precheck_existing_signal = f"root[{_ri2}]:maxRows={_rows2}(navback)"
-                                    _did2 = int(_probe2.get("directIdRows") or 0)
-                                    if _did2 > 0 and _did2 > _precheck_existing_rows:
-                                        _precheck_existing_rows = _did2
-                                        _precheck_existing_signal = f"root[{_ri2}]:directId_s_3_l={_did2}(navback)"
-                                    _rc2 = int(_probe2.get("rowCounterRows") or 0)
-                                    if _rc2 > 0 and _precheck_existing_rows == 0:
-                                        _precheck_existing_rows = _rc2
-                                        _precheck_existing_signal = f"root[{_ri2}]:rowCounter(navback)"
-                                    if _probe2.get("dataCellHit") and _precheck_existing_rows == 0:
-                                        _precheck_existing_rows = 1
-                                        _precheck_existing_signal = f"root[{_ri2}]:dataCellId(navback)"
-                                    if _probe2.get("containerHasData") and _precheck_existing_rows == 0:
-                                        _precheck_existing_rows = 1
-                                        _precheck_existing_signal = f"root[{_ri2}]:containerText(navback)"
-                                    _fb2 = int(_probe2.get("fallbackRows") or 0)
-                                    if _fb2 > 0 and _precheck_existing_rows == 0:
-                                        _precheck_existing_rows = _fb2
-                                        _precheck_existing_signal = f"root[{_ri2}]:fallbackRows={_fb2}(navback)"
-                            except Exception:
-                                continue
-                        note(
-                            f"{log_prefix}: re-probe after navback recovery: precheck rows="
-                            f"{_precheck_existing_rows} signal={_precheck_existing_signal or 'none'}"
-                        )
-                else:
-                    note(
-                        f"{log_prefix}: navigate-back recovery — Pre-check tab re-click failed. "
-                        "Will try chassis/VIN drilldown recovery if tabs stay missing."
-                    )
-            else:
-                note(
-                    f"{log_prefix}: navigate-back recovery — third-level tabs NOT found after "
-                    "navigating back. Will try chassis/VIN drilldown recovery if tabs stay missing."
-                )
         else:
-            note(
-                f"{log_prefix}: navigate-back recovery skipped — no valid pre-Pre-check URL "
-                f"captured ({_pre_precheck_url[:120]!r})."
+            note(f"{log_prefix}: chassis/VIN recovery skipped — no scraped vehicle context.")
+        if _chassis_rec:
+            _safe_page_wait(page, 1000, log_label="before_precheck_tab_after_chassis_recovery")
+            _precheck_tab_ok = _click_third_level_view_bar_tab(
+                page, "Pre-check", wait_ms=1500,
+                content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
             )
-
-        if not _navback_recovered and not _precheck_third_level_tabs_loaded:
-            note(
-                f"{log_prefix}: third-level tabs still missing — attempting chassis/VIN drilldown recovery "
-                "(no forced PDI Assessment GotoView URL)."
-            )
-            _chassis_rec = False
-            if scraped is not None:
-                _chassis_rec = _recover_serial_detail_via_left_chassis_vin(
+            if not _precheck_tab_ok:
+                _precheck_tab_ok = _siebel_click_by_id_anywhere(
                     page,
-                    scraped,
-                    action_timeout_ms=action_timeout_ms,
+                    "ui-id-1115",
+                    timeout_ms=_tmo,
                     content_frame_selector=content_frame_selector,
                     note=note,
+                    label="Pre-check tab (legacy ui-id-1115)",
                     log_prefix=log_prefix,
+                    wait_ms=1500,
                 )
-            else:
-                note(f"{log_prefix}: chassis/VIN recovery skipped — no scraped vehicle context.")
-            if _chassis_rec:
-                _safe_page_wait(page, 1000, log_label="before_precheck_tab_after_chassis_recovery")
-                _precheck_tab_ok = _click_third_level_view_bar_tab(
-                    page, "Pre-check", wait_ms=1500,
-                    content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
+            if _precheck_tab_ok:
+                try:
+                    _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab_chassis_recovery")
+                except Exception as _e:
+                    if _is_browser_disconnected_error(_e):
+                        raise
+                note(f"{log_prefix}: Pre-check tab loaded after chassis recovery (networkidle complete).")
+                _siebel_note_frame_focus_snapshot(
+                    page,
+                    note,
+                    "precheck_pdi_after_chassis_recovery_precheck_tab",
+                    log_prefix=log_prefix,
+                    content_frame_selector=content_frame_selector,
                 )
-                if not _precheck_tab_ok:
-                    _precheck_tab_ok = _siebel_click_by_id_anywhere(
-                        page,
-                        "ui-id-1115",
-                        timeout_ms=_tmo,
-                        content_frame_selector=content_frame_selector,
-                        note=note,
-                        label="Pre-check tab (legacy ui-id-1115)",
-                        log_prefix=log_prefix,
-                        wait_ms=1500,
-                    )
-                if _precheck_tab_ok:
-                    try:
-                        _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab_chassis_recovery")
-                    except Exception as _e:
-                        if _is_browser_disconnected_error(_e):
-                            raise
-                    note(f"{log_prefix}: Pre-check tab loaded after chassis recovery (networkidle complete).")
-                    _siebel_note_frame_focus_snapshot(
-                        page,
-                        note,
-                        "precheck_pdi_after_chassis_recovery_precheck_tab",
-                        log_prefix=log_prefix,
-                        content_frame_selector=content_frame_selector,
-                    )
-                    _safe_page_wait(page, 1000, log_label="precheck_tab_post_chassis_recovery_settle")
-                    try:
-                        _post_chassis = (page.url or "").replace(" ", "+")
-                        if (
-                            "PDIPre+Assessment" in _post_chassis
-                            or "Precheck+List+Applet" in _post_chassis
-                        ):
-                            note(
-                                f"{log_prefix}: Pre-check after chassis recovery still on PDIPre view "
-                                f"URL={_post_chassis[:300]!r}."
-                            )
-                    except Exception:
-                        pass
-                    for _settle in range(3):
-                        for _root in _roots():
-                            try:
-                                _settle_res = _root.evaluate(_settle_poll_js)
-                                if isinstance(_settle_res, dict) and _settle_res.get("loaded"):
-                                    _precheck_third_level_tabs_loaded = True
-                                    note(
-                                        f"{log_prefix}: third-level tabs visible after chassis recovery "
-                                        f"(settle {_settle + 1}/3) tabs={_settle_res.get('tabs')!r}"
-                                    )
-                                    break
-                            except Exception:
-                                continue
-                        if _precheck_third_level_tabs_loaded:
-                            break
-                        _safe_page_wait(page, 500, log_label=f"chassis_recovery_precheck_settle_{_settle}")
-                    _precheck_existing_rows = 0
-                    _precheck_existing_signal = ""
-                    for _ri2, _root2 in enumerate(_roots()):
+                _safe_page_wait(page, 1000, log_label="precheck_tab_post_chassis_recovery_settle")
+                try:
+                    _post_chassis = (page.url or "").replace(" ", "+")
+                    if (
+                        "PDIPre+Assessment" in _post_chassis
+                        or "Precheck+List+Applet" in _post_chassis
+                    ):
+                        note(
+                            f"{log_prefix}: Pre-check after chassis recovery still on PDIPre view "
+                            f"URL={_post_chassis[:300]!r}."
+                        )
+                except Exception:
+                    pass
+                for _settle in range(3):
+                    for _root in _roots():
                         try:
-                            _probe2 = _root2.evaluate(_precheck_probe_js)
-                            if isinstance(_probe2, dict):
-                                if _probe2.get("thirdLevelTabsLoaded"):
-                                    _precheck_third_level_tabs_loaded = True
-                                _rows2 = int(_probe2.get("maxRows") or 0)
-                                if _rows2 > _precheck_existing_rows:
-                                    _precheck_existing_rows = _rows2
-                                    _precheck_existing_signal = f"root[{_ri2}]:maxRows={_rows2}(chassis_recovery)"
-                                _did2 = int(_probe2.get("directIdRows") or 0)
-                                if _did2 > 0 and _did2 > _precheck_existing_rows:
-                                    _precheck_existing_rows = _did2
-                                    _precheck_existing_signal = f"root[{_ri2}]:directId_s_3_l={_did2}(chassis_recovery)"
-                                _rc2 = int(_probe2.get("rowCounterRows") or 0)
-                                if _rc2 > 0 and _precheck_existing_rows == 0:
-                                    _precheck_existing_rows = _rc2
-                                    _precheck_existing_signal = f"root[{_ri2}]:rowCounter(chassis_recovery)"
-                                if _probe2.get("dataCellHit") and _precheck_existing_rows == 0:
-                                    _precheck_existing_rows = 1
-                                    _precheck_existing_signal = f"root[{_ri2}]:dataCellId(chassis_recovery)"
-                                if _probe2.get("containerHasData") and _precheck_existing_rows == 0:
-                                    _precheck_existing_rows = 1
-                                    _precheck_existing_signal = f"root[{_ri2}]:containerText(chassis_recovery)"
-                                _fb2 = int(_probe2.get("fallbackRows") or 0)
-                                if _fb2 > 0 and _precheck_existing_rows == 0:
-                                    _precheck_existing_rows = _fb2
-                                    _precheck_existing_signal = f"root[{_ri2}]:fallbackRows={_fb2}(chassis_recovery)"
+                            _settle_res = _root.evaluate(_settle_poll_js)
+                            if isinstance(_settle_res, dict) and _settle_res.get("loaded"):
+                                _precheck_third_level_tabs_loaded = True
+                                note(
+                                    f"{log_prefix}: third-level tabs visible after chassis recovery "
+                                    f"(settle {_settle + 1}/3) tabs={_settle_res.get('tabs')!r}"
+                                )
+                                break
                         except Exception:
                             continue
-                    _precheck_fallback_only = (
-                        not _precheck_third_level_tabs_loaded
-                        and _precheck_existing_rows > 0
-                        and "fallbackRows" in _precheck_existing_signal
-                    )
-                    if _precheck_fallback_only:
-                        note(
-                            f"{log_prefix}: precheck_row_probe after chassis recovery found rows="
-                            f"{_precheck_existing_rows} via UNSCOPED fallback "
-                            f"({_precheck_existing_signal!r}) but third-level tabs are NOT loaded — "
-                            "discounting fallbackRows."
-                        )
-                        _precheck_existing_rows = 0
-                        _precheck_existing_signal = ""
+                    if _precheck_third_level_tabs_loaded:
+                        break
+                    _safe_page_wait(page, 500, log_label=f"chassis_recovery_precheck_settle_{_settle}")
+                _precheck_existing_rows = 0
+                _precheck_existing_signal = ""
+                for _ri2, _root2 in enumerate(_roots()):
+                    try:
+                        _probe2 = _root2.evaluate(_precheck_probe_js)
+                        if isinstance(_probe2, dict):
+                            if _probe2.get("thirdLevelTabsLoaded"):
+                                _precheck_third_level_tabs_loaded = True
+                            _rows2 = int(_probe2.get("maxRows") or 0)
+                            if _rows2 > _precheck_existing_rows:
+                                _precheck_existing_rows = _rows2
+                                _precheck_existing_signal = f"root[{_ri2}]:maxRows={_rows2}(chassis_recovery)"
+                            _did2 = int(_probe2.get("directIdRows") or 0)
+                            if _did2 > 0 and _did2 > _precheck_existing_rows:
+                                _precheck_existing_rows = _did2
+                                _precheck_existing_signal = f"root[{_ri2}]:directId_s_3_l={_did2}(chassis_recovery)"
+                            _rc2 = int(_probe2.get("rowCounterRows") or 0)
+                            if _rc2 > 0 and _precheck_existing_rows == 0:
+                                _precheck_existing_rows = _rc2
+                                _precheck_existing_signal = f"root[{_ri2}]:rowCounter(chassis_recovery)"
+                            if _probe2.get("dataCellHit") and _precheck_existing_rows == 0:
+                                _precheck_existing_rows = 1
+                                _precheck_existing_signal = f"root[{_ri2}]:dataCellId(chassis_recovery)"
+                            if _probe2.get("containerHasData") and _precheck_existing_rows == 0:
+                                _precheck_existing_rows = 1
+                                _precheck_existing_signal = f"root[{_ri2}]:containerText(chassis_recovery)"
+                            _fb2 = int(_probe2.get("fallbackRows") or 0)
+                            if _fb2 > 0 and _precheck_existing_rows == 0:
+                                _precheck_existing_rows = _fb2
+                                _precheck_existing_signal = f"root[{_ri2}]:fallbackRows={_fb2}(chassis_recovery)"
+                    except Exception:
+                        continue
+                _precheck_fallback_only = (
+                    not _precheck_third_level_tabs_loaded
+                    and _precheck_existing_rows > 0
+                    and "fallbackRows" in _precheck_existing_signal
+                )
+                if _precheck_fallback_only:
                     note(
-                        f"{log_prefix}: re-probe after chassis recovery: precheck rows="
-                        f"{_precheck_existing_rows} signal={_precheck_existing_signal or 'none'} "
-                        f"third_level_tabs_loaded={_precheck_third_level_tabs_loaded}"
+                        f"{log_prefix}: precheck_row_probe after chassis recovery found rows="
+                        f"{_precheck_existing_rows} via UNSCOPED fallback "
+                        f"({_precheck_existing_signal!r}) but third-level tabs are NOT loaded — "
+                        "discounting fallbackRows."
                     )
-                else:
-                    note(
-                        f"{log_prefix}: Pre-check tab re-click failed after chassis recovery — "
-                        "continuing with prior third-level tab state."
-                    )
+                    _precheck_existing_rows = 0
+                    _precheck_existing_signal = ""
+                note(
+                    f"{log_prefix}: re-probe after chassis recovery: precheck rows="
+                    f"{_precheck_existing_rows} signal={_precheck_existing_signal or 'none'} "
+                    f"third_level_tabs_loaded={_precheck_third_level_tabs_loaded}"
+                )
+            else:
+                note(
+                    f"{log_prefix}: Pre-check tab re-click failed after chassis recovery — "
+                    "continuing with prior third-level tab state."
+                )
 
     _precheck_already_present = _precheck_existing_rows > 0
     note(
@@ -2860,6 +2721,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     content_frame_selector=content_frame_selector,
                     note=note,
                     log_prefix=log_prefix,
+                    vehicle_url=vehicle_url,
+                    frame_partial=frame_partial,
+                    engine_partial=engine_partial,
+                    nav_timeout_ms=nav_timeout_ms,
                 ):
                     for _tl_poll2 in range(12):
                         _tl_found2 = False
@@ -4562,12 +4427,18 @@ def _recover_serial_detail_via_left_chassis_vin(
     content_frame_selector: str | None,
     note,
     log_prefix: str,
+    vehicle_url: str = "",
+    frame_partial: str = "",
+    engine_partial: str = "",
+    nav_timeout_ms: int = 30_000,
 ) -> bool:
     """
     Re-establish **serial detail** context when third-level tabs (PreCheck / PDI / Features) fail to
-    render — same path as a fresh ``prepare_vehicle`` drill-in: left **Search Results** Title →
-    **VIN** → **Serial Number**. Used instead of a forced ``GotoView`` URL (Siebel may return
-    SBL-DAT-00309 without proper record context).
+    render. Tries the left **Search Results** Title first (fast path if still on Vehicle List). If the
+    left pane is not visible (typical after Siebel navigated away to Features / PDIPre view), does a
+    **full Vehicle List re-navigation and re-search** using ``vehicle_url`` / ``frame_partial`` /
+    ``engine_partial``, then drills into VIN → Serial Number. Never constructs a forced ``GotoView``
+    URL (Siebel returns SBL-DAT-00309 without proper record context).
     """
     chassis = _best_chassis_str(
         str((scraped or {}).get("full_chassis") or "").strip(),
@@ -4576,22 +4447,68 @@ def _recover_serial_detail_via_left_chassis_vin(
     if not chassis or len(chassis) < 4:
         note(f"{log_prefix}: chassis/VIN recovery skipped — no chassis in scraped context.")
         return False
-    note(
-        f"{log_prefix}: chassis/VIN recovery — left Search Results Title → VIN → Serial Number "
-        "(re-establish third-level tab strip)."
-    )
+
     _tmo = min(int(action_timeout_ms or 3000), 5000)
-    if not _siebel_try_click_vin_search_hit_link(page, chassis, timeout_ms=_tmo):
-        note(f"{log_prefix}: chassis/VIN recovery — left Title link not found or VIN mismatch.")
-        return False
-    _safe_page_wait(page, 1000, log_label="chassis_recovery_after_left_title")
-    try:
-        _pv_networkidle(note, page, 12_000, f"{log_prefix}_chassis_recovery_after_title")
-    except Exception as e:
-        if _is_browser_disconnected_error(e):
-            raise
-    _siebel_poll_center_list_matches(page, chassis, note=note)
     _fb = chassis
+
+    _left_pane_ok = _siebel_try_click_vin_search_hit_link(page, chassis, timeout_ms=_tmo)
+    if _left_pane_ok:
+        note(
+            f"{log_prefix}: chassis/VIN recovery — clicked left Title link (fast path)."
+        )
+        _safe_page_wait(page, 1000, log_label="chassis_recovery_after_left_title")
+        try:
+            _pv_networkidle(note, page, 12_000, f"{log_prefix}_chassis_recovery_after_title")
+        except Exception as e:
+            if _is_browser_disconnected_error(e):
+                raise
+        _siebel_poll_center_list_matches(page, chassis, note=note)
+    else:
+        note(
+            f"{log_prefix}: chassis/VIN recovery — left Title link not found on current page. "
+            "Falling back to full Vehicle List re-navigation and re-search."
+        )
+        _vurl = (vehicle_url or "").strip()
+        _fp = (frame_partial or "").strip()
+        _ep = (engine_partial or "").strip()
+        if not _vurl or not _fp or not _ep:
+            note(
+                f"{log_prefix}: chassis/VIN recovery — cannot re-search: "
+                f"vehicle_url={'present' if _vurl else 'MISSING'}, "
+                f"frame_partial={'present' if _fp else 'MISSING'}, "
+                f"engine_partial={'present' if _ep else 'MISSING'}."
+            )
+            return False
+        _search_err = _siebel_goto_vehicle_list_and_search(
+            page,
+            _vurl,
+            _fp,
+            _ep,
+            nav_timeout_ms=nav_timeout_ms,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
+        if _search_err:
+            note(f"{log_prefix}: chassis/VIN recovery — Vehicle List re-search failed: {_search_err!r}")
+            return False
+        note(f"{log_prefix}: chassis/VIN recovery — Vehicle List re-search succeeded.")
+        _safe_page_wait(page, 400, log_label="chassis_recovery_pre_left_poll")
+        if not _siebel_poll_left_search_title_matches(page, _fp, note=note):
+            note(f"{log_prefix}: chassis/VIN recovery — left pane did not show VIN after re-search.")
+            return False
+        if not _siebel_try_click_vin_search_hit_link(page, _fp, timeout_ms=_tmo):
+            note(f"{log_prefix}: chassis/VIN recovery — left Title click failed after re-search.")
+            return False
+        note(f"{log_prefix}: chassis/VIN recovery — clicked left Title after Vehicle List re-search.")
+        _safe_page_wait(page, 1000, log_label="chassis_recovery_after_research_left_title")
+        try:
+            _pv_networkidle(note, page, 12_000, f"{log_prefix}_chassis_recovery_after_research_title")
+        except Exception as e:
+            if _is_browser_disconnected_error(e):
+                raise
+        _siebel_poll_center_list_matches(page, _fp, note=note)
+
     if not _siebel_click_by_name_anywhere(
         page,
         "VIN",
@@ -4633,7 +4550,7 @@ def _recover_serial_detail_via_left_chassis_vin(
         log_prefix=log_prefix,
         content_frame_selector=content_frame_selector,
     )
-    note(f"{log_prefix}: chassis/VIN recovery completed.")
+    note(f"{log_prefix}: chassis/VIN recovery completed (VIN → Serial Number drilldown).")
     return True
 
 
@@ -4950,6 +4867,10 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     note,
     form_trace=None,
     debug_dump_dir: str | Path | None = None,
+    vehicle_url: str = "",
+    frame_partial: str = "",
+    engine_partial: str = "",
+    nav_timeout_ms: int = 30_000,
 ) -> str | None:
     """
     On the **vehicle** detail view (dealer stock): click **Serial Number**, run tab **Pre-check** + **PDI**
@@ -4994,6 +4915,10 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         do_feature_id_scrape=True,
         pdi_span_start_out=_pdi_span_t0,
         debug_dump_dir=debug_dump_dir,
+        vehicle_url=vehicle_url,
+        frame_partial=frame_partial,
+        engine_partial=engine_partial,
+        nav_timeout_ms=nav_timeout_ms,
     )
     if not _serial_pc_ok:
         return _serial_pc_err or "Pre-check / PDI failed after Serial Number drilldown (prepare_vehicle)."
@@ -5519,6 +5444,10 @@ def prepare_vehicle(
                 note=note,
                 form_trace=form_trace,
                 debug_dump_dir=debug_dump_dir,
+                vehicle_url=vehicle_url,
+                frame_partial=frame_p,
+                engine_partial=engine_p,
+                nav_timeout_ms=nav_timeout_ms,
             )
             if _detail_pc_err:
                 merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
