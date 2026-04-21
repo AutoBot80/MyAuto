@@ -17,9 +17,11 @@
   The tag push triggers the GitHub Actions "Electron Release" workflow which
   publishes the installer to GitHub Releases for auto-update.
 
-  Version bumping: reads the current "version" from electron/package.json,
-  increments the patch number (0.5.0 -> 0.5.1 -> 0.5.2), updates the file,
-  and uses that as the commit message and git tag.
+  Version bumping: after "git fetch origin --tags --force" (remote tags win if local
+  tags pointed at different commits), finds the highest
+  semver-like tag matching vX.Y.Z (ignores other tag shapes), increments the
+  patch by one, writes that to electron/package.json (for electron-builder),
+  and uses it as the commit message and git tag.
 
   Prerequisites:
   - Node.js / npm in PATH
@@ -72,12 +74,6 @@ function Write-Fail {
     exit 1
 }
 
-function Get-ElectronVersion {
-    $pkgPath = Join-Path (Join-Path $script:RepoRoot "electron") "package.json"
-    $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
-    return $pkg.version
-}
-
 function Set-ElectronVersion {
     param([string] $NewVersion)
     $pkgPath = Join-Path (Join-Path $script:RepoRoot "electron") "package.json"
@@ -87,9 +83,45 @@ function Set-ElectronVersion {
     [System.IO.File]::WriteAllText($pkgPath, $updated, $utf8NoBom)
 }
 
-function Get-BumpedVersion {
-    param([string] $Current)
-    if ($Current -match '^(\d+)\.(\d+)\.(\d+)$') {
+function Get-MaxSemVerFromGitTags {
+    <#
+      Returns highest X.Y.Z from local tags matching ^v\d+\.\d+\.\d+$, or $null if none.
+    #>
+    $lines = @(git tag -l "v*" 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+    $bestMaj = -1
+    $bestMin = -1
+    $bestPat = -1
+    foreach ($line in $lines) {
+        $t = [string]$line.Trim()
+        if ($t -match '^v(\d+)\.(\d+)\.(\d+)$') {
+            $maj = [int]$Matches[1]
+            $min = [int]$Matches[2]
+            $pat = [int]$Matches[3]
+            if ($maj -gt $bestMaj -or ($maj -eq $bestMaj -and $min -gt $bestMin) -or ($maj -eq $bestMaj -and $min -eq $bestMin -and $pat -gt $bestPat)) {
+                $bestMaj = $maj
+                $bestMin = $min
+                $bestPat = $pat
+            }
+        }
+    }
+    if ($bestMaj -lt 0) {
+        return $null
+    }
+    return "$bestMaj.$bestMin.$bestPat"
+}
+
+function Get-NextSemVerFromGitTags {
+    <#
+      Max vX.Y.Z tag + 1 patch; if no such tags, returns 0.5.1
+    #>
+    $max = Get-MaxSemVerFromGitTags
+    if ($null -eq $max) {
+        return "0.5.1"
+    }
+    if ($max -match '^(\d+)\.(\d+)\.(\d+)$') {
         $maj = [int]$Matches[1]
         $min = [int]$Matches[2]
         $pat = [int]$Matches[3] + 1
@@ -150,23 +182,36 @@ if ($branch -ne "main") {
     Write-Fail "Current branch is '$branch'. Checkout main first."
 }
 
-# --- Version bump ---
-$currentVer = Get-ElectronVersion
-$nextVer = Get-BumpedVersion $currentVer
+Write-Step "Fetch tags from origin"
+git fetch origin --tags --force 2>&1 | ForEach-Object { Write-Host $_ }
+if ($LASTEXITCODE -ne 0) { Write-Fail "git fetch origin --tags --force failed." }
+Write-Ok "Tags synced from origin"
+
+# --- Version bump (from fetched tags, not package.json) ---
+$maxTagVer = Get-MaxSemVerFromGitTags
+if ($BuildOnly) {
+    if ($null -ne $maxTagVer) {
+        $nextVer = $maxTagVer
+        Write-Host "BuildOnly - using latest tag version $nextVer (no bump)" -ForegroundColor DarkGray
+    } else {
+        $nextVer = "0.5.1"
+        Write-Host "BuildOnly - no vX.Y.Z tags yet; using $nextVer" -ForegroundColor DarkGray
+    }
+} else {
+    $nextVer = Get-NextSemVerFromGitTags
+    if ($null -ne $maxTagVer) {
+        Write-Host "Latest tag version: $maxTagVer" -ForegroundColor DarkGray
+    } else {
+        Write-Host "No vX.Y.Z tags yet (starting from 0.5.1)" -ForegroundColor DarkGray
+    }
+}
 $tag = Get-TagFromVersion $nextVer
 
-Write-Host "Current version: $currentVer" -ForegroundColor DarkGray
-Write-Host "Next version:    $nextVer  (tag: $tag)" -ForegroundColor Yellow
+Write-Host "Release version: $nextVer  (tag: $tag)" -ForegroundColor Yellow
 Write-Host ""
 
-if (-not $BuildOnly) {
-    Set-ElectronVersion $nextVer
-    Write-Ok "electron/package.json version -> $nextVer"
-} else {
-    $nextVer = $currentVer
-    $tag = Get-TagFromVersion $currentVer
-    Write-Host "BuildOnly - keeping version $currentVer" -ForegroundColor DarkGray
-}
+Set-ElectronVersion $nextVer
+Write-Ok "electron/package.json version -> $nextVer"
 
 # =================== BUILD PHASES ===================
 

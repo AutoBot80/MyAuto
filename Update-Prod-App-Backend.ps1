@@ -6,8 +6,9 @@
   Run from the repo root. Right-click this file > "Run with PowerShell"
   (or: powershell -ExecutionPolicy Bypass -File .\Prod-ec2-deploy.ps1)
 
-  Commits: git add -u then git commit -m with the next vX.Y.ZZ derived from the previous
-  commit subject (e.g. v0.5.03 -> v0.5.04). If the last subject does not match, uses v0.5.00.
+  Commits: git add -u then git commit -m with the next vX.Y.ZZ after "git fetch origin --tags --force":
+  highest local tag matching vX.Y.Z, patch + 1 (same rules as Update-Prod-App-Electron.ps1).
+  If no such tags exist yet, starts at v0.5.01. Writes backend/VERSION from that version.
   Use -SkipCommit to push only (no local commit).
 
   Prerequisites:
@@ -16,6 +17,9 @@
   - EC2: SSM Agent, IAM role with AmazonSSMManagedInstanceCore, app at /opt/saathi
 
   See also: deploy/ec2/DEPLOY.md
+
+  At start (after branch check), runs "git fetch origin --tags --force" so local tags
+  match the remote (overwrites local tag refs if they pointed at different commits).
 
 .PARAMETER SkipPush
   Skip local git push (use if you already pushed).
@@ -55,31 +59,67 @@ function Write-Fail {
     Write-Host "FAIL: $Message" -ForegroundColor Red
 }
 
-function Get-NextDeployVersionMessage {
+function Get-MaxSemVerFromGitTags {
     <#
-      Next tag from last commit subject: vX.Y.ZZ -> increment ZZ (2-digit pad until 99, then decimal).
-      No match -> v0.5.00
+      Returns highest X.Y.Z from local tags matching ^v\d+\.\d+\.\d+$, or $null if none.
     #>
-    $null = git rev-parse --verify HEAD 2>$null
+    $lines = @(git tag -l "v*" 2>&1)
     if ($LASTEXITCODE -ne 0) {
-        return "v0.5.00"
+        return $null
     }
-    $last = git log -1 --format=%s 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $last) {
-        return "v0.5.00"
+    $bestMaj = -1
+    $bestMin = -1
+    $bestPat = -1
+    foreach ($line in $lines) {
+        $t = [string]$line.Trim()
+        if ($t -match '^v(\d+)\.(\d+)\.(\d+)$') {
+            $maj = [int]$Matches[1]
+            $min = [int]$Matches[2]
+            $pat = [int]$Matches[3]
+            if ($maj -gt $bestMaj -or ($maj -eq $bestMaj -and $min -gt $bestMin) -or ($maj -eq $bestMaj -and $min -eq $bestMin -and $pat -gt $bestPat)) {
+                $bestMaj = $maj
+                $bestMin = $min
+                $bestPat = $pat
+            }
+        }
     }
-    if ($last -match '^v(\d+)\.(\d+)\.(\d+)$') {
+    if ($bestMaj -lt 0) {
+        return $null
+    }
+    return "$bestMaj.$bestMin.$bestPat"
+}
+
+function Get-NextSemVerFromGitTags {
+    <#
+      Max vX.Y.Z tag + 1 patch; if no such tags, returns 0.5.1
+    #>
+    $max = Get-MaxSemVerFromGitTags
+    if ($null -eq $max) {
+        return "0.5.1"
+    }
+    if ($max -match '^(\d+)\.(\d+)\.(\d+)$') {
         $maj = [int]$Matches[1]
         $min = [int]$Matches[2]
-        $patNext = [int]$Matches[3] + 1
-        if ($patNext -le 99) {
-            $patStr = "{0:D2}" -f $patNext
-        } else {
-            $patStr = "$patNext"
-        }
-        return ("v{0}.{1}.{2}" -f $maj, $min, $patStr)
+        $pat = [int]$Matches[3] + 1
+        return "$maj.$min.$pat"
     }
-    return "v0.5.00"
+    return "0.5.1"
+}
+
+function Get-TagFromVersion {
+    param([string] $SemVer)
+    if ($SemVer -match '^(\d+)\.(\d+)\.(\d+)$') {
+        $maj = [int]$Matches[1]
+        $min = [int]$Matches[2]
+        $pat = [int]$Matches[3]
+        if ($pat -le 99) {
+            $patStr = "{0:D2}" -f $pat
+        } else {
+            $patStr = "$pat"
+        }
+        return "v$maj.$min.$patStr"
+    }
+    return "v0.5.01"
 }
 
 # Resolve repo root (script location)
@@ -99,6 +139,14 @@ if ($branch -ne "main") {
     exit 1
 }
 
+Write-Step "Fetch tags from origin"
+git fetch origin --tags --force 2>&1 | ForEach-Object { Write-Host $_ }
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "git fetch origin --tags --force failed."
+    exit 1
+}
+Write-Ok "Tags synced from origin"
+
 # --- Phase 0.5: Auto-commit tracked changes (git add -u) with bumped version message ---
 if (-not $SkipCommit) {
     Write-Step "Phase 0.5: Auto-commit (tracked files, version message)"
@@ -107,7 +155,14 @@ if (-not $SkipCommit) {
     if (-not $hasTrackedChanges) {
         Write-Ok "Nothing to commit (working tree matches HEAD for tracked files)"
     } else {
-        $verMsg = Get-NextDeployVersionMessage
+        $maxTagVer = Get-MaxSemVerFromGitTags
+        $nextSemVer = Get-NextSemVerFromGitTags
+        if ($null -ne $maxTagVer) {
+            Write-Host "Latest tag version: $maxTagVer -> next $nextSemVer" -ForegroundColor DarkGray
+        } else {
+            Write-Host "No vX.Y.Z tags yet; using first release $nextSemVer" -ForegroundColor DarkGray
+        }
+        $verMsg = Get-TagFromVersion $nextSemVer
         $semver = $verMsg.TrimStart("v")
         $versionPath = Join-Path $RepoRoot "backend\VERSION"
         $utf8Ver = New-Object System.Text.UTF8Encoding $false
