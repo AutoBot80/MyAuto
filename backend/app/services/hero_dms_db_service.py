@@ -16,7 +16,12 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from app.config import DEALER_ID, HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE, HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER
+from app.config import (
+    DATABASE_URL,
+    DEALER_ID,
+    HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE,
+    HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +76,8 @@ def persist_masters_after_create_order(
         "enquiry_number": str((out.get("vehicle") or {}).get("enquiry_number") or ""),
     }
     _atomic_ok = False
-    _atomic_err = None
+    _atomic_err: str | None = None
+    _deferred_no_local_db = False
     _cid_out: int | None = None
     _vid_out: int | None = None
     _sid_out: int | None = None
@@ -82,23 +88,31 @@ def persist_masters_after_create_order(
         and preexisting_customer_id is None
         and preexisting_vehicle_id is None
     ):
-        try:
-            _cid_out, _vid_out, _sid_out = insert_dms_masters_from_siebel_scrape(
-                dms_values,
-                out.get("vehicle") or {},
-                collated_customer_fields=_collate_fields,
-                dealer_id=did,
+        if not DATABASE_URL:
+            # Electron sidecar has no DB; cloud /sidecar/dms/commit persists masters.
+            note(
+                "Master INSERT skipped locally (no DATABASE_URL); "
+                "cloud /sidecar/dms/commit will persist after this run."
             )
-            _atomic_ok = True
-            if _cid_out is not None:
-                out["customer_id"] = _cid_out
-            if _vid_out is not None:
-                out["vehicle_id"] = _vid_out
-            if _sid_out is not None:
-                out["sales_id"] = _sid_out
-        except Exception as _p_exc:
-            _atomic_err = str(_p_exc)
-            logger.warning("siebel_dms: master INSERT after Create Invoice failed: %s", _p_exc)
+            _deferred_no_local_db = True
+        else:
+            try:
+                _cid_out, _vid_out, _sid_out = insert_dms_masters_from_siebel_scrape(
+                    dms_values,
+                    out.get("vehicle") or {},
+                    collated_customer_fields=_collate_fields,
+                    dealer_id=did,
+                )
+                _atomic_ok = True
+                if _cid_out is not None:
+                    out["customer_id"] = _cid_out
+                if _vid_out is not None:
+                    out["vehicle_id"] = _vid_out
+                if _sid_out is not None:
+                    out["sales_id"] = _sid_out
+            except Exception as _p_exc:
+                _atomic_err = str(_p_exc)
+                logger.warning("siebel_dms: master INSERT after Create Invoice failed: %s", _p_exc)
     elif _inv_ready and (preexisting_customer_id is not None or preexisting_vehicle_id is not None):
         note(
             "Invoice# present but customer_id/vehicle_id already set — skipping DB "
@@ -120,12 +134,15 @@ def persist_masters_after_create_order(
         or (out.get("vehicle") or {}).get("vehicle_ex_showroom_cost")
         or ""
     )
+    _log_atomic_err = _atomic_err
+    if not _log_atomic_err and _deferred_no_local_db:
+        _log_atomic_err = "deferred to server commit (no DATABASE_URL)"
     _write_playwright_dms_masters_section(
         log_fp,
         attach_ex_showroom=_attach_ex,
         sales_master_prep=out.get("dms_sales_master_prep") or {},
         atomic_db_committed=_atomic_ok,
-        atomic_db_error=_atomic_err,
+        atomic_db_error=_log_atomic_err,
     )
     if _atomic_ok and _cid_out is not None and _vid_out is not None and log_fp is not None:
         try:
