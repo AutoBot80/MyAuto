@@ -132,17 +132,15 @@ _DETAILS_OR_INSURANCE_SNIFF = [
     re.compile(r"gross\s*premium|policy\s*no\.?|cert\.?\s*no\.?", re.IGNORECASE),
 ]
 
-_A4_LONG_EDGE_PTS = 842
-_MAX_RASTER_LONG_EDGE_PX = 3600
+_MAX_RASTER_LONG_EDGE_PX = 5400
 
 
-def _capped_dpi(page_rect_width: float, page_rect_height: float, target_dpi: int) -> int:
-    """Scale DPI down when the PDF page coordinate space exceeds A4 so we don't
-    rasterize a scanner-embedded image into a multi-hundred-MB bitmap."""
-    long_edge = max(page_rect_width, page_rect_height)
-    if long_edge <= _A4_LONG_EDGE_PTS:
-        return target_dpi
-    return max(72, int(target_dpi * _A4_LONG_EDGE_PTS / long_edge))
+def _capped_dpi(_page_rect_width: float, _page_rect_height: float, target_dpi: int) -> int:
+    """Always return *target_dpi* — scanner PDFs routinely embed A4 pages at
+    inflated coordinate-space dimensions, making the old DPI-reduction heuristic
+    produce images too low-res for Textract to read small Aadhaar text.
+    ``_cap_raster_size`` remains as the pixel-budget safety net."""
+    return target_dpi
 
 
 def _cap_raster_size(img: Image.Image, page_label: str = "") -> Image.Image:
@@ -331,12 +329,40 @@ def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = OCR_PR
         doc.close()
 
 
+_TEXTRACT_MAX_BYTES = 5 * 1024 * 1024  # 5 MB hard limit
+
+
 def _pil_image_to_jpeg_bytes(img: Image.Image, quality: int = 92) -> bytes:
-    """Encode a PIL image to JPEG bytes (Textract accepts JPEG/PNG ≤ 5 MB)."""
+    """Encode a PIL image to JPEG bytes (Textract accepts JPEG/PNG <= 5 MB).
+
+    If the result exceeds 4.5 MB, retry at lower quality.  If still over 5 MB
+    after quality reduction, downscale the image and retry.
+    """
     import io
+
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality)
-    return buf.getvalue()
+    data = buf.getvalue()
+
+    for fallback_q in (85, 75, 65):
+        if len(data) <= _TEXTRACT_MAX_BYTES - 512 * 1024:
+            return data
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=fallback_q)
+        data = buf.getvalue()
+        logger.info("JPEG %d bytes at q=%d (retried from q=%d)", len(data), fallback_q, quality)
+
+    if len(data) > _TEXTRACT_MAX_BYTES:
+        scale = 0.75
+        new_w = max(360, int(img.width * scale))
+        new_h = max(360, int(img.height * scale))
+        smaller = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        smaller.save(buf, format="JPEG", quality=75)
+        data = buf.getvalue()
+        logger.warning("JPEG still %d bytes after quality sweep; downscaled to %dx%d", len(data), new_w, new_h)
+
+    return data
 
 
 def _textract_ddt_for_page(

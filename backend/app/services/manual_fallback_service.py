@@ -34,6 +34,7 @@ SESSION_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 ROLE_AADHAR_FRONT = "aadhar_front"
 ROLE_AADHAR_BACK = "aadhar_back"
+ROLE_AADHAR_FRONT_AND_BACK = "aadhar_front_and_back"
 ROLE_DETAILS = "details"
 ROLE_UNUSED = "unused"
 
@@ -113,7 +114,7 @@ def apply_manual_session(
     merge unused pages into ``unused.pdf``. Does not run OcrService (callers such as consolidated
     manual-apply run Textract after this).
 
-    ``assignments`` maps "0".."n-1" to aadhar_front | aadhar_back | details | unused.
+    ``assignments`` maps "0".."n-1" to aadhar_front | aadhar_back | aadhar_front_and_back | details | unused.
     Returns (subfolder_name e.g. mobile_ddmmyy, list of saved file basenames at sale root and under for_OCR).
     """
     import fitz
@@ -132,10 +133,10 @@ def apply_manual_session(
 
     page_files = sorted(session_dir.glob("page_*.jpg"))
     page_count = len(page_files)
-    if page_count < 3:
-        raise ValueError("Session has fewer than 3 pages")
+    if page_count < 2:
+        raise ValueError("Session has fewer than 2 pages")
 
-    valid_roles = {ROLE_AADHAR_FRONT, ROLE_AADHAR_BACK, ROLE_DETAILS, ROLE_UNUSED}
+    valid_roles = {ROLE_AADHAR_FRONT, ROLE_AADHAR_BACK, ROLE_AADHAR_FRONT_AND_BACK, ROLE_DETAILS, ROLE_UNUSED}
     for i in range(page_count):
         key = str(i)
         if key not in assignments:
@@ -147,10 +148,14 @@ def apply_manual_session(
     from collections import Counter
 
     c = Counter(role_by_page.values())
-    if c[ROLE_AADHAR_FRONT] != 1 or c[ROLE_AADHAR_BACK] != 1 or c[ROLE_DETAILS] != 1:
+    has_combined = c.get(ROLE_AADHAR_FRONT_AND_BACK, 0) == 1
+    has_separate = c.get(ROLE_AADHAR_FRONT, 0) == 1 and c.get(ROLE_AADHAR_BACK, 0) == 1
+    if c.get(ROLE_DETAILS, 0) != 1:
+        raise ValueError("Assign exactly one page to Details.")
+    if not has_combined and not has_separate:
         raise ValueError(
-            "Assign exactly one page to Aadhar front, one to Aadhar back, and one to Details; "
-            "other pages must be Unused."
+            "Assign one page to Aadhar front + back (same page), "
+            "or one page each to Aadhar front and Aadhar back."
         )
 
     subfolder = get_uploaded_scans_sale_subfolder_leaf(digits)
@@ -162,13 +167,17 @@ def apply_manual_session(
     def page_path(i: int) -> Path:
         return session_dir / f"page_{i + 1:02d}.jpg"
 
-    front_i = next(i for i, r in role_by_page.items() if r == ROLE_AADHAR_FRONT)
-    back_i = next(i for i, r in role_by_page.items() if r == ROLE_AADHAR_BACK)
+    if has_combined:
+        combo_i = next(i for i, r in role_by_page.items() if r == ROLE_AADHAR_FRONT_AND_BACK)
+        shutil.copy2(page_path(combo_i), for_ocr / FILENAME_AADHAR_FRONT)
+        shutil.copy2(page_path(combo_i), for_ocr / FILENAME_AADHAR_BACK)
+    else:
+        front_i = next(i for i, r in role_by_page.items() if r == ROLE_AADHAR_FRONT)
+        back_i = next(i for i, r in role_by_page.items() if r == ROLE_AADHAR_BACK)
+        shutil.copy2(page_path(front_i), for_ocr / FILENAME_AADHAR_FRONT)
+        shutil.copy2(page_path(back_i), for_ocr / FILENAME_AADHAR_BACK)
+
     det_i = next(i for i, r in role_by_page.items() if r == ROLE_DETAILS)
-
-    shutil.copy2(page_path(front_i), for_ocr / FILENAME_AADHAR_FRONT)
-    shutil.copy2(page_path(back_i), for_ocr / FILENAME_AADHAR_BACK)
-
     det_jpeg = page_path(det_i).read_bytes()
     det_pdf = _jpeg_bytes_to_single_page_pdf(det_jpeg)
     (for_ocr / FILENAME_SALES_DETAIL_SHEET_PDF).write_bytes(det_pdf)

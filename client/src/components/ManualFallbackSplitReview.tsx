@@ -3,13 +3,20 @@ import { applyConsolidatedManualFallback, fetchManualSessionPageObjectUrl } from
 import type { ManualFallbackPayload, UploadScansResponse } from "../types";
 
 const ROLE_OPTIONS = [
+  { value: "aadhar_front_and_back", label: "Aadhar front + back (same page)" },
   { value: "aadhar_front", label: "Aadhar_front.jpg" },
   { value: "aadhar_back", label: "Aadhar_back.jpg" },
   { value: "details", label: "Sales_Detail_Sheet (from page)" },
   { value: "unused", label: "Unused (append to unused.pdf)" },
 ] as const;
 
-function defaultRoles(pageCount: number): string[] {
+function defaultRoles(pageCount: number, lockedDetailsIdx?: number | null): string[] {
+  if (pageCount === 2) {
+    const detIdx = lockedDetailsIdx ?? 0;
+    return Array.from({ length: 2 }, (_, i) =>
+      i === detIdx ? "details" : "aadhar_front_and_back"
+    );
+  }
   return Array.from({ length: pageCount }, (_, i) => {
     if (i === 0) return "aadhar_front";
     if (i === 1) return "aadhar_back";
@@ -19,11 +26,11 @@ function defaultRoles(pageCount: number): string[] {
 }
 
 function initialRolesFromPayload(payload: ManualFallbackPayload): string[] {
-  const { page_count: pageCount, suggested_roles: sr } = payload;
+  const { page_count: pageCount, suggested_roles: sr, locked_details_index: ldi } = payload;
   if (Array.isArray(sr) && sr.length === pageCount) {
     return sr.map((r) => (typeof r === "string" ? r : "unused"));
   }
-  return defaultRoles(pageCount);
+  return defaultRoles(pageCount, ldi);
 }
 
 export interface ManualFallbackSplitReviewProps {
@@ -100,10 +107,6 @@ export function ManualFallbackSplitReview({
       setApplyError("Enter 10-digit Customer Mobile in Section 2 first.");
       return;
     }
-    if (pageCount < 3) {
-      setApplyError("Need at least 3 pages to assign Aadhar front, back, and Details.");
-      return;
-    }
     const assignments: Record<string, string> = {};
     for (let i = 0; i < pageCount; i++) {
       assignments[String(i)] = roles[i] ?? "unused";
@@ -121,23 +124,13 @@ export function ManualFallbackSplitReview({
     }
   }
 
-  if (pageCount < 3) {
-    return (
-      <div className="manual-fallback-split-review manual-fallback-split-review--error" role="alert">
-        <p>Manual split has fewer than 3 pages; cannot assign Aadhar front, back, and Details.</p>
-        <button type="button" className="app-button" onClick={onDismiss}>
-          Dismiss
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="manual-fallback-split-review">
       <h3 className="manual-fallback-split-review__title">Confirm document pages</h3>
       <p className="manual-fallback-split-review__hint">
         If the details sheet was already read, Section 2 may be partially filled. Assign each page to{" "}
-        <strong>Aadhaar front</strong>, <strong>Aadhaar back</strong>, or <strong>Sales Detail Sheet</strong>, then
+        <strong>Aadhaar front</strong>, <strong>Aadhaar back</strong>,{" "}
+        <strong>Aadhaar front + back (same page)</strong>, or <strong>Sales Detail Sheet</strong>, then
         press <strong>Apply document layout</strong> to run Aadhaar OCR and save scans. Fix any remaining fields,
         then <strong>Submit Info.</strong>
       </p>

@@ -1544,6 +1544,7 @@ export function AddSalesPage({
                     onDismiss={() => {
                       setManualFallbackPayload(null);
                       setPendingScannerArchiveMove(null);
+                      setManualFormOnly(true);
                     }}
                   />
                 )}
@@ -1622,7 +1623,7 @@ export function AddSalesPage({
                 </div>
                 <div
                   className={
-                    !savedTo && !manualFallbackPayload ? "add-sales-v2-box--greyed" : ""
+                    !savedTo && !manualFallbackPayload && !manualFormOnly ? "add-sales-v2-box--greyed" : ""
                   }
                 >
                 {extractionComplete && savedTo && !manualFormOnly && !insuranceReadByTextract && (
