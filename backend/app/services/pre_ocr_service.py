@@ -2028,7 +2028,12 @@ def _split_pdf_by_classification(
     for idx in combined_indices:
         if idx not in page_images:
             continue
-        if not _process_same_page_aadhar(_pil_rgb_to_jpeg_bytes(page_images[idx]), for_ocr_dir):
+        try:
+            split_ok = _process_same_page_aadhar(_pil_rgb_to_jpeg_bytes(page_images[idx]), for_ocr_dir)
+        except Exception:
+            logger.exception("Aadhaar combined page %d: _process_same_page_aadhar crashed", idx + 1)
+            split_ok = False
+        if not split_ok:
             logger.warning(
                 "Aadhaar combined page %d: consolidated + letter split failed; copying full page to %s only",
                 idx + 1,
