@@ -132,6 +132,17 @@ _DETAILS_OR_INSURANCE_SNIFF = [
     re.compile(r"gross\s*premium|policy\s*no\.?|cert\.?\s*no\.?", re.IGNORECASE),
 ]
 
+_A4_LONG_EDGE_PTS = 842
+
+
+def _capped_dpi(page_rect_width: float, page_rect_height: float, target_dpi: int) -> int:
+    """Scale DPI down when the PDF page coordinate space exceeds A4 so we don't
+    rasterize a scanner-embedded image into a multi-hundred-MB bitmap."""
+    long_edge = max(page_rect_width, page_rect_height)
+    if long_edge <= _A4_LONG_EDGE_PTS:
+        return target_dpi
+    return max(72, int(target_dpi * _A4_LONG_EDGE_PTS / long_edge))
+
 
 def osd_deskew_clockwise_degrees_from_image(img: Image.Image) -> int:
     """
@@ -256,11 +267,12 @@ def _pdf_to_page_images(
         for i in range(min(doc.page_count, max_pages)):
             page = doc[i]
             t_r = time.perf_counter()
-            pix = page.get_pixmap(dpi=dpi)
+            effective_dpi = _capped_dpi(page.rect.width, page.rect.height, dpi)
+            pix = page.get_pixmap(dpi=effective_dpi)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             raster_ms = int((time.perf_counter() - t_r) * 1000)
             page_timings.append(
-                (f"raster_page_{i + 1}", raster_ms, f"dpi={dpi} px={pix.width}x{pix.height}"),
+                (f"raster_page_{i + 1}", raster_ms, f"dpi={effective_dpi} px={pix.width}x{pix.height}"),
             )
             if fix_orientation:
                 t_osd = time.perf_counter()
@@ -287,7 +299,9 @@ def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = OCR_PR
 
     doc = fitz.open(str(pdf_path))
     try:
-        pix = doc[page_0].get_pixmap(dpi=dpi)
+        page = doc[page_0]
+        effective_dpi = _capped_dpi(page.rect.width, page.rect.height, dpi)
+        pix = page.get_pixmap(dpi=effective_dpi)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
         return correct_image_orientation_upright_image(img)
     finally:
@@ -605,7 +619,9 @@ def try_write_pencil_mark_for_sale_folder(sale_dir: Path) -> bool:
         try:
             if doc.page_count < 1:
                 return False
-            pix = doc[0].get_pixmap(dpi=OCR_PRE_OCR_RASTER_DPI)
+            page = doc[0]
+            effective_dpi = _capped_dpi(page.rect.width, page.rect.height, OCR_PRE_OCR_RASTER_DPI)
+            pix = page.get_pixmap(dpi=effective_dpi)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=90)
@@ -642,7 +658,8 @@ def _export_single_page_pdfs_to_raw(
                 rot = osd_rotations[i]
             else:
                 page = src[i]
-                pix = page.get_pixmap(dpi=OCR_PRE_OCR_RASTER_DPI)
+                effective_dpi = _capped_dpi(page.rect.width, page.rect.height, OCR_PRE_OCR_RASTER_DPI)
+                pix = page.get_pixmap(dpi=effective_dpi)
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
                 rot = osd_deskew_clockwise_degrees_from_image(img)
 
