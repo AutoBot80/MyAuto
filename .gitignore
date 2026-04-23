@@ -19,7 +19,7 @@ __pycache__/
 *.egg-info/
 .eggs/
 dist/
-build/
+/build/
 
 # Node
 node_modules/
@@ -29,6 +29,7 @@ electron/node_modules/
 electron/release/
 electron/release-*/
 electron/resources/update-token.json
+electron/sidecar/build/
 
 
 # IDE and OS

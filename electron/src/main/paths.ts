@@ -2,13 +2,17 @@ import { app } from "electron";
 import fs from "fs";
 import path from "path";
 
-/** Default production install root (matches NSIS target). */
-export const DEFAULT_SAATHI_BASE = "D:\\Saathi";
+/** Dev-mode fallback when not running from a packaged build. */
+const DEV_SAATHI_BASE = "D:\\Saathi";
 
 export function getSaathiBaseDir(): string {
   const fromEnv = process.env.SAATHI_BASE_DIR?.trim();
   if (fromEnv) return path.resolve(fromEnv);
-  return DEFAULT_SAATHI_BASE;
+  if (app.isPackaged) {
+    // Packaged NSIS install: exe sits at e.g. D:\Saathi\Dealer Saathi.exe
+    return path.dirname(app.getPath("exe"));
+  }
+  return DEV_SAATHI_BASE;
 }
 
 export function getLogsDir(): string {

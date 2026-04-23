@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import fs from "fs";
 import path from "path";
 import { logError, logInfo } from "./logger";
-import { getRepoRootFromMain, getSidecarExePath, getSidecarScriptPath } from "./paths";
+import { getRepoRootFromMain, getSaathiBaseDir, getSidecarExePath, getSidecarScriptPath } from "./paths";
 
 export interface SidecarJobPayload {
   type: string;
@@ -93,7 +93,7 @@ function resolvePython(): string {
 function ensureSidecarDaemon(baseDir: string | undefined): ChildProcessWithoutNullStreams | null {
   const env = {
     ...process.env,
-    SAATHI_BASE_DIR: baseDir || process.env.SAATHI_BASE_DIR || "D:\\Saathi",
+    SAATHI_BASE_DIR: baseDir || getSaathiBaseDir(),
     PYTHONUNBUFFERED: "1",
   };
   if (daemonProc && daemonRl) {
@@ -204,7 +204,7 @@ async function runSidecarJobOneshot(payload: SidecarJobPayload): Promise<Sidecar
   const baseDir = payload.saathi_base_dir?.trim();
   const env = {
     ...process.env,
-    SAATHI_BASE_DIR: baseDir || process.env.SAATHI_BASE_DIR || "D:\\Saathi",
+    SAATHI_BASE_DIR: baseDir || getSaathiBaseDir(),
   };
 
   let proc: ChildProcessWithoutNullStreams;
@@ -308,7 +308,7 @@ async function runSidecarJobDaemon(payload: SidecarJobPayload): Promise<SidecarJ
 
   const stdinPayload = JSON.stringify({
     ...payload,
-    saathi_base_dir: baseDir || process.env.SAATHI_BASE_DIR || "D:\\Saathi",
+    saathi_base_dir: baseDir || getSaathiBaseDir(),
   });
 
   proc.stdin.write(stdinPayload + "\n", "utf8");
