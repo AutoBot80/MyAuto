@@ -13,11 +13,11 @@ locals {
   # time until instances exist, which breaks count on aws_cloudwatch_metric_alarm.*.
   ec2_metrics_enabled = var.asg_desired_capacity > 0
 
-  # Metric math: MAX(m0,m1) is parsed as MAX(single tuple) → ValidationException. Use MAX(m0, m1)
-  # (spaces). AVG has the same issue; for two instances use (m0+m1)/2. ASG max is 2 in variables.tf.
+  # CloudWatch: MAX/AVG need an *array* of time series, not two args — use MAX([m0,m1]), AVG([m0,m1]).
+  # See: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/using-metric-math.html
   _cw_app_n = length(local.app_instance_ids_sorted)
-  cw_ec2_max_expr = local._cw_app_n == 0 ? "0" : local._cw_app_n == 1 ? "m0" : "MAX(m0, m1)"
-  cw_ec2_avg_expr = local._cw_app_n == 0 ? "0" : local._cw_app_n == 1 ? "m0" : "(m0+m1)/2"
+  cw_ec2_max_expr = local._cw_app_n == 0 ? "0" : local._cw_app_n == 1 ? "m0" : "MAX([m0, m1])"
+  cw_ec2_avg_expr = local._cw_app_n == 0 ? "0" : local._cw_app_n == 1 ? "m0" : "AVG([m0, m1])"
 }
 
 # RDS FreeableMemory: fixed byte thresholds (AWS metric is bytes).

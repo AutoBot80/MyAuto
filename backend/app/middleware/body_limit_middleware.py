@@ -11,16 +11,23 @@ from app.config import (
 )
 
 
+def _path_segments(path: str) -> list[str]:
+    return [p for p in path.split("/") if p]
+
+
 def _limit_for_path(path: str) -> int:
-    if path.startswith("/uploads"):
+    # Do not use path.startswith("/uploads") only — behind a prefix (e.g. /api) the path is
+    # /api/.../uploads/... and would incorrectly get MAX_JSON_BODY_BYTES (2 MiB).
+    segs = _path_segments(path)
+    if "uploads" in segs:
         return MAX_UPLOAD_ROUTE_BODY_BYTES
-    if path.startswith("/subdealer-challan/parse-scan"):
+    if "subdealer-challan" in segs and "parse-scan" in segs:
         return MAX_SINGLE_UPLOAD_BODY_BYTES
-    if path.startswith("/qr-decode"):
+    if "qr-decode" in segs:
         return MAX_SINGLE_UPLOAD_BODY_BYTES
-    if path.startswith("/textract"):
+    if "textract" in segs:
         return MAX_SINGLE_UPLOAD_BODY_BYTES
-    if path.startswith("/vision"):
+    if "vision" in segs:
         return MAX_SINGLE_UPLOAD_BODY_BYTES
     return MAX_JSON_BODY_BYTES
 

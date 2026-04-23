@@ -130,8 +130,9 @@ MAX_JSON_BODY_BYTES = int(os.getenv("MAX_JSON_BODY_BYTES", str(2 * 1024 * 1024))
 # Default max size for a single uploaded file (500 KB)
 UPLOAD_MAX_FILE_BYTES = int(os.getenv("UPLOAD_MAX_FILE_BYTES", str(500 * 1024)))
 # Add Sales consolidated PDF (multi-page Aadhaar + details); larger than per-image scans
+# Default 100 MiB; override via env if needed
 UPLOAD_MAX_CONSOLIDATED_PDF_BYTES = int(
-    os.getenv("UPLOAD_MAX_CONSOLIDATED_PDF_BYTES", str(5 * 1024 * 1024))
+    os.getenv("UPLOAD_MAX_CONSOLIDATED_PDF_BYTES", str(100 * 1024 * 1024))
 )
 # Single-file upload routes: /qr-decode, /vision, /textract (POST), /subdealer-challan/parse-scan
 MAX_SINGLE_UPLOAD_BODY_BYTES = int(
