@@ -53,14 +53,9 @@ param(
     [string] $InstanceTag = "saathi-app"
 )
 
-# Do not use Stop: git/aws write to stderr; Stop can terminate before our Exit-Script pause.
+# Do not use Stop: git/aws write to stderr; Stop can terminate before we pause the window.
 $ErrorActionPreference = "Continue"
-
-trap {
-    Write-Host ""
-    Write-Fail "Unhandled error: $($_.Exception.Message)"
-    Exit-Script 1
-}
+$script:FinalExitCode = 0
 
 function Write-Step {
     param([string] $Message)
@@ -80,9 +75,8 @@ function Write-Fail {
 
 function Exit-Script {
     param([int] $Code = 0)
-    Write-Host ""
-    Read-Host "Press Enter to close"
-    exit $Code
+    $script:FinalExitCode = $Code
+    throw "DEPLOY_EXIT"
 }
 
 function Get-MaxSemVerFromGitTags {
@@ -207,6 +201,8 @@ function Get-TagFromVersion {
     }
     return "v0.5.01"
 }
+
+try {
 
 # Resolve repo root (script location)
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -364,14 +360,10 @@ if ($ids.Count -eq 0) {
     Exit-Script 1
 }
 
-$InstanceId = $ids[0]
-if ($ids.Count -gt 1) {
-    Write-Host ('Multiple instances found; using first: {0} [total: {1}]' -f $InstanceId, $ids.Count) -ForegroundColor DarkYellow
-}
-Write-Ok "InstanceId=$InstanceId"
+Write-Ok ("Found {0} instance(s): {1}" -f $ids.Count, ($ids -join ', '))
 
-# --- Phase 3: SSM deploy ---
-Write-Step "Phase 3: SSM remote deploy (git pull, pip, restart saathi-api)"
+# --- Phase 3: SSM deploy (all instances) ---
+Write-Step "Phase 3: SSM remote deploy (git pull, pip, nginx, restart saathi-api)"
 
 # One logical script on the instance (bash). SSM AWS-RunShellScript expects "commands" as an array of lines.
 $remoteLines = @(
@@ -381,6 +373,8 @@ $remoteLines = @(
     'git pull origin main'
     'source backend/venv/bin/activate'
     'pip install -q -r backend/requirements.txt'
+    'sudo cp deploy/ec2/nginx-saathi.conf /etc/nginx/conf.d/saathi.conf'
+    'sudo nginx -t && sudo systemctl reload nginx'
     'sudo systemctl restart saathi-api'
     'sleep 3'
     'curl -sS -f http://127.0.0.1:8000/health'
@@ -390,7 +384,7 @@ $remoteLines = @(
 # Full request JSON avoids Windows quoting issues with --parameters file://...
 $cliInputObj = [ordered]@{
     DocumentName   = "AWS-RunShellScript"
-    InstanceIds    = @($InstanceId)
+    InstanceIds    = $ids
     Parameters     = @{ commands = $remoteLines }
 }
 $cliInputJson = $cliInputObj | ConvertTo-Json -Depth 10 -Compress
@@ -417,49 +411,86 @@ try {
     Remove-Item -Path $cliInputFile -ErrorAction SilentlyContinue
 }
 
-Write-Host "CommandId=$CommandId - waiting for completion..."
+Write-Host "CommandId=$CommandId - waiting for completion on $($ids.Count) instance(s)..."
 
 $maxWaitSec = 300
-$elapsed = 0
-$status = "InProgress"
-while ($elapsed -lt $maxWaitSec -and $status -in @("InProgress", "Pending", "Delayed")) {
-    Start-Sleep -Seconds 2
-    $elapsed += 2
-    $inv = aws ssm get-command-invocation `
+$allSuccess = $true
+
+foreach ($InstanceId in $ids) {
+    Write-Step "Waiting for $InstanceId"
+    $elapsed = 0
+    $status = "InProgress"
+    while ($elapsed -lt $maxWaitSec -and $status -in @("InProgress", "Pending", "Delayed")) {
+        Start-Sleep -Seconds 2
+        $elapsed += 2
+        $inv = aws ssm get-command-invocation `
+            --region $Region `
+            --command-id $CommandId `
+            --instance-id $InstanceId `
+            --output json 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "get-command-invocation (retry): $inv" -ForegroundColor DarkGray
+            continue
+        }
+        try {
+            $invObj = $inv | ConvertFrom-Json
+            $status = $invObj.Status
+        } catch {
+            Write-Host "get-command-invocation (parse retry): $($_.Exception.Message)" -ForegroundColor DarkGray
+            continue
+        }
+    }
+
+    $final = aws ssm get-command-invocation `
         --region $Region `
         --command-id $CommandId `
         --instance-id $InstanceId `
         --output json 2>&1
+
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "get-command-invocation (retry): $inv" -ForegroundColor DarkGray
+        Write-Fail "Could not read command result for ${InstanceId}: $final"
+        $allSuccess = $false
         continue
     }
-    $invObj = $inv | ConvertFrom-Json
-    $status = $invObj.Status
+
+    try {
+        $finalObj = $final | ConvertFrom-Json
+    } catch {
+        Write-Fail "Could not parse command result for ${InstanceId}: $($_.Exception.Message)"
+        Write-Host "Raw output: $final" -ForegroundColor DarkGray
+        $allSuccess = $false
+        continue
+    }
+    Write-Host ""
+    Write-Host "--- $InstanceId stdout ---" -ForegroundColor DarkCyan
+    Write-Host ($finalObj.StandardOutputContent)
+    Write-Host "--- $InstanceId stderr ---" -ForegroundColor DarkYellow
+    Write-Host ($finalObj.StandardErrorContent)
+
+    if ($finalObj.Status -eq "Success") {
+        Write-Ok "$InstanceId Status=Success"
+    } else {
+        Write-Fail "$InstanceId Status=$($finalObj.Status)"
+        $allSuccess = $false
+    }
 }
 
-$final = aws ssm get-command-invocation `
-    --region $Region `
-    --command-id $CommandId `
-    --instance-id $InstanceId `
-    --output json 2>&1
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "Could not read command result: $final"
-    Exit-Script 1
-}
-
-$finalObj = $final | ConvertFrom-Json
-Write-Host ""
-Write-Host "--- Remote stdout ---" -ForegroundColor DarkCyan
-Write-Host ($finalObj.StandardOutputContent)
-Write-Host "--- Remote stderr ---" -ForegroundColor DarkYellow
-Write-Host ($finalObj.StandardErrorContent)
-
-if ($finalObj.Status -eq "Success") {
-    Write-Ok "SSM command Status=Success"
+if ($allSuccess) {
+    Write-Ok "All instances deployed successfully."
     Exit-Script 0
 }
 
-Write-Fail "SSM command Status=$($finalObj.Status)"
+Write-Fail "One or more instances failed -- check output above."
 Exit-Script 1
+
+} catch {
+    if ($_.Exception.Message -ne "DEPLOY_EXIT") {
+        Write-Host ""
+        Write-Host "FAIL: Unhandled error: $($_.Exception.Message)" -ForegroundColor Red
+        $script:FinalExitCode = 1
+    }
+} finally {
+    Write-Host ""
+    Read-Host "Press Enter to close"
+}
+exit $script:FinalExitCode
