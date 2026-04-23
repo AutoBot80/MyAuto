@@ -22,7 +22,7 @@ locals {
 
 # RDS FreeableMemory: fixed byte thresholds (AWS metric is bytes).
 locals {
-  rds_freeable_memory_warn_bytes = 200 * 1024 * 1024
+  rds_freeable_memory_warn_bytes = 175 * 1024 * 1024
   rds_freeable_memory_crit_bytes = 128 * 1024 * 1024
   rds_db_connections_warn        = var.rds_max_connections_for_alarms * 0.70
   rds_db_connections_crit        = var.rds_max_connections_for_alarms * 0.85

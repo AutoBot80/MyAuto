@@ -1,10 +1,20 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
 import fs from "fs";
+import { tmpdir } from "os";
 import path from "path";
 import { logError, logInfo } from "./logger";
 import { getAppIconPath, getRepoRootFromMain } from "./paths";
 import { registerIpc } from "./ipc-handlers";
+import { runPrintTestFromDir } from "./printer";
 import { killAllSidecarJobs } from "./sidecar";
+
+/** Print-smoke / SAATHI_PRINT_TEST_DIR: use a dedicated userData + disk cache under %TEMP% to avoid Chromium cache lock / Access denied (0x5) on the default profile. */
+const _printTestDirEnv = process.env.SAATHI_PRINT_TEST_DIR?.trim();
+if (_printTestDirEnv) {
+  const smokeRoot = path.join(tmpdir(), "saathi-electron-print-smoke");
+  app.setPath("userData", smokeRoot);
+  app.commandLine.appendSwitch("disk-cache-dir", path.join(smokeRoot, "chromium-disk-cache"));
+}
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -77,7 +87,30 @@ function createWindow(): void {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  const printTestDir = process.env.SAATHI_PRINT_TEST_DIR?.trim();
+  if (printTestDir) {
+    logInfo(`SAATHI_PRINT_TEST_DIR smoke print: ${printTestDir}`);
+    const r = await runPrintTestFromDir(printTestDir);
+    if (r.ok) {
+      logInfo(`print test ok: printed=${r.printed}`);
+      await dialog.showMessageBox({
+        type: "info",
+        title: "Print test",
+        message: `Printed ${r.printed} PDF file(s).\n\nFolder:\n${printTestDir}`,
+      });
+    } else {
+      logError(`print test failed: ${r.error ?? "unknown"}`);
+      await dialog.showMessageBox({
+        type: "error",
+        title: "Print test failed",
+        message: r.error ?? "Unknown error",
+      });
+    }
+    app.quit();
+    return;
+  }
+
   logInfo("application started");
   createWindow();
   app.on("activate", () => {

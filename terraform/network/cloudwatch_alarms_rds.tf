@@ -74,13 +74,14 @@ resource "aws_cloudwatch_metric_alarm" "rds_freeable_memory_warn" {
 
   alarm_name          = "${var.project_name}-rds-freeable-memory-warn"
   comparison_operator = "LessThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm  = 2
   metric_name         = "FreeableMemory"
   namespace           = "AWS/RDS"
   period              = 300
   statistic           = "Average"
   threshold           = local.rds_freeable_memory_warn_bytes
-  alarm_description   = "WARNING: RDS FreeableMemory < 200 MB (5 min avg)"
+  alarm_description   = "WARNING: RDS FreeableMemory < 175 MB (5 min avg; 2 of 2 periods)"
   treat_missing_data  = "notBreaching"
 
   dimensions = {

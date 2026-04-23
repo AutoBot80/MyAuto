@@ -108,16 +108,37 @@ locals {
     %{endif}
     %{endif}
 
+    # ── 6a. DATABASE_URL from RDS master secret (rotates; keep .env in sync) ─
+    mkdir -p /opt/saathi/etc
+    umask 077
+    {
+      echo "RDS_SECRET_ARN=${nonsensitive(aws_db_instance.main.master_user_secret[0].secret_arn)}"
+      echo "RDS_ENDPOINT=${aws_db_instance.main.endpoint}"
+      echo "AWS_DEFAULT_REGION=${var.aws_region}"
+      echo "RDS_DB_NAME=${var.rds_db_name}"
+    } > /opt/saathi/etc/rds-url-sync.env
+    chmod 600 /opt/saathi/etc/rds-url-sync.env
+    chmod +x /opt/saathi/deploy/ec2/write-database-url.sh
+    chmod +x /opt/saathi/deploy/ec2/sync-database-url.sh
+    if ! /opt/saathi/deploy/ec2/sync-database-url.sh; then
+      echo "sync-database-url.sh failed (check instance role / Secrets Manager access)." >&2
+      exit 1
+    fi
+
     # ── 7. Nginx — real proxy config (replaces stub) ─────────────────────
     rm -f /etc/nginx/conf.d/saathi-health.conf
     cp /opt/saathi/deploy/ec2/nginx-saathi.conf /etc/nginx/conf.d/saathi.conf
     rm -f /etc/nginx/conf.d/default.conf
     nginx -t && systemctl reload nginx
 
-    # ── 8. Systemd service ───────────────────────────────────────────────
+    # ── 8. Systemd: API + periodic DATABASE_URL sync from RDS secret ───
     chmod +x /opt/saathi/deploy/ec2/run-gunicorn.sh
     cp /opt/saathi/deploy/ec2/saathi-api.service /etc/systemd/system/saathi-api.service
+    cp /opt/saathi/deploy/ec2/saathi-rds-url-sync.service /etc/systemd/system/saathi-rds-url-sync.service
+    cp /opt/saathi/deploy/ec2/saathi-rds-url-sync.timer /etc/systemd/system/saathi-rds-url-sync.timer
     systemctl daemon-reload
+    systemctl enable saathi-rds-url-sync.timer
+    systemctl start saathi-rds-url-sync.timer
     systemctl enable saathi-api
     systemctl start saathi-api
 

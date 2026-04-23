@@ -83,7 +83,9 @@ if not host:
     )
 
 pwd_q = urllib.parse.quote_plus(str(password))
-print(f"postgresql://{user}:{pwd_q}@{host}:{port}/{dbname}")
+base = f"postgresql://{user}:{pwd_q}@{host}:{port}/{dbname}"
+sep = "&" if "?" in base else "?"
+print(f"{base}{sep}sslmode=require")
 PY
 )"
 

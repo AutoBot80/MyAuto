@@ -1,0 +1,19 @@
+Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)
+
+started_ist=2026-04-21T18:10:07.104+05:30
+subfolder='8905969604_210426'
+
+--- trace ---
+2026-04-21T18:10:07.110+05:30 [NOTE] run_fill_insurance_only: starting Fill Insurance flow
+2026-04-21T18:10:07.251+05:30 [NOTE] KYC uploads: using Uploaded scans (Aadhar_front.jpg / Aadhar.jpg, Aadhar_back.jpg; third slot reuses front).
+2026-04-21T18:10:10.145+05:30 [NOTE] run_fill_insurance_only: phase=page_open elapsed_ms=0
+2026-04-21T18:10:13.636+05:30 [NOTE] run_fill_insurance_only: past partner login URL — Sign In automation skipped
+2026-04-21T18:10:16.207+05:30 [NOTE] run_fill_insurance_only: phase=after_sign_in_settle elapsed_ms=6062
+2026-04-21T18:10:29.081+05:30 [NOTE] run_fill_insurance_only: tab_resolve step=2W (two-wheeler) branch=stayed_on_fallback elapsed_ms=18933 resolver_ms=7098
+2026-04-21T18:10:29.095+05:30 [NOTE] run_fill_insurance_only: active tab after 2W
+2026-04-21T18:10:29.103+05:30 [NOTE] run_fill_insurance_only: phase=after_2w elapsed_ms=18953
+2026-04-21T18:10:32.902+05:30 [ERROR] New Policy: Locator.wait_for: Timeout 3500ms exceeded.
+Call log:
+  - waiting for get_by_text("New Policy", exact=True).first to be visible
+    11 × locator resolved to hidden <a id="ctl00_ContentPlaceHolder1_hypPolicy">New Policy</a>
+

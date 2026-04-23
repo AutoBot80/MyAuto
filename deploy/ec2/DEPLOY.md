@@ -108,6 +108,47 @@ Confirm the line in `/opt/saathi/backend/.env`:
 grep '^DATABASE_URL=' /opt/saathi/backend/.env
 ```
 
+`write-database-url.sh` bakes in **`?sslmode=require`**, which RDS expects.
+
+### Step 2a — Auto-sync (recommended, avoids manual re-runs on rotation)
+
+When the RDS **master** password is managed in Secrets Manager (`manage_master_user_password` in Terraform), the password can rotate. To keep `DATABASE_URL` in `/opt/saathi/backend/.env` aligned without you editing the file by hand:
+
+1. **New ASG instances (after you apply Terraform and merge this repo’s launch template):** `user_data` creates `/opt/saathi/etc/rds-url-sync.env` (using `terraform output -raw rds_master_user_secret_arn` and `rds_endpoint` / region / DB name), runs [sync-database-url.sh](./sync-database-url.sh) once, then enables **[saathi-rds-url-sync.timer](./saathi-rds-url-sync.timer)** (by default about **every 2 minutes**; edit `OnUnitActiveSec` in the unit to tune). The sync replaces only the `DATABASE_URL=` line; it restarts **`saathi-api` only** if the URL **changed** and the service was **already** running.
+2. **Long-lived instances (manual one-time):** `git pull`, then (adjust ARNs/endpoint from `terraform output` on your machine):
+
+   ```bash
+   sudo install -d -m 700 /opt/saathi/etc
+   sudo tee /opt/saathi/etc/rds-url-sync.env > /dev/null <<'EOF'
+   RDS_SECRET_ARN=paste-from-terraform-output-rds_master_user_secret_arn
+   RDS_ENDPOINT=paste-from-terraform-output-rds_endpoint
+   AWS_DEFAULT_REGION=ap-south-1
+   RDS_DB_NAME=saathi
+   EOF
+   sudo chmod 600 /opt/saathi/etc/rds-url-sync.env
+   sudo chmod +x /opt/saathi/deploy/ec2/write-database-url.sh /opt/saathi/deploy/ec2/sync-database-url.sh
+   sudo cp /opt/saathi/deploy/ec2/saathi-rds-url-sync.service /opt/saathi/deploy/ec2/saathi-rds-url-sync.timer /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now saathi-rds-url-sync.timer
+   sudo /opt/saathi/deploy/ec2/sync-database-url.sh
+   ```
+
+If your app `.env` is the **monolithic** Secret in `app_dotenv_secret_arn`, that file can still list an old `DATABASE_URL`; the timer’s sync **overrides** the live `DATABASE_URL=` on disk to match the **RDS master** secret, which is the one that actually rotates with RDS.
+
+| Check | Command |
+|--------|---------|
+| Next timer runs | `systemctl list-timers saathi-rds-url-sync.timer` |
+| Last sync logs | `journalctl -u saathi-rds-url-sync.service -n 50 --no-pager` |
+
+**Password rotation in production (avoid DB outages):** The app reads `DATABASE_URL` when **Gunicorn** starts, so a **new** password is applied only after **`.env` is updated and `saathi-api` restarts**. The failure window is roughly **(time until the next successful sync) + (restart)**, and only while the **old** in-memory config no longer matches RDS. To keep that small:
+
+- **Run the sync timer (Step 2a) on every app instance** — the default [saathi-rds-url-sync.timer](./saathi-rds-url-sync.timer) polls **every 2 minutes**; for stricter SLOs, set `OnUnitActiveSec=1m`, then `systemctl daemon-reload && systemctl restart saathi-rds-url-sync.timer` after deploying the file.
+- **Prefer ≥2 app instances** behind the ALB so a **sync + restart** on one instance does not take down all capacity (health checks will drain/restore targets as usual if configured).
+- **Alarms and checks:** e.g. ALB **5xx** or target **unhealthy**, and **failed** `saathi-rds-url-sync` runs: `journalctl -u saathi-rds-url-sync.service -p err` / CloudWatch from the instance if you ship those logs. Fix **IAM** (`GetSecretValue` on the RDS master secret) and **network to RDS** if sync fails.
+- **Staging test:** In a non-prod account or maintenance window, trigger a **Secrets Manager** rotation (or a manual password update **consistent with** the secret) and watch **health** + sync logs; confirm the API recovers without manual SSH.
+- **Optional, faster than polling:** An **EventBridge** rule on **Secrets Manager rotation** (or a narrow schedule) that runs **SSM `AWS-RunShellScript`** on the ASG to execute `sync-database-url.sh` immediately, so you are not limited by the timer. Polling is simpler; event-driven is best when you need sub-minute cutover.
+- **Longer-term alternative:** Fetch the RDS secret **inside the application** (AWS SDK) when opening DB connections, so a password change does not require a process restart — a larger app change; the timer + restart pattern is the usual first step for Gunicorn-style apps.
+
 ---
 
 ## Step 3 — `JWT_SECRET` and required vars
@@ -156,7 +197,7 @@ curl -sS http://127.0.0.1:8000/health
 
 The unit file includes **`ExecStartPre=chown … ec2-user`** on `/opt/saathi/backend/venv` so the venv stays writable by `ec2-user` after every restart (covers accidental `sudo pip install`). New ASG instances get the same ownership from Terraform `user_data` after the initial `pip install`.
 
-If RDS credentials rotate or you changed the secret, re-run Step 2 before restarting.
+If RDS credentials rotate or you changed the secret, re-run **Step 2** (or wait for the **Step 2a** timer, when enabled) before/instead of a manual `DATABASE_URL` edit, then `sudo systemctl restart saathi-api` if the timer is not in use.
 
 ---
 

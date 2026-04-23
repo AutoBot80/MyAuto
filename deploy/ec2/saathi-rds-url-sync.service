@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync DATABASE_URL from RDS master secret (Secrets Manager) into /opt/saathi/backend/.env
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# AWS_DEFAULT_REGION, RDS_SECRET_ARN, optional RDS_HOST / RDS_ENDPOINT, RDS_DB_NAME
+EnvironmentFile=-/opt/saathi/etc/rds-url-sync.env
+ExecStart=/opt/saathi/deploy/ec2/sync-database-url.sh
+
+[Install]
+WantedBy=multi-user.target

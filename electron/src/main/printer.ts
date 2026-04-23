@@ -32,6 +32,22 @@ function printWithCallback(wc: WebContents, options: WebContentsPrintOptions): P
   });
 }
 
+/**
+ * Print PDF via **system dialog only** (no silent fallback: same HP/driver bugs affect silent).
+ * Uses explicit ``pageSize`` so Chromium does not send an empty layout to the driver.
+ */
+async function printPdfContents(wc: WebContents, deviceName?: string): Promise<void> {
+  const opts: WebContentsPrintOptions = {
+    silent: false,
+    printBackground: true,
+    pageSize: "A4",
+  };
+  if (deviceName?.trim()) {
+    opts.deviceName = deviceName.trim();
+  }
+  await printWithCallback(wc, opts);
+}
+
 export interface PrintOptions {
   html: string;
   deviceName?: string;
@@ -92,9 +108,19 @@ export interface PresignedPrintItem {
   kind?: string;
 }
 
-function createPdfPrintWindow(): BrowserWindow {
+/**
+ * PDF print must use a **visible** window on Windows: a hidden window often has no laid-out
+ * content size, which triggers ``content size is empty`` / ``Printer settings invalid`` and the
+ * system print dialog may never appear.
+ */
+function createPdfPrintWindow(title: string): BrowserWindow {
   return new BrowserWindow({
-    show: false,
+    show: true,
+    width: 900,
+    height: 1100,
+    center: true,
+    title: title || "Print",
+    autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -136,23 +162,13 @@ export async function printPdfsFromPresignedUrls(
             error: `PDF not found on this PC: ${item.filename ?? localPath}`,
           };
         }
-        const win = createPdfPrintWindow();
+        const win = createPdfPrintWindow(item.filename ?? "Print");
         try {
           await win.loadFile(localPath);
-          try {
-            await printWithCallback(win.webContents, {
-              silent: true,
-              deviceName,
-              printBackground: true,
-            });
-          } catch (e) {
-            logError("print pdf silent failed, trying dialog", e);
-            await printWithCallback(win.webContents, {
-              silent: false,
-              deviceName,
-              printBackground: true,
-            });
-          }
+          win.focus();
+          // PDF viewer may need a tick before layout/size exist for print preview.
+          await new Promise<void>((r) => setTimeout(r, 500));
+          await printPdfContents(win.webContents, deviceName);
           printed++;
         } finally {
           win.destroy();
@@ -175,23 +191,12 @@ export async function printPdfsFromPresignedUrls(
       );
       await writeFile(tmpPath, buf);
 
-      const win = createPdfPrintWindow();
+      const win = createPdfPrintWindow(item.filename ?? "Print");
       try {
         await win.loadFile(tmpPath);
-        try {
-          await printWithCallback(win.webContents, {
-            silent: true,
-            deviceName,
-            printBackground: true,
-          });
-        } catch (e) {
-          logError("print pdf silent failed, trying dialog", e);
-          await printWithCallback(win.webContents, {
-            silent: false,
-            deviceName,
-            printBackground: true,
-          });
-        }
+        win.focus();
+        await new Promise<void>((r) => setTimeout(r, 500));
+        await printPdfContents(win.webContents, deviceName);
         printed++;
       } finally {
         win.destroy();
@@ -209,4 +214,24 @@ export async function printPdfsFromPresignedUrls(
     }
   }
   return { ok: true, printed };
+}
+
+/**
+ * Dev / smoke: print every ``*.pdf`` in ``absDir`` using the same local-path path as production
+ * (``printPdfsFromPresignedUrls``). Used when ``SAATHI_PRINT_TEST_DIR`` is set in main.
+ */
+export async function runPrintTestFromDir(absDir: string): Promise<{ ok: boolean; printed: number; error?: string }> {
+  const { readdir } = await import("fs/promises");
+  const { join } = await import("path");
+  const names = (await readdir(absDir))
+    .filter((n) => n.toLowerCase().endsWith(".pdf"))
+    .sort();
+  const items: PresignedPrintItem[] = names.map((filename) => ({
+    presigned_url: join(absDir, filename),
+    filename,
+  }));
+  if (!items.length) {
+    return { ok: false, printed: 0, error: `No PDF files in ${absDir}` };
+  }
+  return printPdfsFromPresignedUrls(items);
 }
