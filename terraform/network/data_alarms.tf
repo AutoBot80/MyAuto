@@ -1,4 +1,4 @@
-# App-tier EC2 instances (for CPU / memory alarms). Refreshes as ASG replaces instances.
+# Per-instance CloudWatch series for ASG members. PutMetricAlarm does not support SEARCH in metric-math; use m0/m1 + MAX/AVG.
 
 data "aws_instances" "app_tier" {
   filter {
@@ -8,16 +8,18 @@ data "aws_instances" "app_tier" {
 }
 
 locals {
+  cw_app_asg_name = "${var.project_name}-asg-app"
+
   app_instance_ids_sorted = sort(data.aws_instances.app_tier.ids)
-  # Must not use length(app_instance_ids_sorted) here: data.aws_instances ids are unknown at plan
-  # time until instances exist, which breaks count on aws_cloudwatch_metric_alarm.*.
+  # Count gate uses desired_capacity, not list length, so plan-time unknown ids do not break alarm count.
   ec2_metrics_enabled = var.asg_desired_capacity > 0
 
-  # Metric math: MAX(m0,m1) is parsed as MAX(single tuple) → ValidationException. Use MAX(m0, m1)
-  # (spaces). AVG has the same issue; for two instances use (m0+m1)/2. ASG max is 2 in variables.tf.
-  _cw_app_n = length(local.app_instance_ids_sorted)
-  cw_ec2_max_expr = local._cw_app_n == 0 ? "0" : local._cw_app_n == 1 ? "m0" : "MAX(m0, m1)"
-  cw_ec2_avg_expr = local._cw_app_n == 0 ? "0" : local._cw_app_n == 1 ? "m0" : "(m0+m1)/2"
+  # Stack allows max 2 instances. MAX(m0, m1) must use a comma+space, not a tuple, or CloudWatch rejects it.
+  _ec2_n           = length(local.app_instance_ids_sorted)
+  ec2_cpu_max_expr = local._ec2_n == 0 ? "0" : local._ec2_n == 1 ? "m0" : "MAX(m0, m1)"
+  ec2_cpu_avg_expr = local._ec2_n == 0 ? "0" : local._ec2_n == 1 ? "m0" : "(m0+m1)/2"
+  # Same m0/m1 / MAX() shape as CPU for mem (separate resources with mem metrics on those ids).
+  ec2_mem_max_expr = local.ec2_cpu_max_expr
 }
 
 # RDS FreeableMemory: fixed byte thresholds (AWS metric is bytes).

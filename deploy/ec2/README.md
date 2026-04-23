@@ -2,6 +2,8 @@
 
 Instances run **Amazon Linux 2023**. The launch template **user_data** now **self-deploys** the full stack (system packages → git clone → Python 3.11 venv → pip → Nginx proxy → Gunicorn systemd service). New instances launched by the ASG come up healthy without manual SSH.
 
+**AWS prod / beta (alarms, ASG scaling, CloudWatch agent, Gunicorn defaults, RDS, §7 as-built):** [Production cloud design](../../Documentation/Production_cloud_design.md)
+
 **Ongoing deploys:** follow **[DEPLOY.md](./DEPLOY.md)** (git pull → pip → restart).
 
 ## Layout on the server

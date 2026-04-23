@@ -95,7 +95,7 @@ terraform output
 
 ## Planned next work (priority order — adjust as needed)
 
-1. **App on EC2:** Follow **[`deploy/ec2/README.md`](../deploy/ec2/README.md)** — Gunicorn + `uvicorn.workers.UvicornWorker` (4 workers, timeout 60s), Nginx proxy, **systemd**, **`write-database-url.sh`** for **`DATABASE_URL`** from the RDS master secret; merge **`dotenv.production.example`** and required portal URLs + **`JWT_SECRET`**. Then remove bootstrap **`saathi-health.conf`** and switch to **`nginx-saathi.conf`**.
+1. **App on EC2:** Follow **[`deploy/ec2/README.md`](../deploy/ec2/README.md)** — Gunicorn + `uvicorn.workers.UvicornWorker` (3 workers, timeout 60s; `keepalive` / `max_requests` per `gunicorn.conf.py`), Nginx proxy, **systemd**, **`write-database-url.sh`** for **`DATABASE_URL`** from the RDS master secret; merge **`dotenv.production.example`** and required portal URLs + **`JWT_SECRET`**. Then remove bootstrap **`saathi-health.conf`** and switch to **`nginx-saathi.conf`**. For prod infra behavior (alarms, ASG, agent), use **[`Production_cloud_design.md`](Production_cloud_design.md) §7–§8**.
 2. **HTTPS on ALB:** ACM certificate (same region as ALB: `ap-south-1`), ALB listener **443**, optional HTTP→HTTPS redirect; security groups already allow 443 when ready.
 3. **Edge:** **CloudFront** in front of ALB; **WAF** Web ACL association (note: CloudFront uses WAF in **us-east-1** for global resources — confirm current AWS behavior when implementing).
 4. **DNS:** **Route 53** for `dealersaathi.co.in` (or chosen hostname) → CloudFront or ALB alias as designed.

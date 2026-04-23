@@ -5,13 +5,14 @@ resource "aws_cloudwatch_metric_alarm" "sqs_depth_warn" {
 
   alarm_name          = "${var.project_name}-sqs-depth-warn-${replace(replace(each.value, ".fifo", ""), "/", "-")}"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "ApproximateNumberOfVisibleMessages"
   namespace           = "AWS/SQS"
   period              = 600
   statistic           = "Average"
   threshold           = 500
-  alarm_description   = "WARNING: SQS ${each.value} backlog — scale-out"
+  alarm_description   = "WARNING: SQS ${each.value} backlog — scale-out; 2 of 2"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -28,13 +29,14 @@ resource "aws_cloudwatch_metric_alarm" "sqs_depth_crit" {
 
   alarm_name          = "${var.project_name}-sqs-depth-crit-${replace(replace(each.value, ".fifo", ""), "/", "-")}"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "ApproximateNumberOfVisibleMessages"
   namespace           = "AWS/SQS"
   period              = 600
   statistic           = "Average"
   threshold           = 2000
-  alarm_description   = "CRITICAL: SQS ${each.value} backlog — scale-out"
+  alarm_description   = "CRITICAL: SQS ${each.value} backlog — scale-out; 2 of 2"
   treat_missing_data  = "notBreaching"
 
   dimensions = {

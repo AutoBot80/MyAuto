@@ -1,4 +1,5 @@
 # Step scaling (no target tracking). Scale out +1 on load; scale in -1 only on sustained low CPU.
+# (AWS does not support `cooldown` on StepScaling policies; ASG `default_cooldown` = 300s paces all scaling.)
 
 resource "aws_autoscaling_policy" "scale_out" {
   name                      = "${var.project_name}-scale-out-step"

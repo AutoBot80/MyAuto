@@ -5,13 +5,14 @@ resource "aws_cloudwatch_metric_alarm" "alb_target_response_time_warn" {
 
   alarm_name          = "${var.project_name}-alb-target-response-warn"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "TargetResponseTime"
   namespace           = "AWS/ApplicationELB"
   period              = 300
   statistic           = "Average"
   threshold           = 1.2
-  alarm_description   = "WARNING: ALB TargetResponseTime > 1.2s (5 min avg) — scale-out"
+  alarm_description   = "WARNING: ALB TargetResponseTime > 1.2s (5 min avg) — scale-out; 2 of 2"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -29,13 +30,14 @@ resource "aws_cloudwatch_metric_alarm" "alb_target_response_time_crit" {
 
   alarm_name          = "${var.project_name}-alb-target-response-crit"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "TargetResponseTime"
   namespace           = "AWS/ApplicationELB"
   period              = 300
   statistic           = "Average"
   threshold           = 2
-  alarm_description   = "CRITICAL: ALB TargetResponseTime > 2s (5 min avg) — scale-out"
+  alarm_description   = "CRITICAL: ALB TargetResponseTime > 2s (5 min avg) — scale-out; 2 of 2"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -53,13 +55,14 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx_warn" {
 
   alarm_name          = "${var.project_name}-alb-5xx-warn"
   comparison_operator = "GreaterThanOrEqualToThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "HTTPCode_Target_5XX_Count"
   namespace           = "AWS/ApplicationELB"
   period              = 300
   statistic           = "Sum"
   threshold           = 5
-  alarm_description   = "WARNING: HTTPCode_Target_5XX_Count >= 5 in 5 min"
+  alarm_description   = "WARNING: HTTPCode_Target_5XX_Count >= 5 in 5 min; 2 of 2"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -77,13 +80,14 @@ resource "aws_cloudwatch_metric_alarm" "alb_5xx_crit" {
 
   alarm_name          = "${var.project_name}-alb-5xx-crit"
   comparison_operator = "GreaterThanOrEqualToThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "HTTPCode_Target_5XX_Count"
   namespace           = "AWS/ApplicationELB"
   period              = 300
   statistic           = "Sum"
   threshold           = 5
-  alarm_description   = "CRITICAL: HTTPCode_Target_5XX_Count >= 5 in 5 min"
+  alarm_description   = "CRITICAL: HTTPCode_Target_5XX_Count >= 5 in 5 min; 2 of 2"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -101,13 +105,14 @@ resource "aws_cloudwatch_metric_alarm" "alb_request_rate_warn" {
 
   alarm_name          = "${var.project_name}-alb-request-rate-warn"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "RequestCountPerTarget"
   namespace           = "AWS/ApplicationELB"
   period              = 60
   statistic           = "Sum"
   threshold           = 60
-  alarm_description   = "WARNING: RequestCountPerTarget > 60 req/min — scale-out"
+  alarm_description   = "WARNING: RequestCountPerTarget > 60 req/min — scale-out; 2 of 2"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -125,13 +130,14 @@ resource "aws_cloudwatch_metric_alarm" "alb_request_rate_crit" {
 
   alarm_name          = "${var.project_name}-alb-request-rate-crit"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "RequestCountPerTarget"
   namespace           = "AWS/ApplicationELB"
   period              = 60
   statistic           = "Sum"
   threshold           = 100
-  alarm_description   = "CRITICAL: RequestCountPerTarget > 100 req/min — scale-out"
+  alarm_description   = "CRITICAL: RequestCountPerTarget > 100 req/min — scale-out; 2 of 2"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -150,9 +156,10 @@ resource "aws_cloudwatch_metric_alarm" "alb_healthy_degraded" {
 
   alarm_name          = "${var.project_name}-alb-healthy-degraded"
   comparison_operator = "GreaterThanOrEqualToThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   threshold           = 1
-  alarm_description   = "WARNING: exactly one healthy target (min_capacity >= 2)"
+  alarm_description   = "WARNING: exactly one healthy target (min_capacity >= 2); 2 of 2"
   treat_missing_data  = "notBreaching"
 
   metric_query {
@@ -186,14 +193,15 @@ resource "aws_cloudwatch_metric_alarm" "alb_healthy_crit_none" {
 
   alarm_name          = "${var.project_name}-alb-healthy-crit-down"
   comparison_operator = "LessThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "HealthyHostCount"
   namespace           = "AWS/ApplicationELB"
   period              = 60
   statistic           = "Minimum"
   threshold           = 1
-  alarm_description   = "CRITICAL: HealthyHostCount < 1 (no healthy targets)"
-  treat_missing_data  = "breaching"
+  alarm_description   = "CRITICAL: HealthyHostCount < 1 (no healthy targets); 2 of 2"
+  treat_missing_data  = "notBreaching"
 
   dimensions = {
     LoadBalancer = aws_lb.public.arn_suffix

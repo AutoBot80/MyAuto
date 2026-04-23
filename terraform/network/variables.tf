@@ -145,8 +145,8 @@ variable "asg_scale_out_warmup_seconds" {
 
 variable "asg_scale_in_cooldown_seconds" {
   type        = number
-  description = "Simple scaling policy cooldown for scale-in (-1 instance)."
-  default     = 900
+  description = "Simple scaling policy cooldown for scale-in (-1 instance); must be >= scale-out cooldown (300s)."
+  default     = 600
 }
 
 # --- App deployment (user_data bootstrap) ---

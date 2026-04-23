@@ -2,7 +2,9 @@
 
 Use this after [README.md](./README.md) one-time setup. **Do not commit** `/opt/saathi/backend/.env` or secrets.
 
-**Ops backlog (suggested order):** (1) RDS backups / restore drill — [../../Documentation/rds-backup-recovery.md](../../Documentation/rds-backup-recovery.md); (2) optional JWT in SSM — below; (3) CloudWatch alarms — `terraform/network/cloudwatch_alarms.tf` (+ optional `alarm_sns_topic_arn`); (4) CI — [../../.github/workflows/backend-ci.yml](../../.github/workflows/backend-ci.yml).
+**Canonical AWS prod / beta** (request path, components, autoscaling, CloudWatch alarms, Gunicorn, `terraform apply` after instance churn, §7 as-built, §8 versioning): [../../Documentation/Production_cloud_design.md](../../Documentation/Production_cloud_design.md)
+
+**Ops backlog (suggested order):** (1) RDS backups / restore drill — [../../Documentation/rds-backup-recovery.md](../../Documentation/rds-backup-recovery.md); (2) optional JWT in SSM — below; (3) CloudWatch / ASG in Terraform `terraform/network/` (see Production doc **§7.4**; optional `alarm_sns_topic_arn`); (4) CI — [../../.github/workflows/backend-ci.yml](../../.github/workflows/backend-ci.yml).
 
 ---
 
@@ -12,6 +14,8 @@ Amazon Linux 2023 minimal AMIs may be missing common tools after an instance res
 
 ```bash
 sudo yum install -y nano htop postgresql15
+sudo dnf install -y spal-release
+sudo dnf install -y tesseract tesseract-langpack-eng tesseract-langpack-hin
 ```
 
 ---

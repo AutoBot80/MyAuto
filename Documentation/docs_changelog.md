@@ -32,6 +32,7 @@ _Add entries below. Remove them after the corresponding BRD/HLD/LLD/DDL updates 
 
 - **2026-04-05** — File created. Prior doc work (e.g. BR-21 Run Report PDFs, `hero_dms_form22_print`, LLD 6.276) is already in BRD/HLD/LLD/DDL; no backlog copied here.
 - **2026-04-18** — Handoff alignment: canonical **as-built AWS production** detail is **[`Production_cloud_design.md`](Production_cloud_design.md) §7** (version table §8); [`session_resume.md`](session_resume.md) points there for continuity.
+- **2026-04-24** — **[`Production_cloud_design.md`](Production_cloud_design.md) v0.3:** Gunicorn tuning, ASG/CloudWatch (no `SEARCH` on standard alarms, per-InstanceId EC2 CPU, CWAgent mem+double dimensions), alarm 2-of-2 + `notBreaching`, step vs simple policy cooldowns; see §2.4, §2.5, §2.10, §7.4–§7.5, §8.
 
 ---
 

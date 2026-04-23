@@ -15,7 +15,7 @@ data "aws_ami" "al2023_x86" {
 
 locals {
   # Full self-deploy: system deps → clone repo → venv → pip → Nginx → Gunicorn systemd service.
-  # CloudWatch Agent publishes mem_used_percent + disk_used_percent to namespace CWAgent (see cloudwatch_alarms_ec2.tf).
+  # CloudWatch Agent: mem + disk in CWAgent with native AutoScalingGroupName (alarms: SEARCH, no per-instance id).
   app_user_data = <<-EOT
     #!/bin/bash
     set -euxo pipefail
@@ -31,10 +31,35 @@ locals {
       python3.11 python3.11-devel python3.11-pip \
       gcc pkg-config cairo-devel nano htop postgresql15
 
+    # Tesseract OCR (SPAL repo) — used by pre-OCR Aadhaar front/back split
+    dnf install -y spal-release
+    dnf install -y tesseract tesseract-langpack-eng tesseract-langpack-hin
+
     # ── 2. CloudWatch Agent ──────────────────────────────────────────────
     mkdir -p /opt/aws/amazon-cloudwatch-agent/etc
     python3 <<'PY'
-    import json; cfg={"agent":{"metrics_collection_interval":60,"run_as_user":"root"},"metrics":{"namespace":"CWAgent","append_dimensions":{"InstanceId":"$${aws:InstanceId}"},"metrics_collected":{"mem":{"measurement":["mem_used_percent"]},"disk":{"measurement":["disk_used_percent"],"resources":["*"]}}}}; open("/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json","w").write(json.dumps(cfg,indent=2))
+    import json
+    cfg = {
+        "agent": {"metrics_collection_interval": 60, "run_as_user": "root"},
+        "metrics": {
+            "namespace": "CWAgent",
+            "append_dimensions": {
+                "InstanceId": "$${aws:InstanceId}",
+                "AutoScalingGroupName": "$${aws:AutoScalingGroupName}"
+            },
+            "metrics_collected": {
+                "mem": {"measurement": ["mem_used_percent"]},
+                "disk": {
+                    "measurement": ["disk_used_percent"],
+                    "resources": ["*"]
+                }
+            }
+        }
+    }
+    open(
+        "/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json",
+        "w",
+    ).write(json.dumps(cfg, indent=2))
     PY
     /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
       -a fetch-config -m ec2 -s \
@@ -98,6 +123,7 @@ locals {
     mv -f "$DOTENV_TMP" /opt/saathi/backend/.env
     trap - EXIT
     chmod 600 /opt/saathi/backend/.env
+    chown ec2-user:ec2-user /opt/saathi/backend/.env
     echo "Wrote .env from Secrets Manager ($(wc -l < /opt/saathi/backend/.env) lines)"
     %{else}
     %{if var.app_dotenv_ssm_param != ""}
@@ -105,6 +131,7 @@ locals {
       --with-decryption --query "Parameter.Value" --output text \
       --region ${var.aws_region} > /opt/saathi/backend/.env
     chmod 600 /opt/saathi/backend/.env
+    chown ec2-user:ec2-user /opt/saathi/backend/.env
     %{endif}
     %{endif}
 
@@ -150,6 +177,30 @@ locals {
       fi
       sleep 5
     done
+
+    # ── 10. Shell helpers for ec2-user ─────────────────────────────────
+    # saathi-psql: one-command interactive psql using DATABASE_URL from .env
+    cat > /usr/local/bin/saathi-psql <<'HELPER'
+    #!/bin/bash
+    set -a
+    . /opt/saathi/backend/.env 2>/dev/null
+    set +a
+    if [[ -z "$DATABASE_URL" ]]; then
+      echo "DATABASE_URL not found in /opt/saathi/backend/.env" >&2
+      exit 1
+    fi
+    exec psql "$DATABASE_URL" "$@"
+    HELPER
+    chmod +x /usr/local/bin/saathi-psql
+
+    # Auto-source .env on login so DATABASE_URL is always available
+    cat >> /home/ec2-user/.bashrc <<'BASHRC'
+
+    # Saathi: load DATABASE_URL and other env vars from .env
+    if [[ -r /opt/saathi/backend/.env ]]; then
+      set -a; . /opt/saathi/backend/.env 2>/dev/null; set +a
+    fi
+    BASHRC
   EOT
 }
 

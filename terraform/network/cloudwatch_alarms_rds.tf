@@ -5,7 +5,8 @@ resource "aws_cloudwatch_metric_alarm" "rds_free_storage_low" {
 
   alarm_name          = "${var.project_name}-rds-free-storage-low"
   comparison_operator = "LessThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "FreeStorageSpace"
   namespace           = "AWS/RDS"
   period              = 300
@@ -28,7 +29,8 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu_warn" {
 
   alarm_name          = "${var.project_name}-rds-cpu-warn"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "CPUUtilization"
   namespace           = "AWS/RDS"
   period              = 300
@@ -51,7 +53,8 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu_crit" {
 
   alarm_name          = "${var.project_name}-rds-cpu-crit"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "CPUUtilization"
   namespace           = "AWS/RDS"
   period              = 300
@@ -75,7 +78,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_freeable_memory_warn" {
   alarm_name          = "${var.project_name}-rds-freeable-memory-warn"
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = 2
-  datapoints_to_alarm  = 2
+  datapoints_to_alarm = 2
   metric_name         = "FreeableMemory"
   namespace           = "AWS/RDS"
   period              = 300
@@ -98,14 +101,14 @@ resource "aws_cloudwatch_metric_alarm" "rds_freeable_memory_crit" {
 
   alarm_name          = "${var.project_name}-rds-freeable-memory-crit"
   comparison_operator = "LessThanThreshold"
-  evaluation_periods  = 3
+  evaluation_periods  = 2
   datapoints_to_alarm = 2
   metric_name         = "FreeableMemory"
   namespace           = "AWS/RDS"
   period              = 300
   statistic           = "Average"
   threshold           = local.rds_freeable_memory_crit_bytes
-  alarm_description   = "CRITICAL: RDS FreeableMemory < 128 MB (5 min avg; 2 of 3 periods)"
+  alarm_description   = "CRITICAL: RDS FreeableMemory < 128 MB (5 min avg; 2 of 2 periods)"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -122,7 +125,8 @@ resource "aws_cloudwatch_metric_alarm" "rds_db_connections_warn" {
 
   alarm_name          = "${var.project_name}-rds-connections-warn"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "DatabaseConnections"
   namespace           = "AWS/RDS"
   period              = 300
@@ -145,7 +149,8 @@ resource "aws_cloudwatch_metric_alarm" "rds_db_connections_crit" {
 
   alarm_name          = "${var.project_name}-rds-connections-crit"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
   metric_name         = "DatabaseConnections"
   namespace           = "AWS/RDS"
   period              = 300
