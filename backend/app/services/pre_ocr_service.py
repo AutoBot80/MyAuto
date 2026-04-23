@@ -133,6 +133,7 @@ _DETAILS_OR_INSURANCE_SNIFF = [
 ]
 
 _A4_LONG_EDGE_PTS = 842
+_MAX_RASTER_LONG_EDGE_PX = 3600
 
 
 def _capped_dpi(page_rect_width: float, page_rect_height: float, target_dpi: int) -> int:
@@ -142,6 +143,26 @@ def _capped_dpi(page_rect_width: float, page_rect_height: float, target_dpi: int
     if long_edge <= _A4_LONG_EDGE_PTS:
         return target_dpi
     return max(72, int(target_dpi * _A4_LONG_EDGE_PTS / long_edge))
+
+
+def _cap_raster_size(img: Image.Image, page_label: str = "") -> Image.Image:
+    """Downscale if the rasterized image exceeds ``_MAX_RASTER_LONG_EDGE_PX``.
+
+    Some scanners embed high-res images inside A4-dimensioned pages, so
+    ``_capped_dpi`` (which trusts the PDF coordinate space) cannot prevent
+    oversized pixmaps. This post-render check is the final safety net.
+    """
+    long_px = max(img.width, img.height)
+    if long_px <= _MAX_RASTER_LONG_EDGE_PX:
+        return img
+    scale = _MAX_RASTER_LONG_EDGE_PX / long_px
+    new_w = max(360, int(img.width * scale))
+    new_h = max(360, int(img.height * scale))
+    logger.warning(
+        "Raster %s %dx%d exceeds %d px long edge; downscaling to %dx%d",
+        page_label, img.width, img.height, _MAX_RASTER_LONG_EDGE_PX, new_w, new_h,
+    )
+    return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
 
 def osd_deskew_clockwise_degrees_from_image(img: Image.Image) -> int:
@@ -270,9 +291,10 @@ def _pdf_to_page_images(
             effective_dpi = _capped_dpi(page.rect.width, page.rect.height, dpi)
             pix = page.get_pixmap(dpi=effective_dpi)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            img = _cap_raster_size(img, f"page_{i + 1}")
             raster_ms = int((time.perf_counter() - t_r) * 1000)
             page_timings.append(
-                (f"raster_page_{i + 1}", raster_ms, f"dpi={effective_dpi} px={pix.width}x{pix.height}"),
+                (f"raster_page_{i + 1}", raster_ms, f"dpi={effective_dpi} px={img.width}x{img.height}"),
             )
             if fix_orientation:
                 t_osd = time.perf_counter()
@@ -303,6 +325,7 @@ def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = OCR_PR
         effective_dpi = _capped_dpi(page.rect.width, page.rect.height, dpi)
         pix = page.get_pixmap(dpi=effective_dpi)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img = _cap_raster_size(img, f"page_{page_0 + 1}")
         return correct_image_orientation_upright_image(img)
     finally:
         doc.close()
@@ -623,6 +646,7 @@ def try_write_pencil_mark_for_sale_folder(sale_dir: Path) -> bool:
             effective_dpi = _capped_dpi(page.rect.width, page.rect.height, OCR_PRE_OCR_RASTER_DPI)
             pix = page.get_pixmap(dpi=effective_dpi)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            img = _cap_raster_size(img, "pencil_mark")
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=90)
             return write_pencil_mark_from_details_page(sale_dir, buf.getvalue())
@@ -661,6 +685,7 @@ def _export_single_page_pdfs_to_raw(
                 effective_dpi = _capped_dpi(page.rect.width, page.rect.height, OCR_PRE_OCR_RASTER_DPI)
                 pix = page.get_pixmap(dpi=effective_dpi)
                 img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                img = _cap_raster_size(img, f"raw_page_{i + 1}")
                 rot = osd_deskew_clockwise_degrees_from_image(img)
 
             dst = fitz.open()

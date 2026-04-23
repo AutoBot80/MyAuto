@@ -67,6 +67,13 @@ backend/app/data/kyc_insurer_strategy_cache.json
 # Local login payloads / secrets (never commit)
 client/login.json
 
+# Runtime data folders (local scans, OCR output, bulk uploads)
+Uploaded scans/
+uploaded-scans/
+ocr_output/
+Bulk Upload/
+bulk-upload/
+
 # Terraform: commit .tf and .terraform.lock.hcl; not provider cache or state
 .terraform/
 *.tfstate
