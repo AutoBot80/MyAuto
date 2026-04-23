@@ -2489,6 +2489,25 @@ def run_pre_ocr_and_prepare(
                 "Single-page PDF: treating page %d as Aadhar_combined (both faces on one page)",
                 idx + 1,
             )
+
+    # Reverse fallback: back found but front missing — OCR likely missed DOB/gender
+    # on a combined scan. Promote the sole Aadhar_back page to Aadhar_combined.
+    if has_aadhar_back and not has_aadhar_front:
+        back_pages = [(i, p) for i, p in classifications if p == PAGE_TYPE_AADHAR_BACK]
+        if len(back_pages) == 1:
+            idx = back_pages[0][0]
+            classifications = [
+                (i, PAGE_TYPE_AADHAR_COMBINED if i == idx else p)
+                for i, p in classifications
+            ]
+            has_aadhar_front = True
+            classified_types = {ptype for _, ptype in classifications}
+            logger.info(
+                "Promoting Aadhar_back page %d to Aadhar_combined "
+                "(no front found; likely combined scan with poor front OCR)",
+                idx + 1,
+            )
+
     orchestration.append(
         ("aadhar_combined_fallback", int((time.perf_counter() - t_fb0) * 1000), "", _off()),
     )

@@ -303,6 +303,11 @@ class UploadService:
 
             append_pre_ocr_step_lines(ocr_out_dir, log_leaf, post_pre_steps)
 
+            try:
+                sync_ocr_subfolder_to_s3(dealer_id, log_leaf)
+            except Exception:
+                logger.exception("Failed to sync rejected OCR artifacts to S3 for leaf=%s", log_leaf)
+
             mf: dict[str, Any] = {
                 "session_id": session_id,
                 "page_count": page_count,
