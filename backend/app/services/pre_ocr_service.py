@@ -2035,12 +2035,13 @@ def _split_pdf_by_classification(
             split_ok = False
         if not split_ok:
             logger.warning(
-                "Aadhaar combined page %d: consolidated + letter split failed; copying full page to %s only",
+                "Aadhaar combined page %d: split failed; copying full page as both %s and %s",
                 idx + 1,
                 FILENAME_AADHAR_FRONT,
+                FILENAME_AADHAR_BACK,
             )
-            out_path = for_ocr_dir / FILENAME_AADHAR_FRONT
-            page_images[idx].save(out_path, "JPEG", quality=90)
+            page_images[idx].save(for_ocr_dir / FILENAME_AADHAR_FRONT, "JPEG", quality=90)
+            page_images[idx].save(for_ocr_dir / FILENAME_AADHAR_BACK, "JPEG", quality=90)
 
     # Write known types (skip Aadhar slots already produced from combined split)
     for ptype, filename in PAGE_TYPE_TO_FILENAME.items():
