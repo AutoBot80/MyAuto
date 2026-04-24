@@ -79,7 +79,7 @@ export async function uploadScansV2(
 
 /** Pre-OCR + Textract: one PDF with Aadhaar + sales detail; subfolder mobile from OCR or optional ``customerMobile``. */
 export async function uploadScansV2Consolidated(
-  consolidatedPdf: File,
+  consolidatedFiles: File[],
   dealerId?: number,
   customerMobile?: string
 ): Promise<UploadScansResponse> {
@@ -89,7 +89,9 @@ export async function uploadScansV2Consolidated(
   if (m.length === 10 && !isPlaceholderCustomerMobileDigits(m)) {
     form.append("mobile", m);
   }
-  form.append("consolidated_pdf", consolidatedPdf);
+  for (const f of consolidatedFiles) {
+    form.append("consolidated_pdf", f);
+  }
   return postUploadForm("/uploads/scans-v2-consolidated", form);
 }
 
@@ -104,7 +106,7 @@ export interface ConsolidatedUploadPartial {
  * ``onPartial`` fires as each fragment is persisted so the UI can fill fields before the slowest job finishes.
  */
 export async function uploadScansV2ConsolidatedStream(
-  consolidatedPdf: File,
+  consolidatedFiles: File[],
   dealerId: number | undefined,
   customerMobile: string | undefined,
   onPartial: (p: ConsolidatedUploadPartial) => void
@@ -115,7 +117,9 @@ export async function uploadScansV2ConsolidatedStream(
   if (m.length === 10 && !isPlaceholderCustomerMobileDigits(m)) {
     form.append("mobile", m);
   }
-  form.append("consolidated_pdf", consolidatedPdf);
+  for (const f of consolidatedFiles) {
+    form.append("consolidated_pdf", f);
+  }
 
   const headers = new Headers();
   const token = getAccessToken();

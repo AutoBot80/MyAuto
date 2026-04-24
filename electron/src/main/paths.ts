@@ -5,12 +5,20 @@ import path from "path";
 /** Dev-mode fallback when not running from a packaged build. */
 const DEV_SAATHI_BASE = "D:\\Saathi";
 
+/** When the app is in ...\Saathi\Dealer Saathi, use the ...\Saathi root (matches installer, survives updates to the app folder). */
+function packagedSaathiDataRoot(installDir: string): string {
+  if (path.basename(installDir).toLowerCase() !== "dealer saathi") return installDir;
+  const parent = path.resolve(installDir, "..");
+  if (path.basename(parent).toLowerCase() !== "saathi") return installDir;
+  return parent;
+}
+
 export function getSaathiBaseDir(): string {
   const fromEnv = process.env.SAATHI_BASE_DIR?.trim();
   if (fromEnv) return path.resolve(fromEnv);
   if (app.isPackaged) {
-    // Packaged NSIS install: exe sits at e.g. D:\Saathi\Dealer Saathi.exe
-    return path.dirname(app.getPath("exe"));
+    const installDir = path.resolve(path.dirname(app.getPath("exe")));
+    return packagedSaathiDataRoot(installDir);
   }
   return DEV_SAATHI_BASE;
 }

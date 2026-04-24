@@ -235,13 +235,16 @@ def copy_incoming_scan_pdf(
     subfolder_leaf: str,
     source_pdf: Path,
 ) -> None:
-    """Copy consolidated PDF to ``inputs_scan.pdf`` under the artifact folder."""
+    """Copy consolidated scan (PDF or image) to ``inputs_scan.*`` under the artifact folder."""
     if not ocr_output_dir or not source_pdf.is_file():
         return
     try:
         paths = artifact_paths(ocr_output_dir, subfolder_leaf)
         paths["base"].mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_pdf, paths["inputs_scan"])
+        dest = paths["inputs_scan"]
+        if source_pdf.suffix.lower() != ".pdf":
+            dest = dest.with_suffix(source_pdf.suffix.lower())
+        shutil.copy2(source_pdf, dest)
     except OSError as e:
         logger.warning("copy_incoming_scan_pdf: %s", e)
 

@@ -976,6 +976,13 @@
   box-sizing: border-box;
 }
 
+/* Parent section 3 uses pointer-events: none when Fill Forms is gated; re-enable the insurer field so it stays editable. */
+.add-sales-v2-box--greyed .add-sales-v2-dd--insurance-editable {
+  pointer-events: auto;
+  position: relative;
+  z-index: 1;
+}
+
 /* DOB — fill wide date cell (see .add-sales-v2-dd--dob-full) */
 .add-sales-v2-dl-input.add-sales-v2-dl-input--dob {
   display: block;

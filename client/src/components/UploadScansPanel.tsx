@@ -22,9 +22,9 @@ interface UploadScansPanelProps {
   isMobileValid?: boolean;
   /** Upload scans to subfolder mobile_ddmmyy as Aadhar.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg */
   onUploadV2?: (aadharScan: File, aadharBackScan: File, salesDetail: File, insuranceSheet?: File) => Promise<void>;
-  /** Single multi-page PDF: pre-OCR classify/split then Textract (mobile from document). */
+  /** Single multi-page PDF or multiple JPEG/PNG pages: pre-OCR classify/split then Textract (mobile from document). */
   onUploadConsolidated?: (
-    consolidatedPdf: File,
+    consolidatedFiles: File[],
     fsArchive?: ConsolidatedFsArchiveContext | null
   ) => Promise<void>;
   /** Reverse countdown (e.g. 00m:40s → 00m:00s) while OCR runs; omit or null to hide. */
@@ -93,7 +93,7 @@ export function UploadScansPanel({
   const isPreUploaded = Boolean(savedTo && uploadedFiles.length > 0);
   /** When consolidated API exists: default is consolidated PDF; checking this shows per-document uploads. */
   const [uploadIndividualFiles, setUploadIndividualFiles] = useState(false);
-  const [selectedConsolidatedPdf, setSelectedConsolidatedPdf] = useState<File | null>(null);
+  const [selectedConsolidatedFiles, setSelectedConsolidatedFiles] = useState<File[]>([]);
   /** When set, the landing file is moved to `processed` only after Print Forms and Queue RTO succeeds (not right after OCR). */
   const [scannerRootHandle, setScannerRootHandle] = useState<FileSystemDirectoryHandle | null>(null);
   const [consolidatedFsArchive, setConsolidatedFsArchive] = useState<ConsolidatedFsArchiveContext | null>(null);
@@ -152,7 +152,7 @@ export function UploadScansPanel({
   const canUploadConsolidated =
     hasConsolidated &&
     !individualMode &&
-    selectedConsolidatedPdf &&
+    selectedConsolidatedFiles.length > 0 &&
     !isUploading;
 
   function clearIndividualSelections() {
@@ -169,7 +169,7 @@ export function UploadScansPanel({
   }
 
   function clearConsolidatedSelection() {
-    setSelectedConsolidatedPdf(null);
+    setSelectedConsolidatedFiles([]);
     setConsolidatedFsArchive(null);
     if (consolidatedInputRef.current) consolidatedInputRef.current.value = "";
   }
@@ -194,9 +194,9 @@ export function UploadScansPanel({
       try {
         const picked = await pickConsolidatedPdfFromLanding(scannerRootHandle);
         if (!picked) return;
-        setSelectedConsolidatedPdf(picked.file);
+        setSelectedConsolidatedFiles(picked.files);
         setConsolidatedFsArchive({
-          fileHandle: picked.fileHandle,
+          fileHandles: picked.fileHandles,
           scannerRoot: scannerRootHandle,
         });
       } catch (e) {
@@ -236,7 +236,7 @@ export function UploadScansPanel({
           {hasConsolidated && !individualMode ? (
             <>
               <p className="app-panel-hint-consolidated" role="note">
-                Consolidated PDF should contain Sales Detail Sheet, Aadhaar Front and Aadhaar Back information
+                Upload a multi-page PDF or select multiple JPEG/PNG page images (Sales Detail Sheet + Aadhaar Front + Back)
               </p>
               {showScannerArchiveRow ? (
                 <>
@@ -254,7 +254,7 @@ export function UploadScansPanel({
                   </div>
                   {scannerRootHandle ? (
                     <p className="app-panel-scan-folder-note" role="note">
-                      After processing, PDFs will be moved from landing to processed folder.
+                      After processing, files will be moved from landing to processed folder.
                     </p>
                   ) : (
                     <p className="app-panel-scan-folder-note" role="note">
@@ -277,12 +277,13 @@ export function UploadScansPanel({
                   id="upload-scan-consolidated"
                   ref={consolidatedInputRef}
                   type="file"
-                  accept=".pdf,application/pdf"
+                  accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+                  multiple
                   style={{ display: "none" }}
                   onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      setSelectedConsolidatedPdf(file);
+                    const files = e.target.files;
+                    if (files && files.length > 0) {
+                      setSelectedConsolidatedFiles(Array.from(files));
                       setConsolidatedFsArchive(null);
                     }
                     e.target.value = "";
@@ -294,7 +295,11 @@ export function UploadScansPanel({
                   disabled={isUploading}
                   onClick={() => void onChooseConsolidatedFile()}
                 >
-                  {selectedConsolidatedPdf ? selectedConsolidatedPdf.name : "Choose file"}
+                  {selectedConsolidatedFiles.length > 0
+                    ? selectedConsolidatedFiles.length === 1
+                      ? selectedConsolidatedFiles[0].name
+                      : `${selectedConsolidatedFiles.length} files selected`
+                    : "Choose file(s)"}
                 </button>
               </div>
               {onUploadV2 && showIndividualFileUploadToggle ? (
@@ -321,8 +326,8 @@ export function UploadScansPanel({
                   className="app-button app-button--primary"
                   disabled={!canUploadConsolidated}
                   onClick={() => {
-                    if (selectedConsolidatedPdf && onUploadConsolidated)
-                      void onUploadConsolidated(selectedConsolidatedPdf, consolidatedFsArchive);
+                    if (selectedConsolidatedFiles.length > 0 && onUploadConsolidated)
+                      void onUploadConsolidated(selectedConsolidatedFiles, consolidatedFsArchive);
                   }}
                 >
                   {isUploading ? "Uploading…" : "Upload documents"}

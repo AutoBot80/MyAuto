@@ -1,4 +1,5 @@
 import type { HomeTileFlags } from "../api/auth";
+import { HomePageWatermark } from "../components/HomePageWatermark";
 import "./HomePage.css";
 
 interface HomePageProps {
@@ -28,7 +29,7 @@ export function HomePage({
   return (
     <div className="home-page">
       <div className="home-page-tiles-wrap">
-        <div className="home-page-watermark" aria-hidden />
+        <HomePageWatermark />
         {!anyTile ? (
           <p className="home-page-no-tiles" role="status">
             No home modules are assigned for your role. Ask an administrator to set flags in{" "}

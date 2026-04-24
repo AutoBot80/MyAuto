@@ -105,13 +105,13 @@ export async function getProcessedDirectory(
 }
 
 export interface ConsolidatedPickFromLanding {
-  file: File;
-  fileHandle: FileSystemFileHandle;
+  files: File[];
+  fileHandles: FileSystemFileHandle[];
 }
 
 /** Passed to upload after picking via File System Access API under `scanner/landing`. */
 export interface ConsolidatedFsArchiveContext {
-  fileHandle: FileSystemFileHandle;
+  fileHandles: FileSystemFileHandle[];
   scannerRoot: FileSystemDirectoryHandle;
 }
 
@@ -122,24 +122,29 @@ export async function pickConsolidatedPdfFromLanding(
   if (!fsAccessSupported()) return null;
   const landing = await getLandingDirectory(scannerRoot);
   try {
-    const [fileHandle] = await window.showOpenFilePicker({
+    const fileHandles = await window.showOpenFilePicker({
       startIn: landing,
-      types: [{ description: "PDF", accept: { "application/pdf": [".pdf"] } }],
-      multiple: false,
+      types: [
+        { description: "All supported", accept: { "application/pdf": [".pdf"], "image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"] } },
+      ],
+      multiple: true,
     });
-    const file = await fileHandle.getFile();
-    return { file, fileHandle };
+    if (fileHandles.length === 0) return null;
+    const files = await Promise.all(fileHandles.map((h) => h.getFile()));
+    return { files, fileHandles };
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") return null;
     throw e;
   }
 }
 
-/** Move the file from `landing` into `processed` (same basename). */
+/** Move files from `landing` into `processed` (same basenames). */
 export async function moveConsolidatedToProcessed(
-  fileHandle: FileSystemFileHandle,
+  fileHandles: FileSystemFileHandle[],
   scannerRoot: FileSystemDirectoryHandle
 ): Promise<void> {
   const processed = await getProcessedDirectory(scannerRoot);
-  await fileHandle.move(processed);
+  for (const fh of fileHandles) {
+    await fh.move(processed);
+  }
 }

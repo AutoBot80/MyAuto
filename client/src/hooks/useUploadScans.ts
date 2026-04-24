@@ -123,13 +123,13 @@ export function useUploadScans(
   }
 
   async function uploadConsolidatedV2(
-    consolidatedPdf: File,
+    consolidatedFiles: File[],
     fsArchive?: ConsolidatedFsArchiveContext | null
   ) {
     setIsUploading(true);
     setUploadStatus("Uploading…");
     try {
-      const data = await uploadScansV2ConsolidatedStream(consolidatedPdf, dealerId, mobileDigits, (p) => {
+      const data = await uploadScansV2ConsolidatedStream(consolidatedFiles, dealerId, mobileDigits, (p) => {
         if (p.savedTo) {
           setSavedTo(p.savedTo);
         }

@@ -313,6 +313,63 @@ def _pdf_to_page_images(
     return result, osd_rotations, page_timings
 
 
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+
+
+def _is_image_file(path: Path) -> bool:
+    """Return True if *path* looks like a raster image (by extension or magic bytes)."""
+    if path.suffix.lower() in _IMAGE_SUFFIXES:
+        return True
+    try:
+        head = path.read_bytes()[:8]
+    except OSError:
+        return False
+    return head[:3] == b"\xff\xd8\xff" or head[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def _image_to_page_images(
+    image_path: Path,
+    *,
+    extra_image_paths: list[Path] | None = None,
+    fix_orientation: bool = True,
+) -> tuple[list[tuple[int, Image.Image]], dict[int, int], list[tuple[str, int, str]]]:
+    """Load raster image(s) directly as pages — no PDF rasterization loss.
+
+    When *extra_image_paths* is given, each path becomes an additional page
+    (page 0 = *image_path*, page 1 = extra[0], …).
+    """
+    all_paths = [image_path] + (extra_image_paths or [])
+    result: list[tuple[int, Image.Image]] = []
+    page_timings: list[tuple[str, int, str]] = []
+    osd_rotations: dict[int, int] = {}
+
+    for i, p in enumerate(all_paths):
+        page_no = i + 1
+        t_r = time.perf_counter()
+        img = Image.open(p)
+        img.load()
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        img = _cap_raster_size(img, f"page_{page_no}")
+        raster_ms = int((time.perf_counter() - t_r) * 1000)
+        page_timings.append((f"load_image_page_{page_no}", raster_ms, f"native px={img.width}x{img.height}"))
+
+        if fix_orientation:
+            t_osd = time.perf_counter()
+            rot_cw = osd_deskew_clockwise_degrees_from_image(img)
+            osd_ms = int((time.perf_counter() - t_osd) * 1000)
+            osd_rotations[i] = rot_cw
+            page_timings.append((f"osd_page_{page_no}", osd_ms, f"rotation={rot_cw}"))
+            if rot_cw:
+                img = img.rotate(-rot_cw, expand=True, fillcolor="white")
+        else:
+            osd_rotations[i] = 0
+
+        result.append((i, img))
+
+    return result, osd_rotations, page_timings
+
+
 def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = OCR_PRE_OCR_RASTER_DPI) -> Image.Image:
     """Render one PDF page to PIL RGB via PyMuPDF."""
     import fitz
@@ -1117,11 +1174,13 @@ def split_aadhar_consolidated(
     split_y_eff: int | None = split_y
     split_x_eff: int | None = split_x
     if split_x is not None and split_y is not None:
-        use_vertical = v_strength > h_strength
+        if h >= w:
+            use_vertical = v_strength > h_strength * 1.5
+        else:
+            use_vertical = v_strength > h_strength
     elif split_x is not None and split_y is None:
         use_vertical = True
     elif split_x is None and split_y is None:
-        # No valley: default by aspect — many one-page scans are **left/right**, not top/bottom.
         if w > h * 1.02:
             use_vertical = True
             split_x_eff = w // 2
@@ -1736,7 +1795,11 @@ def _split_pdf_multi_customer_to_sale_dirs(
         for_ocr_dir.mkdir(parents=True, exist_ok=True)
         raw_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(pdf_path, raw_dir / pdf_path.name)
-        _export_pdf_pages_to_raw(pdf_path, raw_dir, osd_rotations=osd_rotations)
+        if extra_image_paths:
+            for ep in extra_image_paths:
+                shutil.copy2(ep, raw_dir / ep.name)
+        if not _is_image_file(pdf_path):
+            _export_pdf_pages_to_raw(pdf_path, raw_dir, osd_rotations=osd_rotations)
 
         fi = bundle.get("aadhar_front_idx")
         bi = bundle.get("aadhar_back_idx")
@@ -1770,6 +1833,15 @@ def _split_pdf_multi_customer_to_sale_dirs(
                         didx_b + 1,
                         FILENAME_SALES_DETAIL_SHEET_PDF,
                     )
+                elif didx_b in page_images:
+                    pdf_bytes = _jpeg_bytes_to_single_page_pdf(_pil_rgb_to_jpeg_bytes(page_images[didx_b]))
+                    (for_ocr_dir / FILENAME_SALES_DETAIL_SHEET_PDF).write_bytes(pdf_bytes)
+                    logger.info(
+                        "Multi-customer: bundle %d page %d -> %s (generated from raster)",
+                        i + 1,
+                        didx_b + 1,
+                        FILENAME_SALES_DETAIL_SHEET_PDF,
+                    )
 
         didx = bundle.get("details_idx")
         if didx is not None and didx in page_images:
@@ -1798,6 +1870,8 @@ def pre_ocr_pdf(
     pdf_path: Path,
     processing_dir: Path | None = None,
     t0_wall: float | None = None,
+    *,
+    extra_image_paths: list[Path] | None = None,
 ) -> tuple[str, Path | None, str | None, list[tuple[str, int | None, str, int]], dict[int, Image.Image], dict[int, int], dict[int, dict]]:
     """
     Extract mobile from PDF using parallel Textract DDT per page (Details sheet has mobile).
@@ -1832,9 +1906,16 @@ def pre_ocr_pdf(
 
     try:
         t0 = time.perf_counter()
-        pages, osd_rotations, raster_timings = _pdf_to_page_images(pdf_path, fix_orientation=OCR_PRE_OCR_OSD_ENABLED)
-        raster_ms = int((time.perf_counter() - t0) * 1000)
-        _step("pdf_to_page_rasters", raster_ms, f"pages={len(pages)} osd={OCR_PRE_OCR_OSD_ENABLED} file={pdf_path.name}")
+        if _is_image_file(pdf_path):
+            pages, osd_rotations, raster_timings = _image_to_page_images(
+                pdf_path, extra_image_paths=extra_image_paths, fix_orientation=OCR_PRE_OCR_OSD_ENABLED,
+            )
+            raster_ms = int((time.perf_counter() - t0) * 1000)
+            _step("image_to_page_rasters", raster_ms, f"pages={len(pages)} osd={OCR_PRE_OCR_OSD_ENABLED} file={pdf_path.name}")
+        else:
+            pages, osd_rotations, raster_timings = _pdf_to_page_images(pdf_path, fix_orientation=OCR_PRE_OCR_OSD_ENABLED)
+            raster_ms = int((time.perf_counter() - t0) * 1000)
+            _step("pdf_to_page_rasters", raster_ms, f"pages={len(pages)} osd={OCR_PRE_OCR_OSD_ENABLED} file={pdf_path.name}")
         for rt_id, rt_ms, rt_detail in raster_timings:
             _step(rt_id, rt_ms, rt_detail)
         page_images: dict[int, Image.Image] = {idx: im for idx, im in pages}
@@ -1991,6 +2072,7 @@ def _split_pdf_by_classification(
     raw_dir: Path | None = None,
     page_images_cache: dict[int, Image.Image] | None = None,
     osd_rotations: dict[int, int] | None = None,
+    extra_image_paths: list[Path] | None = None,
 ) -> Path:
     """
     Classify each page from OCR text; write rotated/cut/named outputs under ``sale_dir/for_OCR/``.
@@ -2010,7 +2092,11 @@ def _split_pdf_by_classification(
     if raw_dir is not None:
         raw_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(pdf_path, raw_dir / pdf_path.name)
-        _export_pdf_pages_to_raw(pdf_path, raw_dir, osd_rotations=osd_rotations)
+        if extra_image_paths:
+            for ep in extra_image_paths:
+                shutil.copy2(ep, raw_dir / ep.name)
+        if not _is_image_file(pdf_path):
+            _export_pdf_pages_to_raw(pdf_path, raw_dir, osd_rotations=osd_rotations)
 
     classifications = classifications_override if classifications_override is not None else classify_pages_from_ocr_text(full_ocr_text)
     page_type_to_idx: dict[str, int] = {}  # first page index per non-Aadhaar type
@@ -2083,8 +2169,12 @@ def _split_pdf_by_classification(
             if src_pdf and src_pdf.is_file():
                 shutil.copy2(src_pdf, for_ocr_dir / filename)
                 logger.info("Classified page %d -> %s (PDF only)", idx + 1, filename)
+            elif idx in page_images:
+                pdf_bytes = _jpeg_bytes_to_single_page_pdf(_pil_rgb_to_jpeg_bytes(page_images[idx]))
+                (for_ocr_dir / filename).write_bytes(pdf_bytes)
+                logger.info("Classified page %d -> %s (generated from raster)", idx + 1, filename)
             else:
-                logger.warning("Details page %d: missing raw PDF for Sales_Detail_Sheet.pdf", idx + 1)
+                logger.warning("Details page %d: no raw PDF and no raster image available", idx + 1)
             continue
         out_path = for_ocr_dir / filename
         page_images[idx].save(out_path, "JPEG", quality=90)
@@ -2096,7 +2186,7 @@ def _split_pdf_by_classification(
             write_pencil_mark_from_details_page(sale_dir, _pil_rgb_to_jpeg_bytes(page_images[didx]))
 
     # Merge unused pages into unused.pdf
-    if unused_indices:
+    if unused_indices and not _is_image_file(pdf_path):
         doc = fitz.open(str(pdf_path))
         try:
             merged = fitz.open()
@@ -2111,7 +2201,7 @@ def _split_pdf_by_classification(
         finally:
             doc.close()
 
-    if raw_dir is not None:
+    if raw_dir is not None and not _is_image_file(pdf_path):
         _sync_for_ocr_pdfs(sale_dir, raw_dir, page_type_to_idx, combined_indices)
 
     return sale_dir
@@ -2304,6 +2394,7 @@ def run_pre_ocr_and_prepare(
     dealer_id: int = 100001,
     *,
     mobile_hint: str | None = None,
+    extra_image_paths: list[Path] | None = None,
 ) -> tuple[
     list[tuple[Path, str, str]] | None,
     str,
@@ -2373,14 +2464,23 @@ def run_pre_ocr_and_prepare(
     dest_pdf.write_bytes(source_pdf.read_bytes())
     copy_ms = int((time.perf_counter() - t_copy0) * 1000)
 
-    # Consolidated OCR artifacts: incoming PDF copy under ocr_output/{stem}_{ddmmyy}/
+    # Consolidated OCR artifacts: incoming scan copy under ocr_output/{stem}_{ddmmyy}/
     copy_incoming_scan_pdf(ocr_out, artifact_leaf, dest_pdf)
+    if extra_image_paths:
+        from app.services.ocr_sale_artifacts import artifact_paths as _artifact_paths
+        try:
+            ap = _artifact_paths(ocr_out, artifact_leaf)
+            ap["base"].mkdir(parents=True, exist_ok=True)
+            for ep in extra_image_paths:
+                shutil.copy2(ep, ap["base"] / ep.name)
+        except OSError:
+            pass
 
     # Run pre-OCR (parallel Textract DDT per page). Also returns the
     # rendered page images, OSD rotations, and per-page DDT result dicts so downstream
     # steps skip re-rasterization and can reuse DDT results in the main OCR pipeline.
     t_pre0 = time.perf_counter()
-    full_text, ocr_path, mobile, pre_steps, page_images, osd_rotations, ddt_results = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir, t0_wall=t0_wall)
+    full_text, ocr_path, mobile, pre_steps, page_images, osd_rotations, ddt_results = pre_ocr_pdf(dest_pdf, processing_dir=proc_dir, t0_wall=t0_wall, extra_image_paths=extra_image_paths)
     # Consolidated Add Sales: user-entered mobile must win over OCR (letter/other pages may show a different number).
     hint = _normalize_indian_mobile_hint(mobile_hint)
     if hint:
@@ -2594,6 +2694,7 @@ def run_pre_ocr_and_prepare(
         raw_dir=raw_dir,
         page_images_cache=page_images,
         osd_rotations=osd_rotations,
+        extra_image_paths=extra_image_paths,
     )
     orchestration.append(
         (

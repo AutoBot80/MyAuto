@@ -16,6 +16,7 @@ from app.repositories.ai_reader_queue import AiReaderQueueRepository
 from app.repositories.master_ref import REF_TYPE_FINANCER, REF_TYPE_INSURER, list_ref_values
 from app.services.utility_functions import (
     default_profession_if_empty,
+    fuzzy_best_master_ref_value,
     fuzzy_best_option_label,
     normalize_for_fuzzy_match,
     normalize_nominee_relationship_value,
@@ -2193,8 +2194,8 @@ def _apply_initcap_on_read(
     Presentation normalization for API reads:
     convert human-readable OCR text fields to InitCap.
 
-    When ``master_insurers`` / ``master_financers`` are non-empty, fuzzy-match (50%+ score)
-    OCR text to canonical ``master_ref.ref_value`` rows and replace with the table value on match.
+    When ``master_insurers`` / ``master_financers`` are non-empty, ``fuzzy_best_master_ref_value`` maps
+    OCR text to canonical ``master_ref.ref_value`` (head-weighted; optional *The* ignored) with 50%+ score.
     """
     customer = data.get("customer") or {}
     if isinstance(customer, dict):
@@ -2227,7 +2228,7 @@ def _apply_initcap_on_read(
             ins = sanitize_details_sheet_insurer_value(insurance.get("insurer"))
             if ins:
                 if master_insurers:
-                    canon = fuzzy_best_option_label(ins, master_insurers, min_score=0.5)
+                    canon = fuzzy_best_master_ref_value(ins, master_insurers, min_score=0.5)
                     insurance["insurer"] = canon if canon else _initcap_words(ins)
                 else:
                     insurance["insurer"] = _initcap_words(ins)
@@ -2252,7 +2253,7 @@ def _apply_initcap_on_read(
             fv = str(insurance.get("financier") or "").strip()
             if fv:
                 if master_financers:
-                    fcanon = fuzzy_best_option_label(fv, master_financers, min_score=0.5)
+                    fcanon = fuzzy_best_master_ref_value(fv, master_financers, min_score=0.5)
                     insurance["financier"] = fcanon if fcanon else _initcap_words(fv)
                 else:
                     insurance["financier"] = _initcap_words(fv)

@@ -42,7 +42,7 @@ async def upload_scans_v2(
 @router.post("/scans-v2-consolidated")
 async def upload_scans_v2_consolidated(
     principal: Principal = Depends(get_principal),
-    consolidated_pdf: UploadFile = File(..., description="Single PDF: Aadhaar + sales detail (multi-page ok)"),
+    consolidated_pdf: list[UploadFile] = File(..., description="Consolidated scan: one multi-page PDF or multiple JPEG/PNG pages"),
     dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
     mobile: str = Form(
         "",
@@ -61,7 +61,7 @@ async def upload_scans_v2_consolidated(
 @router.post("/scans-v2-consolidated-stream")
 async def upload_scans_v2_consolidated_stream(
     principal: Principal = Depends(get_principal),
-    consolidated_pdf: UploadFile = File(..., description="Single PDF: Aadhaar + sales detail (multi-page ok)"),
+    consolidated_pdf: list[UploadFile] = File(..., description="Consolidated scan: one multi-page PDF or multiple JPEG/PNG pages"),
     dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
     mobile: str = Form(
         "",

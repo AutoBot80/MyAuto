@@ -1,10 +1,13 @@
+/* stretch (not center) on cross axis so .home-page-tiles-wrap gets full main height; inner flex centers tiles / login */
 .home-page {
   display: flex;
   flex: 1;
   min-height: 0;
-  align-items: center;
+  width: 100%;
+  align-items: stretch;
   justify-content: center;
   padding: 2rem;
+  box-sizing: border-box;
 }
 
 .home-page-no-tiles {
@@ -30,19 +33,25 @@
   width: 100%;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   align-self: stretch;
+  overflow: hidden;
+  isolation: isolate;
 }
 
-/* Watermark behind the tiles – scales to fill the entire main form area */
+/* img from HomePageWatermark — src via import (reliable in Electron + Vite); do not set url() here */
 .home-page-watermark {
   position: absolute;
+  z-index: 0;
   inset: 0;
-  background-image: url("/watermark.png");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 100% 100%;
-  opacity: 0.35;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
   pointer-events: none;
+  user-select: none;
+  opacity: 0.42;
+  display: block;
 }
 
 .home-tiles-layout {

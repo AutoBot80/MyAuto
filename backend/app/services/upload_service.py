@@ -28,6 +28,7 @@ from app.services.ocr_sale_artifacts import (
 )
 from app.services.page_classifier import FILENAME_AADHAR_FRONT
 from app.services.upload_file_validation import (
+    detect_image_or_pdf_kind,
     read_upload_capped,
     sanitize_legacy_upload_filename,
     validate_magic_jpeg_or_png,
@@ -240,6 +241,7 @@ class UploadService:
         *,
         mobile_hint: str | None = None,
         on_extraction_event: Any | None = None,
+        extra_image_paths: list[Path] | None = None,
     ) -> dict:
         """CPU-bound pre-OCR + Textract; must run in a worker thread (see ``save_and_queue_v2_consolidated``).
 
@@ -255,6 +257,7 @@ class UploadService:
                 processing_dir=proc_dir,
                 dealer_id=dealer_id,
                 mobile_hint=mobile_hint,
+                extra_image_paths=extra_image_paths,
             )
         except Exception as e:
             return {"error": f"Pre-OCR failed: {e}"}
@@ -517,13 +520,13 @@ class UploadService:
 
     async def save_and_queue_v2_consolidated(
         self,
-        consolidated_pdf: UploadFile,
+        consolidated_pdf: list[UploadFile],
         dealer_id: int = 100001,
         *,
         form_mobile: str | None = None,
     ) -> dict:
         """
-        Single multi-page PDF (Aadhaar + sales detail in one file): run bulk pre-OCR pipeline
+        One multi-page PDF *or* multiple JPEG/PNG pages: run bulk pre-OCR pipeline
         (``run_pre_ocr_and_prepare``), then the same orient / normalize / pencil / Textract path as
         ``save_and_queue_v2``. Subfolder mobile comes from OCR when readable; optional ``form_mobile``
         (Add Sales **Customer Mobile**) is used when the Details mobile row is missing or garbled in Tesseract.
@@ -533,19 +536,25 @@ class UploadService:
 
         **Not** the bulk load queue: no ``bulk_loads`` row, no worker lease — pre-OCR runs in this request only.
         """
-        try:
-            content = await read_upload_capped(consolidated_pdf, UPLOAD_MAX_CONSOLIDATED_PDF_BYTES)
-            validate_magic_jpeg_png_or_pdf(content, label="Consolidated scan")
-        except ValueError as e:
-            return {"error": str(e)}
-
-        # Add Sales only: same ``run_pre_ocr_and_prepare`` as bulk, but no ``bulk_loads`` / SQS — not Bulk Upload/Processing.
         proc_dir = get_add_sales_pre_ocr_work_dir(dealer_id)
         proc_dir.mkdir(parents=True, exist_ok=True)
-        stem = Path(f"{(consolidated_pdf.filename or 'consolidated').strip() or 'consolidated'}").stem
-        safe_stem = stem[:80] if stem else "consolidated"
-        dest_pdf = proc_dir / f"add_sales_{safe_stem}_{uuid4().hex[:12]}.pdf"
-        dest_pdf.write_bytes(content)
+        saved_paths: list[Path] = []
+        for uf in consolidated_pdf:
+            try:
+                content = await read_upload_capped(uf, UPLOAD_MAX_CONSOLIDATED_PDF_BYTES)
+                validate_magic_jpeg_png_or_pdf(content, label="Consolidated scan")
+            except ValueError as e:
+                return {"error": str(e)}
+            stem = Path(f"{(uf.filename or 'consolidated').strip() or 'consolidated'}").stem
+            safe_stem = stem[:80] if stem else "consolidated"
+            kind = detect_image_or_pdf_kind(content)
+            ext = {  "jpeg": ".jpg", "png": ".png" }.get(kind or "", ".pdf")
+            dest = proc_dir / f"add_sales_{safe_stem}_{uuid4().hex[:12]}{ext}"
+            dest.write_bytes(content)
+            saved_paths.append(dest)
+
+        dest_pdf = saved_paths[0]
+        extra_image_paths = saved_paths[1:] if len(saved_paths) > 1 else None
 
         try:
             return await asyncio.to_thread(
@@ -554,13 +563,14 @@ class UploadService:
                 proc_dir,
                 dealer_id,
                 mobile_hint=form_mobile,
+                extra_image_paths=extra_image_paths,
             )
         except Exception as e:
             return {"error": f"Consolidated processing failed: {e}"}
 
     async def save_and_queue_v2_consolidated_stream(
         self,
-        consolidated_pdf: UploadFile,
+        consolidated_pdf: list[UploadFile],
         dealer_id: int = 100001,
         *,
         form_mobile: str | None = None,
@@ -569,19 +579,26 @@ class UploadService:
         Same as ``save_and_queue_v2_consolidated`` but yields **SSE** lines (``text/event-stream``):
         ``partial`` when Aadhaar or Details merge is written, ``complete`` with the final JSON payload.
         """
-        try:
-            content = await read_upload_capped(consolidated_pdf, UPLOAD_MAX_CONSOLIDATED_PDF_BYTES)
-            validate_magic_jpeg_png_or_pdf(content, label="Consolidated scan")
-        except ValueError as e:
-            yield f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
-            return
-
         proc_dir = get_add_sales_pre_ocr_work_dir(dealer_id)
         proc_dir.mkdir(parents=True, exist_ok=True)
-        stem = Path(f"{(consolidated_pdf.filename or 'consolidated').strip() or 'consolidated'}").stem
-        safe_stem = stem[:80] if stem else "consolidated"
-        dest_pdf = proc_dir / f"add_sales_{safe_stem}_{uuid4().hex[:12]}.pdf"
-        dest_pdf.write_bytes(content)
+        saved_paths: list[Path] = []
+        for uf in consolidated_pdf:
+            try:
+                content = await read_upload_capped(uf, UPLOAD_MAX_CONSOLIDATED_PDF_BYTES)
+                validate_magic_jpeg_png_or_pdf(content, label="Consolidated scan")
+            except ValueError as e:
+                yield f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
+                return
+            stem = Path(f"{(uf.filename or 'consolidated').strip() or 'consolidated'}").stem
+            safe_stem = stem[:80] if stem else "consolidated"
+            kind = detect_image_or_pdf_kind(content)
+            ext = {  "jpeg": ".jpg", "png": ".png" }.get(kind or "", ".pdf")
+            dest = proc_dir / f"add_sales_{safe_stem}_{uuid4().hex[:12]}{ext}"
+            dest.write_bytes(content)
+            saved_paths.append(dest)
+
+        dest_pdf = saved_paths[0]
+        extra_image_paths = saved_paths[1:] if len(saved_paths) > 1 else None
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
@@ -598,6 +615,7 @@ class UploadService:
                     dealer_id,
                     mobile_hint=form_mobile,
                     on_extraction_event=bridge,
+                    extra_image_paths=extra_image_paths,
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, ("done", result))
             except Exception as e:

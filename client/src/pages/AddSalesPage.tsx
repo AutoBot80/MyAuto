@@ -1338,7 +1338,7 @@ export function AddSalesPage({
     if (gatePassSucceeded && pendingScannerArchiveMove) {
       const arch = pendingScannerArchiveMove;
       try {
-        await moveConsolidatedToProcessed(arch.fileHandle, arch.scannerRoot);
+        await moveConsolidatedToProcessed(arch.fileHandles, arch.scannerRoot);
         statusLines.push("Moved scan from landing to processed folder.");
         setPendingScannerArchiveMove(null);
         setUploadStatus((prev) => (prev ? `${prev} ` : "") + "Moved scan to processed folder.");
@@ -2146,7 +2146,7 @@ export function AddSalesPage({
                     <div className="add-sales-v2-dl-row-group">
                       <div className="add-sales-v2-dl-row">
                         <dt>Insurance Provider</dt>
-                        <dd>
+                        <dd className="add-sales-v2-dd--insurance-editable">
                           <input
                             type="text"
                             className="add-sales-v2-dl-input add-sales-v2-dl-input--insurance-provider-wide"

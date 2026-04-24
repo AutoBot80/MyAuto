@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AppChrome } from "../components/AppChrome";
+import { HomePageWatermark } from "../components/HomePageWatermark";
 import { useToday } from "../hooks/useToday";
 import { loginApi, type LoginRequest, type LoginResponse } from "../api/auth";
 import "./HomePage.css";
@@ -87,7 +88,7 @@ export function LoginPage({ onLoggedIn }: Props) {
           <main className="app-main-v2">
             <div className="home-page login-page">
               <div className="home-page-tiles-wrap">
-                <div className="home-page-watermark" aria-hidden />
+                <HomePageWatermark />
                 <div className="login-page-content">
                   <div className="login-card">
                     <div className="login-intro">

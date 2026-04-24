@@ -79,15 +79,18 @@ def write_manual_session_jpegs(
     Write one JPEG per page under manual_sessions/{uuid}/page_NN.jpg, each ≤ POST_OCR_MAX_FILE_BYTES.
     Returns (session_id, page_count).
     """
-    from app.services.pre_ocr_service import _pdf_to_page_images, _pil_rgb_to_jpeg_bytes
+    from app.services.pre_ocr_service import _pdf_to_page_images, _image_to_page_images, _is_image_file, _pil_rgb_to_jpeg_bytes
 
     imgs = page_images
     if not imgs:
-        pages, _osd, _timings = _pdf_to_page_images(dest_pdf)
+        if _is_image_file(dest_pdf):
+            pages, _osd, _timings = _image_to_page_images(dest_pdf)
+        else:
+            pages, _osd, _timings = _pdf_to_page_images(dest_pdf)
         imgs = {idx: im for idx, im in pages}
 
     if not imgs:
-        raise ValueError("No pages to split from PDF")
+        raise ValueError("No pages to split from file")
 
     session_id = uuid4().hex
     base = _session_base(dealer_id, session_id)

@@ -2,12 +2,33 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 import unicodedata
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_for_fuzzy_match(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").lower().strip())
+
+
+def strip_leading_the_for_master_ref(s: str) -> str:
+    """
+    After :func:`normalize_for_fuzzy_match`, drop a single leading article **the** so
+    *The New India …* and *New India …* align for master_ref scoring. If stripping would
+    clear the string, return the original.
+    """
+    t = re.sub(r"\s+", " ", (s or "").lower().strip())
+    if not t:
+        return t
+    if t == "the":
+        return t
+    if t.startswith("the "):
+        rest = t[4:].strip()
+        if rest:
+            t = re.sub(r"\s+", " ", rest).strip()
+    return t
 
 
 def normalize_dob_for_misp(dd_raw: str) -> str:
@@ -119,6 +140,87 @@ def normalize_nominee_relationship_value(val: str | None) -> str:
     return s
 
 
+def _fuzzy_composite_pair_strength(q: str, c: str) -> float:
+    """``q`` and ``c`` must already be :func:`normalize_for_fuzzy_match` output (lowercase, collapsed spaces)."""
+    score = difflib.SequenceMatcher(None, q, c).ratio()
+    q_words = set(w for w in q.split() if len(w) >= 2)
+    c_words = set(w for w in c.split() if len(w) >= 2)
+    if q_words and c_words:
+        inter = len(q_words & c_words)
+        union = len(q_words | c_words) or 1
+        score = max(score, (inter / union) * 0.98)
+    if len(q) >= 3 and (q in c or c in q):
+        score = max(score, 0.92)
+    if len(q) >= 3:
+        for w in c.split():
+            if len(w) >= len(q) and q in w:
+                score = max(score, 0.9)
+                break
+    return score
+
+
+# Head blend avoids tail-only collisions (e.g. *India Insurance* on different insurers) vs raw argmax.
+_MASTER_REF_HEAD_BLEND = 0.55
+_FULL_BLEND = 1.0 - _MASTER_REF_HEAD_BLEND
+_CLOSE_CANDIDATE_LOG_EPS = 0.05
+
+
+def fuzzy_best_master_ref_value(
+    query: str, candidates: list[str], *, min_score: float = 0.5
+) -> str | None:
+    """
+    Map OCR/sheet text to a canonical ``master_ref.ref_value`` (INSURER or FINANCER):
+    same underlying signals as :func:`fuzzy_best_option_label`, but
+    (1) ignores a leading *The* for scoring (people add/drop the article);
+    (2) blends with the first **3** content words of query vs candidate so the **brand
+    prefix** outweighs a shared generic tail (*India Insurance*, *Ltd.*, *Bank*, etc.).
+
+    Returns the **exact** ``ref_value`` string for the best row, or ``None`` if below ``min_score``.
+    """
+    if not candidates:
+        return None
+    qn = normalize_for_fuzzy_match(query)
+    if not qn:
+        out = (candidates[0] or "").strip()
+        return out or None
+    qs = strip_leading_the_for_master_ref(qn) or qn
+    rows: list[tuple[str, float, float, float, int]] = []
+    for i, raw in enumerate(candidates):
+        c = (raw or "").strip()
+        if not c:
+            continue
+        cn = normalize_for_fuzzy_match(c)
+        cs = strip_leading_the_for_master_ref(cn) or cn
+        s_full = _fuzzy_composite_pair_strength(qs, cs)
+        wq, wc = qs.split(), cs.split()
+        head_q = " ".join(wq[:3]) if wq else qs
+        head_c = " ".join(wc[:3]) if wc else cs
+        s_head = _fuzzy_composite_pair_strength(head_q, head_c) if head_q and head_c else 0.0
+        final = _MASTER_REF_HEAD_BLEND * s_head + _FULL_BLEND * s_full
+        rows.append((c, final, s_full, s_head, i))
+    if not rows:
+        return None
+    rows.sort(key=lambda t: (-t[1], -t[3], -t[2], t[4]))  # final, s_head, s_full, stable index
+    best = rows[0]
+    if best[1] < min_score:
+        return None
+    if len(rows) > 1:
+        second = rows[1]
+        if (best[1] - second[1]) <= _CLOSE_CANDIDATE_LOG_EPS:
+            logger.info(
+                "master_ref fuzzy: close scores (within %.2f) — pick=%r score=%.4f head=%.4f full=%.4f; "
+                "next=%r score=%.4f",
+                _CLOSE_CANDIDATE_LOG_EPS,
+                best[0],
+                best[1],
+                best[3],
+                best[2],
+                second[0],
+                second[1],
+            )
+    return best[0]
+
+
 def fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: float = 0.42) -> str | None:
     """
     Pick dropdown option label best matching query (insurer from details sheet / OEM name).
@@ -129,7 +231,6 @@ def fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: flo
     q = normalize_for_fuzzy_match(query)
     if not q:
         return candidates[0].strip() or candidates[0]
-    q_words = set(w for w in q.split() if len(w) >= 2)
     best_label = (candidates[0] or "").strip()
     best_score = 0.0
     for raw in candidates:
@@ -137,19 +238,7 @@ def fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: flo
         if not c:
             continue
         cn = normalize_for_fuzzy_match(c)
-        score = difflib.SequenceMatcher(None, q, cn).ratio()
-        c_words = set(w for w in cn.split() if len(w) >= 2)
-        if q_words and c_words:
-            inter = len(q_words & c_words)
-            union = len(q_words | c_words) or 1
-            score = max(score, (inter / union) * 0.98)
-        if len(q) >= 3 and (q in cn or cn in q):
-            score = max(score, 0.92)
-        if len(q) >= 3:
-            for w in cn.split():
-                if len(w) >= len(q) and q in w:
-                    score = max(score, 0.9)
-                    break
+        score = _fuzzy_composite_pair_strength(q, cn)
         if score > best_score:
             best_score = score
             best_label = c
