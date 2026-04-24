@@ -68,11 +68,11 @@ async function main() {
   const gh = (process.env.GH_TOKEN || "").trim();
   if (!gh) {
     console.warn(
-      "\n[electron-builder] GH_TOKEN is not set — build will succeed but GitHub publish will be skipped or fail.\n" +
-        "Set it in the user environment or run the deploy script after injecting the token.\n"
+      "\n[electron-builder] GH_TOKEN is not set — the deploy script injects it for update-token.json.\n" +
+        "Publishing is handled by GitHub Actions (tag push), not by this local build.\n"
     );
   } else {
-    console.log("[electron-builder] GH_TOKEN is set — upload to GitHub will be attempted after the installer is built.\n");
+    console.log("[electron-builder] GH_TOKEN is set (used for update-token.json; publish handled by GitHub Actions).\n");
   }
 
   // Use the programmatic API instead of CLI to avoid shell word-splitting
@@ -80,14 +80,15 @@ async function main() {
   // electron-builder auto-reads electron-builder.yml from projectDir;
   // we only override directories.output to point at the fresh folder.
   //
-  // IMPORTANT: Without `publish: "always"`, local runs leave publish policy undefined, so
-  // PublishManager sets isPublish=false and NOTHING is uploaded (unlike CI: `--publish always`).
+  // Publishing is handled by the GitHub Actions workflow triggered by the tag push
+  // (Phase 6 of Update-Prod-App-Electron.ps1). Local builds only produce the installer;
+  // `publish: "always"` caused hangs uploading ~100MB over slow connections.
   const builder = require("electron-builder");
   try {
     await builder.build({
       projectDir: root,
       targets: builder.Platform.WINDOWS.createTarget("nsis", builder.Arch.x64),
-      publish: "always",
+      publish: "never",
       config: {
         directories: { output: outName },
       },
