@@ -72,6 +72,10 @@ sdr_ci_apply:
 sdr_ci_end:
 !macroend
 
+; customInstall and helpers are installer-only. The same nsh is included for the
+; BUILD_UNINSTALLER stub compile; unguarded Function + Call in customInstall
+; triggers NSIS 6010 ("not referenced") and fails when warnings are errors.
+!ifndef BUILD_UNINSTALLER
 ; $R0 = string in, $R1 = last backslash index, $4/$3 = scratch, $0/$2 = scratch
 ; Returns last path segment in $2 (or empty if $R1 < 0);
 ; string length in $0 for basename; offset of basename in $4
@@ -139,3 +143,4 @@ FunctionEnd
   FileClose $9
 sdr_envok:
 !macroend
+!endif
