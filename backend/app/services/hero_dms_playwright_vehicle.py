@@ -1131,6 +1131,37 @@ def _pdi_note_service_request_new_click_diagnostics(
     )
 
 
+def _playwright_root_debug_label(root: object) -> str:
+    """Short label for Page vs Frame (name + truncated url) for operator logs."""
+    try:
+        nm = getattr(root, "name", None)
+        if nm:
+            u = getattr(root, "url", "") or ""
+            return f"name={str(nm)!r} url={str(u)[:280]!r}"
+        u = getattr(root, "url", "") or ""
+        return f"url={str(u)[:320]!r}"
+    except Exception:
+        return repr(type(root).__name__)
+
+
+def _locator_dom_brief(loc) -> str:
+    """Tag#id + truncated aria-label/title for a clicked locator."""
+    try:
+        return str(
+            loc.evaluate(
+                """el => {
+                    const tag = (el.tagName || '').toLowerCase();
+                    const id = el.id || '';
+                    const al = (el.getAttribute('aria-label') || '').slice(0, 90);
+                    const tt = (el.getAttribute('title') || '').slice(0, 90);
+                    return tag + (id ? '#' + id : '') + ' aria=' + al + ' title=' + tt;
+                }"""
+            )
+        )
+    except Exception:
+        return "n/a"
+
+
 def _siebel_click_service_request_list_new_record(
     page: Page,
     *,
@@ -1327,9 +1358,10 @@ def _siebel_click_service_request_list_new_record(
                 _js_all_btns = _js_res.get("allNewrecordBtns") or []
                 if _js_clicked:
                     _branch_hit("_click_sr_list_new", f"js_newrecord_{context}")
+                    _fw = _playwright_root_debug_label(_root)
                     note(
-                        f"{log_prefix}: clicked {context} + (JS id={_js_clicked!r}). "
-                        f"tried={_js_tried!r} all_newrecord_btns={_js_all_btns!r}"
+                        f"{log_prefix}: clicked {context} + (JS) frame={_fw!r} "
+                        f"element_id={_js_clicked!r} tried={_js_tried!r} all_newrecord_btns={_js_all_btns!r}"
                     )
                     return True
                 note(
@@ -1338,9 +1370,11 @@ def _siebel_click_service_request_list_new_record(
                 )
             elif bool(_js_res):
                 _branch_hit("_click_sr_list_new", f"js_newrecord_{context}")
+                _fw = _playwright_root_debug_label(_root)
                 note(
-                    f"{log_prefix}: clicked {context} + (JS: siebui-icon-newrecord — "
-                    "ids s_3_1_12_0_Ctrl / s_2_* or scan matching Service Request / PDI / Precheck List:New)."
+                    f"{log_prefix}: clicked {context} + (JS non-dict path) frame={_fw!r} — "
+                    "siebui-icon-newrecord ids s_3_1_12_0_Ctrl / s_2_* or scan matching "
+                    "Service Request / PDI / Precheck List:New."
                 )
                 return True
         except Exception:
@@ -1365,9 +1399,14 @@ def _siebel_click_service_request_list_new_record(
                         except Exception:
                             _rl.first.click(timeout=_tmo, force=True)
                         _branch_hit("_click_sr_list_new", f"role_{_role}_{context}")
+                        _fw = _playwright_root_debug_label(_root)
+                        try:
+                            _dom = _locator_dom_brief(_rl.first)
+                        except Exception:
+                            _dom = "n/a"
                         note(
                             f"{log_prefix}: clicked {context} + via role={_role!r} "
-                            f"name={_sr_role_name!r}."
+                            f"name={_sr_role_name!r} frame={_fw!r} element={_dom!r}."
                         )
                         return True
                     elif _rl_count > 0:
@@ -1396,7 +1435,15 @@ def _siebel_click_service_request_list_new_record(
                     except Exception:
                         _loc.click(timeout=_tmo, force=True)
                     _branch_hit("_click_sr_list_new", f"css_{_css[:30]}_{context}")
-                    note(f"{log_prefix}: clicked {context} + ({_css!r} nth={_ii}).")
+                    _fw = _playwright_root_debug_label(_root)
+                    try:
+                        _dom = _locator_dom_brief(_loc)
+                    except Exception:
+                        _dom = "n/a"
+                    note(
+                        f"{log_prefix}: clicked {context} + selector={_css!r} nth={_ii} "
+                        f"frame={_fw!r} element={_dom!r}."
+                    )
                     return True
             except Exception:
                 continue
@@ -1759,7 +1806,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         return { loaded: hasTabs, tabs };
     }"""
     if not _on_wrong_precheck_view:
-        for _settle in range(3):
+        for _settle in range(10):
             for _root in _roots():
                 try:
                     _settle_res = _root.evaluate(_settle_poll_js)
@@ -1767,14 +1814,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         _precheck_third_level_tabs_loaded = True
                         note(
                             f"{log_prefix}: third-level tabs visible after settle poll "
-                            f"(attempt {_settle + 1}/3) tabs={_settle_res.get('tabs')!r}"
+                            f"(attempt {_settle + 1}/10) tabs={_settle_res.get('tabs')!r}"
                         )
                         break
                 except Exception:
                     continue
             if _precheck_third_level_tabs_loaded:
                 break
-            _safe_page_wait(page, 500, log_label=f"precheck_tab_settle_{_settle}")
+            _safe_page_wait(page, 300, log_label=f"precheck_tab_settle_{_settle}")
     _precheck_probe_js = """() => {
                 const vis = (el) => {
                     if (!el) return false;
@@ -2685,6 +2732,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             if _precheck_icon_ok:
                 if _open_try > 0:
                     note(f"{log_prefix}: Open pick icon succeeded after {_open_try} extra Tab(s) (focus on Open column).")
+                note(
+                    f"{log_prefix}: Pre-check Open pick icon clicked "
+                    f"(id={_precheck_icon_used!r}, tabs_before={_open_try})."
+                )
                 break
     if not _precheck_icon_ok:
         return False, (
@@ -3646,6 +3697,204 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 continue
         return _rc
 
+    def _pdi_focus_first_pdi_jqgrow() -> None:
+        """Focus first visible PDI jqGrid data row so pick icons bind to the intended line."""
+        _jq_js = """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            const isLeftSearchPane = (el) => {
+                let n = el;
+                for (let d = 0; d < 22 && n; d++) {
+                    const pid = String(n.id || '').toLowerCase();
+                    if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                return false;
+            };
+            const isPdiScoped = (el) => {
+                if (isLeftSearchPane(el)) return false;
+                let n = el;
+                for (let d = 0; d < 28 && n; d++) {
+                    const id = String(n.id || '').toLowerCase();
+                    const nm = String(n.getAttribute('name') || '').toLowerCase();
+                    const tit = String(n.getAttribute('title') || '').toLowerCase();
+                    const hay = id + ' ' + nm + ' ' + tit;
+                    if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) return false;
+                    if (id.includes('s_2_l') || id.includes('gview_s_2') || id === 'gbox_s_2_l') return true;
+                    if (id.includes('s_4_l') || id.includes('gview_s_4') || id === 'gbox_s_4_l') return true;
+                    if (id.includes('s_5_l') || id.includes('gview_s_5') || id === 'gbox_s_5_l') return true;
+                    if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                return false;
+            };
+            const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
+                (tb) => vis(tb) && isPdiScoped(tb)
+            );
+            for (const tb of tables) {
+                const tr = tb.querySelector('tbody tr.jqgrow');
+                if (!tr || !vis(tr)) continue;
+                try { tr.scrollIntoView({ block: 'center' }); } catch (e) {}
+                const tds = tr.querySelectorAll('td');
+                if (tds.length && vis(tds[0])) {
+                    tds[0].click();
+                    return true;
+                }
+                tr.click();
+                return true;
+            }
+            return false;
+        }"""
+        for _root in _roots():
+            try:
+                if bool(_root.evaluate(_jq_js)):
+                    note(f"{log_prefix}: focused PDI list first data row (jqgrow) before pick icon.")
+                    _safe_page_wait(page, 300, log_label="after_pdi_jqgrow_focus")
+                    return
+            except Exception:
+                continue
+
+    def _click_pdi_pick_icon(stage_label: str) -> tuple[bool, str]:
+        _used = ""
+        _ok = False
+        _pick_ids = [
+            "s_2_2_32_0_icon",
+            "s_2_2_32_0",
+            "s_2_2_31_0_icon",
+            "s_2_2_31_0",
+            "s_2_1_14_0_icon",
+            "s_2_1_14_0",
+            "s_2_1_12_0_icon",
+            "s_2_1_12_0",
+        ]
+        for _pdi_pick_id in _pick_ids:
+            if _siebel_click_by_id_anywhere(
+                page,
+                _pdi_pick_id,
+                timeout_ms=_tmo,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                label=f"PDI pick icon ({_pdi_pick_id}) [{stage_label}]",
+                log_prefix=log_prefix,
+                wait_ms=300,
+                is_visible_timeout_ms=300,
+            ):
+                _ok = True
+                _used = _pdi_pick_id
+                _branch_hit("_click_pdi_pick_icon", f"id_{_pdi_pick_id}_{stage_label}")
+                break
+        if not _ok:
+            _css_fb = (
+                "a.siebui-icon-picklist",
+                "img.siebui-icon-picklist",
+                "[class*='siebui-icon-picklist' i]",
+                "a[title*='Pick' i]",
+                "img[title*='Pick' i]",
+            )
+            for _css in _css_fb:
+                for _root in _roots():
+                    try:
+                        _grp = _root.locator(_css)
+                        _nmax = _grp.count()
+                        if _nmax < 1:
+                            continue
+                        for _ni in (0, 1, 2, 3):
+                            if _ni >= _nmax:
+                                continue
+                            _loc = _grp.nth(_ni)
+                            if not _loc.is_visible(timeout=300):
+                                continue
+                            try:
+                                _loc.scroll_into_view_if_needed(timeout=300)
+                            except Exception:
+                                pass
+                            try:
+                                _loc.click(timeout=_tmo)
+                            except Exception:
+                                _loc.click(timeout=_tmo, force=True)
+                            _ok, _used = True, f"{_css}@nth={_ni}"
+                            _branch_hit("_click_pdi_pick_icon", f"css_{_css[:30]}_{stage_label}")
+                            note(
+                                f"{log_prefix}: PDI pick via CSS {_css!r} nth={_ni} [{stage_label}] "
+                                "(fallback after id misses)."
+                            )
+                            break
+                        if _ok:
+                            break
+                    except Exception:
+                        continue
+                if _ok:
+                    break
+        return _ok, _used
+
+    def _pdi_log_picklist_miss_diag() -> None:
+        """Log visible picklist-like elements and id= probe when PDI pick icon clicks all fail."""
+        _js = """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+                const r = el.getBoundingClientRect();
+                return r.width >= 2 && r.height >= 2;
+            };
+            const pickIds = [
+                's_2_2_32_0_icon', 's_2_2_32_0', 's_2_2_31_0_icon', 's_2_2_31_0',
+                's_2_1_14_0_icon', 's_2_1_14_0', 's_2_1_12_0_icon', 's_2_1_12_0'
+            ];
+            const idProbe = [];
+            for (const pid of pickIds) {
+                const el = document.getElementById(pid);
+                if (!el) { idProbe.push(pid + ':missing'); continue; }
+                const tag = String(el.tagName || '').toLowerCase();
+                const v = vis(el);
+                const al = String(el.getAttribute('aria-label') || '').slice(0, 48);
+                idProbe.push(pid + ':' + tag + ':vis=' + v + ':al=' + al);
+            }
+            const out = [];
+            const pickers = Array.from(document.querySelectorAll(
+                'a.siebui-icon-picklist, img.siebui-icon-picklist, [class*="siebui-icon-picklist" i]'
+            ));
+            let n = 0;
+            for (const el of pickers) {
+                if (!vis(el)) continue;
+                const tag = String(el.tagName || '').toLowerCase();
+                const id = (el.id || '').trim();
+                const al = (el.getAttribute('aria-label') || '').slice(0, 72);
+                const tt = (el.getAttribute('title') || '').slice(0, 72);
+                const cls = String(el.className || '').replace(/\\s+/g, ' ').slice(0, 64);
+                out.push({ n: n++, tag, id, al, tt, cls });
+                if (out.length >= 20) break;
+            }
+            return { idProbe, candidates: out };
+        }"""
+        _parts: list[str] = []
+        for _proot in _roots():
+            _fw = _playwright_root_debug_label(_proot)
+            try:
+                d = _proot.evaluate(_js)
+            except Exception as ex:
+                note(f"{log_prefix}: PDI pick miss diag: evaluate failed frame={_fw!r} err={ex!r}")
+                continue
+            if not isinstance(d, dict):
+                continue
+            _parts.append(
+                f"frame={_fw!r} idProbe={d.get('idProbe')!r} "
+                f"visible_picklist_candidates={d.get('candidates')!r}"
+            )
+        if _parts:
+            note(f"{log_prefix}: PDI pick icon miss — diagnostics by root: {' || '.join(_parts)}")
+        else:
+            note(f"{log_prefix}: PDI pick icon miss — no per-root diagnostics collected.")
+
     if _pdi_need_new_row:
         _pdi_rows_before_new = _eval_pdi_grid_rowcount()
         note(
@@ -3700,39 +3949,35 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 "(tried s_3_1_12_0_Ctrl / s_2_1_14_0_Ctrl / s_2_2_32_0 + scan; "
                 "see _siebel_click_service_request_list_new_record).",
             )
-        note(f"{log_prefix}: clicked Service Request List:New on PDI tab.")
         _safe_page_wait(page, 300, log_label="after_sr_list_new")
 
-        # The "+" is often only title/aria "Service Request List:New" (clicked above). Some builds add a
-        # separate Siebel pick id — try it, but do not fail the flow if absent (tenant has no s_2_2_32_0_icon).
-        _pdi_legacy_pick = _siebel_click_by_id_anywhere(
-            page,
-            "s_2_2_32_0_icon",
-            timeout_ms=_tmo,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            label="PDI pick icon (legacy s_2_2_32_0_icon)",
-            log_prefix=log_prefix,
-            wait_ms=300,
-            is_visible_timeout_ms=300,
-        )
-        if not _pdi_legacy_pick:
-            _pdi_legacy_pick = _siebel_click_by_id_anywhere(
-                page,
-                "s_2_2_32_0",
-                timeout_ms=_tmo,
-                content_frame_selector=content_frame_selector,
-                note=note,
-                label="PDI pick button (legacy s_2_2_32_0)",
-                log_prefix=log_prefix,
-                wait_ms=300,
-                is_visible_timeout_ms=300,
-            )
-        if not _pdi_legacy_pick:
+        _pdi_focus_first_pdi_jqgrow()
+        _pdi_pick_ok = False
+        _pdi_pick_used = ""
+        for _pdi_pick_try in range(6):
+            if _pdi_pick_try > 0:
+                try:
+                    page.keyboard.press("Tab")
+                    _safe_page_wait(page, 300, log_label=f"pdi_tab_before_pick_try_{_pdi_pick_try}")
+                except Exception:
+                    pass
+            _pdi_pick_ok, _pdi_pick_used = _click_pdi_pick_icon("pdi_after_new")
+            if _pdi_pick_ok:
+                if _pdi_pick_try > 0:
+                    note(
+                        f"{log_prefix}: PDI pick icon succeeded after {_pdi_pick_try} extra Tab(s)."
+                    )
+                note(
+                    f"{log_prefix}: PDI pick icon clicked "
+                    f"(id={_pdi_pick_used!r}, tabs_before={_pdi_pick_try})."
+                )
+                break
+        if not _pdi_pick_ok:
             note(
-                f"{log_prefix}: PDI legacy pick ids (s_2_2_32_0_icon / s_2_2_32_0) not found — "
+                f"{log_prefix}: PDI pick icon not found after id + CSS fallback (with Tab retries) — "
                 "continuing after Service Request List:New only."
             )
+            _pdi_log_picklist_miss_diag()
 
         _siebel_lov_pick_first_row_ok_pdi_style(
             page,

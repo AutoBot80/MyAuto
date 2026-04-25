@@ -274,10 +274,14 @@ export function SubdealerChallanPage({
 
   const selectedBatchVehicleLines = useMemo(() => {
     if (!selectedProcessedRow) return [];
-    if (selectedProcessedRow.detail_lines !== undefined) {
-      return selectedProcessedRow.detail_lines;
-    }
-    return selectedProcessedRow.failed_lines ?? [];
+    const lines = selectedProcessedRow.detail_lines !== undefined
+      ? selectedProcessedRow.detail_lines
+      : selectedProcessedRow.failed_lines ?? [];
+    return [...lines].sort((a, b) => {
+      const af = (a.status || "").trim().toLowerCase() === "failed" ? 0 : 1;
+      const bf = (b.status || "").trim().toLowerCase() === "failed" ? 0 : 1;
+      return af - bf;
+    });
   }, [selectedProcessedRow]);
 
   const showSummaryBar =
@@ -429,10 +433,12 @@ export function SubdealerChallanPage({
   };
 
   const onFileSelected = async (e: ChangeEvent<HTMLInputElement>) => {
-    const fileList = e.target.files;
-    e.target.value = "";
-    if (!fileList || fileList.length === 0) return;
-    const files = Array.from(fileList);
+    const input = e.target;
+    // Snapshot files before clearing `value` — `input.files` is a live `FileList` and clearing
+    // the value empties it, so we must not read the list after `input.value = ""`.
+    const files = input.files && input.files.length > 0 ? Array.from(input.files) : [];
+    input.value = "";
+    if (files.length === 0) return;
     setLoading(true);
     setParseOcrProgress(null);
     setError(null);
@@ -856,6 +862,16 @@ export function SubdealerChallanPage({
             onClick={() => applyProcessedChallanSearch()}
           >
             Search
+          </button>
+          <button
+            type="button"
+            className="app-button app-button--small challans-processed-search-btn"
+            disabled={processedLoading}
+            aria-busy={processedLoading}
+            title="Reload processed batches and prepared counts"
+            onClick={() => void loadProcessed()}
+          >
+            {processedLoading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
         <p className="challans-processed-list-hint">
