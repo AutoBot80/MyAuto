@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.security.deps import get_principal, resolve_dealer_id
@@ -23,6 +23,7 @@ async def upload_scans(
 
 @router.post("/scans-v2")
 async def upload_scans_v2(
+    background_tasks: BackgroundTasks,
     principal: Principal = Depends(get_principal),
     mobile: str = Form(...),
     aadhar_scan: UploadFile = File(...),
@@ -35,12 +36,20 @@ async def upload_scans_v2(
     """Subfolder = mobile_ddmmyy; files saved as Aadhar_front.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg."""
     did = resolve_dealer_id(principal, dealer_id)
     return await upload_service.save_and_queue_v2(
-        mobile, aadhar_scan, aadhar_back, sales_detail, insurance_sheet, financing_doc, dealer_id=did
+        mobile,
+        aadhar_scan,
+        aadhar_back,
+        sales_detail,
+        insurance_sheet,
+        financing_doc,
+        dealer_id=did,
+        background_tasks=background_tasks,
     )
 
 
 @router.post("/scans-v2-consolidated")
 async def upload_scans_v2_consolidated(
+    background_tasks: BackgroundTasks,
     principal: Principal = Depends(get_principal),
     consolidated_pdf: list[UploadFile] = File(..., description="Consolidated scan: one multi-page PDF or multiple JPEG/PNG pages"),
     dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
@@ -55,11 +64,13 @@ async def upload_scans_v2_consolidated(
         consolidated_pdf,
         dealer_id=did,
         form_mobile=mobile or None,
+        background_tasks=background_tasks,
     )
 
 
 @router.post("/scans-v2-consolidated-stream")
 async def upload_scans_v2_consolidated_stream(
+    background_tasks: BackgroundTasks,
     principal: Principal = Depends(get_principal),
     consolidated_pdf: list[UploadFile] = File(..., description="Consolidated scan: one multi-page PDF or multiple JPEG/PNG pages"),
     dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
@@ -79,6 +90,7 @@ async def upload_scans_v2_consolidated_stream(
             consolidated_pdf,
             dealer_id=did,
             form_mobile=mobile or None,
+            background_tasks=background_tasks,
         ),
         media_type="text/event-stream",
         headers={
@@ -108,6 +120,7 @@ def get_manual_session_page(
 
 @router.post("/scans-v2-consolidated/manual-apply")
 async def apply_consolidated_manual_fallback(
+    background_tasks: BackgroundTasks,
     principal: Principal = Depends(get_principal),
     session_id: str = Form(..., description="Session id from manual_fallback response"),
     mobile: str = Form(..., description="10-digit customer mobile; determines upload subfolder"),
@@ -128,4 +141,5 @@ async def apply_consolidated_manual_fallback(
         mobile,
         assignments_json,
         dealer_id=did,
+        background_tasks=background_tasks,
     )

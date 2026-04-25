@@ -10,6 +10,7 @@ import {
   type ChallanMasterProcessedRow,
   type SubdealerChallanLine,
 } from "../api/subdealerChallan";
+import { warmDmsBrowserLocal } from "../api/fillForms";
 
 const ROWS_PER_TABLE = 13;
 const TABLE_COUNT = 2;
@@ -251,8 +252,20 @@ export function SubdealerChallanPage({
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** Multi-page OCR: ``parse-scan`` is one file per request. */
   const [parseOcrProgress, setParseOcrProgress] = useState<{ current: number; total: number } | null>(null);
+  /** One-shot warm trigger per page session; keeps upload actions snappy without repeated launches. */
+  const dmsWarmTriggeredRef = useRef(false);
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
+
+  const triggerSubdealerDmsWarm = useCallback(() => {
+    if (dmsWarmTriggeredRef.current) return;
+    const base = (dmsUrl || "").trim();
+    if (!base) return;
+    dmsWarmTriggeredRef.current = true;
+    void warmDmsBrowserLocal({ dms_base_url: base }).catch(() => {
+      // Keep this non-blocking for Subdealer Challan OCR flow.
+    });
+  }, [dmsUrl]);
 
   const selectedProcessedRow = useMemo(
     () => processedRows.find((r) => r.challan_batch_id === selectedProcessedBatchId) ?? null,
@@ -610,7 +623,10 @@ export function SubdealerChallanPage({
             type="button"
             className="app-button subdealer-challan-inline-btn"
             disabled={loading}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => {
+              triggerSubdealerDmsWarm();
+              fileInputRef.current?.click();
+            }}
             title="PDF or JPEG/PNG, one or more files (e.g. multiple challan pages)"
           >
             {loading
@@ -619,7 +635,14 @@ export function SubdealerChallanPage({
                 : "Processing…"
               : "Upload scan(s)"}
           </button>
-          <button type="button" className="app-button subdealer-challan-inline-btn" disabled>
+          <button
+            type="button"
+            className="app-button subdealer-challan-inline-btn"
+            disabled
+            onClick={() => {
+              triggerSubdealerDmsWarm();
+            }}
+          >
             From Scanner
           </button>
         </div>

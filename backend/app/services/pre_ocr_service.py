@@ -2371,10 +2371,17 @@ def _build_ddt_prefetch(
     Keys match ``_parallel_textract_prefetch_upload_subfolder`` output: ``aadhar_front``,
     ``aadhar_back``, ``insurance``.  ``details_forms`` is **not** included because the main
     OCR pipeline needs AnalyzeDocument FORMS (not DDT) for the Details sheet.
-    ``Aadhar_combined`` populates both ``aadhar_front`` and ``aadhar_back``.
+
+    ``Aadhar_combined`` is **omitted** here: DDT is run on the full-page raster and often only
+    captures one card face, while the split pass writes per-face images under ``for_OCR/``.
+    Prefetching that single DDT result for both slots would skip fresh DetectDocumentText on
+    the split files and wrong-side text would be parsed as the front in
+    :func:`app.services.sales_ocr_service._pipeline_merge_aadhar_customer`.
     """
     out: dict[str, dict] = {}
     for page_idx, ptype in classifications:
+        if ptype == PAGE_TYPE_AADHAR_COMBINED:
+            continue
         key = _PAGE_TYPE_TO_PREFETCH_KEY.get(ptype)
         if not key:
             continue
@@ -2383,8 +2390,6 @@ def _build_ddt_prefetch(
             continue
         if key not in out:
             out[key] = result
-        if ptype == PAGE_TYPE_AADHAR_COMBINED and "aadhar_back" not in out:
-            out["aadhar_back"] = result
     return out
 
 
@@ -2405,6 +2410,7 @@ def run_pre_ocr_and_prepare(
     Path | None,
     dict[str, Any] | None,
     dict[int, dict] | None,
+    dict[str, Any] | None,
 ]:
     """
     Copy PDF to Processing, run pre-OCR (parallel Textract DDT on in-memory rasters), classify pages,
@@ -2413,12 +2419,14 @@ def run_pre_ocr_and_prepare(
 
     Validates BEFORE splitting: mobile + 3 critical classifications (Aadhar, Aadhar_back, Details).
     Returns ``(bundles | None, subfolder_stem, mobile_or_none, ocr_path, missing_list | None,
-    page_images | None, dest_pdf | None, rejected_extras | None, ddt_results | None)``.
+    page_images | None, dest_pdf | None, rejected_extras | None, ddt_results | None,
+    details_forms_prefetch | None)``.
 
     The ninth return value ``ddt_prefetch`` is a role-keyed dict (``aadhar_front``, ``aadhar_back``,
     ``insurance``, etc.) mapping to Textract DDT result dicts from the initial parallel DDT pass;
     callers thread these into ``process_uploaded_subfolder`` as prefetch to avoid redundant Textract
-    DDT calls in the main OCR pipeline.
+    DDT calls in the main OCR pipeline.  Pages classified as ``Aadhar_combined`` do not contribute
+    ``aadhar_front``/``aadhar_back`` (split JPEGs are Textract DDT'd in the main pass instead).
 
     When ``missing_list`` is non-empty, ``page_images`` and ``dest_pdf`` are set for manual JPEG split fallback;
     otherwise those two entries are None. The eighth return value is **rejected_extras** (optional ``suggested_roles``,
@@ -2560,7 +2568,7 @@ def run_pre_ocr_and_prepare(
                 ("run_pre_ocr_and_prepare_done", None, f"path=multi_customer bundles={len(result_bundles)}", _off()),
             )
             _flush_pre(orchestration)
-            return result_bundles, source_pdf.stem, first_mobile, ocr_path, None, None, None, None, None
+            return result_bundles, source_pdf.stem, first_mobile, ocr_path, None, None, None, None, None, None
         # Fall back to single-customer (e.g. scan has 2 mobiles but only 1 customer)
         logger.info("Multi-customer detected but could not build bundles; falling back to single-customer (classifications=%s, mobiles=%s)",
                     [(i, t) for i, t in classifications], all_mobiles)
@@ -2678,7 +2686,7 @@ def run_pre_ocr_and_prepare(
         if rejected_extras is None:
             rejected_extras = {}
         rejected_extras["_t0_wall"] = t0_wall
-        return None, source_pdf.stem, mobile, ocr_path, missing, page_images, dest_pdf, rejected_extras, ddt_prefetch
+        return None, source_pdf.stem, mobile, ocr_path, missing, page_images, dest_pdf, rejected_extras, ddt_prefetch, None
 
     mobile_leaf = us.get_subdir_name_mobile(mobile)
     if mobile_leaf != artifact_leaf:
@@ -2687,28 +2695,76 @@ def run_pre_ocr_and_prepare(
     subfolder = mobile_leaf
     sale_dir = get_uploads_dir(dealer_id) / subfolder
     raw_dir = sale_dir / "raw"
-    t_sp0 = time.perf_counter()
-    _split_pdf_by_classification(
-        dest_pdf, full_text, sale_dir,
-        classifications_override=classifications,
-        raw_dir=raw_dir,
-        page_images_cache=page_images,
-        osd_rotations=osd_rotations,
-        extra_image_paths=extra_image_paths,
-    )
-    orchestration.append(
-        (
-            "split_pdf_by_classification",
-            int((time.perf_counter() - t_sp0) * 1000),
-            f"sale_dir={subfolder}",
-            _off(),
-        ),
-    )
+    details_forms_prefetch: dict[str, Any] | None = None
+    details_forms_future = None
+    details_forms_executor = None
+    details_forms_prefetch_t0 = 0.0
+    details_idx = next((idx for idx, ptype in classifications if ptype == PAGE_TYPE_DETAILS), None)
+    if details_idx is not None and details_idx in page_images:
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            from app.services.sales_textract_service import extract_forms_from_bytes
+
+            details_blob = _pil_rgb_to_jpeg_bytes(page_images[details_idx])
+            details_forms_executor = ThreadPoolExecutor(max_workers=1)
+            details_forms_prefetch_t0 = time.perf_counter()
+            details_forms_future = details_forms_executor.submit(extract_forms_from_bytes, details_blob)
+            orchestration.append(
+                ("details_forms_prefetch_started", None, f"page={details_idx + 1}", _off()),
+            )
+        except Exception:
+            logger.exception("details_forms prefetch start failed source=%s", source_pdf.name)
+    try:
+        t_sp0 = time.perf_counter()
+        _split_pdf_by_classification(
+            dest_pdf, full_text, sale_dir,
+            classifications_override=classifications,
+            raw_dir=raw_dir,
+            page_images_cache=page_images,
+            osd_rotations=osd_rotations,
+            extra_image_paths=extra_image_paths,
+        )
+        orchestration.append(
+            (
+                "split_pdf_by_classification",
+                int((time.perf_counter() - t_sp0) * 1000),
+                f"sale_dir={subfolder}",
+                _off(),
+            ),
+        )
+        if details_forms_future is not None:
+            try:
+                details_forms_prefetch = details_forms_future.result()
+                dforms_ms = int((time.perf_counter() - details_forms_prefetch_t0) * 1000)
+                if details_forms_prefetch and not details_forms_prefetch.get("error"):
+                    orchestration.append(("details_forms_prefetch_ready", dforms_ms, "ok", _off()))
+                else:
+                    err = (details_forms_prefetch or {}).get("error")
+                    orchestration.append(
+                        ("details_forms_prefetch_ready", dforms_ms, f"error={err!r}", _off()),
+                    )
+            except Exception as exc:
+                orchestration.append(("details_forms_prefetch_ready", None, f"error={exc!r}", _off()))
+                logger.exception("details_forms prefetch failed source=%s", source_pdf.name)
+    finally:
+        if details_forms_executor is not None:
+            details_forms_executor.shutdown(wait=False)
     orchestration.append(("run_pre_ocr_and_prepare_done", None, "path=single_customer", _off()))
     write_sale_text_artifact(ocr_out, mobile_leaf, full_text)
     _flush_pre(orchestration)
 
-    return [(sale_dir, subfolder, mobile or "")], source_pdf.stem, mobile, ocr_path, None, None, None, None, ddt_prefetch
+    return (
+        [(sale_dir, subfolder, mobile or "")],
+        source_pdf.stem,
+        mobile,
+        ocr_path,
+        None,
+        None,
+        None,
+        None,
+        ddt_prefetch,
+        details_forms_prefetch,
+    )
 
 
 def move_multi_customer_to_success_or_error(

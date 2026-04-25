@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from fastapi import UploadFile
+from fastapi import BackgroundTasks, UploadFile
 
 from app.config import (
     UPLOAD_MAX_CONSOLIDATED_PDF_BYTES,
@@ -36,6 +36,7 @@ from app.services.upload_file_validation import (
     validate_magic_jpeg_png_pdf_legacy,
 )
 from app.services.dealer_storage import sync_ocr_subfolder_to_s3, sync_uploads_subfolder_to_s3
+from app.services.post_ocr_service import run_deferred_post_ocr_for_sale
 
 # ai_reader_queue disabled; extraction runs directly after upload (Option 1)
 
@@ -123,6 +124,8 @@ class UploadService:
         insurance_sheet: UploadFile | None = None,
         financing_doc: UploadFile | None = None,
         dealer_id: int = 100001,
+        *,
+        background_tasks: BackgroundTasks | None = None,
     ) -> dict:
         """Subfolder = mobile_ddmmyy; save as Aadhar_front.jpg, Aadhar_back.jpg, Details.jpg; optional Insurance.jpg, Financing.jpg."""
         ok, err = self.validate_mobile(mobile)
@@ -207,7 +210,10 @@ class UploadService:
                 uploads_dir=uploads_dir,
                 ocr_output_dir=get_ocr_output_dir(dealer_id),
             )
-            extraction_result = ocr.process_uploaded_subfolder(subdir_name)
+            extraction_result = ocr.process_uploaded_subfolder(
+                subdir_name,
+                defer_post_ocr=background_tasks is not None,
+            )
             if pencil_warnings:
                 extraction_result = {**extraction_result, "warnings": pencil_warnings}
             # Include full extracted details so client can populate immediately (no polling)
@@ -217,7 +223,18 @@ class UploadService:
         except Exception as e:
             extraction_result = {"error": str(e), "processed": []}
 
-        sync_uploads_subfolder_to_s3(dealer_id, subdir_name)
+        udir = self.uploads_dir or get_uploads_dir(dealer_id)
+        ocr_dir = get_ocr_output_dir(dealer_id)
+        if background_tasks and (extraction_result.get("post_ocr") or {}).get("deferred"):
+            background_tasks.add_task(
+                run_deferred_post_ocr_for_sale,
+                udir,
+                ocr_dir,
+                subdir_name,
+                dealer_id,
+            )
+        else:
+            sync_uploads_subfolder_to_s3(dealer_id, subdir_name)
         return {
             "saved_count": len(saved),
             "saved_files": saved,
@@ -242,6 +259,7 @@ class UploadService:
         mobile_hint: str | None = None,
         on_extraction_event: Any | None = None,
         extra_image_paths: list[Path] | None = None,
+        defer_post_ocr: bool = False,
     ) -> dict:
         """CPU-bound pre-OCR + Textract; must run in a worker thread (see ``save_and_queue_v2_consolidated``).
 
@@ -252,7 +270,7 @@ class UploadService:
         from app.services.pre_ocr_service import run_pre_ocr_and_prepare
 
         try:
-            bundles, _stem, _mobile_ocr, _ocr_path, missing, page_images, _, rejected_extras, ddt_prefetch = run_pre_ocr_and_prepare(
+            bundles, _stem, _mobile_ocr, _ocr_path, missing, page_images, _, rejected_extras, ddt_prefetch, details_forms_prefetch = run_pre_ocr_and_prepare(
                 dest_pdf,
                 processing_dir=proc_dir,
                 dealer_id=dealer_id,
@@ -382,7 +400,9 @@ class UploadService:
             extraction_result = ocr.process_uploaded_subfolder(
                 subdir_name,
                 on_extraction_event=on_extraction_event,
+                details_forms_prefetch=details_forms_prefetch or None,
                 ddt_prefetch=ddt_prefetch or None,
+                defer_post_ocr=defer_post_ocr,
             )
             if pencil_warnings:
                 extraction_result = {**extraction_result, "warnings": pencil_warnings}
@@ -400,8 +420,9 @@ class UploadService:
                     subdir_name,
                 )
 
-        sync_uploads_subfolder_to_s3(dealer_id, subdir_name)
-        sync_ocr_subfolder_to_s3(dealer_id, subdir_name)
+        if not defer_post_ocr:
+            sync_uploads_subfolder_to_s3(dealer_id, subdir_name)
+            sync_ocr_subfolder_to_s3(dealer_id, subdir_name)
 
         saved: list[str] = []
         final_sale = uploads_dir / subdir_name
@@ -424,6 +445,8 @@ class UploadService:
         mobile: str,
         assignments_json: str,
         dealer_id: int,
+        *,
+        defer_post_ocr: bool = False,
     ) -> dict:
         from app.services.manual_fallback_service import apply_manual_session, read_details_forms_cache
 
@@ -469,6 +492,7 @@ class UploadService:
             extraction_result = ocr.process_uploaded_subfolder(
                 subfolder,
                 details_forms_prefetch=prefetch,
+                defer_post_ocr=defer_post_ocr,
             )
             if pencil_warnings:
                 extraction_result = {**extraction_result, "warnings": pencil_warnings}
@@ -509,14 +533,29 @@ class UploadService:
         mobile: str,
         assignments_json: str,
         dealer_id: int = 100001,
+        *,
+        background_tasks: BackgroundTasks | None = None,
     ) -> dict:
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self._apply_consolidated_manual_fallback_sync,
             session_id,
             mobile,
             assignments_json,
             dealer_id,
+            defer_post_ocr=background_tasks is not None,
         )
+        if background_tasks and result.get("saved_to"):
+            ex = result.get("extraction") or {}
+            if (ex.get("post_ocr") or {}).get("deferred"):
+                udir = self.uploads_dir or get_uploads_dir(dealer_id)
+                background_tasks.add_task(
+                    run_deferred_post_ocr_for_sale,
+                    udir,
+                    get_ocr_output_dir(dealer_id),
+                    result["saved_to"],
+                    dealer_id,
+                )
+        return result
 
     async def save_and_queue_v2_consolidated(
         self,
@@ -524,6 +563,7 @@ class UploadService:
         dealer_id: int = 100001,
         *,
         form_mobile: str | None = None,
+        background_tasks: BackgroundTasks | None = None,
     ) -> dict:
         """
         One multi-page PDF *or* multiple JPEG/PNG pages: run bulk pre-OCR pipeline
@@ -557,16 +597,29 @@ class UploadService:
         extra_image_paths = saved_paths[1:] if len(saved_paths) > 1 else None
 
         try:
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 self._process_consolidated_pdf_sync,
                 dest_pdf,
                 proc_dir,
                 dealer_id,
                 mobile_hint=form_mobile,
                 extra_image_paths=extra_image_paths,
+                defer_post_ocr=background_tasks is not None,
             )
         except Exception as e:
             return {"error": f"Consolidated processing failed: {e}"}
+        if background_tasks and result.get("saved_to"):
+            ex = result.get("extraction") or {}
+            if (ex.get("post_ocr") or {}).get("deferred"):
+                udir = self.uploads_dir or get_uploads_dir(dealer_id)
+                background_tasks.add_task(
+                    run_deferred_post_ocr_for_sale,
+                    udir,
+                    get_ocr_output_dir(dealer_id),
+                    result["saved_to"],
+                    dealer_id,
+                )
+        return result
 
     async def save_and_queue_v2_consolidated_stream(
         self,
@@ -574,6 +627,7 @@ class UploadService:
         dealer_id: int = 100001,
         *,
         form_mobile: str | None = None,
+        background_tasks: BackgroundTasks | None = None,
     ):
         """
         Same as ``save_and_queue_v2_consolidated`` but yields **SSE** lines (``text/event-stream``):
@@ -599,6 +653,7 @@ class UploadService:
 
         dest_pdf = saved_paths[0]
         extra_image_paths = saved_paths[1:] if len(saved_paths) > 1 else None
+        defer_post_ocr = background_tasks is not None
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
@@ -616,6 +671,7 @@ class UploadService:
                     mobile_hint=form_mobile,
                     on_extraction_event=bridge,
                     extra_image_paths=extra_image_paths,
+                    defer_post_ocr=defer_post_ocr,
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, ("done", result))
             except Exception as e:
@@ -631,6 +687,17 @@ class UploadService:
                 yield f"data: {json.dumps(body)}\n\n"
             elif item[0] == "done":
                 result = item[1]
+                if background_tasks and result.get("saved_to"):
+                    ex = result.get("extraction") or {}
+                    if (ex.get("post_ocr") or {}).get("deferred"):
+                        udir = self.uploads_dir or get_uploads_dir(dealer_id)
+                        background_tasks.add_task(
+                            run_deferred_post_ocr_for_sale,
+                            udir,
+                            get_ocr_output_dir(dealer_id),
+                            result["saved_to"],
+                            dealer_id,
+                        )
                 yield f"data: {json.dumps({'event': 'complete', 'result': result})}\n\n"
                 return
             elif item[0] == "error":

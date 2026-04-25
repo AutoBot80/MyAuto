@@ -34,6 +34,7 @@ from app.services.fill_hero_insurance_service import (
     main_process,
     post_process,
     pre_process,
+    warm_insurance_browser_session,
 )
 from app.services.fill_rto_service import warm_vahan_browser_session
 from app.services.playwright_executor import get_playwright_executor
@@ -266,6 +267,18 @@ class WarmVahanBrowserResponse(BaseModel):
     message: str | None = None
 
 
+class WarmInsuranceBrowserRequest(BaseModel):
+    insurance_base_url: str | None = Field(
+        default=None,
+        description="Absolute Insurance base URL; defaults to INSURANCE_BASE_URL.",
+    )
+
+
+class WarmInsuranceBrowserResponse(BaseModel):
+    success: bool
+    error: str | None = None
+
+
 def _safe_subfolder_name(subfolder: str) -> str:
     """Safe directory name for ocr_output."""
     import re
@@ -473,6 +486,26 @@ async def warm_vahan_browser() -> WarmVahanBrowserResponse:
         success=bool(result.get("success")),
         error=result.get("error"),
         message=result.get("message"),
+    )
+
+
+@router.post("/insurance/warm-browser", response_model=WarmInsuranceBrowserResponse)
+async def warm_insurance_browser(req: WarmInsuranceBrowserRequest) -> WarmInsuranceBrowserResponse:
+    """
+    Open or attach to Insurance (no fill) in the background. Used after upload to reduce first-run wait.
+    """
+    enforce_max_text_depth(req.model_dump())
+    base_url = (req.insurance_base_url or INSURANCE_BASE_URL or "").strip()
+    if not base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="insurance_base_url required (or set INSURANCE_BASE_URL)",
+        )
+    base_url = _require_absolute_http_url(base_url, "insurance_base_url")
+    result = await _run_playwright_work(partial(warm_insurance_browser_session, base_url))
+    return WarmInsuranceBrowserResponse(
+        success=bool(result.get("success")),
+        error=result.get("error"),
     )
 
 

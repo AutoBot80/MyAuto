@@ -60,6 +60,7 @@ from app.services.add_sales_commit_service import (
 from app.services.handle_browser_opening import (
     _playwright_page_url_matches_site_base,
     get_or_open_site_page,
+    launch_site_background_detached,
 )
 from app.services.insurance_form_values import (
     append_playwright_insurance_line,
@@ -9159,6 +9160,40 @@ def _wait_for_insurance_kyc_after_login(page, insurance_base_url: str) -> str | 
         "On the login page, enter User ID and Password and click Login (dummy), or complete sign-in on the real portal "
         f"so KYC opens — then press Fill Insurance again (wait limit {INSURANCE_LOGIN_WAIT_MS // 1000}s)."
     )
+def warm_insurance_browser_session(insurance_base_url: str) -> dict:
+    """
+    Pre-open or attach to Insurance browser without running fill automation.
+    On Windows, a new managed browser starts minimized (no focus steal) via ``launch_background=True``.
+    """
+    out: dict = {"success": False, "error": None}
+    u = (insurance_base_url or "").strip()
+    if not u:
+        out["error"] = "INSURANCE_BASE_URL not set"
+        return out
+    try:
+        page, open_error = get_or_open_site_page(
+            u,
+            "Insurance",
+            require_login_on_open=False,
+            launch_background=True,
+        )
+        if page is None:
+            launched = launch_site_background_detached(u)
+            if launched:
+                out["success"] = True
+                return out
+            out["error"] = open_error or "Could not open Insurance browser"
+            return out
+        out["success"] = True
+    except PlaywrightTimeout as e:
+        out["error"] = f"Timeout: {e!s}"
+        logger.warning("fill_insurance_service: warm_insurance_browser_session PlaywrightTimeout %s", e)
+    except Exception as e:
+        out["error"] = str(e)
+        logger.warning("fill_insurance_service: warm_insurance_browser_session %s", e)
+    return out
+
+
 def run_fill_insurance_only(
     insurance_base_url: str,
     *,

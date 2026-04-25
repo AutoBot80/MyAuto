@@ -341,6 +341,14 @@ def _dispatch_warm_browser(params: dict) -> dict:
     return warm_dms_browser_session(dms_base)
 
 
+def _dispatch_warm_insurance(params: dict) -> dict:
+    from app.config import INSURANCE_BASE_URL
+    from app.services.fill_hero_insurance_service import warm_insurance_browser_session
+
+    insurance_base = (params.get("insurance_base_url") or INSURANCE_BASE_URL or "").strip()
+    return warm_insurance_browser_session(insurance_base)
+
+
 def _dispatch_warm_vahan(params: dict) -> dict:
     from app.services.fill_rto_service import warm_vahan_browser_session
 
@@ -756,6 +764,9 @@ def dispatch(payload: dict) -> dict:
 
     if job_type == "warm_browser":
         data = _dispatch_warm_browser(params)
+        return {"success": True, "data": data}
+    if job_type == "warm_insurance":
+        data = _dispatch_warm_insurance(params)
         return {"success": True, "data": data}
     if job_type == "warm_vahan":
         data = _dispatch_warm_vahan(params)

@@ -75,7 +75,10 @@ from app.services.dms_relation_prefix import compute_dms_relation_prefix
 from app.services.add_sales_commit_service import finalize_staging_row_with_master_ids
 from app.services.hero_dms_db_service import persist_staging_masters_after_invoice
 from app.services.hero_dms_reports_service import run_hero_dms_reports
-from app.services.handle_browser_opening import get_or_open_site_page
+from app.services.handle_browser_opening import (
+    get_or_open_site_page,
+    launch_site_background_detached,
+)
 from app.services.utility_functions import (
     clean_text as _clean_text,
     require_customer_vehicle_ids as _require_customer_vehicle_ids,
@@ -2048,6 +2051,10 @@ def warm_dms_browser_session(dms_base_url: str) -> dict:
             launch_background=True,
         )
         if page is None:
+            launched = launch_site_background_detached(u)
+            if launched:
+                out["success"] = True
+                return out
             out["error"] = open_error or "Could not open DMS browser"
             return out
         _install_playwright_js_dialog_handler(page)

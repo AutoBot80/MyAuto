@@ -117,6 +117,15 @@ export interface WarmDmsBrowserResponse {
   error?: string | null;
 }
 
+export interface WarmInsuranceBrowserRequest {
+  insurance_base_url?: string | null;
+}
+
+export interface WarmInsuranceBrowserResponse {
+  success: boolean;
+  error?: string | null;
+}
+
 /** Open/attach DMS and wait through login readiness only (no fill). Fire-and-forget from Add Sales after upload. */
 export async function warmDmsBrowser(req: WarmDmsBrowserRequest): Promise<WarmDmsBrowserResponse> {
   const controller = new AbortController();
@@ -148,6 +157,48 @@ export async function warmDmsBrowserLocal(req: WarmDmsBrowserRequest): Promise<W
     });
     if (result.timedOut) return { success: false, error: "Sidecar warm-browser timed out." };
     const data = (result.parsed as { data?: WarmDmsBrowserResponse })?.data;
+    if (data) return data;
+    return { success: result.success, error: result.error ?? undefined };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Open/attach Insurance and wait through login readiness only (no fill). */
+export async function warmInsuranceBrowser(
+  req: WarmInsuranceBrowserRequest
+): Promise<WarmInsuranceBrowserResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DMS_WARM_BROWSER_TIMEOUT_MS);
+  try {
+    return await apiFetch<WarmInsuranceBrowserResponse>("/fill-forms/insurance/warm-browser", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Electron-aware warm insurance: routes through the local sidecar (Playwright on the dealer PC)
+ * when running inside Electron, falls back to the cloud API otherwise.
+ */
+export async function warmInsuranceBrowserLocal(
+  req: WarmInsuranceBrowserRequest
+): Promise<WarmInsuranceBrowserResponse> {
+  if (!isElectron()) return warmInsuranceBrowser(req);
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "warm_insurance",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: { insurance_base_url: req.insurance_base_url ?? undefined },
+    });
+    if (result.timedOut) return { success: false, error: "Sidecar warm-insurance timed out." };
+    const data = (result.parsed as { data?: WarmInsuranceBrowserResponse })?.data;
     if (data) return data;
     return { success: result.success, error: result.error ?? undefined };
   } catch (err) {

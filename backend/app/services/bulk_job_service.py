@@ -479,7 +479,7 @@ def process_job(job_id: str, dealer_id: int, worker_id: str) -> str:
         conn.close()
 
     try:
-        bundles, subfolder_stem, mobile, ocr_path, missing, _page_imgs, _dest_pdf, _rejected_extras, _ddt_prefetch = run_pre_ocr_and_prepare(
+        bundles, subfolder_stem, mobile, ocr_path, missing, _page_imgs, _dest_pdf, _rejected_extras, _ddt_prefetch, _details_forms_prefetch = run_pre_ocr_and_prepare(
             scans_pdf,
             processing_dir=proc_dir,
             dealer_id=dealer_id,

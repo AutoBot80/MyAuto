@@ -3662,6 +3662,7 @@ class OcrService:
         on_extraction_event: Callable[[str, dict[str, Any]], None] | None = None,
         details_forms_prefetch: dict[str, Any] | None = None,
         ddt_prefetch: dict[str, dict] | None = None,
+        defer_post_ocr: bool = True,
     ) -> dict:
         """
         Run extraction directly on uploaded files (no queue).
@@ -3670,6 +3671,10 @@ class OcrService:
         uses **Textract text only** on front/back (no UIDAI QR in this path). **Details sheet** is
         compiled in **parallel** with the Aadhaar pipeline, then results are merged once into JSON.
         **Details** raster/PDF: Textract **AnalyzeDocument FORMS** (structured key-values).
+        When ``defer_post_ocr`` is True (default for Add Sales when the response should return before
+        compress/move from ``for_OCR/``), :func:`run_post_ocr` is **not** run here; ``post_ocr`` will
+        be ``{deferred, ok}`` and callers should run it in a background task. Bulk/sequential flows
+        should pass ``defer_post_ocr=False`` to keep post-OCR and S3 layout synchronous.
         When ``details_forms_prefetch`` is set (manual session reuse), that dict is used as the Details
         FORMS result and **no** second AnalyzeDocument call is made for the sales detail sheet.
 
@@ -3890,35 +3895,46 @@ class OcrService:
 
         t_post = time.perf_counter()
         post_ocr_result: dict[str, Any] = {"ok": True, "skipped": True}
-        try:
-            from app.services.post_ocr_service import run_post_ocr
-
-            post_ocr_result = run_post_ocr(self.uploads_dir, subfolder)
-        except Exception as e:
-            logger.exception("post_ocr failed subfolder=%s", subfolder)
-            post_ocr_result = {"ok": False, "error": str(e)}
-        section_timings_ms["post_ocr_ms"] = int((time.perf_counter() - t_post) * 1000)
-
-        if post_ocr_result.get("ok") and "total_bytes_before" in post_ocr_result:
+        if defer_post_ocr:
+            post_ocr_result = {"deferred": True, "ok": True}
+            section_timings_ms["post_ocr_ms"] = 0
+            logger.info("post_ocr deferred (not blocking request) subfolder=%s", subfolder)
             append_ocr_extraction_log(
                 self.ocr_output_dir,
                 subfolder,
                 "post",
-                (
-                    f"ok bytes_before={post_ocr_result.get('total_bytes_before')} "
-                    f"bytes_after={post_ocr_result.get('total_bytes_after')} "
-                    f"max_file_bytes={post_ocr_result.get('max_file_bytes')} "
-                    f"still_over={len(post_ocr_result.get('files_still_over_limit') or [])} "
-                    f"actions={len(post_ocr_result.get('actions') or [])}"
-                ),
+                "deferred until after HTTP response (background run_post_ocr + S3 sync)",
             )
         else:
-            append_ocr_extraction_log(
-                self.ocr_output_dir,
-                subfolder,
-                "post",
-                f"failed error={post_ocr_result.get('error', 'unknown')!r}",
-            )
+            try:
+                from app.services.post_ocr_service import run_post_ocr
+
+                post_ocr_result = run_post_ocr(self.uploads_dir, subfolder)
+            except Exception as e:
+                logger.exception("post_ocr failed subfolder=%s", subfolder)
+                post_ocr_result = {"ok": False, "error": str(e)}
+            section_timings_ms["post_ocr_ms"] = int((time.perf_counter() - t_post) * 1000)
+
+            if post_ocr_result.get("ok") and "total_bytes_before" in post_ocr_result:
+                append_ocr_extraction_log(
+                    self.ocr_output_dir,
+                    subfolder,
+                    "post",
+                    (
+                        f"ok bytes_before={post_ocr_result.get('total_bytes_before')} "
+                        f"bytes_after={post_ocr_result.get('total_bytes_after')} "
+                        f"max_file_bytes={post_ocr_result.get('max_file_bytes')} "
+                        f"still_over={len(post_ocr_result.get('files_still_over_limit') or [])} "
+                        f"actions={len(post_ocr_result.get('actions') or [])}"
+                    ),
+                )
+            else:
+                append_ocr_extraction_log(
+                    self.ocr_output_dir,
+                    subfolder,
+                    "post",
+                    f"failed error={post_ocr_result.get('error', 'unknown')!r}",
+                )
 
         section_timings_ms["total_ms"] = int((time.perf_counter() - t_total) * 1000)
 

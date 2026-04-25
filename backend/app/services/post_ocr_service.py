@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import time
 import shutil
 from pathlib import Path
 
@@ -297,3 +298,55 @@ def run_post_ocr(uploads_dir: Path, subfolder: str) -> dict[str, object]:
         "files_still_over_limit": files_over,
         "actions": actions,
     }
+
+
+def run_deferred_post_ocr_for_sale(
+    uploads_dir: Path,
+    ocr_output_dir: Path,
+    subfolder: str,
+    dealer_id: int,
+) -> None:
+    """
+    After ``process_uploaded_subfolder`` returns with post-OCR **deferred** (not blocking the HTTP
+    response), run the same :func:`run_post_ocr` + S3 upload sync as the old synchronous path.
+
+    ``dealer_id`` is used for ``sync_uploads_subfolder_to_s3`` / ``sync_ocr_subfolder_to_s3`` so
+    Insurance and other steps see the **final** compressed, sale-root file layout.
+    """
+    from app.services.dealer_storage import sync_ocr_subfolder_to_s3, sync_uploads_subfolder_to_s3
+    from app.services.ocr_extraction_log import append_ocr_extraction_log
+
+    t0 = time.perf_counter()
+    try:
+        post_ocr_result = run_post_ocr(uploads_dir, subfolder)
+    except Exception as e:
+        logger.exception("deferred post_ocr run_post_ocr failed subfolder=%s", subfolder)
+        append_ocr_extraction_log(ocr_output_dir, subfolder, "post", f"deferred failed error={e!r}")
+        return
+    ms = int((time.perf_counter() - t0) * 1000)
+    if post_ocr_result.get("ok") and "total_bytes_before" in post_ocr_result:
+        append_ocr_extraction_log(
+            ocr_output_dir,
+            subfolder,
+            "post",
+            (
+                f"deferred-ok post_ocr_ms={ms} "
+                f"bytes_before={post_ocr_result.get('total_bytes_before')} "
+                f"bytes_after={post_ocr_result.get('total_bytes_after')} "
+                f"max_file_bytes={post_ocr_result.get('max_file_bytes')} "
+                f"still_over={len(post_ocr_result.get('files_still_over_limit') or [])} "
+                f"actions={len(post_ocr_result.get('actions') or [])}"
+            ),
+        )
+    else:
+        append_ocr_extraction_log(
+            ocr_output_dir,
+            subfolder,
+            "post",
+            f"deferred run_post_ocr failed result={post_ocr_result!r} ms={ms}",
+        )
+    try:
+        sync_uploads_subfolder_to_s3(dealer_id, subfolder)
+        sync_ocr_subfolder_to_s3(dealer_id, subfolder)
+    except Exception:
+        logger.exception("deferred S3 sync after post_ocr subfolder=%s", subfolder)

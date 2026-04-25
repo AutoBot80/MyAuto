@@ -190,7 +190,7 @@ def process_bulk_pdf(
             uploads_dir=get_uploads_dir(dealer_id),
             ocr_output_dir=get_ocr_output_dir(dealer_id),
         )
-        ocr.process_uploaded_subfolder(subfolder)
+        ocr.process_uploaded_subfolder(subfolder, defer_post_ocr=False)
         details = ocr.get_extracted_details(subfolder)
         if not details:
             return {"ok": False, "subfolder": subfolder, "mobile": mobile, "retryable": True, "error": "OCR extraction failed"}

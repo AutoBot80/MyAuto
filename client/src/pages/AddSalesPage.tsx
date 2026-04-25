@@ -14,6 +14,7 @@ import {
   printGatePass,
   isFillDmsAbortError,
   warmDmsBrowserLocal,
+  warmInsuranceBrowserLocal,
 } from "../api/fillForms";
 import { fetchCreateInvoiceEligibility, type CreateInvoiceEligibilityResponse } from "../api/addSales";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
@@ -378,30 +379,44 @@ export function AddSalesPage({
   });
   const [formResetKey, setFormResetKey] = useState(0);
 
-  /** User-facing message when DMS warm-browser fails (sidecar or API). */
-  const formatWarmBrowserFailure = useCallback((err: unknown): string => {
+  /** User-facing message when warm-browser fails (sidecar or API). */
+  const formatWarmBrowserFailure = useCallback((err: unknown, siteLabel: string): string => {
     const raw = err instanceof Error ? err.message : String(err);
     const unreachable =
       /502|503|504|Service unavailable|ECONNREFUSED|Failed to fetch|Load failed|Cannot connect|network error/i.test(
         raw
       );
     if (unreachable) {
-      console.warn("[Add Sales] DMS warm-browser:", raw);
-      return "DMS pre-open did not run (API or proxy unreachable — start backend on :8000, use Vite dev with VITE_API_URL unset, then refresh). You can still press Create Invoice when the API is up.";
+      console.warn(`[Add Sales] ${siteLabel} warm-browser:`, raw);
+      return `${siteLabel} pre-open did not run (API or proxy unreachable — start backend on :8000, use Vite dev with VITE_API_URL unset, then refresh).`;
     }
     return raw.length > 280 ? `${raw.slice(0, 280)}…` : raw;
   }, []);
 
-  const triggerWarmBrowser = useCallback(
+  const triggerWarmBrowsers = useCallback(
     (subfolder: string) => {
       const sf = (subfolder || "").trim();
-      const url = (dmsUrl ?? "").trim();
-      if (!sf || !url || siteUrlsLoading || siteUrlsError) return;
-      if (dmsWarmSubfolderRef.current === sf) return;
-      dmsWarmSubfolderRef.current = sf;
-      void warmDmsBrowserLocal({ dms_base_url: url }).catch((err) => {
-        setFillDmsStatus(`DMS warm-up did not finish: ${formatWarmBrowserFailure(err)}`);
-      });
+      if (!sf || siteUrlsLoading || siteUrlsError) return;
+      if (warmBrowsersSubfolderRef.current === sf) return;
+      warmBrowsersSubfolderRef.current = sf;
+
+      const tasks: Promise<unknown>[] = [];
+      const dmsBase = (dmsUrl ?? "").trim();
+      if (dmsBase) {
+        tasks.push(
+          warmDmsBrowserLocal({ dms_base_url: dmsBase }).catch((err) => {
+            setFillDmsStatus(`DMS warm-up did not finish: ${formatWarmBrowserFailure(err, "DMS")}`);
+          })
+        );
+      }
+      tasks.push(
+        warmInsuranceBrowserLocal({}).catch((err) => {
+          setFillInsuranceStatus(
+            `Insurance warm-up did not finish: ${formatWarmBrowserFailure(err, "Insurance")}`
+          );
+        })
+      );
+      void Promise.allSettled(tasks);
     },
     [dmsUrl, siteUrlsLoading, siteUrlsError, formatWarmBrowserFailure]
   );
@@ -432,10 +447,10 @@ export function AddSalesPage({
       }
       const sf = (opts?.savedToForWarm ?? "").trim();
       if (sf && detailsHasOcrPayloadForWarm(details)) {
-        triggerWarmBrowser(sf);
+        triggerWarmBrowsers(sf);
       }
     },
-    [triggerWarmBrowser]
+    [triggerWarmBrowsers]
   );
 
   const {
@@ -476,7 +491,7 @@ export function AddSalesPage({
   /** While true, `refreshCreateInvoiceEligibility()` from useEffect is skipped so a stale fetch cannot race the post–Create Invoice eligibility sync. */
   const suppressPostDmsEligibilitySyncRef = useRef(false);
   /** Subfolder for which DMS warm-browser has already been triggered. */
-  const dmsWarmSubfolderRef = useRef<string | null>(null);
+  const warmBrowsersSubfolderRef = useRef<string | null>(null);
   /** Fewer, slower polls to avoid hammering laptop / backend when OCR is slow. */
   const POLL_MAX = 5;
   const POLL_INTERVAL_MS = 10000;
@@ -932,15 +947,15 @@ export function AddSalesPage({
 
   useEffect(() => {
     if (!savedTo) {
-      dmsWarmSubfolderRef.current = null;
+      warmBrowsersSubfolderRef.current = null;
     }
   }, [savedTo]);
 
   /** Pre-open DMS browser as soon as upload has a subfolder and site URLs are ready (before OCR completes). */
   useEffect(() => {
     if (!savedTo) return;
-    triggerWarmBrowser(savedTo);
-  }, [savedTo, triggerWarmBrowser]);
+    triggerWarmBrowsers(savedTo);
+  }, [savedTo, triggerWarmBrowsers]);
 
   useEffect(() => {
     if (hasSuppliedInsuranceDoc) {

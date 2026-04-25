@@ -257,6 +257,41 @@ def _find_browser_exe() -> tuple[str | None, str | None]:
     return None, None
 
 
+def launch_site_background_detached(base_url: str) -> bool:
+    """
+    Best-effort background browser open that avoids focus steal on Windows.
+    Used by warm-browser flows when CDP attach is unavailable.
+    """
+    target = (base_url or "").strip()
+    if not target:
+        return False
+    exe, _channel = _find_browser_exe()
+    if not exe:
+        return False
+    try:
+        cmd = [exe, "--new-window", "--start-minimized", target]
+        creation_flags = 0
+        if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+            creation_flags |= subprocess.CREATE_NEW_PROCESS_GROUP
+        if hasattr(subprocess, "DETACHED_PROCESS"):
+            creation_flags |= subprocess.DETACHED_PROCESS
+        startupinfo = None
+        if os.name == "nt":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags,
+            startupinfo=startupinfo,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _url_looks_like_dms_siebel_tab(url: str) -> bool:
     """Hero Connect / Siebel — never treat as the Insurance (MISP) tab when both are open in one browser."""
     u = (url or "").lower()
@@ -294,6 +329,9 @@ def _launch_managed_browser_for_site(
             ]
             if headless:
                 cmd.append("--headless=new")
+            if launch_background:
+                # Stronger hint for Chromium to keep startup non-intrusive.
+                cmd.append("--start-minimized")
             cmd.append(base_url)
             creation_flags = 0
             if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
@@ -398,6 +436,10 @@ def _launch_managed_browser_for_site(
                                         return page, channel
                                 except Exception:
                                     continue
+                    if launch_background:
+                        # In silent warm mode, avoid creating/navigating tabs via CDP here because
+                        # those operations can foreground an existing browser window on Windows.
+                        continue
                     try:
                         if browser.contexts:
                             ctx0 = browser.contexts[0]
@@ -433,6 +475,11 @@ def _launch_managed_browser_for_site(
         logger.info(
             "handle_browser_opening: independent CDP attach unavailable; trying Playwright-managed launch fallback."
         )
+
+    if launch_background:
+        # Silent warm path: do not use Playwright-managed fallback because headed launch
+        # frequently steals focus from the operator app on Windows.
+        return None, None
 
     channels = ["msedge", "chrome"]
     launch_args: list[str] = []

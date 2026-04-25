@@ -303,7 +303,7 @@ def prepare_reprocess(
             OcrService(
                 uploads_dir=get_uploads_dir(did),
                 ocr_output_dir=get_ocr_output_dir(did),
-            ).process_uploaded_subfolder(subfolder)
+            ).process_uploaded_subfolder(subfolder, defer_post_ocr=False)
         except Exception as e:
             logger.exception("prepare_reprocess: background OCR failed for %s: %s", subfolder, e)
 
