@@ -24,8 +24,12 @@ from app.services.ocr_extraction_log import append_ocr_extraction_log, append_pr
 from app.services.ocr_sale_artifacts import (
     consolidate_peer_pre_ocr_folder_into_mobile,
     initial_artifact_leaf,
+    remove_if_empty_initial_artifact_dir,
     safe_file_stem,
 )
+
+# Merged into ``details_forms_cache.json`` for manual-apply so we can remove stale pre-OCR ocr_output dirs
+PRE_OCR_ARTIFACT_LEAF_CACHE_KEY = "_pre_ocr_artifact_leaf"
 from app.services.page_classifier import FILENAME_AADHAR_FRONT
 from app.services.upload_file_validation import (
     detect_image_or_pdf_kind,
@@ -314,7 +318,9 @@ class UploadService:
             if rejected_extras and rejected_extras.get("details_forms_cache"):
                 t_cache0 = time.perf_counter()
                 try:
-                    write_details_forms_cache(dealer_id, session_id, rejected_extras["details_forms_cache"])
+                    _cache = {**rejected_extras["details_forms_cache"]}
+                    _cache[PRE_OCR_ARTIFACT_LEAF_CACHE_KEY] = initial_artifact_leaf(dest_pdf.stem)
+                    write_details_forms_cache(dealer_id, session_id, _cache)
                     cache_ms = int((time.perf_counter() - t_cache0) * 1000)
                     post_pre_steps.append(
                         ("details_forms_cache_json_write", cache_ms, "details_forms_cache.json for manual-apply reuse", _post_off()),
@@ -366,6 +372,7 @@ class UploadService:
         _sale_dir, subfolder_name, _mobile_str = bundles[0]
         uploads_dir = self.uploads_dir or get_uploads_dir(dealer_id)
         subdir_name = subfolder_name
+        pre_ocr_artifact_leaf = initial_artifact_leaf(dest_pdf.stem)
         append_ocr_extraction_log(
             get_ocr_output_dir(dealer_id),
             subfolder_name,
@@ -412,13 +419,18 @@ class UploadService:
         except Exception as e:
             extraction_result = {"error": str(e), "processed": []}
         finally:
+            ocr_dealer = get_ocr_output_dir(dealer_id)
             try:
-                consolidate_peer_pre_ocr_folder_into_mobile(get_ocr_output_dir(dealer_id), subdir_name)
+                consolidate_peer_pre_ocr_folder_into_mobile(ocr_dealer, subdir_name)
             except Exception:
                 logger.exception(
                     "consolidate_peer_pre_ocr_folder_into_mobile failed subfolder=%s",
                     subdir_name,
                 )
+            try:
+                remove_if_empty_initial_artifact_dir(ocr_dealer, subdir_name, pre_ocr_artifact_leaf)
+            except Exception:
+                logger.exception("remove_if_empty_initial_artifact_dir failed subfolder=%s", subdir_name)
 
         if not defer_post_ocr:
             sync_uploads_subfolder_to_s3(dealer_id, subdir_name)
@@ -459,6 +471,11 @@ class UploadService:
         str_map = {str(k): str(v) for k, v in assignments.items()}
 
         details_forms_prefetch = read_details_forms_cache(dealer_id, session_id)
+        pre_ocr_artifact_for_cleanup: str | None = None
+        if details_forms_prefetch and isinstance(details_forms_prefetch, dict):
+            _leaf = details_forms_prefetch.get(PRE_OCR_ARTIFACT_LEAF_CACHE_KEY)
+            if isinstance(_leaf, str) and _leaf.strip():
+                pre_ocr_artifact_for_cleanup = _leaf.strip()
         try:
             subfolder, _saved_paths = apply_manual_session(dealer_id, session_id, mobile, str_map)
         except ValueError as e:
@@ -485,6 +502,8 @@ class UploadService:
                 )
 
             prefetch = details_forms_prefetch if details_forms_prefetch and not details_forms_prefetch.get("error") else None
+            if prefetch and isinstance(prefetch, dict) and PRE_OCR_ARTIFACT_LEAF_CACHE_KEY in prefetch:
+                prefetch = {k: v for k, v in prefetch.items() if k != PRE_OCR_ARTIFACT_LEAF_CACHE_KEY}
             ocr = OcrService(
                 uploads_dir=uploads_dir,
                 ocr_output_dir=get_ocr_output_dir(dealer_id),
@@ -503,10 +522,16 @@ class UploadService:
             logger.exception("manual-apply OCR failed subfolder=%s", subfolder)
             extraction_result = {"error": str(e), "manual_only": True}
         finally:
+            ocr_d = get_ocr_output_dir(dealer_id)
             try:
-                consolidate_peer_pre_ocr_folder_into_mobile(get_ocr_output_dir(dealer_id), subfolder)
+                consolidate_peer_pre_ocr_folder_into_mobile(ocr_d, subfolder)
             except Exception:
                 logger.exception("consolidate_peer_pre_ocr_folder_into_mobile failed subfolder=%s", subfolder)
+            if pre_ocr_artifact_for_cleanup:
+                try:
+                    remove_if_empty_initial_artifact_dir(ocr_d, subfolder, pre_ocr_artifact_for_cleanup)
+                except Exception:
+                    logger.exception("remove_if_empty_initial_artifact_dir failed subfolder=%s", subfolder)
 
         final_sale = uploads_dir / subfolder
         saved_names: list[str] = []

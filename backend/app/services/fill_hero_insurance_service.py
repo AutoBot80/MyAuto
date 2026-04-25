@@ -456,8 +456,22 @@ def _locator_scroll_into_view_stepped(
 
 
 def _proposal_fail(
-    ocr_output_dir, subfolder, msg: str,
+    ocr_output_dir,
+    subfolder,
+    msg: str,
+    *,
+    page: Any = None,
 ) -> tuple[str | None, dict[str, Any]]:
+    if page is not None and ocr_output_dir and (subfolder or "").strip():
+        try:
+            _append_hero_misp_frame_dump(
+                page,
+                reason=f"proposal_form_fail: {str(msg)[:200]!s}",
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+            )
+        except Exception:
+            pass
     append_playwright_insurance_line(
         ocr_output_dir, subfolder, "ERROR", f"main_process proposal form: {msg}",
     )
@@ -6183,8 +6197,13 @@ def _proposal_addon_checkbox_id_or_label(
     subfolder: str | None,
     *,
     timeout_ms: int,
+    optional: bool = False,
 ) -> str | None:
-    """Prefer stable CPH1 id from MispPolicy scrape; fall back to row/label regex."""
+    """Prefer stable CPH1 id from MispPolicy scrape; fall back to row/label regex.
+
+    When ``optional`` is True and neither the CPH1 control nor a label/row match exists
+    (insurer-specific proposal grids omit the add-on), log skip and return success.
+    """
     r = _proposal_step_checkbox_by_cph1_id(
         page,
         id_suffix,
@@ -6197,7 +6216,7 @@ def _proposal_addon_checkbox_id_or_label(
     if r is None:
         return None
     if r == PROPOSAL_CHECKBOX_ID_NOT_FOUND:
-        return _proposal_step_checkbox(
+        err = _proposal_step_checkbox(
             page,
             label_pattern,
             want_checked,
@@ -6206,6 +6225,15 @@ def _proposal_addon_checkbox_id_or_label(
             subfolder,
             timeout_ms=timeout_ms,
         )
+        if err and optional and "checkbox not found for pattern" in err:
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                "skip: add-on not on form for this insurer/product (row/checkbox absent)",
+            )
+            return None
+        return err
     return r
 
 
@@ -6233,32 +6261,43 @@ def _proposal_step_nominee_gender_radio(
         return f"{step_id}: could not interpret nominee gender from {gender_raw!r}"
     id_suffix = "rdbtnMale" if want_male else "rdbtnFemale"
     last_err = ""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
-        try:
-            loc = _proposal_cph1_locator(root, id_suffix)
-            if loc.count() == 0:
-                continue
-            el = loc.first
-            if not el.is_visible(timeout=800):
-                _proposal_scroll_visible(el, timeout_ms=timeout_ms)
-            if not el.is_visible(timeout=1_800):
-                continue
-            try:
-                el.check(timeout=timeout_ms, force=True)
-            except Exception:
-                el.check(timeout=timeout_ms)
-            if not el.is_checked():
-                return f"{step_id}: nominee gender radio still not checked after check() ({id_suffix})"
-            _proposal_log(
-                ocr_output_dir,
-                subfolder,
-                step_id,
-                f"radio {id_suffix} checked ok readback=checked",
+    for pass_i in range(2):
+        if pass_i == 1:
+            if not last_err or "intercept" not in last_err.lower():
+                break
+            _hero_misp_dismiss_proposal_overlay_modals(
+                page,
+                timeout_ms=min(int(timeout_ms), 8_000),
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
             )
-            return None
-        except Exception as exc:
-            last_err = str(exc)
-            continue
+        last_err = ""
+        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+            try:
+                loc = _proposal_cph1_locator(root, id_suffix)
+                if loc.count() == 0:
+                    continue
+                el = loc.first
+                if not el.is_visible(timeout=800):
+                    _proposal_scroll_visible(el, timeout_ms=timeout_ms)
+                if not el.is_visible(timeout=1_800):
+                    continue
+                try:
+                    el.check(timeout=timeout_ms, force=True)
+                except Exception:
+                    el.check(timeout=timeout_ms)
+                if not el.is_checked():
+                    return f"{step_id}: nominee gender radio still not checked after check() ({id_suffix})"
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    step_id,
+                    f"radio {id_suffix} checked ok readback=checked",
+                )
+                return None
+            except Exception as exc:
+                last_err = str(exc)
+                continue
     return f"{step_id}: nominee gender radio not found ({last_err or 'no candidate'})"
 
 
@@ -7475,6 +7514,112 @@ def _hero_misp_click_vin_post_submit_modal_i_agree(
     return False
 
 
+def _hero_misp_dismiss_proposal_overlay_modals(
+    page,
+    *,
+    timeout_ms: int = 5_000,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> bool:
+    """
+    MISP can show a **message** layer (``#divModal`` / ``#modal``) on top of the proposal form. Elements
+    underneath may be **visible** to Playwright but clicks fail with **intercepts pointer events** until
+    the user agrees. This path targets **#btnOK** and **I Agree** inside those shells, including some
+    builds where the container lacks ``.show``/``.in`` but still blocks.
+    """
+    to = min(int(timeout_ms), 20_000)
+    roots: list = [page]
+    try:
+        for fr in page.frames:
+            if not fr.is_detached():
+                roots.append(fr)
+    except Exception:
+        pass
+    agree_btn_rx = re.compile(r"^\s*I\s*agree\s*$", re.I)
+    agree_loose_rx = re.compile(r"I\s*agree", re.I)
+    for root in roots:
+        for sel in (
+            "#divModal button#btnOK",
+            "#divModal a#btnOK",
+            "#modal button#btnOK",
+            "div#modal button#btnOK",
+            "#divModal .modal-footer button#btnOK",
+        ):
+            try:
+                loc = root.locator(sel)
+                n = min(int(loc.count()), 6)
+                for i in range(n):
+                    btn = loc.nth(i)
+                    if btn.is_visible(timeout=500):
+                        try:
+                            btn.scroll_into_view_if_needed(timeout=1_000)
+                        except Exception:
+                            pass
+                        btn.click(timeout=to, force=True)
+                        if ocr_output_dir and (subfolder or "").strip():
+                            append_playwright_insurance_line(
+                                ocr_output_dir,
+                                (subfolder or "").strip(),
+                                "NOTE",
+                                "main_process: dismissed proposal overlay modal (#btnOK in #divModal/#modal)",
+                            )
+                        _t(page, 450)
+                        _wait_load_optional(page, min(5_000, to))
+                        return True
+            except Exception:
+                continue
+        for shell_sel in ("#divModal", "#modal"):
+            try:
+                shell = root.locator(shell_sel)
+                if shell.count() == 0:
+                    continue
+            except Exception:
+                continue
+            for role, rx in (("button", agree_btn_rx), ("link", agree_btn_rx)):
+                try:
+                    hit = shell.first.get_by_role(role, name=rx)
+                    if hit.count() == 0:
+                        continue
+                    if hit.first.is_visible(timeout=400):
+                        try:
+                            hit.first.scroll_into_view_if_needed(timeout=1_000)
+                        except Exception:
+                            pass
+                        hit.first.click(timeout=to, force=True)
+                        if ocr_output_dir and (subfolder or "").strip():
+                            append_playwright_insurance_line(
+                                ocr_output_dir,
+                                (subfolder or "").strip(),
+                                "NOTE",
+                                f"main_process: dismissed proposal overlay (role={role} I Agree in modal shell)",
+                            )
+                        _t(page, 450)
+                        _wait_load_optional(page, min(5_000, to))
+                        return True
+                except Exception:
+                    continue
+    for root in roots:
+        try:
+            b = root.get_by_role("button", name=agree_loose_rx)
+            for i in range(min(b.count(), 10)):
+                el = b.nth(i)
+                if el.is_visible(timeout=400):
+                    el.click(timeout=to, force=True)
+                    if ocr_output_dir and (subfolder or "").strip():
+                        append_playwright_insurance_line(
+                            ocr_output_dir,
+                            (subfolder or "").strip(),
+                            "NOTE",
+                            "main_process: dismissed overlay via visible I Agree (role=button, loose match)",
+                        )
+                    _t(page, 450)
+                    _wait_load_optional(page, min(5_000, to))
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 def _hero_misp_i_agree_after_vin_submit(
     page,
     *,
@@ -8130,6 +8275,13 @@ def _hero_misp_fill_proposal_and_review(
         except Exception:
             pass
 
+    _hero_misp_dismiss_proposal_overlay_modals(
+        page,
+        timeout_ms=min(pt, 8_000),
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+
     raw_marital = (values.get("marital_status") or "").strip()
     ms = _proposal_map_marital_for_misp(raw_marital)
     if raw_marital:
@@ -8151,7 +8303,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="ddlMaritalStatus",
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     prof = _proposal_map_occupation_for_misp((values.get("profession") or "").strip())
     err = _proposal_step_select_fuzzy(
@@ -8165,7 +8317,7 @@ def _hero_misp_fill_proposal_and_review(
         cph1_id_suffix="ddlOccupatnType",
     )
     if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+        return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     dob_val = (values.get("dob") or "").strip()
     if dob_val:
@@ -8178,7 +8330,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     err = _proposal_step_email_hardcoded(
         page,
@@ -8189,7 +8341,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+        return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     alt_raw = (values.get("alt_phone_num") or "").strip()
     if alt_raw:
@@ -8210,7 +8362,7 @@ def _hero_misp_fill_proposal_and_review(
                 cph1_id_suffix="txtMobile2",
             )
             if err:
-                return _proposal_fail(ocr_output_dir, subfolder, err)
+                return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     city = (values.get("city") or "").strip()
     rto_query = city if city else "City"
@@ -8225,7 +8377,7 @@ def _hero_misp_fill_proposal_and_review(
         cph1_id_suffix="ddlRTO",
     )
     if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+        return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     mname = (values.get("model_name") or "").strip()
     err = _proposal_step_select_fuzzy(
@@ -8246,7 +8398,7 @@ def _hero_misp_fill_proposal_and_review(
         cph1_id_suffix="ddlModelName",
     )
     if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+        return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     # Date of Registration — skipped; left for the operator to fill manually.
     # err = _proposal_step_date_of_registration_today(
@@ -8257,7 +8409,7 @@ def _hero_misp_fill_proposal_and_review(
     #     timeout_ms=pt,
     # )
     # if err:
-    #     return _proposal_fail(ocr_output_dir, subfolder, err)
+    #     return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     nn = (values.get("nominee_name") or "").strip()
     if nn:
@@ -8272,7 +8424,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="txtNomineeName",
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
         _t(page, 350)
 
     na = (values.get("nominee_age") or "").strip()
@@ -8288,7 +8440,14 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="txtNomineeAge",
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+
+    _hero_misp_dismiss_proposal_overlay_modals(
+        page,
+        timeout_ms=min(pt, 8_000),
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
 
     ng = (values.get("nominee_gender") or "").strip()
     if ng:
@@ -8301,7 +8460,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     rel = (values.get("nominee_relationship") or "").strip()
     if rel:
@@ -8331,7 +8490,7 @@ def _hero_misp_fill_proposal_and_review(
                 timeout_ms=pt,
             )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     fin = (values.get("financer_name") or "").strip()
     if fin:
@@ -8346,7 +8505,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="ddlFinancerName",
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
         err = _proposal_step_select_fuzzy(
             page,
@@ -8364,7 +8523,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="ddlAgreementTypeWithFinancer",
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
         # Financer + agreement often trigger UpdatePanel; branch textbox may attach late.
         # ``_t`` caps at 200ms — use an explicit settle for postbacks.
         try:
@@ -8418,7 +8577,7 @@ def _hero_misp_fill_proposal_and_review(
                 cph1_id_suffix="txtFinComBranch",
             )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     if dob_val:
         v_norm = normalize_dob_for_misp(dob_val)
@@ -8434,7 +8593,7 @@ def _hero_misp_fill_proposal_and_review(
                     timeout_ms=pt,
                 )
                 if err:
-                    return _proposal_fail(ocr_output_dir, subfolder, err)
+                    return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     _t(page, 400)
     _is_national_insurance = bool(
@@ -8458,7 +8617,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
         _t(page, 600)
         err = _proposal_addon_checkbox_id_or_label(
             page,
@@ -8471,7 +8630,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
         _t(page, 800)
     else:
         err = _proposal_addon_checkbox_id_or_label(
@@ -8485,7 +8644,9 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+    # RTI (chkroicover) is not offered on every insurer’s proposal grid (e.g. The New
+    # India Assurance); optional skip when the row/checkbox is absent.
     err = _proposal_addon_checkbox_id_or_label(
         page,
         "chkroicover",
@@ -8496,9 +8657,10 @@ def _hero_misp_fill_proposal_and_review(
         ocr_output_dir,
         subfolder,
         timeout_ms=pt,
+        optional=True,
     )
     if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+        return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
     _rsa_addon_pat = (
         r"^RSA$|RSA\s*cover|RSA\s*Cover|Road\s*Side\s*Assist|Roadside\s*Assist"
     )
@@ -8516,7 +8678,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
         err = _proposal_step_checkbox_uncheck_if_present(
             page,
             _eme_addon_pat,
@@ -8526,8 +8688,10 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
     else:
+        # RSA / EME rows are not on every non-NIC grid (e.g. The New India Assurance);
+        # optional when absent — same as RTI.
         err = _proposal_addon_checkbox_id_or_label(
             page,
             "chkRSA",
@@ -8537,9 +8701,10 @@ def _hero_misp_fill_proposal_and_review(
             ocr_output_dir,
             subfolder,
             timeout_ms=pt,
+            optional=True,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
         err = _proposal_addon_checkbox_id_or_label(
             page,
             "chkEME",
@@ -8549,9 +8714,10 @@ def _hero_misp_fill_proposal_and_review(
             ocr_output_dir,
             subfolder,
             timeout_ms=pt,
+            optional=True,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     _opt_uncheck = (HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX or "").strip()
     if _opt_uncheck:
@@ -8564,7 +8730,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     # Re-assert ND Plus Cover for NIC after all other addon toggles which may
     # have triggered ASP.NET postbacks that reset the addon grid.
@@ -8582,7 +8748,7 @@ def _hero_misp_fill_proposal_and_review(
                 timeout_ms=pt,
             )
             if err:
-                return _proposal_fail(ocr_output_dir, subfolder, err)
+                return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
             _t(page, 400)
             err = _proposal_addon_checkbox_id_or_label(
                 page,
@@ -8595,7 +8761,7 @@ def _hero_misp_fill_proposal_and_review(
                 timeout_ms=pt,
             )
             if err:
-                return _proposal_fail(ocr_output_dir, subfolder, err)
+                return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
             _t(page, 600)
             _nd_plus_still_ok = False
             for _root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
@@ -8628,6 +8794,7 @@ def _hero_misp_fill_proposal_and_review(
                 ocr_output_dir,
                 subfolder,
                 "addon_nd_plus_cover_final_verify: ND Plus Cover could not be kept checked after 3 reassert attempts",
+                page=page,
             )
 
     _hero_cpi_for_cpa = normalize_hero_cpi_flag(values.get("hero_cpi"))
@@ -8643,7 +8810,7 @@ def _hero_misp_fill_proposal_and_review(
             cph1_id_suffix="ddlCPATenure",
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
     else:
         _proposal_log(
             ocr_output_dir,
@@ -8657,7 +8824,7 @@ def _hero_misp_fill_proposal_and_review(
         page, "payment_hdfc", ocr_output_dir, subfolder, timeout_ms=pt
     )
     if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+        return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     for _r in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
         _proposal_scroll_root_to_bottom(_r)
@@ -8671,7 +8838,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
+        return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     _t(page, 500)
     if customer_id is not None and vehicle_id is not None:
@@ -8729,6 +8896,7 @@ def _hero_misp_fill_proposal_and_review(
             subfolder,
             "hard_fail: stopped before Proposal Preview / Proposal Review "
             "(HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW)",
+            page=page,
         )
 
     try:
@@ -8749,7 +8917,12 @@ def _hero_misp_fill_proposal_and_review(
                 except Exception:
                     continue
         if not clicked:
-            return _proposal_fail(ocr_output_dir, subfolder, "proposal_review: could not find or click Proposal Preview / Proposal Review")
+            return _proposal_fail(
+                ocr_output_dir,
+                subfolder,
+                "proposal_review: could not find or click Proposal Preview / Proposal Review",
+                page=page,
+            )
         _proposal_log(
             ocr_output_dir,
             subfolder,
@@ -8758,7 +8931,7 @@ def _hero_misp_fill_proposal_and_review(
         )
         logger.info("Hero Insurance: clicked Proposal Preview (or Proposal Review).")
     except Exception as exc:
-        return _proposal_fail(ocr_output_dir, subfolder, f"proposal_review: {exc!s}")
+        return _proposal_fail(ocr_output_dir, subfolder, f"proposal_review: {exc!s}", page=page)
 
     _t(page, 600)
     _wait_load_optional(page, min(25_000, pt * 5))
@@ -8795,7 +8968,7 @@ def _hero_misp_fill_proposal_and_review(
         timeout_ms=pt,
     )
     if err_pr:
-        return _proposal_fail(ocr_output_dir, subfolder, err_pr)
+        return _proposal_fail(ocr_output_dir, subfolder, err_pr, page=page)
     return None, preview
 
 

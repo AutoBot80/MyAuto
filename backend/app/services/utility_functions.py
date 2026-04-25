@@ -166,6 +166,30 @@ def _fuzzy_composite_pair_strength(q: str, c: str) -> float:
 _MASTER_REF_HEAD_BLEND = 0.55
 _FULL_BLEND = 1.0 - _MASTER_REF_HEAD_BLEND
 _CLOSE_CANDIDATE_LOG_EPS = 0.05
+_PREFIX_TIEBREAK_TOKENS = 3
+
+
+def _ordered_prefix_token_match_score(query_norm: str, candidate_norm: str, *, max_tokens: int = _PREFIX_TIEBREAK_TOKENS) -> float:
+    """
+    Ordered leading-token match score in ``[0,1]``.
+
+    Compares only the first ``max_tokens`` words after normalization. It rewards exact
+    prefix token matches in order and penalizes early divergence. This is used only
+    as a close-score tie-breaker so brand heads (e.g. ``new india``) win over lookalikes
+    that share generic tails (e.g. ``india insurance``).
+    """
+    q_tokens = [w for w in (query_norm or "").split() if w][:max_tokens]
+    c_tokens = [w for w in (candidate_norm or "").split() if w][:max_tokens]
+    if not q_tokens or not c_tokens:
+        return 0.0
+    limit = min(len(q_tokens), len(c_tokens))
+    exact = 0
+    for i in range(limit):
+        if q_tokens[i] == c_tokens[i]:
+            exact += 1
+        else:
+            break
+    return exact / max(1, max_tokens)
 
 
 def fuzzy_best_master_ref_value(
@@ -187,7 +211,7 @@ def fuzzy_best_master_ref_value(
         out = (candidates[0] or "").strip()
         return out or None
     qs = strip_leading_the_for_master_ref(qn) or qn
-    rows: list[tuple[str, float, float, float, int]] = []
+    rows: list[tuple[str, float, float, float, float, int]] = []
     for i, raw in enumerate(candidates):
         c = (raw or "").strip()
         if not c:
@@ -199,27 +223,37 @@ def fuzzy_best_master_ref_value(
         head_q = " ".join(wq[:3]) if wq else qs
         head_c = " ".join(wc[:3]) if wc else cs
         s_head = _fuzzy_composite_pair_strength(head_q, head_c) if head_q and head_c else 0.0
+        s_prefix = _ordered_prefix_token_match_score(qs, cs)
         final = _MASTER_REF_HEAD_BLEND * s_head + _FULL_BLEND * s_full
-        rows.append((c, final, s_full, s_head, i))
+        rows.append((c, final, s_full, s_head, s_prefix, i))
     if not rows:
         return None
-    rows.sort(key=lambda t: (-t[1], -t[3], -t[2], t[4]))  # final, s_head, s_full, stable index
+    # Base ranking by fuzzy score only; ordered-prefix tie-break is applied only for near ties.
+    rows.sort(key=lambda t: (-t[1], -t[3], -t[2], t[5]))  # final, s_head, s_full, stable index
     best = rows[0]
     if best[1] < min_score:
         return None
+    close_rows = [r for r in rows if (best[1] - r[1]) <= _CLOSE_CANDIDATE_LOG_EPS]
+    if len(close_rows) >= 2:
+        # Within near-equal fuzzy confidence, brand-prefix agreement wins.
+        close_rows.sort(key=lambda t: (-t[4], -t[1], -t[3], -t[2], t[5]))
+        best = close_rows[0]
     if len(rows) > 1:
-        second = rows[1]
+        ranked_for_log = close_rows if len(close_rows) >= 2 else rows
+        second = ranked_for_log[1] if len(ranked_for_log) > 1 else rows[1]
         if (best[1] - second[1]) <= _CLOSE_CANDIDATE_LOG_EPS:
             logger.info(
-                "master_ref fuzzy: close scores (within %.2f) — pick=%r score=%.4f head=%.4f full=%.4f; "
-                "next=%r score=%.4f",
+                "master_ref fuzzy: close scores (within %.2f) — pick=%r score=%.4f prefix=%.4f head=%.4f full=%.4f; "
+                "next=%r score=%.4f prefix=%.4f",
                 _CLOSE_CANDIDATE_LOG_EPS,
                 best[0],
                 best[1],
+                best[4],
                 best[3],
                 best[2],
                 second[0],
                 second[1],
+                second[4],
             )
     return best[0]
 

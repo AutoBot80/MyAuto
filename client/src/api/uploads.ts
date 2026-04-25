@@ -194,7 +194,11 @@ export async function uploadScansV2ConsolidatedStream(
         });
       }
       if (msg.event === "complete" && msg.result) {
-        final = msg.result;
+        const r = msg.result as UploadScansResponse & { error?: string };
+        if (r.error) {
+          throw new Error(r.error);
+        }
+        final = r;
       }
     }
   }

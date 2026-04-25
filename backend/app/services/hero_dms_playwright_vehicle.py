@@ -3001,7 +3001,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         )
         return False, "Could not click PDI tab."
     note(f"{log_prefix}: clicked PDI tab.")
-    _safe_page_wait(page, 2000, log_label="after_pdi_tab")
+    _safe_page_wait(page, 3000, log_label="after_pdi_tab")
     try:
         _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_pdi_tab")
     except Exception as e:
@@ -5182,7 +5182,7 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         page, action_timeout_ms=action_timeout_ms, note=note
     ):
         return None
-    _safe_page_wait(page, 2000, log_label="after_features_tab")
+    _safe_page_wait(page, 1000, log_label="after_features_tab")
     try:
         _pv_networkidle(note, page, 8_000, "prepare_vehicle_after_features_tab")
     except Exception as e:

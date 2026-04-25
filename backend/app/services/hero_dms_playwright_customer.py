@@ -771,7 +771,7 @@ def _contact_view_find_by_mobile(
     """
     Open Contact Find view, set object type to Contact when possible, fill **mobile**, optional
     **First Name**, then Go. When ``first_name`` is set, both fields are filled before Find; the
-    First Name field receives the **exact** string (no ``*`` wildcard).
+    First Name field receives a **prefix** query (``name*``).
     When ``first_name`` is omitted, behavior matches legacy **mobile-only** find (re-find after basic
     enquiry, etc.).
 
@@ -815,7 +815,7 @@ def _contact_view_find_by_mobile(
     if scoped_applet_find_clicked:
         note(
             "Filled Mobile (title='Mobile Phone') and First Name (id='field_textbox_1' when present) "
-            "as exact first name (no wildcard) in the same Contact Find frame and clicked Find."
+            "as wildcard first-name prefix query (name*) in the same Contact Find frame and clicked Find."
         )
         if wait_after_go_ms == 2000:
             _contact_find_after_go_wait_bounded(
@@ -885,7 +885,7 @@ def _contact_view_find_by_mobile(
             note("Find: could not fill First Name in Contact Find pane after mobile fill.")
             return False
         _fn_q = _first_name_for_contact_find_query_field(fn_req)
-        note(f"Filled First Name in Find pane → {_fn_q!r} (exact match query).")
+        note(f"Filled First Name in Find pane → {_fn_q!r} (prefix wildcard query).")
 
     _siebel_blur_and_settle(page, ms=350)
 
@@ -922,7 +922,7 @@ def _contact_view_find_by_mobile_strategy_two(
     """
     Video / stage-1 Contact Find: **one** navigation + Find/Go.
 
-    - When ``first_name`` is non-empty after strip: fill **mobile + exact first name**, then Go
+    - When ``first_name`` is non-empty after strip: fill **mobile + first-name prefix query (name*)**, then Go
       (narrower Search Results at the server/UI).
     - When ``first_name`` is empty: **mobile-only** Find (legacy).
 
@@ -1848,7 +1848,7 @@ def _validate_contact_find_first_name(raw: str) -> tuple[bool, str]:
 
 def _first_name_for_contact_find_query_field(raw: str) -> str:
     """
-    Value typed into Siebel Contact Find **First Name**: **exact** string (no ``*`` wildcard).
+    Value typed into Siebel Contact Find **First Name**: prefix query with trailing ``*`` wildcard.
 
     Trailing dots from dotted duplicate keys are stripped so the typed value matches the dotted
     re-find path; the grid matcher uses the same normalization (case-insensitive exact equality).
@@ -1858,7 +1858,7 @@ def _first_name_for_contact_find_query_field(raw: str) -> str:
         return ""
     while s.endswith("."):
         s = s[:-1].strip()
-    return s
+    return f"{s}*"
 
 
 def _mobile_needle_for_contact_grid_match(mobile: str) -> str:
@@ -2072,7 +2072,7 @@ def _fill_first_name_in_find_roots(
     action_timeout_ms: int,
     content_frame_selector: str | None,
 ) -> bool:
-    """Fill First Name in Contact Find pane (any search root / frame) with exact text (no ``*``)."""
+    """Fill First Name in Contact Find pane (any search root / frame) as prefix query (``name*``)."""
     fn = _first_name_for_contact_find_query_field((first_name or "").strip())
     if not fn:
         return False

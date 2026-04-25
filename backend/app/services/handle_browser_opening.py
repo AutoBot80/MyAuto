@@ -387,10 +387,11 @@ def _launch_managed_browser_for_site(
                     # blank while CDP attaches. Do not open a second tab (previous behavior).
                     if len(existing) == 1:
                         pg0 = existing[0]
-                        try:
-                            pg0.wait_for_load_state("domcontentloaded", timeout=10_000)
-                        except Exception:
-                            pass
+                        if not launch_background:
+                            try:
+                                pg0.wait_for_load_state("domcontentloaded", timeout=10_000)
+                            except Exception:
+                                pass
                         try:
                             u0 = (pg0.url or "").strip()
                         except Exception:
@@ -398,6 +399,9 @@ def _launch_managed_browser_for_site(
                         if (site_label or "").strip() == "Insurance" and _url_looks_like_dms_siebel_tab(
                             u0
                         ):
+                            if launch_background:
+                                # Silent warm: new_page + goto would foreground Edge/Chrome on Windows.
+                                continue
                             logger.info(
                                 "handle_browser_opening: sole CDP tab is Siebel/DMS — opening a new tab for Insurance instead of reusing DMS (base=%s).",
                                 (base_url or "")[:120],
@@ -421,11 +425,15 @@ def _launch_managed_browser_for_site(
                     if len(existing) > 1:
                         want_host = _hostname_for_site_match(base_url)
                         for page in existing:
+                            if not launch_background:
+                                try:
+                                    page.wait_for_load_state("domcontentloaded", timeout=3500)
+                                except Exception:
+                                    pass
                             try:
-                                page.wait_for_load_state("domcontentloaded", timeout=3500)
+                                u = (page.url or "").strip()
                             except Exception:
-                                pass
-                            u = (page.url or "").strip()
+                                u = ""
                             if u and _page_matches_site_for_reuse(u, base_url, site_label):
                                 return page, channel
                         if want_host:
@@ -878,7 +886,11 @@ def get_or_open_site_page(
     like Vahan would invalidate the running session.
 
     ``launch_background`` (Windows): start the independently launched edge/chrome **minimized** so the
-    operator SPA is less likely to lose focus (used for DMS warm-browser only).
+    operator SPA is less likely to lose focus (DMS/Insurance **warm-browser**). When true, the
+    **navigate** step (``_navigate_existing_tab_to_site``) is **skipped** because ``page.goto`` on a
+    connected CDP browser often steals focus; warm-browser may then open a second minimized process
+    in edge cases (acceptable trade for silent warm). Vahan and other flows use the default
+    ``launch_background=False`` and keep the navigate step.
     """
     page = find_open_site_page(base_url, site_label=site_label)
     if page is not None:
@@ -891,14 +903,15 @@ def get_or_open_site_page(
 
     open_target = (launch_url or base_url or "").strip()
 
-    nav_page = _navigate_existing_tab_to_site(open_target, site_label)
-    if nav_page is not None:
-        if not require_login_on_open:
-            return nav_page, None
-        auto_login_ok = _try_auto_login_if_prefilled(nav_page)
-        if auto_login_ok:
-            return nav_page, None
-        return _wait_login_or_prompt_after_open(nav_page, site_label)
+    if not launch_background:
+        nav_page = _navigate_existing_tab_to_site(open_target, site_label)
+        if nav_page is not None:
+            if not require_login_on_open:
+                return nav_page, None
+            auto_login_ok = _try_auto_login_if_prefilled(nav_page)
+            if auto_login_ok:
+                return nav_page, None
+            return _wait_login_or_prompt_after_open(nav_page, site_label)
 
     opened_page, channel = _launch_managed_browser_for_site(
         open_target, launch_background=launch_background, site_label=site_label

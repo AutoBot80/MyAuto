@@ -124,7 +124,9 @@ def _aadhaar_combined_single_page_candidate(t: str) -> bool:
     A normal one-face scan has either front markers or back markers — not both strong signals — so it
     stays ``Aadhar`` or ``Aadhar_back``.
     """
-    if not aadhar_front_face_ocr(t) or len(t) < 400:
+    # Mixed front+back scans can be short/noisy after OCR; rely on signal quality,
+    # not blob length.
+    if not aadhar_front_face_ocr(t):
         return False
     back_hits = sum(1 for pat in _AADHAR_BACK_PATTERNS if pat.search(t))
     return back_hits >= 1

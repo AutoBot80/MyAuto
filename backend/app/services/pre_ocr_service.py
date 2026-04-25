@@ -1766,6 +1766,7 @@ def _split_pdf_multi_customer_to_sale_dirs(
     dealer_id: int,
     page_images_cache: dict[int, Image.Image] | None = None,
     osd_rotations: dict[int, int] | None = None,
+    extra_image_paths: list[Path] | None = None,
 ) -> list[tuple[Path, str, str]]:
     """
     For each customer bundle, write into ``Uploaded scans/{dealer_id}/{mobile}_ddmmyy/``
@@ -1806,42 +1807,49 @@ def _split_pdf_multi_customer_to_sale_dirs(
         if fi is not None and bi is not None and fi == bi and fi in page_images:
             if not _process_same_page_aadhar(_pil_rgb_to_jpeg_bytes(page_images[fi]), for_ocr_dir):
                 logger.warning(
-                    "Multi bundle %d: same-page Aadhaar split failed; saving full page as %s",
+                    "Multi bundle %d: same-page Aadhaar split failed; saving full page as both %s and %s",
                     i + 1,
                     FILENAME_AADHAR_FRONT,
+                    FILENAME_AADHAR_BACK,
                 )
                 page_images[fi].save(for_ocr_dir / FILENAME_AADHAR_FRONT, "JPEG", quality=90)
+                page_images[fi].save(for_ocr_dir / FILENAME_AADHAR_BACK, "JPEG", quality=90)
         else:
             for key, filename in [
                 ("aadhar_front_idx", FILENAME_AADHAR_FRONT),
                 ("aadhar_back_idx", "Aadhar_back.jpg"),
-                ("insurance_idx", "Insurance.jpg"),
             ]:
                 idx = bundle.get(key)
                 if idx is not None and idx in page_images:
                     out_path = for_ocr_dir / filename
                     page_images[idx].save(out_path, "JPEG", quality=90)
                     logger.info("Multi-customer: bundle %d page %d -> %s", i + 1, idx + 1, filename)
-            didx_b = bundle.get("details_idx")
-            if didx_b is not None:
-                src_d = raw_dir / f"page_{didx_b + 1:02d}.pdf"
-                if src_d.is_file():
-                    shutil.copy2(src_d, for_ocr_dir / FILENAME_SALES_DETAIL_SHEET_PDF)
-                    logger.info(
-                        "Multi-customer: bundle %d page %d -> %s",
-                        i + 1,
-                        didx_b + 1,
-                        FILENAME_SALES_DETAIL_SHEET_PDF,
-                    )
-                elif didx_b in page_images:
-                    pdf_bytes = _jpeg_bytes_to_single_page_pdf(_pil_rgb_to_jpeg_bytes(page_images[didx_b]))
-                    (for_ocr_dir / FILENAME_SALES_DETAIL_SHEET_PDF).write_bytes(pdf_bytes)
-                    logger.info(
-                        "Multi-customer: bundle %d page %d -> %s (generated from raster)",
-                        i + 1,
-                        didx_b + 1,
-                        FILENAME_SALES_DETAIL_SHEET_PDF,
-                    )
+
+        ins_idx = bundle.get("insurance_idx")
+        if ins_idx is not None and ins_idx in page_images:
+            page_images[ins_idx].save(for_ocr_dir / "Insurance.jpg", "JPEG", quality=90)
+            logger.info("Multi-customer: bundle %d page %d -> Insurance.jpg", i + 1, ins_idx + 1)
+
+        didx_b = bundle.get("details_idx")
+        if didx_b is not None:
+            src_d = raw_dir / f"page_{didx_b + 1:02d}.pdf"
+            if src_d.is_file():
+                shutil.copy2(src_d, for_ocr_dir / FILENAME_SALES_DETAIL_SHEET_PDF)
+                logger.info(
+                    "Multi-customer: bundle %d page %d -> %s",
+                    i + 1,
+                    didx_b + 1,
+                    FILENAME_SALES_DETAIL_SHEET_PDF,
+                )
+            elif didx_b in page_images:
+                pdf_bytes = _jpeg_bytes_to_single_page_pdf(_pil_rgb_to_jpeg_bytes(page_images[didx_b]))
+                (for_ocr_dir / FILENAME_SALES_DETAIL_SHEET_PDF).write_bytes(pdf_bytes)
+                logger.info(
+                    "Multi-customer: bundle %d page %d -> %s (generated from raster)",
+                    i + 1,
+                    didx_b + 1,
+                    FILENAME_SALES_DETAIL_SHEET_PDF,
+                )
 
         didx = bundle.get("details_idx")
         if didx is not None and didx in page_images:
@@ -2552,6 +2560,7 @@ def run_pre_ocr_and_prepare(
                 dest_pdf, bundles_data, dealer_id,
                 page_images_cache=page_images,
                 osd_rotations=osd_rotations,
+                extra_image_paths=extra_image_paths,
             )
             sp_ms = int((time.perf_counter() - t_sp0) * 1000)
             orchestration.append(

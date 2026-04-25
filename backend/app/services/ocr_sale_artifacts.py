@@ -349,6 +349,42 @@ def _peer_has_consolidatable_artifacts(peer: Path) -> bool:
     return any(f.is_file() for f in peer.glob("*_ocr_log.txt"))
 
 
+def remove_if_empty_initial_artifact_dir(
+    ocr_output_dir: Path | None,
+    mobile_subfolder_leaf: str,
+    initial_artifact_subfolder_leaf: str,
+) -> None:
+    """
+    If pre-OCR created ``ocr_output/.../initial_artifact`` and ``rename_sale_artifact_bundle`` did not
+    merge it into the mobile folder, a stale empty work directory can remain. When the **mobile** sale
+    folder for this run exists and ``initial_artifact`` is a different path that is now empty, remove it.
+
+    ``initial_artifact_subfolder_leaf`` must be the same string pre-OCR used (e.g. from
+    :func:`initial_artifact_leaf` on the consolidated PDF stem). No globbing.
+    """
+    if not ocr_output_dir or not str(mobile_subfolder_leaf or "").strip() or not str(
+        initial_artifact_subfolder_leaf or ""
+    ).strip():
+        return
+    safe_mobile = _safe_subfolder_name(mobile_subfolder_leaf)
+    safe_init = _safe_subfolder_name(initial_artifact_subfolder_leaf)
+    if not safe_init or not safe_mobile or safe_init == safe_mobile:
+        return
+    root = Path(ocr_output_dir).resolve()
+    initial_dir = root / safe_init
+    mobile_dir = root / safe_mobile
+    if not mobile_dir.is_dir():
+        return
+    if not initial_dir.is_dir() or initial_dir.resolve() == mobile_dir.resolve():
+        return
+    try:
+        if any(initial_dir.iterdir()):
+            return
+        initial_dir.rmdir()
+    except OSError as e:
+        logger.debug("remove_if_empty_initial_artifact_dir: %s", e)
+
+
 def consolidate_peer_pre_ocr_folder_into_mobile(
     ocr_output_dir: Path,
     mobile_subfolder_leaf: str,

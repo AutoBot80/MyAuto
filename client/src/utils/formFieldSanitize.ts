@@ -22,6 +22,19 @@ export function sanitizeFormFieldValue(raw: string): string {
   return acc.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Input-safe variant for controlled text inputs.
+ * Keeps a trailing space while typing so multi-word values remain typeable.
+ */
+export function sanitizeFormFieldInputValue(raw: string): string {
+  let acc = "";
+  for (const ch of raw) {
+    if (FORM_FIELD_ALLOWED_CHAR.test(ch)) acc += ch;
+    else break;
+  }
+  return acc.replace(/\s+/g, " ");
+}
+
 export function sanitizeOptionalFormField(raw: string | undefined | null): string | undefined {
   if (raw == null) return undefined;
   const s = sanitizeFormFieldValue(String(raw));

@@ -144,12 +144,14 @@ export function useUploadScans(
           controlled.onExtractionComplete(p.details, { savedTo: p.savedTo });
         }
       });
-      if (data.manual_fallback && controlled?.onManualFallback) {
+      if (data.manual_fallback) {
         const partialDetails = data.extraction?.details;
         if (partialDetails && controlled?.onExtractionComplete) {
           controlled.onExtractionComplete(partialDetails, { savedTo: data.saved_to ?? "" });
         }
-        controlled.onManualFallback(data.manual_fallback, data.warning, fsArchive ?? null);
+        if (controlled?.onManualFallback) {
+          controlled.onManualFallback(data.manual_fallback, data.warning, fsArchive ?? null);
+        }
         setUploadStatus(
           partialDetails
             ? "Details sheet applied. Confirm Aadhaar front/back for each page below, then Apply document layout."
@@ -158,12 +160,16 @@ export function useUploadScans(
         );
         return;
       }
+      if ((data as any).error) {
+        setUploadStatus((data as any).error);
+        return;
+      }
       if (data.saved_to) {
         setSavedTo(data.saved_to);
       }
       let msg = data.saved_to
         ? `Uploaded consolidated scan to ${data.saved_to}.`
-        : "Consolidated scan processed.";
+        : "Consolidated scan processed, but no destination folder was returned.";
       if (data.extraction?.error) msg += ` Warning: ${data.extraction.error}`;
       const soft = data.extraction?.warnings;
       if (Array.isArray(soft) && soft.length > 0) msg += ` ${soft.join(" ")}`;

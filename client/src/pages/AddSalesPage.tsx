@@ -24,6 +24,7 @@ import { isHeroBajajFinancierForStaging } from "../utils/financierStagingRules";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 import {
   sanitizeExtractedVehicleDetailFields,
+  sanitizeFormFieldInputValue,
   sanitizeFormFieldValue,
   sanitizeNomineeAgeInput,
   sanitizeOptionalFormField,
@@ -1684,7 +1685,7 @@ export function AddSalesPage({
                           onChange={(e) =>
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
-                              name: sanitizeFormFieldValue(e.target.value),
+                              name: sanitizeFormFieldInputValue(e.target.value),
                             }))
                           }
                           placeholder="—"
@@ -1701,7 +1702,7 @@ export function AddSalesPage({
                           className="add-sales-v2-dl-input add-sales-v2-dl-input--care-of-free"
                           value={c?.care_of ?? ""}
                           onChange={(e) => {
-                            const raw = sanitizeFormFieldValue(e.target.value);
+                            const raw = sanitizeFormFieldInputValue(e.target.value);
                             const parsed = parseCareOfFromCombined(raw);
                             const has = raw.trim() !== "";
                             setExtractedCustomer((prev) => ({
@@ -1728,7 +1729,7 @@ export function AddSalesPage({
                           onChange={(e) =>
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
-                              address: sanitizeFormFieldValue(e.target.value),
+                              address: sanitizeFormFieldInputValue(e.target.value),
                             }))
                           }
                           placeholder="—"
@@ -1813,7 +1814,7 @@ export function AddSalesPage({
                           onChange={(e) =>
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),
-                              financier: sanitizeFormFieldValue(e.target.value),
+                              financier: sanitizeFormFieldInputValue(e.target.value),
                             }))
                           }
                           placeholder="—"
@@ -1927,7 +1928,7 @@ export function AddSalesPage({
                           onChange={(e) =>
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),
-                              profession: sanitizeFormFieldValue(e.target.value),
+                              profession: sanitizeFormFieldInputValue(e.target.value),
                             }))
                           }
                           placeholder="—"
@@ -1963,7 +1964,7 @@ export function AddSalesPage({
                           onChange={(e) =>
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),
-                              nominee_name: sanitizeFormFieldValue(e.target.value),
+                              nominee_name: sanitizeFormFieldInputValue(e.target.value),
                             }))
                           }
                           placeholder="—"
@@ -2169,7 +2170,7 @@ export function AddSalesPage({
                             onChange={(e) =>
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),
-                              insurer: sanitizeFormFieldValue(e.target.value),
+                              insurer: sanitizeFormFieldInputValue(e.target.value),
                             }))
                           }
                             placeholder="—"
