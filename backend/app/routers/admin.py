@@ -317,6 +317,11 @@ class AddDealerLoginRoleRequest(BaseModel):
 
 
 class CreateDiscountRequest(BaseModel):
+    subdealer_type: str | None = Field(
+        None,
+        max_length=64,
+        description="Primary-key segment; defaults to trimmed model when omitted.",
+    )
     model: str = Field(..., min_length=1, max_length=64)
     discount: float | None = None
     create_date: str | None = Field(None, max_length=20)
@@ -698,10 +703,10 @@ def list_dealer_discounts(dealer_id: int) -> list[dict]:
 
             cur.execute(
                 """
-                SELECT subdealer_discount_id, dealer_id, model, discount, create_date, valid_flag
+                SELECT dealer_id, subdealer_type, valid_flag, model, discount, create_date
                 FROM subdealer_discount_master_ref
                 WHERE dealer_id = %s
-                ORDER BY model ASC
+                ORDER BY subdealer_type ASC, model ASC
                 """,
                 (dealer_id,),
             )
@@ -718,6 +723,8 @@ def create_dealer_discount(dealer_id: int, payload: CreateDiscountRequest) -> di
     m = payload.model.strip()
     if not m:
         raise HTTPException(status_code=400, detail="model is required")
+    st_raw = (payload.subdealer_type or "").strip()
+    subdealer_type = st_raw or m
 
     cd = payload.create_date
     if cd is not None:
@@ -740,11 +747,12 @@ def create_dealer_discount(dealer_id: int, payload: CreateDiscountRequest) -> di
 
             cur.execute(
                 """
-                INSERT INTO subdealer_discount_master_ref (dealer_id, model, discount, create_date, valid_flag)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING subdealer_discount_id, dealer_id, model, discount, create_date, valid_flag
+                INSERT INTO subdealer_discount_master_ref
+                    (dealer_id, subdealer_type, valid_flag, model, discount, create_date)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING dealer_id, subdealer_type, valid_flag, model, discount, create_date
                 """,
-                (dealer_id, m, disc, cd, vf),
+                (dealer_id, subdealer_type, vf, m, disc, cd),
             )
             row = cur.fetchone()
         conn.commit()

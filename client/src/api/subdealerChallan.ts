@@ -24,7 +24,7 @@ export type ParseSubdealerChallanResponse = {
 };
 
 /**
- * POST /subdealer-challan/parse-scan — multipart image/PDF.
+ * POST /subdealer-challan/parse-scan — multipart image/PDF (one file per request).
  */
 export async function parseSubdealerChallanScan(
   file: File
@@ -35,6 +35,157 @@ export async function parseSubdealerChallanScan(
     method: "POST",
     body,
   });
+}
+
+/** For multi-page challans: pick the numerically largest book number; fallback to string/natural compare. */
+export function maxChallanBookNumber(a: string | null, b: string | null): string | null {
+  const ta = (a ?? "").trim();
+  const tb = (b ?? "").trim();
+  if (!ta) return tb || null;
+  if (!tb) return ta;
+  if (/^\d+$/.test(ta) && /^\d+$/.test(tb)) {
+    try {
+      return BigInt(ta) >= BigInt(tb) ? ta : tb;
+    } catch {
+      /* fall through */
+    }
+  }
+  return ta.localeCompare(tb, undefined, { numeric: true, sensitivity: "base" }) >= 0 ? ta : tb;
+}
+
+type MergeContext = { label?: string };
+
+function withLabel(msg: string, ctx: MergeContext | undefined, prefixFileName: boolean): string {
+  if (!prefixFileName || !ctx?.label) return msg;
+  return `${ctx.label}: ${msg}`;
+}
+
+/**
+ * Merge several `/parse-scan` results (e.g. one per challan page). Vehicle lines are appended
+ * in file order; the UI should de-dupe. **Challan book number** uses ``maxChallanBookNumber`` across pages.
+ * **Date** uses the first file that has a parseable date; if another file disagrees, a warning is added.
+ * Artifact paths come from the last file (for debugging / support).
+ */
+export function mergeSubdealerChallanParseResults(
+  results: ParseSubdealerChallanResponse[],
+  fileNames: string[] | null = null
+): ParseSubdealerChallanResponse {
+  if (results.length === 0) {
+    return {
+      challan_no: null,
+      challan_date_raw: null,
+      challan_date_iso: null,
+      challan_ddmmyyyy: null,
+      lines: [],
+      artifact_dir: null,
+      raw_ocr_path: null,
+      ocr_json_path: null,
+      warnings: [],
+      error: null,
+    };
+  }
+  if (results.length === 1) {
+    return { ...results[0] };
+  }
+
+  const first = results[0];
+  const multiline = true;
+  const allWarnings: string[] = [];
+  const lines: SubdealerChallanLine[] = [];
+  let challanNo: string | null = null;
+
+  const anchorIndex = results.findIndex(
+    (r) => Boolean((r.challan_date_iso || "").trim() || (r.challan_ddmmyyyy || "").trim())
+  );
+  const a = anchorIndex >= 0 ? results[anchorIndex] : first;
+  let dateRaw: string | null = a.challan_date_raw;
+  let dateIso: string | null = a.challan_date_iso;
+  let ddmm: string | null = a.challan_ddmmyyyy;
+  const canonIso = (dateIso || "").trim();
+  const canonDd = (ddmm || "").trim();
+  const anchorLabel =
+    anchorIndex >= 0 ? fileNames?.[anchorIndex] ?? `page ${anchorIndex + 1}` : "the first file";
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    const name = fileNames?.[i] ?? `page ${i + 1}`;
+    const ctx: MergeContext = { label: name };
+    challanNo = maxChallanBookNumber(challanNo, r.challan_no);
+    for (const w of r.warnings || []) {
+      const t = (w || "").trim();
+      if (t) allWarnings.push(withLabel(t, ctx, multiline));
+    }
+    for (const ln of r.lines || []) lines.push(ln);
+
+    const rIso = (r.challan_date_iso || "").trim();
+    const rDd = (r.challan_ddmmyyyy || "").trim();
+    if (i !== anchorIndex && (rIso || rDd)) {
+      const disagree =
+        (canonIso && rIso && rIso !== canonIso) || (canonDd && rDd && rDd !== canonDd);
+      if (disagree) {
+        allWarnings.push(
+          withLabel(
+            `challan date on this scan (${r.challan_date_raw || r.challan_date_iso || "?"}) ` +
+              `differs from ${anchorLabel} — keeping the date from ${anchorLabel} for staging.`,
+            ctx,
+            true
+          )
+        );
+      }
+    }
+  }
+
+  const last = results[results.length - 1];
+  const seenW = new Set<string>();
+  const outW: string[] = [];
+  for (const w of allWarnings) {
+    const k = w.trim();
+    if (!k || seenW.has(k)) continue;
+    seenW.add(k);
+    outW.push(w);
+  }
+  return {
+    challan_no: challanNo,
+    challan_date_raw: dateRaw,
+    challan_date_iso: dateIso,
+    challan_ddmmyyyy: ddmm,
+    lines,
+    artifact_dir: last.artifact_dir,
+    raw_ocr_path: last.raw_ocr_path,
+    ocr_json_path: last.ocr_json_path,
+    warnings: outW,
+    error: first.error,
+  };
+}
+
+/**
+ * Run OCR for each file (in order) and merge into one result for staging.
+ */
+export async function parseSubdealerChallanScans(
+  files: File[],
+  onProgress?: (current: number, total: number) => void
+): Promise<ParseSubdealerChallanResponse> {
+  if (files.length === 0) {
+    return mergeSubdealerChallanParseResults([]);
+  }
+  if (files.length === 1) {
+    onProgress?.(1, 1);
+    return parseSubdealerChallanScan(files[0]);
+  }
+  const results: ParseSubdealerChallanResponse[] = [];
+  const names: string[] = [];
+  for (let i = 0; i < files.length; i++) {
+    onProgress?.(i + 1, files.length);
+    const f = files[i];
+    names.push(f.name);
+    try {
+      results.push(await parseSubdealerChallanScan(f));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`OCR failed on "${f.name}": ${msg}`);
+    }
+  }
+  return mergeSubdealerChallanParseResults(results, names);
 }
 
 export type CreateChallanStagingBody = {

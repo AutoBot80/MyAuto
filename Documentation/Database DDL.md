@@ -171,21 +171,22 @@ This document lists the current database tables and their columns. **Executable 
 
 ## 6) `dealer_ref`
 
-**Purpose:** Dealer reference; replaces dealer_master. Used by Form 20 (field 10 dealer name), sales_master.
+**Purpose:** Dealer reference; replaces dealer_master. Used by Form 20 (field 10 dealer name), sales_master. **Column order in this section** is the stored logical / greenfield order (**`DDL/04b_dealer_ref.sql`**). Legacy databases upgraded with **`DDL/alter/04i_*.sql`** have **`subdealer_type`** added at the end in PostgreSQL’s internal column order; behavior is the same (references use names).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
 | `dealer_id` | `integer` | NO | `nextval('dealer_ref_dealer_id_seq'::regclass)` | Primary key |
 | `dealer_name` | `varchar(255)` | NO |  | Dealer name |
-| `oem_id` | `integer` | YES |  | FK → `oem_ref(oem_id)`; supplied on insert, not auto-generated |
+| `subdealer_type` | `varchar(64)` | YES |  | Subdealer line/category (e.g. ARD, AD); align with `subdealer_discount_master_ref` rules; optional (**`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**, greenfield **`DDL/04b_dealer_ref.sql`**) |
 | `address` | `text` | YES |  | Address |
 | `pin` | `char(6)` | YES |  | PIN code |
 | `city` | `text` | YES |  | City |
 | `state` | `text` | YES |  | State |
-| `rto_name` | `varchar(128)` | YES |  | Dealer-mapped RTO office name (e.g. `RTO-Bharatpur`) |
 | `parent_id` | `integer` | YES |  | Parent dealer id (hierarchy) |
 | `phone` | `varchar(16)` | YES |  | Phone (up to 16 digits) |
+| `oem_id` | `integer` | YES |  | FK → `oem_ref(oem_id)`; supplied on insert, not auto-generated |
 | `auto_sms_reminders` | `char(1)` | YES |  | Y or N; when Y, trigger populates service_reminders_queue on sales_master upsert |
+| `rto_name` | `varchar(128)` | YES |  | Dealer-mapped RTO office name (e.g. `RTO-Bharatpur`) |
 | `prefer_insurer` | `varchar(255)` | YES |  | Optional canonical MISP insurer label; when merged details-sheet insurer fuzzy-matches (≥20%) to this string, **`build_insurance_fill_values`** uses **`prefer_insurer`** for KYC (**`DDL/alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql`**) |
 | `hero_cpi` | `char(1)` | NO | `'N'` | **Y** or **N**: MISP proposal CPA add-on row (label varies — NIC/CPI/Hero CPI); automation checks when **Y**, unchecks when **N** (**`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**) |
 
@@ -195,6 +196,8 @@ This document lists the current database tables and their columns. **Executable 
 
 **Foreign keys:**
 - `fk_dealer_ref_oem`: (`oem_id`) → `oem_ref(oem_id)`
+
+**Scripts:** `DDL/04b_dealer_ref.sql` (greenfield); add **`subdealer_type`**, reordered columns on new installs: same file; **upgrade** existing DB: **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**
 
 ---
 
@@ -456,6 +459,8 @@ This document lists the current database tables and their columns. **Executable 
 | `ex_showroom_price` | `numeric(12,2)` | YES |  | |
 | `discount` | `numeric(12,2)` | YES |  | Per-line discount |
 
+**Application (subdealer challan, no DDL change):** Before Siebel **order_line_vehicles** attach, the batch order phase sets **`vehicle_inventory_master.discount`** from **`repositories.vehicle_inventory.get_subdealer_challan_discount`**: join **`dealer_ref.subdealer_type`** ( **`to_dealer_id`** ) with **`subdealer_discount_master_ref`** where **`dealer_id`** = **`from_dealer_id`**, **`valid_flag`** = **Y**; **model** = **prefix** of the DMS string (**`starts_with(BTRIM(inventory), BTRIM(ref.model))`**, longest ref **model** if several match) — **LLD** **§2.4e**; **changelog 2.89**; **2.90**.
+
 **Primary key:** `vehicle_inventory_master_pkey` on (`inventory_line_id`)
 
 **Foreign keys:**
@@ -560,25 +565,27 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 ## 16) `subdealer_discount_master_ref`
 
-**Purpose:** Subdealer discount amounts keyed by dealer and vehicle model. Table name ends with **`_ref`** so rows are preserved on Admin **Delete All Data** (**`LIKE '%ref'`**; see `backend/app/routers/admin.py`).
+**Purpose:** One discount row per dealer, subdealer type, model, and Y/N **valid** flag. Several models can share the same dealer + subdealer type + valid. Table name ends with **`_ref`** so rows are preserved on Admin **Delete All Data** (**`LIKE '%ref'`**; see `backend/app/routers/admin.py`).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
-| `subdealer_discount_id` | `integer` | NO | `nextval('subdealer_discount_master_ref_subdealer_discount_id_seq'::regclass)` | Primary key (auto-generated) |
-| `dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
-| `model` | `varchar(64)` | NO |  | Vehicle model |
+| `dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)`; part of primary key |
+| `subdealer_type` | `varchar(64)` | NO |  | Subdealer line / category key; part of primary key (with model and valid_flag) |
+| `valid_flag` | `char(1)` | NO | `'Y'` | **Y** or **N**; part of primary key |
+| `model` | `varchar(64)` | NO |  | Vehicle model key (leading substring); DMS values may be longer; app uses **`starts_with(BTRIM(DMS), BTRIM(model))`** (longest ref **model** wins) — **§16** + **2.90** |
 | `discount` | `numeric(12,2)` | YES |  | |
 | `create_date` | `varchar(20)` | YES |  | dd/mm/yyyy |
-| `valid_flag` | `char(1)` | NO | `'Y'` | **Y** or **N** |
 
-**Primary key:** `subdealer_discount_master_ref_pkey` on (`subdealer_discount_id`)
+**Primary key:** `subdealer_discount_master_ref_pkey` on (`dealer_id`, `subdealer_type`, `valid_flag`, `model`)
 
 **Checks:** `chk_subdealer_discount_valid_flag` — `valid_flag` IN ('Y', 'N')
 
 **Foreign keys:**
 - `fk_subdealer_discount_dealer`: (`dealer_id`) → `dealer_ref(dealer_id)`
 
-**Scripts:** `DDL/22_subdealer_discount_master_ref.sql` (greenfield); existing DBs that still have **`subdealer_discount_master`**: **`DDL/alter/22a_rename_subdealer_discount_master_to_ref.sql`**
+**Scripts:** `DDL/22_subdealer_discount_master_ref.sql` (greenfield); renames: **`DDL/alter/22a_*.sql`**; surrogate to composite: **`DDL/alter/22b_*.sql`**; add **model** to the PK: **`DDL/alter/22c_*.sql`** (no-op if the PK is already 4 columns)
+
+**Subdealer challan resolution:** **`dealer_id`** in this table is the **sending** dealer (**`from_dealer_id`** in staging). The **receiving** dealer’s **`dealer_ref.subdealer_type`** (**`to_dealer_id`**) is matched against this table’s **`subdealer_type`**. **`model`** stores a **prefix** of the DMS name (DMS may add trailing text); the app uses **`starts_with(BTRIM(DMS), BTRIM(s.model))`** and picks the **longest** matching **model** (see **2.90**). With **`valid_flag`** = **Y**; if no row applies, **1500.00** on **`vehicle_inventory_master.discount`** — **`repositories.vehicle_inventory.get_subdealer_challan_discount`**; **LLD** **§2.4e**; **2.89** / **2.90**.
 
 ---
 
@@ -660,7 +667,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `sales_master` | Submit Info, RTO, service reminders, insurance |
 | `oem_ref` | dealer_ref, Form 20 (oem_name via dealer) |
 | `oem_service_schedule` | Trigger for service_reminders_queue |
-| `dealer_ref` | Form 20, sales_master, service reminders |
+| `dealer_ref` | Form 20, sales_master, service reminders, optional **`subdealer_type`** (see **§6**) |
 | `insurance_master` | Submit Info, View Customer |
 | `service_reminders_queue` | Trigger on sales_master |
 | `rto_queue` | RTO Queue page, rc_status_sms_queue |
@@ -676,7 +683,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `challan_staging` | Legacy single-table staging (optional; **`DDL/19_challan_staging.sql`**) |
 | `challan_master` | Challan headers; **`DDL/20_challan_master.sql`** |
 | `challan_details` | Challan ↔ inventory lines; **`DDL/21_challan_details.sql`** |
-| `subdealer_discount_master_ref` | Dealer + model discount rules; **`DDL/22_subdealer_discount_master_ref.sql`** |
+| `subdealer_discount_master_ref` | PK **`(dealer_id, subdealer_type, valid_flag, model)`**; **`DDL/22_*.sql`**, **`alter/22a–22c`** as needed |
 | `roles_ref` | Role ↔ home-tile access flags; **`DDL/25_roles_ref.sql`**; preserved on admin reset |
 | `login_ref` | User logins + password hashes; **`DDL/26_login_ref.sql`** |
 | `login_roles_ref` | Login ↔ role (+ optional `dealer_id`); **`DDL/27_login_roles_ref.sql`** |
@@ -818,4 +825,9 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.83 | Apr 2026 | **`login_roles_ref`** — **`login_id`** → **`login_ref`**, **`role_id`** → **`roles_ref`**, optional **`dealer_id`** (no FK) — **`DDL/27_login_roles_ref.sql`** |
 | 2.84 | Apr 2026 | **`add_sales_staging.login_id`** → **`login_ref`**; **`payload_json`** back-fill **`sales_id`** (Create Invoice commit), **`insurance_id`** (Generate Insurance insert) — **`DDL/alter/13c_add_sales_staging_login_id.sql`**, **`add_sales_commit_service`**, **`add_sales_staging.merge_staging_payload_on_cursor`** |
 | 2.85 | Apr 2026 | **`add_sales_staging.subfolder`**; **`POST /fill-forms/dms`** and **`/insurance/hero`** resolve **`subfolder`** / ids from staging when only **`staging_id`** is sent — **`DDL/alter/13d_add_sales_staging_subfolder.sql`**, **`fill_forms_router`** |
+| 2.86 | Apr 2026 | **`subdealer_discount_master_ref`**: composite PK **`(dealer_id, subdealer_type, valid_flag)`**; added **`subdealer_type`**; removed surrogate **`subdealer_discount_id`**; **`fk_subdealer_discount_dealer`** unchanged — **`DDL/22_subdealer_discount_master_ref.sql`**, **`DDL/alter/22b_subdealer_discount_master_ref_composite_pk.sql`**, **§16**; Admin discounts API ( **`repositories.vehicle_inventory`**: supersedes prior **`get_discount_for_model`** — see **2.89**) — **`backend`**, **`client`** |
+| 2.87 | Apr 2026 | **`subdealer_discount_master_ref`**: primary key extended with **`model`** — **`(dealer_id, subdealer_type, valid_flag, model)`**; **`DDL/22_subdealer_discount_master_ref.sql`**, **`DDL/alter/22b_*.sql`** (new installs), **`DDL/alter/22c_subdealer_discount_master_ref_pk_add_model.sql`** (3-column PK → 4) — **§16** |
+| 2.88 | Apr 2026 | **`dealer_ref.subdealer_type`**; greenfield column order in **`DDL/04b_dealer_ref.sql`**: **`(dealer_id, dealer_name, subdealer_type, address, pin, city, state, parent_id, phone, oem_id, auto_sms_reminders, rto_name, prefer_insurer, hero_cpi)`**; **upgrade** **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`** — **§6** |
+| 2.89 | Apr 2026 | **No schema change.** Subdealer challan per-line discount resolution: **`get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)`** — **`dealer_ref.subdealer_type`** (**`to_dealer_id`**) + **`subdealer_discount_master_ref`** (**`dealer_id`** = **`from_dealer_id`**, matching **`subdealer_type`**, **`valid_flag`** = **Y**, **model**); else **1500.00**; **`update_discount_and_ex_showroom`** on **`vehicle_inventory_master`** — **`backend/app/repositories/vehicle_inventory.py`**, **`add_subdealer_challan_service`** — **§12** ( **`vehicle_inventory_master.discount`** note ) |
+| 2.90 | Apr 2026 | **No schema change.** **Model** match: reference **`subdealer_discount_master_ref.model`** is a **prefix** of the DMS/inventory value (**`starts_with(BTRIM(DMS), BTRIM(ref.model))`**, SQL); **longest** ref **model** if multiple; **`backend/app/repositories/vehicle_inventory.get_subdealer_challan_discount`** — **§12**, **§16**; **LLD** **§2.4e**, **6.297** |
 

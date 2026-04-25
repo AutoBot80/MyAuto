@@ -69,6 +69,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `04b_rename_dealer_master_to_dealer_ref_and_oem.sql` — creates `oem_ref`, renames `dealer_master` to `dealer_ref`, replaces `dealer_of` with `oem_id` (FK to oem_ref).
 - `04c_dealer_ref_add_auto_sms_reminders.sql` — adds `auto_sms_reminders` (Y/N) to dealer_ref.
 - `04h_dealer_ref_add_rto_name.sql` — adds `rto_name` (VARCHAR 128) to `dealer_ref` for insurance/Vahan RTO label; seeds `RTO-Bharatpur` for `dealer_id = 100001`. **Required** if Fill Insurance errors on `dr.rto_name` does not exist.
+- `04i_dealer_ref_add_subdealer_type.sql` — adds **`dealer_ref.subdealer_type`** (VARCHAR 64, nullable). Greenfield full column order: **`DDL/04b_dealer_ref.sql`**.
 - `04d_drop_oem_service_frequency_add_oem_service_schedule.sql` — drops `oem_service_frequency`, creates `oem_service_schedule`.
 - `08a_service_reminders_queue_add_reminder_date.sql` — adds `reminder_date` to service_reminders_queue.
 - `08b_service_reminders_queue_add_reminder_type_dealer_id.sql` — adds `reminder_type`, `dealer_id` to service_reminders_queue.
@@ -104,6 +105,8 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `19b_challan_staging_created_at.sql` — legacy **`challan_staging.created_at`** (Processed tab / failed-count window).
 - `23a_challan_master_staging_last_run_at.sql` — **`challan_master_staging.last_run_at`** (Processed tab **Latest run**).
 - `22a_rename_subdealer_discount_master_to_ref.sql` — renames **`subdealer_discount_master`** → **`subdealer_discount_master_ref`** and renames the **`SERIAL`** sequence (existing DBs only; greenfield uses **`DDL/22_subdealer_discount_master_ref.sql`**).
+- `22b_subdealer_discount_master_ref_composite_pk.sql` — legacy **`subdealer_discount_master_ref`**: add **`subdealer_type`**, **PK** **`(dealer_id, subdealer_type, valid_flag, model)`**, drop **`subdealer_discount_id`**. **No-op** if **`subdealer_discount_id`** is already gone. Greenfield: use **`DDL/22_subdealer_discount_master_ref.sql`**, then run **`22c`** only if an older 3-col PK was applied.
+- `22c_subdealer_discount_master_ref_pk_add_model.sql` — if the table still has **PK** **`(dealer_id, subdealer_type, valid_flag)`** only, extend to **`(dealer_id, subdealer_type, valid_flag, model)`**. **No-op** if the PK is already 4 columns.
 
 **New table (run after customer_master exists):**
 - `10_rto_payment_details.sql` — legacy base creation for the RTO table; current schema then applies `12c_rename_rto_payment_details_to_rto_queue.sql` so the active table is `rto_queue`.

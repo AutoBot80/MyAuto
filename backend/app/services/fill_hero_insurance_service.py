@@ -2,7 +2,7 @@
 Hero Insurance (MISP) Playwright flow: **pre_process** (``run_fill_insurance_only`` on real MISP) runs through KYC,
 then fills **VIN** from DB (**``full_chassis``**) and clicks the VIN page **Submit**. **main_process** continues with
 **I agree** (if shown), then the proposal form. Proposer/vehicle/nominee fields come from the view;
-email, most add-ons, CPA tenure, HDFC, and registration date use **hardcoded** defaults; **Hero CPI** (NIC/CPI row) follows **``form_insurance_view.hero_cpi``** (**``dealer_ref.hero_cpi``**). Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **insurance_master** INSERT runs after proposal fill (readbacks) and **before** **Proposal Preview** / **Review**; **Proposal Preview** / **Review** (always); **Issue Policy** optional via ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``; scrape **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** from preview and merge via ``update_insurance_master_policy_after_issue`` (preview scrape and post–Issue Policy scrape).
+email, most add-ons, HDFC, and registration date use **hardcoded** defaults. **``dealer_ref.hero_cpi``** (**``form_insurance_view.hero_cpi``**): **Y** leaves **CPA Tenure** at the portal default (1) and **checks** the bottom NIC/CPI (name varies) add-on; **N** (default) sets **CPA Tenure** to **0** (hides that add-on row) and **unchecks** the add-on if still present. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **insurance_master** INSERT runs after proposal fill (readbacks) and **before** **Proposal Preview** / **Review**; **Proposal Preview** / **Review** (always); **Issue Policy** optional via ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``; scrape **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** from preview and merge via ``update_insurance_master_policy_after_issue`` (preview scrape and post–Issue Policy scrape).
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import difflib
@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from app.config import (
@@ -46,6 +47,10 @@ from app.config import (
     KYC_USE_KEYBOARD_EKYC_SOP,
     KYC_DEFAULT_KYC_PARTNER_LABEL,
     HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW,
+    INSURER_PREFER_FUZZY_MIN_RATIO,
+    MISP_KYC_POST_UPLOAD_STABLE_MS,
+    MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS,
+    MISP_KYC_TO_VIN_URL_POLL_MS,
     get_uploads_dir,
 )
 from app.services.add_sales_commit_service import (
@@ -92,7 +97,7 @@ HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW = True
 
 # Optional: regex on checkbox **label/row text** (MispPolicy proposal grid) for a **new**
 # proposal checkbox MISP added — force **unchecked** when a matching visible checkbox exists. If **empty**, this
-# step is skipped (no error). **CPA Tenure** is native ``<select>`` ``ddlCPATenure`` (fuzzy option ``0``), not this hook.
+# step is skipped (no error). **CPA Tenure** ``ddlCPATenure`` fuzzy ``0`` only when ``hero_cpi`` is **N**; if **Y**, tenure is not changed (portal default, typically 1), not this hook.
 HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX = ""
 
 # ASP.NET ``ContentPlaceHolder1`` client-id prefix on ``MispPolicy.aspx`` proposal controls (frame scrape).
@@ -113,6 +118,17 @@ HERO_MISP_AGREEMENT_TYPE_FINANCER_CPH1_SUFFIXES = (
     "ddlAgreementWithFinancer",
     "ddlAgreementTypeFinancer",
 )
+
+# **Model Name** (MispPolicy vehicle) — try **ddlModelName** first, then id variants from different builds.
+HERO_MISP_MODEL_NAME_CPH1_SUFFIXES = (
+    "ddlModelName",
+    "ddlVehicleModel",
+    "ddlVehModelName",
+    "ddlModel",
+)
+
+# Fuzzy option pick for model uses substring / token overlap (OCR/DB name vs MISP option wording).
+MISP_PROPOSAL_MODEL_FUZZY_FLOOR = 0.1
 
 # Return from ``_proposal_step_checkbox_by_cph1_id`` when no control matched (caller may use label/regex fallback).
 PROPOSAL_CHECKBOX_ID_NOT_FOUND = "__proposal_checkbox_id_not_found__"
@@ -361,7 +377,18 @@ _MISP_UI_SETTLE_CAP_MS = 200
 def _t(page, ms: int) -> None:
     try:
         page.wait_for_timeout(min(int(ms), _MISP_UI_SETTLE_CAP_MS))
-    except Exception:
+    except Exception as e:
+        # Do not fall back to time.sleep() when the page is gone: that kept long KYC / login waits
+        # stuck until INSURANCE_LOGIN_WAIT_MS, so the Generate Insurance button never completed.
+        try:
+            closed = page.is_closed()
+        except Exception:
+            closed = True
+        if closed:
+            raise PlaywrightError(
+                "The insurance browser window or tab was closed. "
+                "Run Generate Insurance again when you are ready to continue."
+            ) from e
         try:
             time.sleep(min(int(ms), _MISP_UI_SETTLE_CAP_MS) / 1000.0)
         except Exception:
@@ -586,7 +613,12 @@ def _misp_click_nav_step(
     """Snapshot pages → click → resolve tab → trace note. Returns ``(page, error_or_None)``."""
     pages_before = _misp_snapshot_context_pages(page)
     try:
-        click_fn(page, timeout_ms=timeout_ms)
+        click_fn(
+            page,
+            timeout_ms=timeout_ms,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
     except Exception as exc:
         return page, f"{step_label}: {exc!s}"
     t0_res = time.monotonic()
@@ -615,7 +647,7 @@ def _hero_misp_after_sign_in_settle(page) -> None:
     _wait_load_optional(page, 8_000)
     cap = min(10_000, max(800, int(HERO_MISP_LANDING_WAIT_MS)))
     try:
-        page.locator('[aid="ctl00_TWO"], #ctl00_TWO, img[alt="2W Icon"]').first.wait_for(
+        page.locator('a#ctl00_TWO, #ctl00_TWO, #ctl00_w2_menu, img[alt="2W Icon"], [aid="ctl00_TWO"]').first.wait_for(
             state="visible", timeout=cap
         )
     except Exception:
@@ -656,6 +688,145 @@ def _hero_insurance_log_page_diagnostics(
         title,
         nframes,
     )
+
+
+def _collect_hero_misp_frame_dump_lines(page) -> list[str]:
+    """
+    One line per frame: URL, optional frame name, and a compact **meta** object (2W/Postback hints, **Model**
+    ``<select>`` ids) for selector tuning. Used by :func:`_write_hero_misp_frame_dump_file` — not inlined in
+    ``Playwright_insurance.txt``.
+    """
+    out: list[str] = []
+    frs: list = []
+    try:
+        frs = list(getattr(page, "frames", []) or [])
+    except Exception as exc:
+        return [f"frames_enumeration_error={exc!s}"]
+    for i, fr in enumerate(frs):
+        u = ""
+        nm = ""
+        try:
+            u = (getattr(fr, "url", None) or "")  # type: ignore[misc]
+            u = (u or "")[:420]
+        except Exception:
+            pass
+        try:
+            nm = (getattr(fr, "name", None) or "")  # type: ignore[misc]
+        except Exception:
+            pass
+        line = f"  [{i}] name={nm!r} url={u!r}"
+        try:
+            meta = fr.evaluate(  # type: ignore[union-attr]
+                r"""() => {
+            const p = (t) => (t || '').toString();
+            let msp = [];
+            try {
+              msp = Array.from(document.querySelectorAll(
+                "select[id*='Model' i], select[name*='Model' i], select[id$='ddlModelName']"
+              )).slice(0, 8).map((e) => (
+                { id: e.id || '', n: (e.options && e.options.length) || 0 }
+              ));
+            } catch (e) { msp = []; }
+            return {
+            href: p(document && document.location && document.location.href).slice(0, 320),
+            dId: (function() {
+            try {
+              const d = document.documentElement; return d && d.getAttribute
+                ? (d.getAttribute('id') || '') : '';
+            } catch (e) { return ''; }
+            })(),
+            tctl00: !!document.getElementById('ctl00_TWO'),
+            tmenu: !!document.getElementById('ctl00_w2_menu'),
+            twIconImgs: document.querySelectorAll('img[alt="2W Icon"]').length,
+            post: document.querySelectorAll('a[href*="doPostBack"]').length,
+            nav: !!document.querySelector(
+              '#navbarVerticalNav, .nav-item, li.nav-item, nav, [id*="menu"]'
+            ),
+            mispModelSelects: msp
+            };
+            }""",
+            )
+        except Exception as e:
+            meta = {"evaluate_error": str(e)[:200]}
+        line += f" meta={meta!s}"
+        out.append(line)
+    out.insert(0, f"--- Hero MISP frame dump: frames={len(frs)} ---")
+    return out
+
+
+def _write_hero_misp_frame_dump_file(
+    page,
+    *,
+    reason: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> str | None:
+    """
+    Write frame URLs and compact DOM metadata to a **separate** file under ``ocr_output/<subfolder>/``
+    (not the main ``Playwright_insurance.txt`` log). Returns the file **name** for a one-line **NOTE** in the log.
+    """
+    if not ocr_output_dir or not (subfolder or "").strip():
+        return None
+    sub = (subfolder or "").strip()
+    if not sub:
+        return None
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", (reason or "frame_dump").strip())[:100].strip("._-")
+    if not slug:
+        slug = "frame_dump"
+    tstamp = time.strftime("%Y%m%d_%H%M%S")
+    out_dir = ocr_output_dir / sub
+    name = f"insurance_frame_dump_{slug}_{tstamp}.txt"
+    path = out_dir / name
+    body = "\n".join(_collect_hero_misp_frame_dump_lines(page))
+    header = f"timestamp_ist=about_{tstamp} reason={reason!s} url={_hero_misp_safe_url_for_insurance_log(getattr(page, 'url', '') or '')}\n"
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            (header + body)[:1_200_000],
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        try:
+            append_playwright_insurance_line_or_dealer_fallback(
+                ocr_output_dir,
+                sub,
+                "NOTE",
+                f"insurance frame dump: write failed: {str(exc)[:200]}",
+            )
+        except Exception:
+            pass
+        return None
+    return name
+
+
+def _append_hero_misp_frame_dump(
+    page,
+    *,
+    reason: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """Missed 2W / New Policy, etc. — :func:`_write_hero_misp_frame_dump_file` + one **NOTE** (no long inline dump)."""
+    written = _write_hero_misp_frame_dump_file(
+        page,
+        reason=reason,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    if not ocr_output_dir or not (subfolder or "").strip():
+        return
+    if not written:
+        return
+    try:
+        append_playwright_insurance_line_or_dealer_fallback(
+            ocr_output_dir,
+            (subfolder or "").strip(),
+            "NOTE",
+            f"insurance frame dump (separate file): {written} — {reason!s}"[:8_000],
+        )
+    except Exception:
+        pass
 
 
 def _kyc_simulate_tab_away_and_back(
@@ -1504,19 +1675,97 @@ def _misp_wait_landing_after_product_nav(page, *, step: str, timeout_ms: int) ->
     _wait_load_optional(page, min(2_000, cap))
 
 
-def _click_2w_icon(page, *, timeout_ms: int) -> None:
+_MISP_2W_HUB_PRESENT_JS = """() => !!(
+  (function() {
+    const vp = document.getElementById('viewport');
+    if (vp) {
+      if (vp.querySelector('#lsec a#ctl00_TWO, a#ctl00_TWO, #ctl00_w2_menu a')) return true;
+    }
+    return false;
+  })() ||
+  (document.getElementById('lsec') && document.querySelector('#lsec a#ctl00_TWO')) ||
+  document.getElementById('ctl00_TWO') || document.getElementById('ctl00_w2_menu') ||
+  document.querySelector('a#ctl00_TWO') ||
+  document.querySelector("a[href*=\"doPostBack\" i][href*=\"$TWO\" i]") ||
+  document.querySelector('a[href*="$TWO" i]') ||
+  document.querySelector('img[alt="2W Icon"]') || document.querySelector("img[alt*=\"2W\" i]")
+)"""
+
+
+def _wait_misp_2w_hub_ready(page, *, timeout_ms: int) -> bool:
     """
-    Open **2W** (two-wheeler) product path. Markup varies: ``img[alt]``, tiles, or icon buttons.
-    When ``INSURANCE_NAV_IFRAME_SELECTOR`` is set, try 2W locators inside that iframe first.
+    ``MainIndex.aspx`` often mounts **2W** (``#ctl00_TWO`` / menu) *after* first paint; a second frame
+    can stay ``about:blank`` briefly. Poll all ``page.frames`` until hub markers exist or time out.
+    """
+    t0 = time.monotonic()
+    end = t0 + max(0.05, timeout_ms / 1000.0)
+    step_ms = 280
+    while time.monotonic() < end:
+        for fr in list(getattr(page, "frames", []) or []):
+            try:
+                if fr.is_detached():
+                    continue
+            except Exception:
+                continue
+            try:
+                if fr.evaluate(_MISP_2W_HUB_PRESENT_JS):
+                    return True
+            except Exception:
+                pass
+        try:
+            n = page.locator(
+                "#viewport a#ctl00_TWO, #viewport #lsec a#ctl00_TWO, "
+                "#lsec a#ctl00_TWO, #ctl00_TWO, #ctl00_w2_menu, a[href*='$TWO' i], "
+                "img[alt='2W Icon'], img[alt*='2W' i]"
+            ).count()
+            if n > 0:
+                return True
+        except Exception:
+            pass
+        _t(page, step_ms)
+    return False
+
+
+def _click_2w_icon(
+    page,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> None:
+    """
+    Open **2W** (two-wheeler) product path. Hub markup often lives in an **iframe**; we sweep
+    every frame. Production MISP uses ``a#ctl00_TWO`` on ``li#ctl00_w2_menu`` (often under
+    ``div#lsec`` inside ``div#viewport.overlay``) and ``__doPostBack('ctl00$TWO','')``. The anchor can
+    wrap a **div** + **img** + **span**; if the ``<a>`` has no hit area in layout, we click
+    ``.custom-btn-hover`` or the **img** inside.
+    If ``INSURANCE_NAV_IFRAME_SELECTOR`` is set, that iframe is tried with flat locators
+    (no nested ``nav iframe`` — this missed single-level hub iframes).
     """
     _insurance_click_settle(page)
+    wto = min(int(timeout_ms), 8_000)
+    hub_wait_ms = min(16_000, max(9_000, int(timeout_ms) * 2))
+    if not _wait_misp_2w_hub_ready(page, timeout_ms=hub_wait_ms):
+        logger.info(
+            "Hero Insurance: 2W hub markers not detected within %sms — continuing sweep; "
+            "intermittent MainIndex delay.",
+            hub_wait_ms,
+        )
+    else:
+        logger.debug("Hero Insurance: 2W hub script markers present — proceeding to click sweeps.")
+    try:
+        page.locator("#viewport.overlay, div#viewport").first.wait_for(
+            state="attached", timeout=min(2_000, wto)
+        )
+    except Exception:
+        pass
 
-    def _try_click(loc, label: str) -> bool:
+    def _try_click_on_loc(loc, label: str) -> bool:
         try:
             if loc.count() <= 0:
                 return False
             target = loc.first
-            target.wait_for(state="visible", timeout=min(timeout_ms, 8_000))
+            target.wait_for(state="visible", timeout=wto)
             try:
                 target.scroll_into_view_if_needed(timeout=400)
             except Exception:
@@ -1530,92 +1779,178 @@ def _click_2w_icon(page, *, timeout_ms: int) -> None:
         except Exception:
             return False
 
-    if INSURANCE_NAV_IFRAME_SELECTOR:
+    def _try_on_root(root) -> bool:
+        """``root`` is a :class:`Page` or :class:`Frame` (``locator``/``get_by_role``)."""
+        # Hub lives in ``#viewport.overlay``; ``#lsec`` = left column. Prefer **viewport**-scoped first.
+        seq = [
+            "div#viewport a#ctl00_TWO",
+            "#viewport #lsec a#ctl00_TWO",
+            "#viewport li#ctl00_w2_menu a#ctl00_TWO",
+            "div#viewport #lsec a#ctl00_TWO",
+            "div#lsec a#ctl00_TWO",
+            "#lsec a#ctl00_TWO",
+            "li#ctl00_w2_menu a#ctl00_TWO",
+            "a#ctl00_TWO",
+            "#ctl00_TWO",
+            "a#ctl00_TWO .custom-btn-hover",
+            "a#ctl00_TWO div",
+            "li#ctl00_w2_menu a",
+            "#ctl00_w2_menu a",
+            "a#ctl00_TWO img[alt=\"2W Icon\"]",
+            "a[href*=\"__doPostBack\"][href*=\"$TWO\"]",
+            "a[href*=\"__doPostBack\" i][href*=\"TWO\" i]",
+            "img[alt=\"2W Icon\"]",
+            "img[alt*=\"2W\" i]",
+            "ul.nav a#ctl00_TWO",
+            "[aid=\"ctl00_TWO\"]",  # legacy
+        ]
+        for sel in seq:
+            try:
+                if _try_click_on_loc(root.locator(sel), sel):
+                    return True
+            except Exception:
+                continue
         try:
-            fl = page.frame_locator(INSURANCE_NAV_IFRAME_SELECTOR)
-            nav_try = (
-                ('nav iframe [aid="ctl00_TWO"]', fl.locator('[aid="ctl00_TWO"]')),
-                ("nav iframe #ctl00_TWO", fl.locator("#ctl00_TWO")),
-                ('nav iframe img[alt="2W Icon"]', fl.locator('img[alt="2W Icon"]')),
+            lnk = root.get_by_role("link", name=re.compile(r"2\s*W|two[\s-]*wheel", re.I))
+            if _try_click_on_loc(lnk, "get_by_role_link_2W"):
+                return True
+        except Exception:
+            pass
+        try:
+            t = (
+                root.locator("a, button, [role='button']")
+                .filter(has_text=re.compile(r"^\s*2\s*W\s*$", re.I))
             )
-            for label, loc in nav_try:
-                if _try_click(loc, label):
-                    _misp_wait_landing_after_product_nav(page, step="after_2w", timeout_ms=timeout_ms)
-                    return
-        except Exception as exc:
-            logger.debug("Hero Insurance: 2W INSURANCE_NAV_IFRAME_SELECTOR: %s", exc)
+            if _try_click_on_loc(t, "text_tile_2W"):
+                return True
+        except Exception:
+            pass
+        return False
 
-    try_order = (
-        # Hero MISP WebForms: stable tile id (operator-confirmed).
-        ('[aid="ctl00_TWO"]', page.locator('[aid="ctl00_TWO"]')),
-        ('#ctl00_TWO', page.locator("#ctl00_TWO")),
-        ('img[alt="2W Icon"]', page.locator('img[alt="2W Icon"]')),
-        ("img[alt*='2W' i]", page.locator("img[alt*='2W' i]")),
-        ("img[title*='2W' i]", page.locator("img[title*='2W' i]")),
-        ("[aria-label*='2W' i]", page.locator("[aria-label*='2W' i]")),
-        ("[aria-label*='two wheel' i]", page.locator("[aria-label*='two wheel' i]")),
-        (
-            "role=button 2W",
-            page.get_by_role("button", name=re.compile(r"2\s*W|two\s*wheel", re.I)),
-        ),
-        (
-            "link 2W",
-            page.get_by_role("link", name=re.compile(r"2\s*W|two\s*wheel", re.I)),
-        ),
-        (
-            "tile text",
-            page.locator("a, button, [role='button'], div[role='button']").filter(
-                has_text=re.compile(r"^\s*2\s*W\s*$", re.I)
-            ),
-        ),
+    _scan2w_js = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 1 && r.height > 1;
+        };
+        const vp = document.getElementById('viewport');
+        if (vp) {
+            const aVp = vp.querySelector('a#ctl00_TWO');
+            if (aVp) {
+                if (vis(aVp)) { try { aVp.scrollIntoView({ block: 'center' }); aVp.click(); } catch (e) { return 'err'; } return 'viewport'; }
+                const innerP = aVp.querySelector('div.custom-btn-hover') || aVp.querySelector('div') || aVp.querySelector('img');
+                if (innerP && vis(innerP)) { try { innerP.scrollIntoView({ block: 'center' }); innerP.click(); } catch (e) { return 'e3'; } return 'vpinner'; }
+            }
+        }
+        const a = document.getElementById('ctl00_TWO');
+        if (a && a.tagName === 'A') {
+            if (vis(a)) {
+                try { a.scrollIntoView({ block: 'center' }); a.click(); } catch (e) { return 'err'; } return 'id';
+            }
+            const inner = a.querySelector('div.custom-btn-hover') || a.querySelector('div') || a.querySelector('img');
+            if (inner && vis(inner)) {
+                try { inner.scrollIntoView({ block: 'center' }); inner.click(); } catch (e) { return 'e3'; } return 'inner';
+            }
+        }
+        const m = document.getElementById('ctl00_w2_menu');
+        if (m) {
+            const c = m.querySelector('a#ctl00_TWO, a[href*="_doPostBack"], a[href*="doPostBack"]');
+            if (c && vis(c)) { try { c.scrollIntoView({ block: 'center' }); c.click(); } catch (e) { return 'e2'; } return 'li'; }
+        }
+        return '';
+    }"""
+
+    def _2w_sweep_all_contexts() -> bool:
+        """``iframe`` filter first (``src`` may omit ``2w``); then every :class:`Frame` + JS. Returns **True** if 2W fired."""
+        if (INSURANCE_NAV_IFRAME_SELECTOR or "").strip():
+            try:
+                fl = page.frame_locator(INSURANCE_NAV_IFRAME_SELECTOR)
+                for sel, tag in (
+                    ("#viewport a#ctl00_TWO", "ifl_viewport_2w"),
+                    ("#viewport #lsec a#ctl00_TWO", "ifl_vp_lsec"),
+                    ("#lsec a#ctl00_TWO", "ifl_lsec_2w"),
+                    ("a#ctl00_TWO", "ifl_a#ctl00_TWO"),
+                    ("#ctl00_TWO", "ifl_#ctl00"),
+                    ("a#ctl00_TWO .custom-btn-hover", "ifl_custom_btn"),
+                    ("#ctl00_w2_menu a", "ifl_menu_a"),
+                    ("img[alt=\"2W Icon\"]", "ifl_img"),
+                ):
+                    if _try_click_on_loc(fl.locator(sel), f"IFRAME:{tag}"):
+                        _misp_wait_landing_after_product_nav(
+                            page, step="after_2w", timeout_ms=timeout_ms
+                        )
+                        return True
+            except Exception as exc:
+                logger.debug("Hero Insurance: 2W INSURANCE_NAV_IFRAME_SELECTOR: %s", exc)
+        # Hub may be inside **any** top ``iframe`` (``MainIndex``); ``src*=\"2w\"`` can miss relative URLs.
+        try:
+            n_if = min(int(page.locator("iframe").count()), 32)
+        except Exception:
+            n_if = 0
+        for i in range(n_if):
+            cfr = None
+            try:
+                hnd = page.locator("iframe").nth(i).element_handle(
+                    timeout=min(2_500, max(800, wto))
+                )
+                cfr = hnd.content_frame() if hnd else None
+            except Exception:
+                cfr = None
+            if cfr is None:
+                continue
+            try:
+                if cfr.is_detached():
+                    continue
+            except Exception:
+                pass
+            try:
+                if _try_on_root(cfr):
+                    _misp_wait_landing_after_product_nav(
+                        page, step="after_2w", timeout_ms=timeout_ms
+                    )
+                    return True
+            except Exception as exc:
+                logger.debug("Hero Insurance: 2W top iframe [%s] sweep: %s", i, exc)
+        for fr in list(page.frames):
+            try:
+                if _try_on_root(fr):
+                    _misp_wait_landing_after_product_nav(
+                        page, step="after_2w", timeout_ms=timeout_ms
+                    )
+                    return True
+            except Exception as exc:
+                logger.debug("Hero Insurance: 2W frame sweep: %s", exc)
+        for fr in list(page.frames):
+            try:
+                hit = fr.evaluate(_scan2w_js)
+            except Exception:
+                hit = ""
+            if hit and hit not in ("err", "e2"):
+                logger.info("Hero Insurance: clicked 2W control (evaluate_in_frame %s).", hit)
+                _misp_wait_landing_after_product_nav(
+                    page, step="after_2w", timeout_ms=timeout_ms
+                )
+                return True
+        return False
+
+    if _2w_sweep_all_contexts():
+        return
+    logger.info(
+        "Hero Insurance: 2W not found on first pass — 1.2s settle + short hub wait + re-sweep."
     )
-    for label, loc in try_order:
-        if _try_click(loc, label):
-            _misp_wait_landing_after_product_nav(page, step="after_2w", timeout_ms=timeout_ms)
-            return
+    _t(page, 1_200)
+    _wait_misp_2w_hub_ready(page, timeout_ms=6_000)
+    if _2w_sweep_all_contexts():
+        return
 
-    # Last resort: scan visible clickable elements for 2W / two-wheeler copy (Angular/React tiles).
-    try:
-        hit = page.evaluate(
-            """() => {
-            const vis = (el) => {
-                if (!el) return false;
-                const st = window.getComputedStyle(el);
-                if (st.display === 'none' || st.visibility === 'hidden' || parseFloat(st.opacity) === 0) return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 2 && r.height > 2;
-            };
-            const byId = document.querySelector('[aid="ctl00_TWO"]') || document.getElementById('ctl00_TWO');
-            if (byId && vis(byId)) {
-                try { byId.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                byId.click();
-                return 'aid-ctl00_TWO';
-            }
-            const cand = Array.from(
-                document.querySelectorAll('img[alt], [aria-label], button, a, [role="button"]')
-            );
-            for (const el of cand) {
-                if (!vis(el)) continue;
-                const alt = (el.getAttribute('alt') || '').trim();
-                const ar = (el.getAttribute('aria-label') || '').trim();
-                const tx = (el.textContent || '').trim();
-                const blob = (alt + ' ' + ar + ' ' + tx).toLowerCase();
-                if (/\\b2\\s*w\\b/.test(blob) || /two[-\\s]*wheel/i.test(blob)) {
-                    try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
-                    el.click();
-                    return 'ok';
-                }
-            }
-            return '';
-        }"""
-        )
-        if hit:
-            logger.info("Hero Insurance: clicked 2W control (DOM scan).")
-            _misp_wait_landing_after_product_nav(page, step="after_2w", timeout_ms=timeout_ms)
-            return
-    except Exception as exc:
-        logger.warning("Hero Insurance: 2W DOM scan failed: %s", exc)
-
+    _append_hero_misp_frame_dump(
+        page,
+        reason="2W (two-wheeler) control not found/clickable — frame dump for selector tuning",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     raise TimeoutError("2W (two-wheeler) entry control not found or not clickable.")
 
 
@@ -1683,7 +2018,14 @@ def _expand_misp_policy_issuance_nav_if_collapsed(page, *, timeout_ms: int) -> N
     _t(page, min(50, INSURANCE_CLICK_SETTLE_MS + 15))
 
 
-def _click_new_policy(page, *, timeout_ms: int) -> None:
+def _click_new_policy(
+    page,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> None:
+    _ = (ocr_output_dir, subfolder)  # optional: reserved for future frame-dump on miss
     _expand_misp_policy_issuance_nav_if_collapsed(page, timeout_ms=timeout_ms)
     loc = page.get_by_text("New Policy", exact=True)
     loc.first.wait_for(state="visible", timeout=timeout_ms)
@@ -1882,6 +2224,76 @@ def _norm_option_label(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
+def _misp_ddl_option_text_is_placeholder(t: str) -> bool:
+    """True for MISP list placeholders (``--Select--``); false for real vehicle model labels."""
+    s = (t or "").strip()
+    if not s:
+        return True
+    low = s.lower()
+    if low.startswith("--select") or low.startswith("select--"):
+        return True
+    if re.match(r"^[\s\-_]*--\s*select", low, re.I):
+        return True
+    if re.fullmatch(r"select[\s-]*--?", low) or re.fullmatch(r"[\s\-_]*select[\s\-_]*", low):
+        return True
+    return False
+
+
+def _norm_misp_model_key(s: str) -> str:
+    """Loosen staging/OCR model strings vs MISP list labels (punctuation, ``+`` variants, brackets)."""
+    t = normalize_for_fuzzy_match(s)
+    t = re.sub(r"[\[(].*$", "", t)
+    t = t.replace("+", " plus ")
+    t = re.sub(r"[^a-z0-9]+", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _pick_misp_model_option_label(
+    query: str,
+    candidates: list[str],
+) -> str | None:
+    """
+    Match **Model Name** query to a ``<option>`` label: substring containment, token overlap, then
+    :func:`fuzzy_best_option_label` with a **low** floor (portal wording often differs from DB / OCR).
+    """
+    if not (query or "").strip() or not candidates:
+        return None
+    nq = _norm_misp_model_key(query)
+    scored: list[tuple[float, str]] = []
+    for c in candidates:
+        t = (c or "").strip()
+        if not t or _misp_ddl_option_text_is_placeholder(t):
+            continue
+        nc = _norm_misp_model_key(t)
+        if not nc:
+            continue
+        if len(nq) >= 3 and nq in nc:
+            sc = 0.99
+        elif len(nc) >= 3 and nc in nq:
+            sc = 0.92
+        else:
+            qt = [w for w in nq.split() if len(w) >= 2]
+            if qt:
+                hit = sum(1 for w in qt if w in nc)
+                sc = 0.5 * (hit / max(len(qt), 1)) + 0.5 * difflib.SequenceMatcher(
+                    None, nq, nc
+                ).ratio()
+            else:
+                sc = difflib.SequenceMatcher(None, nq, nc).ratio()
+        scored.append((sc, t))
+    if not scored:
+        return fuzzy_best_option_label(
+            query, candidates, min_score=MISP_PROPOSAL_MODEL_FUZZY_FLOOR
+        )
+    scored.sort(key=lambda x: (-x[0], -len(x[1])))
+    best_s, best_l = scored[0]
+    if best_s >= 0.38:
+        return best_l
+    return fuzzy_best_option_label(
+        query, candidates, min_score=MISP_PROPOSAL_MODEL_FUZZY_FLOOR
+    )
+
+
 def _select_option_fuzzy_in_select(
     page,
     select_locator,
@@ -1889,8 +2301,11 @@ def _select_option_fuzzy_in_select(
     *,
     timeout_ms: int,
     fuzzy_min_score: float = 0.42,
+    option_match: str = "default",
+    match_out: dict[str, Any] | None = None,
 ) -> bool:
-    if not (query or "").strip():
+    q_in = (query or "").strip()
+    if not q_in and option_match != "model":
         return False
     try:
         sel = select_locator.first
@@ -1930,9 +2345,7 @@ def _select_option_fuzzy_in_select(
                     v = ""
                 rows.append({"text": t, "value": str(v), "index": i})
         candidates = [
-            r["text"]
-            for r in rows
-            if r["text"] and not r["text"].lower().startswith("--select")
+            r["text"] for r in rows if r["text"] and not _misp_ddl_option_text_is_placeholder(r["text"])
         ]
         if not candidates:
             return False
@@ -1961,11 +2374,29 @@ def _select_option_fuzzy_in_select(
         if chosen_early is not None:
             pick = (chosen_early.get("text") or "").strip() or None
             if not pick:
-                pick = fuzzy_best_option_label(query, candidates, min_score=fuzzy_min_score)
+                if option_match == "model":
+                    pick = _pick_misp_model_option_label(q_strip, candidates)
+                if not pick:
+                    pick = fuzzy_best_option_label(
+                        q_strip, candidates, min_score=fuzzy_min_score
+                    )
         else:
-            pick = fuzzy_best_option_label(query, candidates, min_score=fuzzy_min_score)
+            if option_match == "model":
+                pick = _pick_misp_model_option_label(q_strip, candidates)
+            else:
+                pick = None
+            if not pick:
+                pick = fuzzy_best_option_label(
+                    q_strip, candidates, min_score=fuzzy_min_score
+                )
+        if not pick and option_match == "model" and candidates:
+            pick = candidates[0]
+            if match_out is not None:
+                match_out["model_defaulted_to_first"] = True
         if not pick:
             return False
+        if option_match == "model" and match_out is not None and not q_strip:
+            match_out["model_defaulted_to_first"] = True
         pick_n = _norm_option_label(pick)
         chosen: dict[str, Any] | None = chosen_early
         if chosen is None or _norm_option_label((chosen.get("text") or "")) != pick_n:
@@ -2001,7 +2432,7 @@ def _select_option_fuzzy_in_select(
                 logger.info(
                     "Hero Insurance: selected option %r (fuzzy from %r, strategy=%s)",
                     chosen["text"],
-                    query[:60],
+                    (q_in or q_strip)[:60],
                     strat_name,
                 )
                 return True
@@ -2017,7 +2448,11 @@ def _select_option_fuzzy_in_select(
                 sel.select_option(label=chosen["text"], timeout=to)
             else:
                 sel.select_option(label=chosen["text"], timeout=to, force=True)
-            logger.info("Hero Insurance: selected option %r (fuzzy from %r)", chosen["text"], query[:60])
+            logger.info(
+                "Hero Insurance: selected option %r (fuzzy from %r)",
+                chosen["text"],
+                (q_in or q_strip)[:60],
+            )
             return True
         except Exception as exc_final:
             last_exc = exc_final
@@ -2997,17 +3432,44 @@ def _kyc_meta_match_blob(m: dict[str, Any]) -> str:
     return " ".join(p for p in parts if p).lower()
 
 
+_KYC_DECOY_FILE_INPUT_IDS = {"choose-file"}
+_KYC_DECOY_FILE_INPUT_NAMES = {"uploadDocument"}
+
+
+def _kyc_filter_decoy_file_inputs(meta: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove known decoy/overlay ``input[type=file]`` entries (e.g. custom styled
+    buttons like ``id="choose-file"``) while preserving original DOM ``index`` values
+    so ``Locator.nth()`` still works."""
+    return [
+        m for m in meta
+        if str(m.get("id") or "") not in _KYC_DECOY_FILE_INPUT_IDS
+        and str(m.get("name") or "") not in _KYC_DECOY_FILE_INPUT_NAMES
+    ]
+
+
 def _kyc_resolve_upload_nth_order(meta: list[dict[str, Any]]) -> tuple[list[int], str]:
     """
-    Map upload slots **front → rear → customer photo** to ``Locator.nth`` indices in document order.
+    Map upload slots **front -> rear -> customer photo** to ``Locator.nth`` indices
+    in document order.
 
-    Uses label/id/name text from :func:`_kyc_scrape_file_inputs_metadata`. Falls back to ``[0,1,2]``.
+    Uses label/id/name text from :func:`_kyc_scrape_file_inputs_metadata`.  Tries three
+    resolution layers:
+
+    1. **Title / id only** -- uses just the ``title`` and ``id`` fields which tend to be
+       unique per input, avoiding the shared-``bestLabel`` problem where all inputs
+       inherit the same parent-section text.
+    2. **Full blob** -- concatenates all scraped fields (original behaviour).
+    3. **DOM-order fallback** -- first three *non-decoy* inputs.
+
+    Decoy inputs (``id="choose-file"`` / ``name="uploadDocument"``) are filtered before
+    matching but their DOM indices are preserved for ``Locator.nth()``.
     """
-    n = len(meta)
+    filtered = _kyc_filter_decoy_file_inputs(meta)
+    n = len(filtered)
     if n == 0:
         return [], "empty"
     if n < 3:
-        return [int(meta[i].get("index", i)) for i in range(n)], "dom_order_partial"
+        return [int(filtered[i].get("index", i)) for i in range(n)], "dom_order_partial"
 
     re_front = re.compile(
         r"aadhaar\s*front|front\s*image|aadhar\s*front|आधार.*front|front\s*side",
@@ -3018,30 +3480,56 @@ def _kyc_resolve_upload_nth_order(meta: list[dict[str, Any]]) -> tuple[list[int]
         re.I,
     )
     re_photo = re.compile(
-        r"customer\s*photo|photograph|customer\s*picture|customer\s*pic|photo\s*image",
+        r"customer\s*photo|photograph|customer\s*picture|customer\s*pic"
+        r"|photo\s*image|selfie|self\s*image",
         re.I,
     )
 
-    def find_idx(pat: re.Pattern) -> int | None:
-        for m in meta:
+    # --- Layer 1: match by title + id only (avoids shared bestLabel pollution) ---
+    def _title_id_blob(m: dict[str, Any]) -> str:
+        parts = [str(m.get("id") or ""), str(m.get("title") or "")]
+        return " ".join(p for p in parts if p).lower()
+
+    def find_idx_narrow(pat: re.Pattern) -> int | None:
+        for m in filtered:
+            if pat.search(_title_id_blob(m)):
+                return int(m.get("index", 0))
+        return None
+
+    fi = find_idx_narrow(re_front)
+    ri = find_idx_narrow(re_rear)
+    pi = find_idx_narrow(re_photo)
+    if fi is not None and ri is not None and pi is not None and len({fi, ri, pi}) == 3:
+        return [fi, ri, pi], "title_three_distinct"
+
+    filt_idx = [int(m.get("index", i)) for i, m in enumerate(filtered)]
+    if fi is not None and ri is not None:
+        used = {fi, ri}
+        rest = [i for i in filt_idx if i not in used]
+        if len(rest) == 1:
+            return [fi, ri, rest[0]], "title_front_rear_infer_photo"
+
+    # --- Layer 2: full blob (id + name + ariaLabel + title + bestLabel) ---
+    def find_idx_blob(pat: re.Pattern) -> int | None:
+        for m in filtered:
             if pat.search(_kyc_meta_match_blob(m)):
                 return int(m.get("index", 0))
         return None
 
-    fi = find_idx(re_front)
-    ri = find_idx(re_rear)
-    pi = find_idx(re_photo)
+    fi = find_idx_blob(re_front)
+    ri = find_idx_blob(re_rear)
+    pi = find_idx_blob(re_photo)
     if fi is not None and ri is not None and pi is not None and len({fi, ri, pi}) == 3:
         return [fi, ri, pi], "label_three_distinct"
 
-    all_idx = [int(m.get("index", i)) for i, m in enumerate(meta)]
     if fi is not None and ri is not None:
         used = {fi, ri}
-        rest = [i for i in all_idx if i not in used]
+        rest = [i for i in filt_idx if i not in used]
         if len(rest) == 1:
             return [fi, ri, rest[0]], "label_front_rear_infer_photo"
 
-    return [0, 1, 2], "dom_order_fallback"
+    # --- Layer 3: DOM order fallback on filtered (non-decoy) inputs ---
+    return filt_idx[:3], "dom_order_fallback"
 
 
 def _kyc_note_file_inputs_scrape(
@@ -3177,14 +3665,15 @@ def _kyc_set_one_file_input_chooser_then_direct(
 def _kyc_js_click_primary_cta_in_document(root) -> bool:
     """
     Last-resort: click the first visible submit/button/link whose label/value looks like KYC CTA.
-    MISP often uses **KYC Verification** before redirect and **Proceed** after; values live on ``<input>``.
+    MISP often uses **KYC Verification** before redirect and **Proceed** / **Next** after uploads;
+    values live on ``<input>``.
     """
     try:
         return bool(
             root.evaluate(
                 """() => {
-                  const re = /^(\\s*)(Proceed|Submit|Continue|Verify|KYC\\s*Verification)(\\s*)$/i;
-                  const valRe = /Proceed|Verification|Submit|Continue|Verify|KYC/i;
+                  const re = /^(\\s*)(Proceed|Submit|Continue|Verify|Next|OK|Save|KYC\\s*Verification)(\\s*)$/i;
+                  const valRe = /Proceed|Verification|Submit|Continue|Verify|KYC|Next|Save/i;
                   const nodes = Array.from(
                     document.querySelectorAll(
                       'input[type="submit"], input[type="button"], button, a[href], [role="button"]'
@@ -3214,6 +3703,36 @@ def _kyc_js_click_primary_cta_in_document(root) -> bool:
         return False
 
 
+def _kyc_roots_for_post_upload_cta(page, kyc_fr) -> list:
+    """CTA after uploads is not always in the same frame as the file inputs; scan main + all frames."""
+    out: list = []
+    seen: set[int] = set()
+    for r in (kyc_fr, page, getattr(page, "main_frame", None)):
+        if r is None:
+            continue
+        try:
+            i = id(r)
+        except Exception:
+            continue
+        if i in seen:
+            continue
+        seen.add(i)
+        out.append(r)
+    try:
+        for fr in page.frames:
+            try:
+                i = id(fr)
+            except Exception:
+                continue
+            if i in seen:
+                continue
+            seen.add(i)
+            out.append(fr)
+    except Exception:
+        pass
+    return out
+
+
 def _kyc_click_proceed_submit_after_kyc_upload(
     page,
     kyc_fr,
@@ -3221,8 +3740,9 @@ def _kyc_click_proceed_submit_after_kyc_upload(
     timeout_ms: int,
 ) -> str | None:
     """
-    Click KYC primary CTA after uploads (KYC frame first, then host page). MISP labels vary:
-    **Proceed**, **KYC Verification**, **Submit**, **Continue**, **Verify**; also ``<input>`` ``value=``.
+    Click KYC primary CTA after uploads. MISP labels vary: **Proceed**, **Next**, **KYC Verification**,
+    **Submit**, **Continue**, **Verify**; also ``<input>`` ``value=``. Scans **all** frames — CTA is
+    often outside the KYC file iframe.
     """
     to = min(int(timeout_ms), 45_000)
     name_patterns = (
@@ -3231,8 +3751,12 @@ def _kyc_click_proceed_submit_after_kyc_upload(
         re.compile(r"^\s*Submit\s*$", re.I),
         re.compile(r"^\s*Continue\s*$", re.I),
         re.compile(r"^\s*Verify\s*$", re.I),
+        re.compile(r"^\s*Next\s*$", re.I),
+        re.compile(r"^\s*OK\s*$", re.I),
+        re.compile(r"^\s*Save(\s+and\s+Continue)?\s*$", re.I),
     )
-    for root in (kyc_fr, page):
+    roots = _kyc_roots_for_post_upload_cta(page, kyc_fr)
+    for root in roots:
         for pat in name_patterns:
             try:
                 b = root.get_by_role("button", name=pat)
@@ -3245,14 +3769,21 @@ def _kyc_click_proceed_submit_after_kyc_upload(
                     return None
             except Exception:
                 continue
+    for root in roots:
         try:
-            ln = root.get_by_role("link", name=re.compile(r"Proceed|Verification|Submit|Continue", re.I))
+            ln = root.get_by_role(
+                "link",
+                name=re.compile(
+                    r"Proceed|Verification|Submit|Continue|Next|Save(\s+and\s+Continue)?", re.I
+                ),
+            )
             if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
                 ln.first.click(timeout=to)
                 logger.info("Hero Insurance: post-KYC-upload clicked link CTA.")
                 return None
         except Exception:
             pass
+    for root in roots:
         try:
             inp = root.locator(
                 'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i], '
@@ -3260,7 +3791,9 @@ def _kyc_click_proceed_submit_after_kyc_upload(
                 'input[type="submit"][value*="KYC" i], input[type="button"][value*="KYC" i], '
                 'input[type="submit"][value*="Submit" i], input[type="button"][value*="Submit" i], '
                 'input[type="submit"][value*="Continue" i], input[type="button"][value*="Continue" i], '
-                'input[type="submit"][value*="Verify" i], input[type="button"][value*="Verify" i]'
+                'input[type="submit"][value*="Verify" i], input[type="button"][value*="Verify" i], '
+                'input[type="submit"][value*="Next" i], input[type="button"][value*="Next" i], '
+                'input[type="submit"][value*="Save" i], input[type="button"][value*="Save" i]'
             )
             if inp.count() > 0 and inp.first.is_visible(timeout=2_000):
                 inp.first.click(timeout=to)
@@ -3268,7 +3801,7 @@ def _kyc_click_proceed_submit_after_kyc_upload(
                 return None
         except Exception:
             pass
-    for root in (kyc_fr, page):
+    for root in roots:
         if _kyc_js_click_primary_cta_in_document(root):
             logger.info("Hero Insurance: post-KYC-upload clicked CTA via JS scan.")
             return None
@@ -3593,7 +4126,9 @@ def _kyc_insurer_label_for_misp(values: dict) -> str:
     prefer = clean_text(values.get("prefer_insurer"))
     merged = clean_text(values.get("insurer_merged_before_prefer") or values.get("insurer"))
     current = clean_text(values.get("insurer"))
-    if prefer and merged and insurer_prefer_matches(merged, prefer, min_ratio=0.20):
+    if prefer and merged and insurer_prefer_matches(
+        merged, prefer, min_ratio=INSURER_PREFER_FUZZY_MIN_RATIO
+    ):
         return prefer
     return current
 
@@ -3830,7 +4365,7 @@ def _fill_kyc_ekyc_keyboard_sop(
     type_prefer_skip_dom = bool(
         prefer_v
         and merged_v
-        and insurer_prefer_matches(merged_v, prefer_v, min_ratio=0.20)
+        and insurer_prefer_matches(merged_v, prefer_v, min_ratio=INSURER_PREFER_FUZZY_MIN_RATIO)
     )
 
     cap = min(int(timeout_ms), 120_000)
@@ -4443,14 +4978,53 @@ def _kyc_proceed_or_upload(
             "Uploaded scans" if use_local else "placeholder PNG",
         )
 
+    kyc_wmax_ms = 2_000  # post-upload / autonav / interstitial: cap at 2s
+    try:
+        page.wait_for_timeout(
+            min(MISP_KYC_POST_UPLOAD_STABLE_MS, int(timeout_ms), kyc_wmax_ms)
+        )
+    except Exception:
+        pass
+    poll_ms = min(MISP_KYC_TO_VIN_URL_POLL_MS, int(timeout_ms), kyc_wmax_ms)
+    if _kyc_post_upload_wait_for_mispdms_url_autonav(
+        page,
+        max_ms=poll_ms,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    ):
+        _wait_load_optional(page, kyc_wmax_ms)
+        _t(page, 400)
+        return None
     _t(page, 400)
     _kyc_ensure_consent_checked_before_kyc_cta(page)
     proceed_err = _kyc_click_proceed_submit_after_kyc_upload(
         page, kyc_fr, timeout_ms=timeout_ms
     )
     if proceed_err:
+        if _kyc_post_upload_wait_for_mispdms_url_autonav(
+            page,
+            max_ms=min(int(timeout_ms), kyc_wmax_ms),
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        ):
+            append_playwright_insurance_line_or_dealer_fallback(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "KYC: reached MispDms.aspx (VIN) after CTA error path — auto-nav or delayed postback.",
+            )
+            _wait_load_optional(page, kyc_wmax_ms)
+            _t(page, 400)
+            return None
         return proceed_err
     _wait_load_optional(page, min(25_000, timeout_ms * 4))
+    if not _kyc_url_is_mispdms_vin(page.url or ""):
+        _kyc_post_upload_wait_for_mispdms_url_autonav(
+            page,
+            max_ms=min(int(timeout_ms), kyc_wmax_ms),
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
     _t(page, 400)
     return None
 
@@ -4873,15 +5447,22 @@ def _proposal_step_select_fuzzy(
 ) -> str | None:
     """Set ``<select>`` by optional CPH1 id, then label + fuzzy option; read back selected text."""
     q = (query or "").strip()
-    if not q:
+    if not q and step_id != "model_name":
         return None
     last = "no select control matched labels"
+    cph1_opt_match = "default"
+    cph1_fuzzy_floor = float(KYC_INSURER_FUZZY_MIN_SCORE)
+    if cph1_id_suffix and cph1_id_suffix in HERO_MISP_MODEL_NAME_CPH1_SUFFIXES:
+        cph1_opt_match = "model"
+        cph1_fuzzy_floor = MISP_PROPOSAL_MODEL_FUZZY_FLOOR
     if cph1_id_suffix:
         _suffixes: tuple[str, ...] = (cph1_id_suffix,)
         if cph1_id_suffix == "ddlNomineeRelation":
             _suffixes = HERO_MISP_NOMINEE_RELATION_CPH1_SUFFIXES
         elif cph1_id_suffix == "ddlAgreementTypeWithFinancer":
             _suffixes = HERO_MISP_AGREEMENT_TYPE_FINANCER_CPH1_SUFFIXES
+        elif cph1_id_suffix in HERO_MISP_MODEL_NAME_CPH1_SUFFIXES:
+            _suffixes = HERO_MISP_MODEL_NAME_CPH1_SUFFIXES
         for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
             for _suf in _suffixes:
                 try:
@@ -5030,17 +5611,31 @@ def _proposal_step_select_fuzzy(
                                 except Exception:
                                     pass
                             break
+                    cph1_match_out: dict[str, Any] = {}
                     if not _select_option_fuzzy_in_select(
                         page,
                         loc,
                         q,
                         timeout_ms=timeout_ms,
-                        fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
+                        fuzzy_min_score=cph1_fuzzy_floor,
+                        option_match=cph1_opt_match,
+                        match_out=cph1_match_out,
                     ):
                         last = f"fuzzy select failed for id suffix {_suf!r}"
                         continue
                     snap = _read_locator_value_snapshot(loc)
                     st = (snap.get("selected_text") or "").strip()
+                    if step_id == "model_name" and cph1_match_out.get(
+                        "model_defaulted_to_first"
+                    ):
+                        _proposal_log(
+                            ocr_output_dir,
+                            subfolder,
+                            step_id,
+                            f"select ok id_suffix={_suf!r} readback={st!r} (first list option; "
+                            f"input did not match a specific option or input was empty)",
+                        )
+                        return None
                     if not _proposal_expected_matches_readback(q, st):
                         return (
                             f"{step_id}: readback mismatch expected={q!r} selected_text={st!r} "
@@ -5068,17 +5663,35 @@ def _proposal_step_select_fuzzy(
         except Exception:
             continue
         loc = el
+        _lp_match = "model" if step_id == "model_name" else "default"
+        _lp_fuzzy = (
+            MISP_PROPOSAL_MODEL_FUZZY_FLOOR
+            if _lp_match == "model"
+            else float(KYC_INSURER_FUZZY_MIN_SCORE)
+        )
+        lp_match_out: dict[str, Any] = {}
         if not _select_option_fuzzy_in_select(
             page,
             loc,
             q,
             timeout_ms=timeout_ms,
-            fuzzy_min_score=KYC_INSURER_FUZZY_MIN_SCORE,
+            fuzzy_min_score=_lp_fuzzy,
+            option_match=_lp_match,
+            match_out=lp_match_out,
         ):
             last = f"fuzzy select failed for label pattern {lp!r}"
             continue
         snap = _read_locator_value_snapshot(loc)
         st = (snap.get("selected_text") or "").strip()
+        if step_id == "model_name" and lp_match_out.get("model_defaulted_to_first"):
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                f"select ok label_pattern={lp[:48]!r} readback={st!r} (first list option; "
+                f"input did not match a specific option or input was empty)",
+            )
+            return None
         if not _proposal_expected_matches_readback(q, st):
             return (
                 f"{step_id}: readback mismatch expected={q!r} selected_text={st!r} "
@@ -5091,6 +5704,22 @@ def _proposal_step_select_fuzzy(
             f"select ok label_pattern={lp[:48]!r} readback={st!r}",
         )
         return None
+    wdump = _write_hero_misp_frame_dump_file(
+        page,
+        reason=f"proposal_select_fuzzy step={step_id!s} {last!s}"[:200],
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    if wdump and ocr_output_dir and (subfolder or "").strip():
+        try:
+            append_playwright_insurance_line_or_dealer_fallback(
+                ocr_output_dir,
+                (subfolder or "").strip(),
+                "NOTE",
+                f"insurance frame dump (separate file): {wdump} — proposal_select_fuzzy: {last!s}"[:8_000],
+            )
+        except Exception:
+            pass
     return f"{step_id}: {last}"
 
 
@@ -5632,7 +6261,7 @@ def _proposal_step_nominee_gender_radio(
     return f"{step_id}: nominee gender radio not found ({last_err or 'no candidate'})"
 
 
-# CPA bottom add-on: portal label varies (NIC / CPI / Hero CPI / …); match by row text; state from ``form_insurance_view.hero_cpi``.
+# CPA bottom add-on: portal label varies (NIC / CPI / Hero CPI / …); match by row text. ``hero_cpi`` **N** runs after CPA Tenure→0 in ``_hero_misp_fill_proposal_and_review``; **Y** skips tenure change then checks this row.
 # Inline ``(?i)``/``(?m)`` mid-pattern breaks ``re.compile(..., re.I)`` — use flags on ``compile`` only (**LLD** **6.212**).
 HERO_MISP_HERO_CPI_ADDON_CHECKBOX_PATTERN = (
     r"^\s*(NIC|CPI)\s*$|\b(NIC|CPI)\b|NIC\s*/\s*CPI|CPI\s*/\s*NIC|"
@@ -5649,7 +6278,7 @@ def _proposal_step_hero_cpi_addon_by_dealer_flag(
     *,
     timeout_ms: int,
 ) -> str | None:
-    """``hero_cpi`` **Y** = check matching add-on row; **N** = uncheck if present."""
+    """``hero_cpi`` **Y** = check matching add-on row; **N** = uncheck if present (after CPA Tenure 0 in proposal fill)."""
     flag = normalize_hero_cpi_flag(values.get("hero_cpi"))
     _proposal_log(
         ocr_output_dir,
@@ -6189,6 +6818,83 @@ def _hero_misp_kyc_please_wait_overlay_visible(page) -> bool:
         return False
 
 
+def _hero_misp_ekyc_kyc_to_vin_interstitial_visible(page) -> bool:
+    """
+    eKyc often **auto-advances**; before ``MispDms.aspx`` the same ``ekycpage`` can show a ~5s or **Please wait**
+    / processing strip. Complements the locator-based check with a small body text scan.
+    """
+    if _hero_misp_kyc_please_wait_overlay_visible(page):
+        return True
+    try:
+        return bool(
+            page.evaluate(
+                r"""() => {
+          const t = (document.body && document.body.innerText) ? String(document.body.innerText) : "";
+          const s = t.length > 12000 ? t.slice(0, 12000) : t;
+          if (/please\s*wait|processing\W|redirecting|do\s*not\s*close|one\s*moment|loading/i.test(s)) return true;
+          if (/\b\d{1,2}\s*second/i.test(s) && /wait|redirect|proceed|loading/i.test(s)) return true;
+          return false;
+        }""",
+            )
+        )
+    except Exception:
+        return False
+
+
+def _kyc_url_is_mispdms_vin(u: str) -> bool:
+    return "mispdms.aspx" in (u or "").lower()
+
+
+def _kyc_post_upload_wait_for_mispdms_url_autonav(
+    page,
+    *,
+    max_ms: int,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> bool:
+    """
+    After the last eKYC file, MISP may post to VIN without a **Proceed/Next** click. Poll the top **URL** while
+    **Please wait** / 5s interstitial (often same ekycpage) runs, until ``MispDms.aspx``.
+    """
+    if max_ms < 400:
+        return _kyc_url_is_mispdms_vin(page.url or "")
+    t0 = time.monotonic()
+    interstitial_logged = False
+    while (time.monotonic() - t0) * 1000 < max_ms:
+        u = page.url or ""
+        if _kyc_url_is_mispdms_vin(u):
+            append_playwright_insurance_line_or_dealer_fallback(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                f"KYC post-upload: top URL is MispDms.aspx (VIN) — auto-advance; safe={_hero_misp_safe_url_for_insurance_log(u)[:220]}",
+            )
+            return True
+        if _hero_misp_ekyc_kyc_to_vin_interstitial_visible(page) and not interstitial_logged:
+            interstitial_logged = True
+            append_playwright_insurance_line_or_dealer_fallback(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "KYC post-upload: Please-wait / ~5s interstitial visible (same URL often) — "
+                f"polling up to {max_ms}ms for MispDms.aspx.",
+            )
+        try:
+            page.wait_for_timeout(400)
+        except Exception:
+            time.sleep(0.4)
+    u = page.url or ""
+    if _kyc_url_is_mispdms_vin(u):
+        append_playwright_insurance_line_or_dealer_fallback(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            f"KYC post-upload: MispDms on final poll. safe={_hero_misp_safe_url_for_insurance_log(u)[:220]}",
+        )
+        return True
+    return False
+
+
 def _hero_misp_wait_for_mispdms_vin_url_event(
     page,
     *,
@@ -6201,7 +6907,10 @@ def _hero_misp_wait_for_mispdms_vin_url_event(
     Returns **True** when already on or navigated to that URL; **False** on timeout (caller may still poll ``txtFrameNo``
     if the portal uses a different path). No fixed sleep — Playwright waits on navigation / URL change.
     """
-    to = min(max(3_000, int(timeout_ms)), 90_000)
+    base = int(timeout_ms)
+    if _hero_misp_ekyc_kyc_to_vin_interstitial_visible(page):
+        base = base + min(2_000, int(MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS))
+    to = min(max(3_000, base), 90_000)
     try:
         u0 = (page.url or "").lower()
         if "mispdms.aspx" in u0:
@@ -6330,14 +7039,23 @@ def _hero_misp_wait_for_vin_txt_frame_no_attached(
         )
     except Exception:
         pass
-    if _hero_misp_kyc_please_wait_overlay_visible(page):
+    if _hero_misp_ekyc_kyc_to_vin_interstitial_visible(page):
         _hero_misp_log_vin_transition_line(
             page,
-            phase="kyc_please_wait_overlay_visible",
+            phase="kyc_please_wait_or_5s_interstitial_visible",
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
             classification="kyc",
         )
+        try:
+            append_playwright_insurance_line_or_dealer_fallback(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "VIN step: Please-wait / 5s-style interstitial — MispDms wait budget may include extra ms.",
+            )
+        except Exception:
+            pass
 
     url_remain_ms = max(0, int((deadline - time.monotonic()) * 1000))
     url_ok = _hero_misp_wait_for_mispdms_vin_url_event(
@@ -6682,6 +7400,7 @@ def _hero_misp_proposal_form_markers_visible(page, *, timeout_ms: int = 2_000) -
         "ddlRTO",
         "ddlMaritalStatus",
         "ddlModelName",
+        "ddlVehicleModel",
         "txtEmail",
         "chkNilDepreciation",
         "ddlPaymentMode",
@@ -7508,19 +8227,25 @@ def _hero_misp_fill_proposal_and_review(
         return _proposal_fail(ocr_output_dir, subfolder, err)
 
     mname = (values.get("model_name") or "").strip()
-    if mname:
-        err = _proposal_step_select_fuzzy(
-            page,
-            (r"Model\s*Name", r"Model"),
-            mname,
-            "model_name",
-            ocr_output_dir,
-            subfolder,
-            timeout_ms=pt,
-            cph1_id_suffix="ddlModelName",
-        )
-        if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err)
+    err = _proposal_step_select_fuzzy(
+        page,
+        (
+            r"Model\s*Name",
+            r"Name\s*of\s*Model",
+            r"Vehicle\s*Model",
+            r"Variant",
+            r"^Model$",
+            r"Model(?!\s*(No\.?|Number|#))",
+        ),
+        mname,
+        "model_name",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
+        cph1_id_suffix="ddlModelName",
+    )
+    if err:
+        return _proposal_fail(ocr_output_dir, subfolder, err)
 
     # Date of Registration — skipped; left for the operator to fill manually.
     # err = _proposal_step_date_of_registration_today(
@@ -7904,20 +8629,27 @@ def _hero_misp_fill_proposal_and_review(
                 "addon_nd_plus_cover_final_verify: ND Plus Cover could not be kept checked after 3 reassert attempts",
             )
 
-    err = _proposal_step_select_fuzzy(
-        page,
-        (r"CPA\s*Tenure", r"CPA"),
-        "0",
-        "cpa_tenure",
-        ocr_output_dir,
-        subfolder,
-        timeout_ms=pt,
-        cph1_id_suffix="ddlCPATenure",
-    )
-    if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err)
-
-    # No USGI uncheck: CPA Tenure 0 removes that grid row; uncheck caused detached-DOM failures.
+    _hero_cpi_for_cpa = normalize_hero_cpi_flag(values.get("hero_cpi"))
+    if _hero_cpi_for_cpa == "N":
+        err = _proposal_step_select_fuzzy(
+            page,
+            (r"CPA\s*Tenure", r"CPA"),
+            "0",
+            "cpa_tenure",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+            cph1_id_suffix="ddlCPATenure",
+        )
+        if err:
+            return _proposal_fail(ocr_output_dir, subfolder, err)
+    else:
+        _proposal_log(
+            ocr_output_dir,
+            subfolder,
+            "cpa_tenure",
+            "hero_cpi=Y: leaving CPA Tenure unchanged (portal default, typically 1); not setting to 0",
+        )
 
     _t(page, 400)
     err = _proposal_step_hdfc_payment(
@@ -8129,8 +8861,9 @@ def main_process(
     """
     After **pre_process** (KYC → **VIN fill** → **Submit** on real MISP): **I agree** (if shown) → proposal form.
     **Customer/vehicle/nominee/financer** fields come from
-    ``form_insurance_view`` / ``_build_insurance_fill_values``; **email, add-ons, CPA tenure, payment (HDFC),
-    and registration date** use hardcoded defaults for now. **insurance_master** INSERT runs inside proposal fill,
+    ``form_insurance_view`` / ``_build_insurance_fill_values``; **email, add-ons, payment (HDFC),
+    and registration date** use hardcoded defaults; **``hero_cpi``** controls **CPA Tenure** (0 only when **N**)
+    and the bottom **NIC/CPI** add-on (see module docstring). **insurance_master** INSERT runs inside proposal fill,
     before **Proposal Preview**; preview fields are updated after the preview scrape and again after **Issue Policy**
     when applicable.     **Issue Policy** click may be skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``
     is True. **Proposal Preview** / **Proposal Review** is clicked only when ``ENVIRONMENT`` is
@@ -8393,15 +9126,39 @@ def _wait_for_insurance_kyc_after_login(page, insurance_base_url: str) -> str | 
             u_snip,
         )
 
-    try:
-        page.wait_for_function(_insurance_kyc_screen_ready_js(), timeout=INSURANCE_LOGIN_WAIT_MS)
-    except PlaywrightTimeout:
-        return (
-            "Insurance: timed out waiting for the KYC screen after login. "
-            "On the login page, enter User ID and Password and click Login (dummy), or complete sign-in on the real portal "
-            f"so KYC opens — then press Fill Insurance again (wait limit {INSURANCE_LOGIN_WAIT_MS // 1000}s)."
-        )
-    return None
+    # Poll instead of a single long wait_for_function so closing the window/tab reactivates the UI
+    # quickly (see _t: closed-page waits no longer devolve into time.sleep loops).
+    kyc_js = _insurance_kyc_screen_ready_js()
+    poll_ms = 450
+    deadline = time.monotonic() + (float(INSURANCE_LOGIN_WAIT_MS) / 1000.0)
+    while time.monotonic() < deadline:
+        try:
+            if page.is_closed():
+                return (
+                    "The insurance browser window or tab was closed before the KYC screen appeared. "
+                    "Run Generate Insurance again when you are ready."
+                )
+        except Exception:
+            return (
+                "The insurance browser window or tab was closed before the KYC screen appeared. "
+                "Run Generate Insurance again when you are ready."
+            )
+        try:
+            if page.evaluate(kyc_js):
+                return None
+        except Exception as e:
+            msg = str(e).lower()
+            if "closed" in msg or "has been closed" in msg:
+                return (
+                    "The insurance browser window or tab was closed before the KYC screen appeared. "
+                    "Run Generate Insurance again when you are ready."
+                )
+        _t(page, poll_ms)
+    return (
+        "Insurance: timed out waiting for the KYC screen after login. "
+        "On the login page, enter User ID and Password and click Login (dummy), or complete sign-in on the real portal "
+        f"so KYC opens — then press Fill Insurance again (wait limit {INSURANCE_LOGIN_WAIT_MS // 1000}s)."
+    )
 def run_fill_insurance_only(
     insurance_base_url: str,
     *,

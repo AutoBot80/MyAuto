@@ -1,7 +1,7 @@
 # Low Level Design (LLD)
 ## Auto Dealer Management System
 
-**Version:** 1.21  
+**Version:** 1.24  
 **Last Updated:** April 2026
 
 ---
@@ -10,7 +10,7 @@
 
 - **Layout:** `AppLayout` composes `Header` + `Sidebar` + main content slot.
 - **Pages:** `AddSalesPage`, `AiReaderQueuePage`, `BulkLoadsPage`, `RtoPaymentsPendingPage`, `ViewCustomerPage`, `SubdealerChallanPage`, `HomePage`, `PlaceholderPage`.
-- **API:** `api/client.ts` (base URL, `apiFetch`), `api/siteUrls.ts` (DMS/Vahan/Insurance bases from server `.env`), `api/uploads.ts`, `api/aiReaderQueue.ts`, `api/bulkLoads.ts`, `api/fillForms.ts`, `api/addSales.ts` (Create Invoice eligibility; planned: staging helpers per **§2.2a**), `api/submitInfo.ts`, `api/rtoPaymentDetails.ts`, `api/customerSearch.ts`, `api/admin.ts`, `api/subdealerChallan.ts` — microservice-friendly; swap base URL per env.
+- **API:** `api/client.ts` (base URL, `apiFetch`), `api/siteUrls.ts` (DMS/Vahan/Insurance bases from server `.env`), `api/uploads.ts`, `api/aiReaderQueue.ts`, `api/bulkLoads.ts`, `api/fillForms.ts`, `api/addSales.ts` (Create Invoice eligibility; planned: staging helpers per **§2.2a**), `api/submitInfo.ts`, `api/rtoPaymentDetails.ts`, `api/customerSearch.ts`, `api/admin.ts`, `api/subdealerChallan.ts` ( **`parseSubdealerChallanScan`**, multi-page **`parseSubdealerChallanScans`**, **`mergeSubdealerChallanParseResults`**, **`maxChallanBookNumber`**) — microservice-friendly; swap base URL per env.
 - **Hooks:** `useToday`, `useUploadScans`, `useAiReaderQueue` — reusable, testable.
 - **Types:** `types/index.ts` — `Page`, `AddSalesStep`, `AiReaderQueueItem`, `ExtractedVehicleDetails`, `PrintForm20Response`, etc.
 
@@ -29,7 +29,7 @@
 | `RtoPaymentsPendingPage` | List RTO applications; record payment. |
 | `ViewCustomerPage` | Search by mobile/plate; view vehicles, insurance, and the selected vehicle's `form_vahan_view` row. |
 | `HomePage` | Shows the main Saathi tiles and hosts the Admin Saathi reset button on the landing screen. |
-| `SubdealerChallanPage` | **FR-25**: **`POST /subdealer-challan/parse-scan`**, **`/staging`**, **`/process/{challan_batch_id}`**; **`GET /subdealer-challan/staging/recent`** (batch list + **`failed_lines`**), **`retryChallanStagingRow`** / **`retryChallanOrderOnly`**; props **`dealerId`**, **`dmsUrl`**, **`challanFailedCount`**; numeric To Dealer ID; extended timeout on process/retry — **§2.4e**. |
+| `SubdealerChallanPage` | **FR-25**: file input **multiple** (PDF, JPEG, PNG, WebP); chained **`parse-scan`** ( **`parseSubdealerChallanScans`**) + merged result; then **`/staging`**, **`/process/{challan_batch_id}`**; **`GET /subdealer-challan/staging/recent`**, **`retryChallanStagingRow`** / **`retryChallanOrderOnly`**; props **`dealerId`**, **`dmsUrl`**, **`challanFailedCount`**; subdealer **to_dealer**; extended timeout on process/retry — **§2.4e**. |
 | `PlaceholderPage` | Title + message for coming-soon pages. |
 
 ---
@@ -100,7 +100,7 @@ backend/app/
 | GET | `/customer-search/form-vahan` | Get the `form_vahan_view` row for one customer/vehicle pair. |
 | GET | `/vehicle-search/search` | Query: **`chassis`**, **`engine`** (optional; at least one); **`dealer_id`** ignored (backward compat). Wildcard **`*`** → SQL `%`; 4–6 digit-only → suffix **`%digits`**. **No dealer filter:** **`vehicle_master`** ILIKE (engine may match via yard **`EXISTS`**); **`vehicle_inventory`** is **all dealers** (chassis/engine only); challans match **chassis** and **engine** only (ILIKE **OR** alnum-stripped). Internal search may still read **`challan_details_staging`** to discover inventory-only hits; **response does not include staging rows**. Returns **`vehicle_master`**, **`sales_master`** (latest for **`vehicle_id`**; **`billing_date`** dd/mm/yyyy; customer/dealer fields via subqueries on **`customer_master`** / **`dealer_ref`**, **`dealer_name`** fallback from yard inventory when **`sm.dealer_id`** is null; avoids **`SELECT sm.*`+JOIN duplicate column names with **`RealDictCursor`**), **`vehicle_inventory`**, committed **`challans`**. |
 | GET | `/dealers/{dealer_id}` | Get dealer by ID (includes **`prefer_insurer`** from **`dealer_ref`** for Add Sales insurer default). |
-| POST | `/admin/reset-all-data` | Truncate all public base tables except `oem_ref`, `dealer_ref`, `oem_service_schedule`, and `subdealer_discount_master`. |
+| POST | `/admin/reset-all-data` | Truncate all public base tables except `oem_ref`, `dealer_ref`, tables with names **`LIKE '%ref'`** (e.g. **`subdealer_discount_master_ref`**, **`login_ref`**), and `oem_service_schedule`. |
 | GET | `/documents/{subfolder}/list` | List documents in subfolder. |
 | GET | `/documents/{subfolder}/{filename}` | Download document. |
 | POST | `/qr-decode` | Decode Aadhar QR. |
@@ -108,7 +108,7 @@ backend/app/
 | POST | `/textract/extract` | Textract extract. |
 | POST | `/textract/extract-forms` | Textract extract forms. |
 | GET | `/textract/extract-from-queue` | Extract from queue. |
-| POST | `/subdealer-challan/parse-scan` | **Multipart** upload: Daily Delivery Report scan (JPEG/PNG/PDF). Runs **`parse_subdealer_challan`** (Textract FORMS+TABLES); may write **`Raw_OCR.txt`** / **`OCR_To_be_Used.json`** under **`CHALLANS_DIR`**. **`502`** when OCR parse fails. |
+| POST | `/subdealer-challan/parse-scan` | **Multipart** **single file**: Daily Delivery Report scan (JPEG/PNG/PDF). The client may send **several requests in sequence** to cover multiple physical pages, then **merge** client-side (**`mergeSubdealerChallanParseResults`**, **`maxChallanBookNumber`**) before **`/staging`**. Server runs **`parse_subdealer_challan`** (Textract FORMS+TABLES); may write **`Raw_OCR.txt`** / **`OCR_To_be_Used.json`** under **`CHALLANS_DIR`**. **`502`** when OCR parse fails. |
 | POST | `/subdealer-challan/staging` | Body: **`from_dealer_id`**, **`to_dealer_id`**, optional **`challan_date`** / **`challan_book_num`**, **`lines`** (`raw_engine`, `raw_chassis`). Inserts **`challan_master_staging`** (header: **`num_vehicles`**, **`invoice_status`** = Pending, etc.) and **`challan_details_staging`** rows (**Queued**) for each line, UUID **`challan_batch_id`**. **`400`** if no non-empty lines. |
 | POST | `/subdealer-challan/process/{challan_batch_id}` | Body: optional **`dms_base_url`** (else **`DMS_BASE_URL`**), optional **`dealer_id`** (else **`DEALER_ID`**). Long-running **full** batch: per-line **`prepare_vehicle`**, inventory/discount, one **`prepare_order`** with **`hero_dms_flow=add_subdealer_challan`**. Returns **`ok`** / **`error`** in JSON; **`200`** even on automation failure so the client always reads the body (**BR-22**, **§2.4e**). |
 | GET | `/subdealer-challan/staging/recent` | Query: **`dealer_id`** (default **`DEALER_ID`**), **`days`** (default 15). Returns recent **`challan_master_staging`** rows with embedded **`failed_lines`** (Failed **`challan_details_staging`** rows) for the Processed tab. |
@@ -324,9 +324,11 @@ Duplicate-mobile **Title** drilldown and **Contact_Enquiry** jqGrid detection us
 
 **Purpose:** **BR-22** / **FR-25**. Stock transfer from **from_dealer_id** to **to_dealer_id** without retail **Find Contact Enquiry** / **`add_sales_staging`**.
 
+- **OCR (client, multi-page DDR):** **`SubdealerChallanPage`** and **`api/subdealerChallan.ts`**: for each selected file, **`parseSubdealerChallanScan` → `POST /subdealer-challan/parse-scan`**, then **`mergeSubdealerChallanParseResults`** with **`maxChallanBookNumber`** (book # across pages) and line lists in **file order**; the grid de-dupes engine+chassis before one **`/staging`**. If any parse fails, the client surfaces **`OCR failed on "<filename>": …`**. **§1.1** / **BRD** **FR-25** **§6.9**.
 - **Schema:** **`challan_master_staging`** (one row per **`challan_batch_id`**: header, **`num_vehicles`**, **`num_vehicles_prepared`**, **`invoice_complete`**, **`invoice_status`** Pending / Failed / Completed) and **`challan_details_staging`** (per-vehicle **`status`**, **`last_error`**, **`inventory_line_id`**). Repositories: **`challan_master_staging`**, **`challan_details_staging`** (legacy **`challan_staging`** removed from the app path — **Database DDL** §13).
 - **Entry:** **`add_subdealer_challan_service.run_subdealer_challan_batch`** (`phase`: **`full`**, **`prepare_only`**, **`order_only`**) loads **`challan_details_staging`** (joined to master) for **`challan_batch_id`**, runs **`prepare_vehicle`** per **Queued** line when **`phase`** is **`full`** or **`prepare_only`** (same **`prepare_vehicle`** Siebel implementation as **§2.4d** stage 5 — **Auto Vehicle List** find, receipt/dealer PDI as applicable), merges scrape into **`vehicle_inventory_master`** (**`dealer_id`** = **to_dealer_id**). **`master_repo.refresh_prepared_count`** keeps **`num_vehicles_prepared`** in sync.
 - **Order phase:** When **`phase`** is **`full`** or **`order_only`**, all lines must be **Ready** (see **`batch_all_ready_for_order`** in **`challan_details_staging`** repository). **`order_only`** skips **`prepare_vehicle`** and reuses the order path for invoice/order failures after all lines are Ready.
+- **Discounts (before `prepare_order`):** For each **`vehicle_inventory_master`** line in the batch, **`repositories.vehicle_inventory.get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)`** — **`dealer_ref.subdealer_type`** for **`to_dealer_id`**, join **`subdealer_discount_master_ref`** on **`dealer_id`** = **`from_dealer_id`**, **TRIM**-aligned **`subdealer_type`**, **`valid_flag`** = **Y**; **model** = **prefix** of the DMS value (**`starts_with(BTRIM(dms), BTRIM(ref.model))`**, **longest** ref **model** on ties). **`update_discount_and_ex_showroom`** persists the amount (or **1500.00** when no row, empty model, or null/invalid **discount**). **Siebel** line items then use **`order_line_vehicles`** with two-decimal per-line **discount** strings — **Database DDL** **§12**, **§16**, **2.89** / **2.90**; **BR-22** / **BRD** **§6.9**.
 - **Customer prep (challan-only):** **`prepare_customer_for_challan`** (**`hero_dms_playwright_customer_challan`**) — dummy mobile **`0000000000`**, **`hero_dms_flow`** = **`add_subdealer_challan`**, Comments **`From <from_dealer_id>. Helmet credited`**, dealer/institution fields from **`dealer_ref`** for **to_dealer_id**. Does **not** run the full retail **`prepare_customer`** / Contact Find sweep.
 - **Order-only fill:** **`fill_hero_dms_service.Playwright_Hero_DMS_fill_subdealer_challan_order_only`** runs **`prepare_customer_for_challan`** then **`prepare_order`** (no standalone retail **`Playwright_Hero_DMS_fill`**).
 - **Invoice / create order:** **`hero_dms_playwright_invoice._create_order`** / **`prepare_order`** branches for **`add_subdealer_challan`**: Network customer, Account/Institution from **`dealer_ref`**, challan Comments (vs battery line), skip retail **Contact Last Name** F2 block — aligned with **BR-22**. On success, **`master_repo.set_invoice_state`** sets **`invoice_complete`** / **`invoice_status`** (Completed when **invoice number** present, else Pending); on order failure, **`invoice_status`** = Failed.
@@ -363,7 +365,7 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | `sales_master` | Links customer, vehicle, dealer; sales_id PK. |
 | `oem_ref` | OEM/brand reference. |
 | `oem_service_schedule` | Service schedule per OEM. |
-| `dealer_ref` | Dealer reference; oem_id FK. |
+| `dealer_ref` | Dealer reference; **`subdealer_type`** (subdealer line, e.g. ARD) used with **`subdealer_discount_master_ref`** in subdealer challan discount resolution — **§2.4e**; **`oem_id`** FK. |
 | `insurance_master` | Insurance policies; FK to sales or (customer, vehicle). |
 | `service_reminders_queue` | Service reminders; sales_id FK; populated by trigger. |
 | `rto_queue` | RTO queue/worklist rows; one row per sale; application_id stays the stable queue id while `vahan_application_id` stores the real Vahan number once a dealer batch reaches the cart/upload checkpoint. |
@@ -376,7 +378,7 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | `challan_master` | Header row after successful DMS commit for a batch (**order/invoice refs**, totals). |
 | `challan_details` | Per-vehicle lines linked to **`vehicle_inventory_master`** and **`challan_master`**. |
 | `vehicle_inventory_master` | Subdealer inventory keyed by chassis/engine; upserted from **`prepare_vehicle`** scrape (**to_dealer** scope). |
-| `subdealer_discount_master` | Discount rules: **`from_dealer_id`**, model, **`valid_flag`**. |
+| `subdealer_discount_master_ref` | Per **sending** dealer **dealer_id**, **subdealer_type**, **valid_flag**, **model** (prefix of DMS model); subdealer challan matches **receiving** dealer **`dealer_ref.subdealer_type`**. |
 
 ---
 
@@ -763,10 +765,13 @@ See **Documentation/Database DDL.md** for full table structures. Summary:
 | 6.286 | Apr 2026 | — | **`GET /vehicle-search/search`**: **no dealer scoping** on match keys; **`vehicle_master`** without sales join; **`dealer_id`** query param ignored — **API Endpoints** table. |
 | 6.287 | Apr 2026 | — | **`GET /vehicle-search/search`** **`sales_master`**: **`LEFT JOIN`** **`customer_master`** (**`customer_name`**), **`dealer_ref`** (**`dealer_name`**); **View Vehicles** fixed field order for Vehicle / Sales master — **API Endpoints** table. |
 | 6.288 | Apr 2026 | — | **`GET /vehicle-search/search`**: response omits **`challan_details_staging`**; **View Vehicles** section order Vehicle Master → Sales Master → Vehicle Inventory (all dealers) → Challan Master — **API Endpoints** table. |
-| 6.289 | Apr 2026 | — | **`POST /admin/reset-all-data`**: preserve **`subdealer_discount_master`** (with **`dealer_ref`**, **`oem_ref`**, **`oem_service_schedule`**); **`AdminPage`** confirm copy — **`app/routers/admin.py`** — **API Endpoints** table |
+| 6.289 | Apr 2026 | — | **`POST /admin/reset-all-data`**: preserve ref tables (e.g. **`subdealer_discount_master_ref`**, **`dealer_ref`**, **`oem_ref`**, **`oem_service_schedule`**) per router rules; **`AdminPage`** confirm copy — **`app/routers/admin.py`** — **API Endpoints** table |
 | 6.290 | Apr 2026 | — | **`GET /vehicle-search/search`** **`sales_master`**: address / mobile / alt phone / financier from **`customer_master`**; **`billing_date`** formatted **dd/mm/yyyy**; **View Vehicles** Sales Master column order — **API Endpoints** table. |
 | 6.291 | Apr 2026 | — | **`GET /vehicle-search/search`** **`sales_master`**: explicit **`sales_master`** columns + scalar lookups for customer/dealer (avoids **`RealDictCursor`** losing joined fields when duplicate SQL column names); **`dealer_name`** **`COALESCE`** with **`vehicle_inventory_master`** when **`sm.dealer_id`** null — **`vehicle_search`** — **API Endpoints** table. |
 | 6.292 | Apr 2026 | — | **`fill_rto_service`**: Vahan **workbench** Screen 3 — **`hpa_*`** hypothecation ids, nominee **`nomineeradiobtn1`**, **`nominationname1`**, **`vm_rel1`**; MV Tax / Save / dialog **Ok** fast paths; **`_dump_page_state`** only on final field or terminal failure; removed unconditional tax/popup/series probes — **§2.4f**; **BRD** **§6.3**, **3.162**; **HLD** **1.165** |
 | 6.293 | Apr 2026 | — | **Bulk pre-OCR** — **§2.3a**: **`pre_ocr_service`** (`run_pre_ocr_and_prepare`, **`raw/`**, **`page_NN.pdf`**, OSD **`correct_image_orientation_upright`**, Tesseract classification, Aadhaar split helpers); **`sales_ocr_service`** Textract-only on normalized files; **§4.4** bulk worker narrative — **BRD** **BR-23**, **BR-24**, **FR-26**; **HLD** **§4.3**, **1.166** |
 | 6.294 | Apr 2026 | — | **`raw/`** PDF-only (no **`page_NN.jpg`**); **`osd_deskew_clockwise_degrees`** + **`page.set_rotation`** on single-page exports; **§2.3a** / **§4.4** — **BRD** **3.164**; **HLD** **1.167** |
 | 6.295 | Apr 2026 | — | **`add_sales_staging`**: **`login_id`** column (**`DDL/alter/13c_add_sales_staging_login_id.sql`**); **`payload_json`** merges **`sales_id`** on Create Invoice commit, **`insurance_id`** after **`insert_insurance_master_after_gi`** when **`staging_id`** is set; **`merge_staging_payload_on_cursor`** — **§2.2a**; **Database DDL** **2.84** |
+| 6.296 | Apr 2026 | — | **Subdealer challan:** **`get_subdealer_challan_discount`**, **`FALLBACK_SUBDEALER_CHALLAN_DISCOUNT` (1500)**; **`dealer_ref`** + **`subdealer_discount_master_ref`** — **§2.4e**; **Database DDL** **2.89**; **BR-22** / **BRD** **3.165**; **HLD** **1.168** |
+| 6.297 | Apr 2026 | — | **`get_subdealer_challan_discount`**: **model** = **prefix** of DMS (**`starts_with`**, longest **ref.model**); **Database DDL** **2.90**; **BR-22**; **HLD** **1.169**; **BRD** **3.166** — **§2.4e** |
+| 6.298 | Apr 2026 | — | **Subdealer challan (multi-file OCR):** client **`parseSubdealerChallanScans`**, **`mergeSubdealerChallanParseResults`**, **`maxChallanBookNumber`**; **API** table and **§2.4e** client bullet; **API Endpoints** **`/parse-scan`** = one file per POST — **HLD** **1.170**; **BRD** **3.167**, **FR-25** |

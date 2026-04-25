@@ -33,7 +33,7 @@ from app.repositories import challan_master_staging as master_repo
 from app.repositories.vehicle_inventory import (
     fetch_lines_for_batch_inventory,
     get_by_id,
-    get_discount_for_model,
+    get_subdealer_challan_discount,
     update_discount_and_ex_showroom,
     upsert_from_prepare_vehicle_scrape,
 )
@@ -213,11 +213,8 @@ def _run_order_phase(
         if not inv:
             continue
         model = (inv.get("model") or "").strip()
-        if not model:
-            continue
-        disc = get_discount_for_model(from_dealer_id, model)
-        if disc is not None:
-            update_discount_and_ex_showroom(int(iid), discount=float(disc))
+        disc = get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)
+        update_discount_and_ex_showroom(int(iid), discount=float(disc))
 
     inv_rows = fetch_lines_for_batch_inventory(inv_ids)
     order_lines: list[dict] = []

@@ -189,6 +189,20 @@ function App() {
       .catch(() => setChallanFailedCount(0));
   }, [dealerId]);
 
+  const handleLogout = useCallback(() => {
+    if (authDisabled) return;
+    clearAccessToken();
+    setDealerId(Number(import.meta.env.VITE_DEALER_ID) || 100001);
+    setMode("home");
+    setPage("add-sales");
+    setAddSalesAutoNewTrigger(0);
+    _setLoginName(null);
+    setSessionLoginId(null);
+    setHomeTiles(ALL_HOME_TILES_TRUE);
+    setSessionAdmin(false);
+    setBoot("need-login");
+  }, [authDisabled]);
+
   // Bulk-loads badge only: not tied to Add Sales OCR (upload runs extraction synchronously on the server).
   useEffect(() => {
     if (mode !== "pos" || !canSeeBulkLoads) {
@@ -360,7 +374,23 @@ function App() {
           <div className="app-box">
             <header className="app-topbar">
               <div className="app-topbar-left">
-                {loginName ? <span className="app-topbar-welcome">Welcome {loginName}</span> : null}
+                {loginName ? (
+                  <div className="app-topbar-left-column">
+                    <span className="app-topbar-welcome">Welcome {loginName}</span>
+                    {!authDisabled ? (
+                      <a
+                        href="#"
+                        className="app-topbar-logout"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          handleLogout();
+                        }}
+                      >
+                        Logout
+                      </a>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               <div className="app-topbar-spacer" />
               <div className="app-topbar-title-block">

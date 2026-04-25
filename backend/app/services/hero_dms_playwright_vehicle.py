@@ -1850,13 +1850,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 if (s3l && vis(s3l) && !isPdiGrid(s3l)) {
                     directIdRows = countDataRows(s3l);
                 }
-                // Phase 3: check gview_s_3_l / gbox_s_3_l container text for data signals
+                // Phase 3: check gview_s_3_l / gbox_s_3_l for actual data rows (not just headers).
+                // A header-only grid still contains words like "Closed" / "Opened" in column
+                // labels ("PreCheck Closed Date"), so matching those alone is a false positive.
+                // Require at least one jqgrow data row inside the container.
                 let containerHasData = false;
                 for (const cid of ['gview_s_3_l', 'gbox_s_3_l', 's_3_ld']) {
                     const el = document.getElementById(cid);
                     if (!el || !vis(el)) continue;
-                    const txt = (el.textContent || '').trim();
-                    if (txt.length > 10 && (/precheck/i.test(txt) || /closed|open|submitted/i.test(txt))) {
+                    const tbl = el.tagName === 'TABLE' ? el : el.querySelector('table.ui-jqgrid-btable');
+                    if (tbl && countDataRows(tbl) > 0) {
                         containerHasData = true;
                         break;
                     }
@@ -1870,12 +1873,23 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     const m = rowCounterValue.match(/^(\\d+)\\s+of\\s+(\\d+)/);
                     if (m) rowCounterRows = parseInt(m[2], 10) || 0;
                 }
-                // Phase 5: data cell IDs that only exist when a precheck row is present
+                // Phase 5: data cell IDs that only exist when a precheck row is present.
+                // Require non-empty text — empty TDs can exist on a header-only grid.
                 let dataCellHit = false;
-                for (const dcid of ['1_s_3_l_Status', '1_s_3_l_Created', '1_s_3_l_Closed_Date',
+                let dataCellDateSample = '';
+                for (const dcid of ['1_s_3_l_Created', '1_s_3_l_Closed_Date', '1_s_3_l_Status',
                                      '1_s_3_l_HHML_Mechanic_Full_Name', '1_s_3_l_Abstract', '1_s_3_l_Source']) {
                     const dc = document.getElementById(dcid);
-                    if (dc) { dataCellHit = true; break; }
+                    if (dc) {
+                        const val = (dc.innerText || dc.textContent || '').trim();
+                        if (val.length >= 2) {
+                            dataCellHit = true;
+                            if (!dataCellDateSample && (dcid.includes('Created') || dcid.includes('Closed_Date'))) {
+                                dataCellDateSample = val.slice(0, 48);
+                            }
+                            break;
+                        }
+                    }
                 }
                 // Phase 6: column headers with precheck-specific text
                 let precheckColumnHeaders = false;
@@ -1914,7 +1928,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 }
                 return {
                     maxRows, directIdRows, containerHasData, rowCounterValue, rowCounterRows,
-                    dataCellHit, precheckColumnHeaders, fallbackRows,
+                    dataCellHit, dataCellDateSample, precheckColumnHeaders, fallbackRows,
                     hasPrecheckRowId, thirdLevelTabsLoaded,
                 };
             }"""
@@ -1983,6 +1997,52 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         )
         _precheck_existing_rows = 0
         _precheck_existing_signal = ""
+
+    _precheck_weak_signal = (
+        _precheck_existing_rows > 0
+        and "maxRows" not in _precheck_existing_signal
+        and "directId" not in _precheck_existing_signal
+    )
+    if _precheck_weak_signal or (_on_wrong_precheck_view and _precheck_existing_rows > 0):
+        _precheck_date_cell = ""
+        for _root in _roots():
+            try:
+                _dc = _root.evaluate("""() => {
+                    for (const cid of ['1_s_3_l_Created', '1_s_3_l_Closed_Date']) {
+                        const el = document.getElementById(cid);
+                        if (el) {
+                            const v = (el.innerText || el.textContent || '').trim();
+                            if (v.length >= 6) return v.slice(0, 48);
+                        }
+                    }
+                    return '';
+                }""")
+                if isinstance(_dc, str) and len(_dc.strip()) >= 6:
+                    _precheck_date_cell = _dc.strip()
+                    break
+            except Exception:
+                continue
+        _date_parseable = False
+        if _precheck_date_cell:
+            _test_dt = _siebel_parse_pdi_expiry_cell_to_datetime(_precheck_date_cell)
+            if _test_dt is None:
+                _test_dt2 = _siebel_parse_grid_date_cell_to_date(_precheck_date_cell)
+                _date_parseable = _test_dt2 is not None
+            else:
+                _date_parseable = True
+        if not _date_parseable:
+            note(
+                f"{log_prefix}: precheck_row_probe signal={_precheck_existing_signal!r} "
+                f"is weak or wrong-view; date cell read={_precheck_date_cell!r} did not parse. "
+                "Treating as no precheck row (false positive)."
+            )
+            _precheck_existing_rows = 0
+            _precheck_existing_signal = ""
+        else:
+            note(
+                f"{log_prefix}: precheck_row_probe weak signal confirmed by date cell "
+                f"read={_precheck_date_cell!r} — keeping rows={_precheck_existing_rows}."
+            )
 
     if not _precheck_third_level_tabs_loaded:
         note(
@@ -2117,6 +2177,47 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     )
                     _precheck_existing_rows = 0
                     _precheck_existing_signal = ""
+                _rec_weak = (
+                    _precheck_existing_rows > 0
+                    and "maxRows" not in _precheck_existing_signal
+                    and "directId" not in _precheck_existing_signal
+                )
+                if _rec_weak:
+                    _rec_date = ""
+                    for _root in _roots():
+                        try:
+                            _rdc = _root.evaluate("""() => {
+                                for (const cid of ['1_s_3_l_Created', '1_s_3_l_Closed_Date']) {
+                                    const el = document.getElementById(cid);
+                                    if (el) {
+                                        const v = (el.innerText || el.textContent || '').trim();
+                                        if (v.length >= 6) return v.slice(0, 48);
+                                    }
+                                }
+                                return '';
+                            }""")
+                            if isinstance(_rdc, str) and len(_rdc.strip()) >= 6:
+                                _rec_date = _rdc.strip()
+                                break
+                        except Exception:
+                            continue
+                    _rec_ok = False
+                    if _rec_date:
+                        _rdt = _siebel_parse_pdi_expiry_cell_to_datetime(_rec_date)
+                        _rec_ok = _rdt is not None or _siebel_parse_grid_date_cell_to_date(_rec_date) is not None
+                    if not _rec_ok:
+                        note(
+                            f"{log_prefix}: chassis recovery precheck weak signal "
+                            f"{_precheck_existing_signal!r}; date cell={_rec_date!r} did not parse — "
+                            "treating as no precheck row."
+                        )
+                        _precheck_existing_rows = 0
+                        _precheck_existing_signal = ""
+                    else:
+                        note(
+                            f"{log_prefix}: chassis recovery precheck weak signal confirmed "
+                            f"by date cell={_rec_date!r}."
+                        )
                 note(
                     f"{log_prefix}: re-probe after chassis recovery: precheck rows="
                     f"{_precheck_existing_rows} signal={_precheck_existing_signal or 'none'} "
@@ -2129,6 +2230,39 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 )
 
     _precheck_already_present = _precheck_existing_rows > 0
+
+    _precheck_dates_diag: dict = {}
+    _precheck_dates_js = """() => {
+        const read = (id) => {
+            const el = document.getElementById(id);
+            return el ? (el.innerText || el.textContent || '').trim().slice(0, 48) : '';
+        };
+        return {
+            opened: read('1_s_3_l_Created'),
+            status: read('1_s_3_l_Status'),
+            closed: read('1_s_3_l_Closed_Date'),
+            technician: read('1_s_3_l_HHML_Mechanic_Full_Name'),
+            source: read('1_s_3_l_Source'),
+            row_counter: read('s_3_rc'),
+        };
+    }"""
+    for _root in _roots():
+        try:
+            _dd = _root.evaluate(_precheck_dates_js)
+            if isinstance(_dd, dict) and any(_dd.values()):
+                _precheck_dates_diag = _dd
+                break
+        except Exception:
+            continue
+    note(
+        f"{log_prefix}: precheck_date_cells opened={_precheck_dates_diag.get('opened', '')!r} "
+        f"status={_precheck_dates_diag.get('status', '')!r} "
+        f"closed={_precheck_dates_diag.get('closed', '')!r} "
+        f"technician={_precheck_dates_diag.get('technician', '')!r} "
+        f"source={_precheck_dates_diag.get('source', '')!r} "
+        f"row_counter={_precheck_dates_diag.get('row_counter', '')!r}"
+    )
+
     note(
         f"{log_prefix}: precheck_row_probe rows={_precheck_existing_rows} "
         f"signal={_precheck_existing_signal or 'none'} already_present={_precheck_already_present} "
@@ -2143,6 +2277,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             precheck_existing_rows=_precheck_existing_rows,
             precheck_signal=_precheck_existing_signal or "none",
             precheck_already_present=_precheck_already_present,
+            precheck_opened_date=_precheck_dates_diag.get("opened", ""),
+            precheck_status=_precheck_dates_diag.get("status", ""),
+            precheck_closed_date=_precheck_dates_diag.get("closed", ""),
         )
     if _precheck_already_present:
         note(
@@ -2940,9 +3077,15 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 }
             }
         }
+        // Scope row counter to grid prefix that matched above (e.g. s_2_rc for s_2_l).
+        // s_3_rc may belong to a different applet (vehicle entry) and should not
+        // make the PDI grid appear ready when jqRows is 0.
+        const gridPfx = gridId ? gridId.replace(/_l$/, '') : '';
         let rcTotal = 0;
         let rcText = '';
         for (const rcId of ['s_2_rc', 's_3_rc', 's_4_rc', 's_5_rc']) {
+            const pfx = rcId.replace('_rc', '');
+            if (gridPfx && pfx !== gridPfx) continue;
             const rc = document.getElementById(rcId);
             if (rc && vis(rc)) {
                 const txt = (rc.textContent || '').trim();
@@ -3171,9 +3314,22 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if (tables.length === 0) {
             tables = Array.from(document.querySelectorAll('table')).filter((tb) => vis(tb) && isPdiListScoped(tb));
         }
+        // Row counter: scope to the grid prefix that matched a PDI table above.
+        // On the PDI Assessment view the PDI list is s_2_l with counter s_2_rc;
+        // s_3_rc belongs to a different applet (e.g. vehicle entry) and must not
+        // inflate the PDI row count.
+        const matchedGridPrefixes = new Set();
+        for (const tb of tables) {
+            const tid = (tb.id || '').toLowerCase();
+            for (const pfx of ['s_2', 's_3', 's_4', 's_5']) {
+                if (tid.includes(pfx + '_l')) matchedGridPrefixes.add(pfx);
+            }
+        }
         let rowCounterValue = '';
         let rowCounterRows = 0;
         for (const rcId of ['s_2_rc', 's_3_rc', 's_4_rc', 's_5_rc']) {
+            const pfx = rcId.replace('_rc', '');
+            if (matchedGridPrefixes.size > 0 && !matchedGridPrefixes.has(pfx)) continue;
             const rcEl = document.getElementById(rcId);
             if (rcEl && vis(rcEl)) {
                 const txt = (rcEl.textContent || '').trim();
@@ -3187,7 +3343,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 }
             }
         }
+        // PDI data cell: require non-empty text that looks like a date (contains a digit),
+        // not just DOM element existence or header label text.
         let pdiDataCellHit = false;
+        const headerLabels = ['pdi expiry date', 'pdi/battery expiry flag', 'pdi expiry'];
         const cellProbeIds = [
             '1_s_2_l_HMCL_PDI_Expiry_Date', '1_s_2_l_PDI_Expiry_Date', '1_s_2_l_HHML_PDI_Expiry',
             '2_s_2_l_HMCL_PDI_Expiry_Date', '2_s_2_l_PDI_Expiry_Date',
@@ -3200,7 +3359,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         ];
         for (const cid of cellProbeIds) {
             const dc = document.getElementById(cid);
-            if (dc && vis(dc)) { pdiDataCellHit = true; break; }
+            if (dc && vis(dc)) {
+                const val = (dc.innerText || dc.textContent || '').trim();
+                if (val.length >= 6 && /\\d/.test(val) && !headerLabels.includes(val.toLowerCase())) {
+                    pdiDataCellHit = true;
+                    break;
+                }
+            }
         }
         if (!pdiDataCellHit) {
             const probe = document.querySelector(
@@ -3209,7 +3374,12 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 + '[id^="1_s_4_l_"][id*="Expiry"], [id^="2_s_4_l_"][id*="Expiry"], '
                 + '[id^="1_s_5_l_"][id*="Expiry"], [id^="2_s_5_l_"][id*="Expiry"]'
             );
-            if (probe && vis(probe)) pdiDataCellHit = true;
+            if (probe && vis(probe)) {
+                const val = (probe.innerText || probe.textContent || '').trim();
+                if (val.length >= 6 && /\\d/.test(val) && !headerLabels.includes(val.toLowerCase())) {
+                    pdiDataCellHit = true;
+                }
+            }
         }
         let best = {
             rowCount: 0,
@@ -3239,17 +3409,19 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             if (dataRows === 0) {
                 for (const tr of rows) {
                     const cls = String(tr.className || '').toLowerCase();
-                    if (cls.includes('jqgfirstrow')) continue;
+                    if (cls.includes('jqgfirstrow') || cls.includes('ui-jqgrid-labels')) continue;
+                    const ths = tr.querySelectorAll('th');
+                    if (ths.length > 0) continue;
                     const tds = tr.querySelectorAll('td');
                     if (tds.length < 2) continue;
                     const rowTxt = (tr.textContent || '').trim();
                     if (rowTxt.length < 2) continue;
-                    const ths = tr.querySelectorAll('th');
-                    if (ths.length > 0 && tds.length === 0) continue;
                     dataRows++;
                     if (colIdx >= 0 && colIdx < tds.length) {
                         const cellVal = (tds[colIdx].innerText || tds[colIdx].textContent || '').trim();
-                        if (cellVal) expiryRaw.push(cellVal.slice(0, 48));
+                        if (cellVal && /\\d/.test(cellVal) && !headerLabels.includes(cellVal.toLowerCase())) {
+                            expiryRaw.push(cellVal.slice(0, 48));
+                        }
                     }
                 }
             } else {
@@ -3260,7 +3432,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     const tds = tr.querySelectorAll('td');
                     if (colIdx >= 0 && colIdx < tds.length) {
                         const cellVal = (tds[colIdx].innerText || tds[colIdx].textContent || '').trim();
-                        if (cellVal) expiryRaw.push(cellVal.slice(0, 48));
+                        if (cellVal && /\\d/.test(cellVal) && !headerLabels.includes(cellVal.toLowerCase())) {
+                            expiryRaw.push(cellVal.slice(0, 48));
+                        }
                     }
                 }
             }
@@ -3304,11 +3478,17 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         except Exception:
             continue
 
+    _PDI_HEADER_LABELS = frozenset({
+        "pdi expiry date", "pdi/battery expiry flag", "pdi expiry",
+        "pdi created date", "precheck flag",
+    })
     _pdi_expiry_seen: set[str] = set()
     _pdi_expiry_raw: list[str] = []
     for _x in list(_pdi_expiry_raw_aria) + list(_pdi_table_expiry_raw):
         _k = str(_x or "").strip()
         if not _k or _k in _pdi_expiry_seen:
+            continue
+        if _k.lower() in _PDI_HEADER_LABELS:
             continue
         _pdi_expiry_seen.add(_k)
         _pdi_expiry_raw.append(_k)
@@ -3368,6 +3548,36 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         _pdi_decision_reason = "expired"
     else:
         _pdi_decision_reason = "unknown"
+    _pdi_dates_diag: dict = {}
+    _pdi_dates_js = """() => {
+        const read = (id) => {
+            const el = document.getElementById(id);
+            return el ? (el.innerText || el.textContent || '').trim().slice(0, 48) : '';
+        };
+        return {
+            expiry_s2: read('1_s_2_l_HMCL_PDI_Expiry_Date'),
+            battery_s2: read('1_s_2_l_HMCL_PDI_Battery_Expiry_Flag'),
+            expiry_s3: read('1_s_3_l_HMCL_PDI_Expiry_Date'),
+            row_counter_s2: read('s_2_rc'),
+            row_counter_s3: read('s_3_rc'),
+        };
+    }"""
+    for _root in _roots():
+        try:
+            _pdd = _root.evaluate(_pdi_dates_js)
+            if isinstance(_pdd, dict) and any(_pdd.values()):
+                _pdi_dates_diag = _pdd
+                break
+        except Exception:
+            continue
+    note(
+        f"{log_prefix}: pdi_date_cells expiry_s2={_pdi_dates_diag.get('expiry_s2', '')!r} "
+        f"battery_s2={_pdi_dates_diag.get('battery_s2', '')!r} "
+        f"expiry_s3={_pdi_dates_diag.get('expiry_s3', '')!r} "
+        f"rc_s2={_pdi_dates_diag.get('row_counter_s2', '')!r} "
+        f"rc_s3={_pdi_dates_diag.get('row_counter_s3', '')!r}"
+    )
+
     note(
         f"{log_prefix}: pdi_scrape_saw_row saw_row={_pdi_saw_row} "
         f"row_count={_pdi_row_count} header_matched={_pdi_header_matched}"

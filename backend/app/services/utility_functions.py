@@ -65,7 +65,10 @@ def insurer_prefer_matches(
 ) -> bool:
     """
     True when normalized ``SequenceMatcher`` ratio between details-sheet insurer and dealer
-    ``prefer_insurer`` is at least ``min_ratio`` (default 0.20).
+    ``prefer_insurer`` is at least ``min_ratio``.
+
+    :func:`build_insurance_fill_values` and MISP KYC use ``INSURER_PREFER_FUZZY_MIN_RATIO`` (default
+    0.80) when comparing merged ``master_ref``-aligned details text to ``prefer_insurer``.
     """
     a = normalize_for_fuzzy_match(details_insurer)
     b = normalize_for_fuzzy_match(prefer_insurer)

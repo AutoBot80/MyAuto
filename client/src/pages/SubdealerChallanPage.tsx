@@ -4,7 +4,7 @@ import {
   CHALLAN_STAGING_RECENT_DAYS,
   createChallanStaging,
   listRecentChallanStaging,
-  parseSubdealerChallanScan,
+  parseSubdealerChallanScans,
   processChallanBatch,
   retryChallanOrderOnly,
   type ChallanMasterProcessedRow,
@@ -249,6 +249,8 @@ export function SubdealerChallanPage({
   /** Master row selection drives the lower vehicle lines sub-table. */
   const [selectedProcessedBatchId, setSelectedProcessedBatchId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  /** Multi-page OCR: ``parse-scan`` is one file per request. */
+  const [parseOcrProgress, setParseOcrProgress] = useState<{ current: number; total: number } | null>(null);
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
 
@@ -414,14 +416,19 @@ export function SubdealerChallanPage({
   };
 
   const onFileSelected = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const fileList = e.target.files;
     e.target.value = "";
-    if (!file) return;
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList);
     setLoading(true);
+    setParseOcrProgress(null);
     setError(null);
     setWarnings([]);
     try {
-      const res = await parseSubdealerChallanScan(file);
+      const res = await parseSubdealerChallanScans(
+        files,
+        files.length > 1 ? (c, t) => setParseOcrProgress({ current: c, total: t }) : undefined
+      );
       setChallanNo(res.challan_no);
       setChallanDateRaw(res.challan_date_raw);
       setChallanDateIso(res.challan_date_iso);
@@ -444,6 +451,7 @@ export function SubdealerChallanPage({
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
+      setParseOcrProgress(null);
     }
   };
 
@@ -551,7 +559,8 @@ export function SubdealerChallanPage({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp,application/pdf"
+          multiple
+          accept="image/jpeg,image/jpg,image/png,image/webp,application/pdf,.pdf,.jpg,.jpeg,.png,.webp"
           className="subdealer-challan-file-input"
           aria-hidden
           tabIndex={-1}
@@ -602,8 +611,13 @@ export function SubdealerChallanPage({
             className="app-button subdealer-challan-inline-btn"
             disabled={loading}
             onClick={() => fileInputRef.current?.click()}
+            title="PDF or JPEG/PNG, one or more files (e.g. multiple challan pages)"
           >
-            {loading ? "Processing…" : "Upload Scan"}
+            {loading
+              ? parseOcrProgress && parseOcrProgress.total > 1
+                ? `OCR page ${parseOcrProgress.current} of ${parseOcrProgress.total}…`
+                : "Processing…"
+              : "Upload scan(s)"}
           </button>
           <button type="button" className="app-button subdealer-challan-inline-btn" disabled>
             From Scanner

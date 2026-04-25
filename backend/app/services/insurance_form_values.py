@@ -1,8 +1,10 @@
 """Load and normalize insurance/MISP fill values from ``form_insurance_view`` plus ``add_sales_staging.payload_json`` (when ``staging_id`` is used) and OCR JSON (insurer fallback).
 
 Add Sales passes the same ``staging_id`` as Create Invoice (DMS) so the view (committed masters) and staging (full OCR merge) jointly supply the insurance flow — see BR-20.
-When ``dealer_ref.prefer_insurer`` is present on the view row and the merged details insurer fuzzy-matches it (≥20% ``SequenceMatcher`` on normalized strings), the fill dict uses ``prefer_insurer`` for KYC/proposal insurer typing. When the merged insurer is empty (including after rejecting consent-line OCR bleed), the fill dict uses ``prefer_insurer`` if set.
-``dealer_ref.hero_cpi`` (exposed as ``form_insurance_view.hero_cpi``) is **Y**/**N** and drives the MISP CPA add-on row whose label varies (NIC/CPI/etc.).
+When ``dealer_ref.prefer_insurer`` is present on the view row and the merged details insurer fuzzy-matches it
+at ``INSURER_PREFER_FUZZY_MIN_RATIO`` (see ``app.config``), the fill dict uses ``prefer_insurer`` for
+KYC/proposal insurer typing. When the merged insurer is empty (including after rejecting consent-line OCR bleed), the fill dict uses ``prefer_insurer`` if set.
+``dealer_ref.hero_cpi`` (exposed as ``form_insurance_view.hero_cpi``) is **Y**/**N** (default **N**): **Y** leaves CPA Tenure at the portal default and checks the bottom add-on; **N** sets CPA Tenure to **0** and unchecks that add-on if the row is still present (label varies by insurer: NIC/CPI/Hero CPI/…).
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ def normalize_hero_cpi_flag(raw: object | None) -> str:
         return "N"
     return "Y" if t.strip().upper() == "Y" else "N"
 
+from app.config import INSURER_PREFER_FUZZY_MIN_RATIO
 from app.db import get_connection
 from app.services.sales_ocr_service import _sanitize_details_profession_value
 from app.services.utility_functions import (
@@ -135,7 +138,8 @@ def build_insurance_fill_values(
     when non-empty (overrides view-only values so MISP proposal matches Add Sales / OCR merge). OCR merge is available before
     ``insurance_master`` is populated after a **successful** Generate Insurance run (UPSERT). Insurer may still fall back to **OCR_To_be_Used.json** when view
     and staging lack it.
-    If ``prefer_insurer`` is non-empty and the merged insurer matches it at ≥20% fuzzy ratio, ``insurer`` is set to ``prefer_insurer``.
+    If ``prefer_insurer`` is non-empty and the merged insurer matches it at the configured fuzzy ratio
+    (``INSURER_PREFER_FUZZY_MIN_RATIO`` in ``app.config``, default 0.80), ``insurer`` is set to ``prefer_insurer``.
     When merged insurer is empty after stripping consent-line OCR bleed, ``insurer`` is set from ``prefer_insurer`` if set (blank Details insurer field).
     **Hero CPI** (**``dealer_ref.hero_cpi``** via **``form_insurance_view``**) is normalized to **Y**/**N** and drives the MISP
     CPA add-on row (label varies by insurer). Other proposal-only controls (email default, some add-ons, CPA tenure,
@@ -192,12 +196,15 @@ def build_insurance_fill_values(
     # when the same ≥20% rule matches — see ``_kyc_insurer_label_for_misp``.
     values["insurer_merged_before_prefer"] = merged_insurer
     values["prefer_insurer"] = prefer
-    if prefer and merged_insurer and insurer_prefer_matches(merged_insurer, prefer, min_ratio=0.20):
+    if prefer and merged_insurer and insurer_prefer_matches(
+        merged_insurer, prefer, min_ratio=INSURER_PREFER_FUZZY_MIN_RATIO
+    ):
         values["insurer"] = prefer
         logger.info(
-            "Insurance: using dealer prefer_insurer %r (merged details insurer %r matched >= 20%% fuzzy).",
+            "Insurance: using dealer prefer_insurer %r (merged details insurer %r matched >= %s fuzzy).",
             prefer[:120],
             merged_insurer[:120],
+            INSURER_PREFER_FUZZY_MIN_RATIO,
         )
     elif prefer and not merged_insurer:
         values["insurer"] = prefer

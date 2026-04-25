@@ -3564,3 +3564,35 @@
   max-width: 200px;
   line-height: 1.25;
 }
+
+a.app-topbar-logout,
+button.app-topbar-logout {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.95);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.25;
+  align-self: flex-start;
+}
+
+a.app-topbar-logout:hover,
+a.app-topbar-logout:focus-visible,
+button.app-topbar-logout:hover,
+button.app-topbar-logout:focus-visible {
+  color: #fff;
+  outline: none;
+}
+
+a.app-topbar-logout:focus-visible,
+button.app-topbar-logout:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.8);
+  outline-offset: 2px;
+  border-radius: 2px;
+}

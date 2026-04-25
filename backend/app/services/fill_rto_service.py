@@ -419,22 +419,85 @@ def _init_cap_place_name(s: str) -> str:
 # ---------------------------------------------------------------------------
 # Document resolution
 # ---------------------------------------------------------------------------
+#
+# Typical per-sale folder (``uploads/{dealer_id}/{mobile}_{ddmmyy}/``) — optional ``{mobile}_`` prefix
+# on PDFs; Aadhaar often unprefixed. Example layout::
+#
+#   ``{mobile}_Form_20`` / ``_Form_20`` / ``Form 20``  → FORM 20
+#   ``{mobile}_Sale_Certificate``  → FORM 21
+#   ``{mobile}_Form22`` / ``_Form_22``  → FORM 22
+#   ``{mobile}_GST_Retail_Invoice``  → INVOICE ORIGINAL
+#   ``{mobile}_Insurance*`` / ``*Insurance*Certificate*``  → INSURANCE CERTIFICATE
+#   ``Aadhar_front`` (use pattern ``*aadhaar_front*``)  → AADHAAR FRONT; ``Aadhar_back``  → AADHAAR BACK
+#   ``Sales Detail Sheet`` / ``*Detail Sheet*``  → OWNER UNDERTAKING
+#
+# Matching: each pattern has ``*`` stripped, then the remainder must appear as a **single substring** of
+# the lowercased filename (e.g. ``*Aadhar*front*`` → ``aadharfront`` does **not** match ``aadhar_front``).
+# Use ``*aadhar_front*`` for underscore-separated names. ``pencil_mark`` and similar are intentionally
+# not mapped to an upload category.
 
 _DOC_PATTERNS: list[tuple[str, list[str], list[str]]] = [
     ("FORM 20", ["*Form_20*", "*Form 20*", "*FORM_20*", "*FORM 20*"], [".pdf"]),
     ("FORM 21", ["*Sale_Certificate*", "*Sale Certificate*", "*Form_21*", "*Form 21*", "*FORM_21*"], [".pdf"]),
-    # Underscore optional: e.g. ``8905969604_Form22.pdf``
+    # e.g. ``{mobile}_Form22.pdf`` (no underscore before 22) or ``Form_22``
     ("FORM 22", ["*Form_22*", "*Form22*", "*FORM22*", "*Form 22*", "*FORM_22*", "*FORM 22*"], [".pdf"]),
-    ("INSURANCE CERTIFICATE", ["*Insurance*"], [".pdf"]),
-    ("INVOICE ORIGINAL", ["*GST_Retail_Invoice*", "*GST*Invoice*", "*Tax_Invoice*", "*Tax Invoice*", "*Retail_Invoice*"], [".pdf"]),
-    # ``*Aadhaar*`` vs ``Aadhar``: include ``*aadhar*`` (one 'a').  Do not use a bare ``*back*`` glob here;
-    # ``_resolve_sale_documents`` skips ``*_back*`` filenames for FRONT so ``Aadhar_back`` is not taken as front.
-    ("AADHAAR_FRONT", ["*Aadhar*front*", "*aadhaar*front*", "*adhaar*front*",
-                        "*Aadhar*consolidated*", "*aadhaar*consolidated*", "*adhaar*consolidated*",
-                        "*Aadhar_Card*", "*Aadhaar*", "*aadhar*"], [".jpg", ".jpeg", ".png"]),
-    # Explicit ``*_back*`` — ``*Aadhar*back*`` alone becomes substring ``aadharback`` and misses ``Aadhar_back``.
-    ("AADHAAR_BACK", ["*Aadhar_back*", "*aadhaar_back*", "*adhaar_back*"], [".jpg", ".jpeg", ".png"]),
-    ("OWNER UNDERTAKING FORM", ["*Detail*", "*Details*", "*Sales_Detail*", "*Detail_Sheet*", "*Sales Detail*"], [".pdf", ".jpg", ".jpeg", ".png"]),
+    (
+        "INSURANCE CERTIFICATE",
+        [
+            "*Insurance_Certificate*",
+            "*Certificate_Of_Insurance*",
+            "*_Insurance*",
+            "*Insurance*",
+        ],
+        [".pdf"],
+    ),
+    (
+        "INVOICE ORIGINAL",
+        [
+            "*GST_Retail_Invoice*",
+            "*GST*Invoice*",
+            "*Tax_Invoice*",
+            "*Tax Invoice*",
+            "*Retail_Invoice*",
+        ],
+        [".pdf"],
+    ),
+    # Spelled ``Aadhar`` or ``Aadhaar``; do not add a bare ``*back*`` subpattern. FRONT skips ``*_back*``.
+    # Substring = pattern with all ``*`` removed (e.g. ``*aadhaar_consolidated*`` → ``aadhaar_consolidated``). Prefer
+    # ``*aadhar_front*`` before ``*aadhar*`` (broad) so ``Aadhar_back`` is not the front file if order changes.
+    (
+        "AADHAAR_FRONT",
+        [
+            "*aadhar_front*",
+            "*aadhaar_front*",
+            "*adhaar_front*",
+            "*aadhaar_consolidated*",
+            "*Aadhaar_Card*",
+            "*Aadhaar*",
+            "*aadhar*",
+        ],
+        [".jpg", ".jpeg", ".png"],
+    ),
+    # ``*Aadhar*back*`` → ``aadharback``; use ``*Aadhar_back*`` (→ ``aadhar_back``) for ``Aadhar_back.jpg``
+    (
+        "AADHAAR_BACK",
+        ["*Aadhar_back*", "*aadhaar_back*", "*adhaar_back*"],
+        [".jpg", ".jpeg", ".png"],
+    ),
+    # Most specific first (``iterdir`` order is arbitrary; a lone ``*Detail*`` can false-positive in other names).
+    (
+        "OWNER UNDERTAKING FORM",
+        [
+            "*Sales Detail Sheet*",
+            "*Detail Sheet*",
+            "*Sales_Detail_Sheet*",
+            "*Sales_Detail*",
+            "*Sales Detail*",
+            "*Details*",
+            "*Detail*",
+        ],
+        [".pdf", ".jpg", ".jpeg", ".png"],
+    ),
 ]
 
 

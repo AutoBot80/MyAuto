@@ -20,6 +20,7 @@ type SubTab = "logins" | "discounts";
 
 type DiscountDraftRow = {
   tempId: string;
+  subdealer_type: string;
   model: string;
   discount: string;
   create_date: string;
@@ -33,6 +34,7 @@ function newDiscountDraft(): DiscountDraftRow {
       : `draft-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
   return {
     tempId,
+    subdealer_type: "",
     model: "",
     discount: "",
     create_date: "",
@@ -353,7 +355,9 @@ export function AdminDealersPage() {
       for (const d of discountDrafts) {
         const ds = d.discount.trim();
         const discountNum = ds === "" ? null : Number(ds);
+        const st = d.subdealer_type.trim();
         await createAdminDealerDiscount(selectedId, {
+          subdealer_type: st || undefined,
           model: d.model.trim(),
           discount: discountNum,
           create_date: d.create_date.trim() || null,
@@ -726,7 +730,8 @@ export function AdminDealersPage() {
       ) : (
         <section className="view-vehicles-section" aria-label="Subdealer discounts for dealer">
           <p className="view-vehicles-hint">
-            Per-dealer model discounts (<code>subdealer_discount_master</code>). Use <strong>Add</strong> for new rows, then{" "}
+            Per-dealer subdealer discounts (<code>subdealer_discount_master_ref</code>). Subdealer type can match model if
+            you only need one line per model. Use <strong>Add</strong> for new rows, then{" "}
             <strong>Save changes</strong> to store them.
           </p>
           {discountSaveError ? <p className="view-vehicles-error">{discountSaveError}</p> : null}
@@ -752,7 +757,7 @@ export function AdminDealersPage() {
             <table className="view-vehicles-table admin-dealers-discount-table">
               <thead>
                 <tr>
-                  <th>ID</th>
+                  <th>Subdealer type</th>
                   <th>Model</th>
                   <th>Discount</th>
                   <th>Create date</th>
@@ -762,8 +767,10 @@ export function AdminDealersPage() {
               </thead>
               <tbody>
                 {discounts.map((row) => (
-                  <tr key={row.subdealer_discount_id}>
-                    <td>{row.subdealer_discount_id}</td>
+                  <tr
+                    key={`${row.dealer_id}-${row.subdealer_type}-${row.valid_flag}-${row.model}`}
+                  >
+                    <td>{row.subdealer_type}</td>
                     <td>{row.model}</td>
                     <td>{row.discount != null ? String(row.discount) : "—"}</td>
                     <td>{formatCell(row.create_date)}</td>
@@ -773,7 +780,20 @@ export function AdminDealersPage() {
                 ))}
                 {discountDrafts.map((dr) => (
                   <tr key={dr.tempId} className="admin-dealers-discount-draft-row">
-                    <td>—</td>
+                    <td>
+                      <input
+                        type="text"
+                        className="view-vehicles-kv-input admin-dealers-discount-cell-input"
+                        value={dr.subdealer_type}
+                        onChange={(e) =>
+                          updateDiscountDraft(dr.tempId, { subdealer_type: e.target.value })
+                        }
+                        disabled={savingDiscounts}
+                        placeholder="Defaults to model"
+                        maxLength={64}
+                        aria-label="Subdealer type"
+                      />
+                    </td>
                     <td>
                       <input
                         type="text"

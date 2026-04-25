@@ -81,6 +81,7 @@ run alter/04d_drop_oem_service_frequency_add_oem_service_schedule.sql
 run alter/04f_oem_service_schedule_add_reminder_type.sql
 run alter/04g_oem_ref_add_dms_link.sql
 run alter/04h_dealer_ref_add_rto_name.sql
+run alter/04i_dealer_ref_add_subdealer_type.sql
 
 # sales_master alters
 run alter/05a_sales_master_add_dealer_unique.sql
@@ -156,8 +157,10 @@ run alter/18b_vehicle_inventory_master_add_discount.sql
 run alter/19a_challan_staging_batch_status.sql
 run alter/19b_challan_staging_created_at.sql
 
-# subdealer rename
+# subdealer rename, then composite PK (no-op on greenfield that already has new shape)
 run alter/22a_rename_subdealer_discount_master_to_ref.sql
+run alter/22b_subdealer_discount_master_ref_composite_pk.sql
+run alter/22c_subdealer_discount_master_ref_pk_add_model.sql
 
 # challan_master_staging last_run_at
 run alter/23a_challan_master_staging_last_run_at.sql

@@ -152,35 +152,60 @@ def update_discount_and_ex_showroom(
         conn.close()
 
 
-def get_discount_for_model(from_dealer_id: int, model: str) -> float | None:
+# Subdealer challan: used when `subdealer_discount_master_ref` + `dealer_ref.subdealer_type` (to) do not match.
+FALLBACK_SUBDEALER_CHALLAN_DISCOUNT: float = 1500.0
+
+
+def get_subdealer_challan_discount(
+    from_dealer_id: int,
+    to_dealer_id: int,
+    model: str,
+) -> float:
+    """
+    Resolve discount for a challan line: ``from_dealer_id``/``to_dealer_id``/DMS model string.
+
+    Reads ``dealer_ref.subdealer_type`` for ``to_dealer_id`` and looks up
+    ``subdealer_discount_master_ref`` for ``dealer_id = from_dealer_id``,
+    matching ``subdealer_type`` and ``valid_flag = 'Y'``. **Model** match is **prefix**:
+    the reference row's ``model`` is the start of the DMS value (DMS may have extra trailing
+    characters). If several rows match, the **longest** reference ``model`` wins. If no row
+    matches or discount is null, returns ``FALLBACK_SUBDEALER_CHALLAN_DISCOUNT`` (1500).
+    """
     m = (model or "").strip()[:64]
     if not m:
-        return None
+        return FALLBACK_SUBDEALER_CHALLAN_DISCOUNT
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT discount
-                FROM subdealer_discount_master_ref
-                WHERE dealer_id = %s
-                  AND TRIM(model) = %s
-                  AND valid_flag = 'Y'
-                ORDER BY subdealer_discount_id DESC
+                SELECT s.discount
+                FROM dealer_ref d
+                INNER JOIN subdealer_discount_master_ref s
+                  ON s.dealer_id = %s
+                 AND TRIM(s.subdealer_type) = TRIM(COALESCE(d.subdealer_type, ''))
+                 AND s.valid_flag = 'Y'
+                 AND BTRIM(s.model) <> ''
+                 AND starts_with(BTRIM(%s), BTRIM(s.model))
+                WHERE d.dealer_id = %s
+                  AND d.subdealer_type IS NOT NULL
+                  AND TRIM(COALESCE(d.subdealer_type, '')) <> ''
+                ORDER BY LENGTH(BTRIM(s.model)) DESC
                 LIMIT 1
                 """,
-                (int(from_dealer_id), m),
+                (int(from_dealer_id), m, int(to_dealer_id)),
             )
             r = cur.fetchone()
             if not r:
-                return None
+                return FALLBACK_SUBDEALER_CHALLAN_DISCOUNT
             d = r["discount"] if isinstance(r, dict) else r[0]
             if d is None:
-                return None
+                return FALLBACK_SUBDEALER_CHALLAN_DISCOUNT
             try:
                 return float(d)
             except (TypeError, ValueError):
-                return None
+                return FALLBACK_SUBDEALER_CHALLAN_DISCOUNT
     finally:
         conn.close()
 

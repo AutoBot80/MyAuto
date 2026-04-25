@@ -439,6 +439,16 @@ def _float_env(name: str, default: float) -> float:
 KYC_INSURER_FUZZY_MIN_SCORE = _float_env("KYC_INSURER_FUZZY_MIN_SCORE", 0.28)
 # Fallback when fuzzy returns None: ``difflib.SequenceMatcher`` on normalized insurer vs focused/display text.
 KYC_INSURER_DISPLAY_SEQUENCE_MIN = _float_env("KYC_INSURER_DISPLAY_SEQUENCE_MIN", 0.48)
+# When ``dealer_ref.prefer_insurer`` is set, require at least this ``SequenceMatcher`` ratio vs the merged
+# details insurer (``master_ref``-aligned) before replacing with the dealer string. High default: insurers are
+# normalized; lower the env var only for unusual short prefer aliases.
+INSURER_PREFER_FUZZY_MIN_RATIO = _float_env("INSURER_PREFER_FUZZY_MIN_RATIO", 0.80)
+# After the last eKYC file attach: wait for MISP to process uploads before clicking Proceed/Next (ms). Default **2s** max.
+MISP_KYC_POST_UPLOAD_STABLE_MS = _int_env("MISP_KYC_POST_UPLOAD_STABLE_MS", 2_000)
+# eKYC may **auto-advance** to ``MispDms.aspx``. Poll the top URL this long before requiring CTA (default **2s**).
+MISP_KYC_TO_VIN_URL_POLL_MS = _int_env("MISP_KYC_TO_VIN_URL_POLL_MS", 2_000)
+# VIN step: if **Please wait** / interstitial is present, add this to ``wait_for_url`` (MispDms) budget (default **2s**).
+MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS = _int_env("MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS", 2_000)
 
 _KYC_KB_SOP_RAW = (os.getenv("KYC_USE_KEYBOARD_EKYC_SOP") or "1").strip().lower()
 # When true (default), ``ekycpage`` KYC uses the keyboard SOP instead of DOM clicks.

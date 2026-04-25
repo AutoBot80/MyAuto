@@ -30,12 +30,12 @@ export interface AdminLoginCatalogRow {
 }
 
 export interface SubdealerDiscountRow {
-  subdealer_discount_id: number;
   dealer_id: number;
+  subdealer_type: string;
+  valid_flag: string;
   model: string;
   discount: number | null;
   create_date: string | null;
-  valid_flag: string;
 }
 
 export function getAdminDealerNames() {
@@ -65,6 +65,7 @@ export function getAdminDealerDiscounts(dealerId: number) {
 export function createAdminDealerDiscount(
   dealerId: number,
   body: {
+    subdealer_type?: string | null;
     model: string;
     discount?: number | null;
     create_date?: string | null;

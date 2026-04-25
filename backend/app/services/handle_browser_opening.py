@@ -463,12 +463,21 @@ def _launch_managed_browser_for_site(
 def _page_matches_site_for_reuse(page_url: str, site_base_url: str, site_label: str) -> bool:
     """Match an open browser tab to the configured site URL.
 
-    **Vahan** uses hostname-only matching so tabs still match after login (path changes away from
-    ``login.xhtml``). Other sites keep path-prefix matching via
-    :func:`_playwright_page_url_matches_site_base`.
+    **Vahan** and **Insurance** use hostname-only matching so tabs still match after login
+    (paths move away from ``login.xhtml`` / partner-login into SPAs like ``/ekycpage``). Other
+    sites keep path-prefix matching via :func:`_playwright_page_url_matches_site_base`.
     """
     sl = (site_label or "").strip()
     if sl == "Vahan":
+        ph = _hostname_for_site_match(page_url)
+        bh = _hostname_for_site_match(site_base_url)
+        return bool(ph and bh and ph == bh)
+    if sl == "Insurance":
+        low = (page_url or "").strip().lower()
+        if "blank" in low or low.startswith("chrome://") or low.startswith("edge://") or low.startswith("about:"):
+            return False
+        if _url_looks_like_dms_siebel_tab(page_url):
+            return False
         ph = _hostname_for_site_match(page_url)
         bh = _hostname_for_site_match(site_base_url)
         return bool(ph and bh and ph == bh)
