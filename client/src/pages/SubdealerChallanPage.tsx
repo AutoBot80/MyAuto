@@ -5,8 +5,10 @@ import {
   createChallanStaging,
   listRecentChallanStaging,
   parseSubdealerChallanScans,
+  patchChallanStagingFailedLine,
   processChallanBatch,
   retryChallanOrderOnly,
+  type ChallanFailedDetailLine,
   type ChallanMasterProcessedRow,
   type SubdealerChallanLine,
 } from "../api/subdealerChallan";
@@ -247,6 +249,11 @@ export function SubdealerChallanPage({
   const [processedChallanSearchApplied, setProcessedChallanSearchApplied] = useState("");
   const [retryingProcessBatchId, setRetryingProcessBatchId] = useState<string | null>(null);
   const [retryingOrderBatchId, setRetryingOrderBatchId] = useState<string | null>(null);
+  /** Edits to Failed lines (chassis/engine) before **Save all changes**. */
+  const [failedLineDrafts, setFailedLineDrafts] = useState<
+    Record<number, { raw_chassis: string; raw_engine: string }>
+  >({});
+  const [savingFailedLineEdits, setSavingFailedLineEdits] = useState(false);
   /** Master row selection drives the lower vehicle lines sub-table. */
   const [selectedProcessedBatchId, setSelectedProcessedBatchId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -366,6 +373,77 @@ export function SubdealerChallanPage({
       onChallanCountsRefresh();
     }
   }, [dealerId, processedChallanSearchApplied, onChallanCountsRefresh]);
+
+  useEffect(() => {
+    setFailedLineDrafts({});
+  }, [selectedProcessedBatchId]);
+
+  const hasUnsavedFailedLineEdits = useMemo(() => {
+    for (const fl of selectedBatchVehicleLines) {
+      if ((fl.status || "").trim().toLowerCase() !== "failed") continue;
+      const d = failedLineDrafts[fl.challan_detail_staging_id];
+      if (!d) continue;
+      const sc = (fl.raw_chassis || "").trim();
+      const se = (fl.raw_engine || "").trim();
+      if (d.raw_chassis.trim() !== sc || d.raw_engine.trim() !== se) {
+        return true;
+      }
+    }
+    return false;
+  }, [selectedBatchVehicleLines, failedLineDrafts]);
+
+  const onFailedLineFieldChange = useCallback(
+    (fl: ChallanFailedDetailLine, field: "raw_chassis" | "raw_engine", value: string) => {
+      const up = value.toUpperCase();
+      setFailedLineDrafts((prev) => {
+        const id = fl.challan_detail_staging_id;
+        const cur = prev[id] ?? {
+          raw_chassis: (fl.raw_chassis || "").trim(),
+          raw_engine: (fl.raw_engine || "").trim(),
+        };
+        return { ...prev, [id]: { ...cur, [field]: up } };
+      });
+    },
+    [],
+  );
+
+  const onSaveAllFailedLineEdits = useCallback(async () => {
+    if (!selectedProcessedRow) return;
+    const toSave: { id: number; body: { raw_chassis: string; raw_engine: string } }[] = [];
+    for (const fl of selectedBatchVehicleLines) {
+      if ((fl.status || "").trim().toLowerCase() !== "failed") continue;
+      const d = failedLineDrafts[fl.challan_detail_staging_id];
+      if (!d) continue;
+      const sc = (fl.raw_chassis || "").trim();
+      const se = (fl.raw_engine || "").trim();
+      if (d.raw_chassis.trim() === sc && d.raw_engine.trim() === se) continue;
+      toSave.push({
+        id: fl.challan_detail_staging_id,
+        body: { raw_chassis: d.raw_chassis.trim(), raw_engine: d.raw_engine.trim() },
+      });
+    }
+    if (toSave.length === 0) return;
+    setSavingFailedLineEdits(true);
+    setProcessedError(null);
+    try {
+      for (const { id, body } of toSave) {
+        await patchChallanStagingFailedLine(id, body);
+      }
+      setFailedLineDrafts({});
+      await loadProcessed();
+      onChallanCountsRefresh();
+    } catch (err) {
+      setProcessedError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingFailedLineEdits(false);
+    }
+  }, [
+    selectedProcessedRow,
+    selectedBatchVehicleLines,
+    failedLineDrafts,
+    loadProcessed,
+    onChallanCountsRefresh,
+  ]);
 
   const applyProcessedChallanSearch = useCallback(() => {
     setProcessedChallanSearchApplied(processedChallanSearchDraft.trim());
@@ -874,11 +952,6 @@ export function SubdealerChallanPage({
             {processedLoading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
-        <p className="challans-processed-list-hint">
-          {processedChallanSearchApplied.trim()
-            ? "Showing this challan by book number (any date)."
-            : "Showing batches from the last 15 days that need attention: failed vehicle line(s), or failed invoice."}
-        </p>
         {processedLoading ? (
           <p className="app-table-empty challans-processed-loading-msg">
             Loading…
@@ -892,13 +965,10 @@ export function SubdealerChallanPage({
         ) : (
           <div className="challans-processed-split">
             <div className="challans-processed-master">
-              <p className="challans-processed-hint" id="challans-processed-master-hint">
-                Select a row to view vehicle lines below.
-              </p>
               <div
                 className="challans-processed-table-wrap"
                 role="region"
-                aria-labelledby="challans-processed-master-hint"
+                aria-label="Processed challan batches"
               >
                 <table className="app-table">
                   <thead>
@@ -1010,9 +1080,28 @@ export function SubdealerChallanPage({
               role="region"
               aria-labelledby="challans-processed-failed-heading"
             >
-              <h3 className="challans-processed-failed-heading" id="challans-processed-failed-heading">
-                Vehicles in this batch
-              </h3>
+              <div className="challans-processed-failed-header-row">
+                <h3
+                  className="challans-processed-failed-heading"
+                  id="challans-processed-failed-heading"
+                >
+                  Vehicles in this batch
+                </h3>
+                <button
+                  type="button"
+                  className="app-button app-button--small challans-proc-save-all-btn"
+                  disabled={
+                    !hasUnsavedFailedLineEdits ||
+                    savingFailedLineEdits ||
+                    selectedProcessedRow === null ||
+                    retryingProcessBatchId !== null ||
+                    retryingOrderBatchId !== null
+                  }
+                  onClick={() => void onSaveAllFailedLineEdits()}
+                >
+                  {savingFailedLineEdits ? "Saving…" : "Save all changes"}
+                </button>
+              </div>
               <div className="challans-processed-failed-table-wrap">
                 {selectedProcessedRow === null ? (
                   <p className="app-table-empty challans-processed-failed-placeholder">
@@ -1026,9 +1115,15 @@ export function SubdealerChallanPage({
                   <table className="app-table challans-processed-failed-table">
                     <thead>
                       <tr>
-                        <th scope="col">Line</th>
-                        <th scope="col">Chassis No.</th>
-                        <th scope="col">Engine No.</th>
+                        <th scope="col" title="Line (staging id)">
+                          Line
+                        </th>
+                        <th scope="col" title="Chassis number">
+                          Chassis
+                        </th>
+                        <th scope="col" title="Engine number">
+                          Engine
+                        </th>
                         <th scope="col">Status</th>
                         <th scope="col">Reason</th>
                       </tr>
@@ -1037,14 +1132,57 @@ export function SubdealerChallanPage({
                       {selectedBatchVehicleLines.map((fl) => {
                         const st = (fl.status || "").trim().toLowerCase();
                         const isFailed = st === "failed";
+                        const id = fl.challan_detail_staging_id;
+                        const d = failedLineDrafts[id];
+                        const chVal = d ? d.raw_chassis : (fl.raw_chassis || "").trim();
+                        const enVal = d ? d.raw_engine : (fl.raw_engine || "").trim();
                         return (
                           <tr
-                            key={fl.challan_detail_staging_id}
+                            key={id}
                             className={isFailed ? "challans-proc-detail-row--failed" : undefined}
                           >
-                            <td>{fl.challan_detail_staging_id}</td>
-                            <td>{(fl.raw_chassis || "").trim() || "—"}</td>
-                            <td>{(fl.raw_engine || "").trim() || "—"}</td>
+                            <td title={id != null ? String(id) : undefined}>{id}</td>
+                            <td
+                              className="challans-proc-vehicle-cell"
+                              title={!isFailed && chVal ? chVal : undefined}
+                            >
+                              {isFailed ? (
+                                <input
+                                  type="text"
+                                  className="subdealer-challan-cell-input challans-proc-vehicle-input"
+                                  value={chVal}
+                                  onChange={(e) =>
+                                    onFailedLineFieldChange(fl, "raw_chassis", e.target.value)
+                                  }
+                                  maxLength={32}
+                                  spellCheck={false}
+                                  autoCapitalize="characters"
+                                  aria-label={`Chassis, line ${id}`}
+                                />
+                              ) : (
+                                (fl.raw_chassis || "").trim() || "—"
+                              )}
+                            </td>
+                            <td
+                              className="challans-proc-vehicle-cell"
+                              title={!isFailed && enVal ? enVal : undefined}
+                            >
+                              {isFailed ? (
+                                <input
+                                  type="text"
+                                  className="subdealer-challan-cell-input challans-proc-vehicle-input"
+                                  value={enVal}
+                                  onChange={(e) =>
+                                    onFailedLineFieldChange(fl, "raw_engine", e.target.value)
+                                  }
+                                  maxLength={32}
+                                  spellCheck={false}
+                                  aria-label={`Engine, line ${id}`}
+                                />
+                              ) : (
+                                (fl.raw_engine || "").trim() || "—"
+                              )}
+                            </td>
                             <td>{(fl.status || "").trim() || "—"}</td>
                             <td className={isFailed ? "challans-proc-err" : undefined}>
                               {fl.last_error?.trim() || "—"}

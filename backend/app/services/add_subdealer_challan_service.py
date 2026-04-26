@@ -235,6 +235,7 @@ def _run_order_phase(
         f"appending STEP/NOTE trace to challan log: {log_path}"
     )
     dms_values: dict = {}
+    dms_values["challan_frame_dump_dir"] = str(log_path.parent.resolve())
     prepare_customer_for_challan(
         dms_values,
         to_dealer_id=to_dealer_id,
@@ -521,6 +522,58 @@ def retry_order_only_batch(
         dealer_id=dealer_id,
         phase="order_only",
     )
+
+
+def patch_staging_failed_line_raw_vehicles(
+    *,
+    challan_detail_staging_id: int,
+    dealer_id: int,
+    raw_chassis: str | None,
+    raw_engine: str | None,
+) -> dict[str, object]:
+    """
+    Update ``raw_chassis`` / ``raw_engine`` on a **Failed** staging line (OCR fix before batch retry).
+    Enforces the same (engine, chassis) uniqueness as new staging, excluding this row.
+    """
+    row = detail_repo.fetch_detail_row(challan_detail_staging_id)
+    if not row:
+        return {"ok": False, "error": "Staging row not found."}
+    if int(row["from_dealer_id"]) != int(dealer_id):
+        return {"ok": False, "error": "Not authorized for this staging row."}
+    st = (row.get("status") or "").strip().lower()
+    if st != "failed":
+        return {"ok": False, "error": f"Line status is {st!r}; only Failed lines can be edited here."}
+    re_new = (raw_engine if raw_engine is not None else (row.get("raw_engine") or "")).strip() or None
+    rc_new = (raw_chassis if raw_chassis is not None else (row.get("raw_chassis") or "")).strip() or None
+    if not re_new and not rc_new:
+        return {"ok": False, "error": "At least one of engine or chassis is required."}
+    bid = row.get("challan_batch_id")
+    if not bid:
+        return {"ok": False, "error": "Missing challan_batch_id."}
+    try:
+        bu = uuid.UUID(str(bid))
+    except ValueError:
+        return {"ok": False, "error": "Invalid challan_batch_id."}
+    if detail_repo.other_line_has_same_vehicle_key(
+        exclude_challan_detail_staging_id=challan_detail_staging_id,
+        from_dealer_id=int(row["from_dealer_id"]),
+        challan_book_num=(str(row.get("challan_book_num") or "").strip() or None),
+        challan_date=(str(row.get("challan_date") or "").strip() or None),
+        challan_batch_id=bu,
+        raw_engine=re_new,
+        raw_chassis=rc_new,
+    ):
+        return {
+            "ok": False,
+            "error": "Another line already has this engine and chassis for this challan (book number and date, or this batch).",
+        }
+    if not detail_repo.update_detail_raw_fields(
+        challan_detail_staging_id,
+        raw_chassis=rc_new,
+        raw_engine=re_new,
+    ):
+        return {"ok": False, "error": "Could not update (line not in Failed status?)."}
+    return {"ok": True, "error": None}
 
 
 def create_challan_staging_batch(

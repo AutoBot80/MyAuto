@@ -4,7 +4,7 @@ import { UpdateBanner } from "./UpdateBanner";
 export function AppChrome({ children }: { children: ReactNode }) {
   return (
     <div
-      className="app-chrome app-deterrent"
+      className="app-chrome"
       onContextMenu={(e) => e.preventDefault()}
     >
       {children}

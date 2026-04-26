@@ -333,3 +333,25 @@ export async function retryChallanOrderOnly(
     }
   );
 }
+
+export type PatchChallanStagingFailedLineBody = {
+  raw_chassis: string;
+  raw_engine: string;
+};
+
+/**
+ * PATCH /subdealer-challan/staging/detail/{id} — update chassis/engine on a **Failed** line before batch retry.
+ */
+export async function patchChallanStagingFailedLine(
+  challanDetailStagingId: number,
+  body: PatchChallanStagingFailedLineBody
+): Promise<{ ok?: boolean; error?: string | null }> {
+  return apiFetch<{ ok?: boolean; error?: string | null }>(
+    `/subdealer-challan/staging/detail/${encodeURIComponent(String(challanDetailStagingId))}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+}

@@ -14,6 +14,7 @@ from app.repositories import challan_details_staging as detail_repo
 from app.repositories import challan_master_staging as master_repo
 from app.services.add_subdealer_challan_service import (
     create_challan_staging_batch,
+    patch_staging_failed_line_raw_vehicles,
     retry_failed_staging_row,
     retry_order_only_batch,
     run_subdealer_challan_batch,
@@ -66,6 +67,11 @@ class CreateChallanStagingResponse(BaseModel):
 class ProcessChallanRequest(BaseModel):
     dms_base_url: str | None = Field(None, description="Defaults to server DMS_BASE_URL")
     dealer_id: int | None = Field(None, description="Defaults to DEALER_ID")
+
+
+class PatchStagingDetailRequest(BaseModel):
+    raw_chassis: str | None = Field(None, description="Corrected chassis; may combine with existing if omitted")
+    raw_engine: str | None = Field(None, description="Corrected engine; may combine with existing if omitted")
 
 
 @router.post("/staging", response_model=CreateChallanStagingResponse)
@@ -236,6 +242,27 @@ def staging_failed_count(
         logger.warning("subdealer_challan: missing schema: %s", e)
         raise HTTPException(status_code=503, detail=CHALLAN_STAGING_SCHEMA_HINT) from e
     return {"failed": n}
+
+
+@router.patch("/staging/detail/{challan_detail_staging_id}")
+def patch_staging_detail_raw(
+    challan_detail_staging_id: int,
+    req: PatchStagingDetailRequest,
+    principal: Principal = Depends(get_principal),
+) -> dict[str, object]:
+    """Update ``raw_chassis`` / ``raw_engine`` on a **Failed** line (fix OCR before using batch **Retry**)."""
+    enforce_max_text_depth(req.model_dump())
+    did = int(resolve_dealer_id(principal, None))
+    out = patch_staging_failed_line_raw_vehicles(
+        challan_detail_staging_id=challan_detail_staging_id,
+        dealer_id=did,
+        raw_chassis=req.raw_chassis,
+        raw_engine=req.raw_engine,
+    )
+    if not out.get("ok"):
+        err = (out.get("error") or "Update failed").strip()
+        raise HTTPException(status_code=400, detail=err)
+    return out
 
 
 @router.post("/staging/{challan_detail_staging_id}/retry")

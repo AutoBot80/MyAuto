@@ -2251,6 +2251,61 @@ def _challan_read_pin_code_field(
     return ""
 
 
+def _challan_write_frame_diagnostics(
+    page: Page,
+    *,
+    dump_dir: str,
+    file_stem: str,
+    note: Callable[..., None],
+    field_summary: dict[str, str] | None = None,
+) -> str | None:
+    """
+    Write a text file with per-frame URL + innerText for Siebel debugging.
+    Returns the file path on success, None on failure.
+    """
+    import os
+    import tempfile
+    from datetime import datetime
+
+    try:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"{file_stem}_{ts}.txt"
+        d = Path(dump_dir) if dump_dir else Path(tempfile.gettempdir())
+        d.mkdir(parents=True, exist_ok=True)
+        fpath = d / fname
+
+        lines: list[str] = []
+        lines.append(f"=== Frame Dump: {file_stem} @ {ts} ===\n")
+        lines.append(f"Page URL: {page.url}\n")
+
+        if field_summary:
+            lines.append("\n--- Field Summary ---\n")
+            for k, v in field_summary.items():
+                lines.append(f"  {k}: {v!r}\n")
+            lines.append("\n")
+
+        for i, frame in enumerate(_ordered_frames(page)):
+            try:
+                url = frame.url or "(no url)"
+                txt = ""
+                try:
+                    txt = frame.evaluate("() => document.body ? document.body.innerText : ''") or ""
+                except Exception:
+                    txt = "(could not read innerText)"
+                lines.append(f"\n--- Frame {i}: {url[:200]} ---\n")
+                lines.append(txt[:8000])
+                lines.append("\n")
+            except Exception as e:
+                lines.append(f"\n--- Frame {i}: error {e!r} ---\n")
+
+        fpath.write_text("".join(lines), encoding="utf-8")
+        note(f"Frame dump written: {fpath}")
+        return str(fpath)
+    except Exception as e:
+        note(f"Frame dump failed: {e!r}")
+        return None
+
+
 def _fill_challan_account_institution_name_verify_pin(
     page: Page,
     *,
@@ -2259,6 +2314,7 @@ def _fill_challan_account_institution_name_verify_pin(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note: Callable[..., None],
+    challan_frame_dump_dir: str | None = None,
 ) -> tuple[bool, str]:
     """
     Subdealer challan: dismiss any open MVG applet (Escape), focus the **input** without using the
@@ -2310,13 +2366,26 @@ def _fill_challan_account_institution_name_verify_pin(
     if inst_loc is None:
         return False, "Could not find Account/Institution Name input (challan)."
 
-    # If a prior step opened the MVG / pick applet, close it — we only type in the field and Tab out.
-    for _esc_i in range(3):
+    def _read_inst_value() -> str:
+        """Read current value of Account/Institution Name input."""
         try:
-            page.keyboard.press("Escape")
+            return inst_loc.evaluate("el => el.value || ''") or ""
         except Exception:
-            pass
-        _safe_page_wait(page, 120, log_label=f"challan_institution_dismiss_applet_esc{_esc_i}")
+            return ""
+
+    # --- Frame dump BEFORE filling ---
+    if challan_frame_dump_dir:
+        _challan_write_frame_diagnostics(
+            page,
+            dump_dir=challan_frame_dump_dir,
+            file_stem="challan_before_institution_fill",
+            note=note,
+            field_summary={
+                "Account/Institution Name (before)": _read_inst_value(),
+                "expected_pin": expected_pin or "",
+                "institution_name_to_fill": nm,
+            },
+        )
 
     try:
         inst_loc.scroll_into_view_if_needed(timeout=_tmo)
@@ -2343,7 +2412,6 @@ def _fill_challan_account_institution_name_verify_pin(
             if box and float(box.get("width") or 0) > 12:
                 w = float(box["width"])
                 h = float(box.get("height") or 20)
-                # ~6–14px from left edge, or ~7% of width — whichever is smaller (stays out of icon zone).
                 x_left = min(14.0, max(6.0, w * 0.07))
                 inst_loc.click(position={"x": x_left, "y": h / 2.0}, timeout=_tmo)
             else:
@@ -2351,8 +2419,9 @@ def _fill_challan_account_institution_name_verify_pin(
         except Exception as e:
             return False, f"Account/Institution Name: could not focus input ({e!s})."
 
-    _safe_page_wait(page, 120, log_label="challan_institution_after_focus")
+    _safe_page_wait(page, 150, log_label="challan_institution_after_focus")
 
+    # Clear and type the institution name
     try:
         inst_loc.press("Control+a", timeout=1200)
     except Exception:
@@ -2369,15 +2438,163 @@ def _fill_challan_account_institution_name_verify_pin(
         except Exception as e:
             return False, f"Account/Institution Name: could not type ({e!s})."
 
-    try:
-        inst_loc.press("Tab", timeout=1200)
-    except Exception:
+    # --- Log value AFTER filling, BEFORE Tab ---
+    _val_after_fill = _read_inst_value()
+    note(f"Account/Institution Name after fill (before Tab): {_val_after_fill!r}")
+
+    # Settling wait before Tab
+    _safe_page_wait(page, 500, log_label="challan_institution_settle_before_tab")
+
+    # --- Tab out with multiple fallback attempts ---
+    _tab_ok = False
+    for _tab_attempt in range(3):
+        try:
+            if _tab_attempt == 0:
+                inst_loc.press("Tab", timeout=1500)
+            elif _tab_attempt == 1:
+                page.keyboard.press("Tab")
+            else:
+                inst_loc.evaluate("el => el.blur()")
+            _tab_ok = True
+            break
+        except Exception:
+            _safe_page_wait(page, 100, log_label=f"challan_tab_retry_{_tab_attempt}")
+
+    # Settling wait after Tab to let Siebel process field blur and autopopulate
+    _safe_page_wait(page, 800, log_label="challan_institution_settle_after_tab")
+
+    # --- Log value AFTER Tab ---
+    _val_after_tab = _read_inst_value()
+    note(f"Account/Institution Name after Tab: {_val_after_tab!r} (tab_ok={_tab_ok})")
+
+    # --- Check if Pick Account MVG dialog opened (Tab cleared the field) ---
+    def _detect_pick_account_dialog() -> bool:
+        """Check if Pick Account popup is visible."""
+        for root in roots:
+            try:
+                # Look for dialog with "Pick Account" title or the specific dropdown
+                for sel in (
+                    "[aria-label*='Pick Account' i]",
+                    "[title*='Pick Account' i]",
+                    "div.siebui-popup-mv",
+                    "div.ui-dialog:has-text('Pick Account')",
+                    "select:has(option:text('Account Name'))",
+                ):
+                    loc = root.locator(sel).first
+                    if loc.count() > 0 and loc.is_visible(timeout=300):
+                        return True
+            except Exception:
+                continue
+        return False
+
+    def _handle_pick_account_mvg() -> tuple[bool, str]:
+        """
+        Handle Pick Account MVG using keyboard-driven flow (matches manual behavior):
+        1. Select "Account Name" from dropdown
+        2. Tab to value field
+        3. Type institution name
+        4. Tab again
+        5. Enter to confirm and close dialog
+        """
+        note("Pick Account MVG detected — handling popup with keyboard flow.")
+
+        # Frame dump of the popup
+        if challan_frame_dump_dir:
+            _challan_write_frame_diagnostics(
+                page,
+                dump_dir=challan_frame_dump_dir,
+                file_stem="challan_pick_account_mvg",
+                note=note,
+                field_summary={"institution_name": nm, "expected_pin": expected_pin or ""},
+            )
+
+        _safe_page_wait(page, 400, log_label="pick_account_mvg_start")
+
+        # 1) Select "Account Name" (2nd option) from dropdown using keyboard
+        # Focus dropdown, Home to first option, ArrowDown to second option
+        _dropdown_ok = False
+        
+        # Find and click the dropdown to focus it
+        try:
+            # Use JavaScript to find and click the visible select element
+            _js_focus_dropdown = """() => {
+                const selects = document.querySelectorAll('select');
+                for (const sel of selects) {
+                    const rect = sel.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0) {
+                        const style = window.getComputedStyle(sel);
+                        if (style.display !== 'none' && style.visibility !== 'hidden') {
+                            sel.focus();
+                            sel.click();
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }"""
+            page.evaluate(_js_focus_dropdown)
+            _safe_page_wait(page, 200, log_label="pick_account_dropdown_focus")
+            note("Pick Account MVG: focused dropdown.")
+        except Exception as e:
+            note(f"Pick Account MVG: dropdown focus error: {e!r}")
+
+        # Use keyboard to select second option (Account Name)
+        # Two ArrowDown presses: first may open dropdown, second selects "Account Name"
+        try:
+            page.keyboard.press("ArrowDown")
+            _safe_page_wait(page, 150, log_label="pick_account_dropdown_down1")
+            page.keyboard.press("ArrowDown")
+            _safe_page_wait(page, 150, log_label="pick_account_dropdown_down2")
+            _dropdown_ok = True
+            note("Pick Account MVG: selected 'Account Name' via 2x ArrowDown.")
+        except Exception as e:
+            note(f"Pick Account MVG: keyboard navigation failed: {e!r}")
+
+        _safe_page_wait(page, 300, log_label="pick_account_after_dropdown")
+
+        # 2) Tab to value input field
         try:
             page.keyboard.press("Tab")
+            note("Pick Account MVG: Tab pressed (dropdown → value field).")
+        except Exception:
+            pass
+        _safe_page_wait(page, 300, log_label="pick_account_after_tab1")
+
+        # 3) Type institution name (focus should now be on value input)
+        try:
+            page.keyboard.type(nm, delay=25)
+            note(f"Pick Account MVG: typed {nm!r} in value field.")
+        except Exception as e:
+            return False, f"Pick Account MVG: could not type institution name ({e!s})."
+
+        _safe_page_wait(page, 400, log_label="pick_account_after_type")
+
+        # 4) Tab again (moves focus, may trigger search)
+        try:
+            page.keyboard.press("Tab")
+            note("Pick Account MVG: Tab pressed (value field → next).")
+        except Exception:
+            pass
+        _safe_page_wait(page, 300, log_label="pick_account_after_tab2")
+
+        # 5) Press Enter to confirm selection and close dialog
+        try:
+            page.keyboard.press("Enter")
+            note("Pick Account MVG: Enter pressed to confirm and close.")
         except Exception:
             pass
 
-    note("Create Order: Account/Institution Name typed + Tab (challan); waiting for Pin Code autopopulate.")
+        _safe_page_wait(page, 1000, log_label="pick_account_after_enter")
+        return True, ""
+
+    # If field is empty after Tab and Pick Account dialog is visible, handle it
+    if not _val_after_tab.strip() and _detect_pick_account_dialog():
+        _mvg_ok, _mvg_err = _handle_pick_account_mvg()
+        if not _mvg_ok:
+            return False, _mvg_err
+        # Re-read the field value after MVG handling
+        _val_after_mvg = _read_inst_value()
+        note(f"Account/Institution Name after Pick Account MVG: {_val_after_mvg!r}")
 
     exp_digits = re.sub(r"\D", "", (expected_pin or "").strip())
     for _poll in range(24):
@@ -2430,6 +2647,7 @@ def _create_order(
     network_dealer_name: str = "",
     challan_network_pin: str = "",
     expected_order_number: str = "",
+    challan_frame_dump_dir: str | None = None,
 ) -> tuple[bool, str | None, dict]:
     """
     Vehicle Sales → Sales Orders flow (same frame as the ``+`` New control):
@@ -3068,6 +3286,7 @@ def _create_order(
                     action_timeout_ms=action_timeout_ms,
                     content_frame_selector=content_frame_selector,
                     note=note,
+                    challan_frame_dump_dir=challan_frame_dump_dir,
                 )
                 if not _inst_ok:
                     return False, _inst_err, scraped
@@ -4765,6 +4984,7 @@ def prepare_order(
         str(dms_values.get("order_number") or "").strip()
         or str((out.get("vehicle") or {}).get("order_number") or "").strip()
     )
+    _challan_frame_dump = str(dms_values.get("challan_frame_dump_dir") or "").strip() or None
     ok_order, order_err, order_scraped = _create_order(
         page,
         mobile=mobile,
@@ -4788,6 +5008,7 @@ def prepare_order(
             dms_values.get("network_pin_code") or dms_values.get("pin_code") or ""
         ).strip(),
         expected_order_number=_expected_order,
+        challan_frame_dump_dir=_challan_frame_dump,
     )
     if not ok_order:
         step("Stopped: create_order flow failed.")

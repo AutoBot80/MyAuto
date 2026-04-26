@@ -2978,7 +2978,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  gap: 6px;
+  gap: 3px;
 }
 
 .challans-processed-search {
@@ -3013,12 +3013,6 @@
   flex-shrink: 0;
 }
 
-.challans-processed-list-hint {
-  margin: 0;
-  font-size: 12px;
-  color: #5a6b7a;
-}
-
 .challans-processed-loading-msg {
   padding: 1rem;
   margin: 0;
@@ -3029,25 +3023,20 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.challans-processed-master {
-  flex: 1 1 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
   gap: 4px;
 }
 
-.challans-processed-hint {
-  margin: 0;
-  font-size: 12px;
-  color: #5a6b7a;
+/* Tighter top block + room for more vehicle rows below (see flex ratio) */
+.challans-processed-master {
+  flex: 0.8 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
 .challans-processed-failed-section {
-  flex: 1 1 0;
+  flex: 1.2 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -3056,6 +3045,16 @@
   border-radius: 10px;
   padding: 8px 10px 10px;
   background: #f8fafc;
+  /* ~15% more vertical room for the vehicle lines block vs prior flex-min-only sizing */
+  min-height: 12.5rem;
+}
+
+.challans-processed-failed-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
 }
 
 .challans-processed-failed-heading {
@@ -3063,12 +3062,20 @@
   font-size: 15px;
   font-weight: 600;
   color: #1e5a9e;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.challans-proc-save-all-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .challans-processed-failed-table-wrap {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
+  flex: 1 1 0;
+  min-height: 14.5rem;
+  overflow-x: auto;
+  overflow-y: auto;
   border-radius: 6px;
   background: #fff;
   border: 1px solid #e2eaf2;
@@ -3079,10 +3086,70 @@
   margin: 0;
 }
 
-.challans-processed-failed-table .challans-proc-err {
+/* Tight Chassis/Engine/Status (~10ch); Reason column uses the rest and wraps */
+.challans-processed-failed-table {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 0;
+}
+
+.challans-processed-failed-table.app-table thead th,
+.challans-processed-failed-table.app-table tbody td {
+  vertical-align: middle;
+  line-height: 1.2;
+  padding: 5px 5px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.challans-processed-failed-table.app-table thead th:nth-child(1),
+.challans-processed-failed-table.app-table tbody td:nth-child(1) {
+  width: 6ch;
+  max-width: 6ch;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.challans-processed-failed-table.app-table thead th:nth-child(2),
+.challans-processed-failed-table.app-table tbody td:nth-child(2),
+.challans-processed-failed-table.app-table thead th:nth-child(3),
+.challans-processed-failed-table.app-table tbody td:nth-child(3),
+.challans-processed-failed-table.app-table thead th:nth-child(4),
+.challans-processed-failed-table.app-table tbody td:nth-child(4) {
+  width: 10ch;
+  max-width: 10ch;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.challans-processed-failed-table.app-table thead th:nth-child(5),
+.challans-processed-failed-table.app-table tbody td:nth-child(5) {
+  width: auto;
+  min-width: 0;
   white-space: normal;
-  max-width: min(420px, 40vw);
   word-break: break-word;
+  padding-left: 8px;
+  padding-right: 6px;
+}
+
+.challans-processed-failed-table .challans-proc-err {
+  max-width: none;
+}
+
+.challans-processed-failed-table .challans-proc-vehicle-cell {
+  min-width: 0;
+  max-width: 10ch;
+  overflow: hidden;
+}
+
+.challans-processed-failed-table .challans-proc-vehicle-input.subdealer-challan-cell-input {
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  height: 1.6rem;
+  line-height: 1.2;
+  padding: 2px 4px;
 }
 
 .challans-processed-failed-table tr.challans-proc-detail-row--failed td {
@@ -3119,8 +3186,14 @@
   overflow-x: auto;
   overflow-y: auto;
   border: 1px solid #c5d9ed;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fff;
+}
+
+/* ~half the default .app-table cell padding in this block only — frees height for the bottom table */
+.challans-processed-table-wrap .app-table thead th,
+.challans-processed-table-wrap .app-table tbody td {
+  padding: 5px 10px;
 }
 
 .challans-processed-table-wrap .app-table tbody td.challans-proc-err {
@@ -3486,7 +3559,6 @@
   min-height: 1.75rem;
   line-height: 1.35;
   color: #3d4f5f;
-  user-select: none;
 }
 
 .subdealer-challan-cell-input {
@@ -3527,7 +3599,7 @@
   }
 }
 
-/* App shell: deterrents (see AppChrome) */
+/* App shell (see AppChrome); context menu still deterred in component */
 .app-chrome {
   flex: 1;
   min-height: 0;
@@ -3535,19 +3607,6 @@
   display: flex;
   flex-direction: column;
   position: relative;
-}
-
-.app-deterrent {
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.app-deterrent input,
-.app-deterrent textarea,
-.app-deterrent select,
-.app-deterrent [contenteditable="true"] {
-  user-select: text;
-  -webkit-user-select: text;
 }
 
 .app-topbar-left-column {

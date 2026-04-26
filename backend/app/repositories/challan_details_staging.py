@@ -120,6 +120,101 @@ def fetch_batch_rows(challan_batch_id: uuid.UUID) -> list[dict[str, Any]]:
         conn.close()
 
 
+def other_line_has_same_vehicle_key(
+    *,
+    exclude_challan_detail_staging_id: int,
+    from_dealer_id: int,
+    challan_book_num: str | None,
+    challan_date: str | None,
+    challan_batch_id: uuid.UUID,
+    raw_engine: str | None,
+    raw_chassis: str | None,
+) -> bool:
+    """
+    True if another detail row would duplicate the (engine, chassis) identity:
+    - always checks other rows in the same ``challan_batch_id``;
+    - when both book number and date are set on the master, also checks any other batch
+      for the same dealer + book + date (mirrors create_staging dedupe).
+    """
+    e = (raw_engine or "").strip().upper()
+    c = (raw_chassis or "").strip().upper()
+    if not e and not c:
+        return False
+    book = (challan_book_num or "").strip()
+    d = (challan_date or "").strip()
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM challan_details_staging
+                WHERE challan_batch_id = %s::uuid
+                  AND challan_detail_staging_id <> %s
+                  AND UPPER(TRIM(COALESCE(raw_engine, ''))) = %s
+                  AND UPPER(TRIM(COALESCE(raw_chassis, ''))) = %s
+                LIMIT 1
+                """,
+                (str(challan_batch_id), int(exclude_challan_detail_staging_id), e, c),
+            )
+            if cur.fetchone() is not None:
+                return True
+            if book and d:
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM challan_details_staging d
+                    INNER JOIN challan_master_staging m ON m.challan_batch_id = d.challan_batch_id
+                    WHERE m.from_dealer_id = %s
+                      AND TRIM(COALESCE(m.challan_book_num, '')) = %s
+                      AND TRIM(COALESCE(m.challan_date, '')) = %s
+                      AND d.challan_detail_staging_id <> %s
+                      AND UPPER(TRIM(COALESCE(d.raw_engine, ''))) = %s
+                      AND UPPER(TRIM(COALESCE(d.raw_chassis, ''))) = %s
+                    LIMIT 1
+                    """,
+                    (int(from_dealer_id), book, d, int(exclude_challan_detail_staging_id), e, c),
+                )
+                return cur.fetchone() is not None
+    finally:
+        conn.close()
+    return False
+
+
+def update_detail_raw_fields(
+    challan_detail_staging_id: int,
+    *,
+    raw_chassis: str | None,
+    raw_engine: str | None,
+) -> bool:
+    """
+    Set ``raw_chassis`` / ``raw_engine`` and clear ``last_error`` and ``inventory_line_id`` for
+    a **Failed** line so the user can correct OCR and retry. Returns True if a row was updated.
+    """
+    rc = (raw_chassis or "").strip() or None
+    re_ = (raw_engine or "").strip() or None
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE challan_details_staging
+                SET raw_chassis = %s,
+                    raw_engine = %s,
+                    last_error = NULL,
+                    inventory_line_id = NULL
+                WHERE challan_detail_staging_id = %s
+                  AND LOWER(TRIM(COALESCE(status, ''))) = 'failed'
+                """,
+                (rc, re_, int(challan_detail_staging_id)),
+            )
+            n = int(cur.rowcount or 0)
+        conn.commit()
+    finally:
+        conn.close()
+    return n > 0
+
+
 def update_detail_status(
     challan_detail_staging_id: int,
     *,
