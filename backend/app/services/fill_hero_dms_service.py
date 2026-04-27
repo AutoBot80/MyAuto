@@ -2859,6 +2859,7 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
             out["error"] = "Siebel: mobile_phone is empty — cannot run Sales Orders mobile search."
             return out
         video_first_name = (dms_values.get("first_name") or "").strip()
+        _frame_dump_dir = (dms_values.get("challan_vin_frame_dump_dir") or "").strip() or None
         order_scraped = prepare_order(
             page,
             dms_values,
@@ -2874,6 +2875,7 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
             form_trace=form_trace,
             ms_done=ms_done,
             log_vehicle_snapshot=log_vehicle_snapshot,
+            frame_dump_dir=_frame_dump_dir,
         )
         if out.get("error"):
             return out
