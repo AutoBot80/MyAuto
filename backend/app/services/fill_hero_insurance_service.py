@@ -2,7 +2,7 @@
 Hero Insurance (MISP) Playwright flow: **pre_process** (``run_fill_insurance_only`` on real MISP) runs through KYC,
 then fills **VIN** from DB (**``full_chassis``**) and clicks the VIN page **Submit**. **main_process** continues with
 **I agree** (if shown), then the proposal form. Proposer/vehicle/nominee fields come from the view;
-email, most add-ons, HDFC, and registration date use **hardcoded** defaults. **``dealer_ref.hero_cpi``** (**``form_insurance_view.hero_cpi``**): **Y** leaves **CPA Tenure** at the portal default (1) and **checks** the bottom NIC/CPI (name varies) add-on; **N** (default) sets **CPA Tenure** to **0** (hides that add-on row) and **unchecks** the add-on if still present. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **insurance_master** INSERT runs after proposal fill (readbacks) and **before** **Proposal Preview** / **Review**; **Proposal Preview** / **Review** (always); **Issue Policy** optional via ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``; scrape **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** from preview and merge via ``update_insurance_master_policy_after_issue`` (preview scrape and post–Issue Policy scrape).
+email, most add-ons, HDFC, and registration date use **hardcoded** defaults. **``dealer_ref.hero_cpi``** (**``form_insurance_view.hero_cpi``**): **Y** leaves **CPA Tenure** at the portal default (1) and **checks** the bottom NIC/CPI (name varies) add-on; **N** (default) sets **CPA Tenure** to **0** (hides that add-on row) and **unchecks** the add-on if still present. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **insurance_master** INSERT runs after proposal fill (readbacks) and **before** **Proposal Preview** / **Review**; **Proposal Preview** / **Review** (when production); **Issue Policy** optional via ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``; **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** are written once via ``update_insurance_master_policy_after_issue`` from the final scrape in ``main_process`` (post–**Issue Policy** path). Proposal preview still runs in production for logging and **Print Proposal** / **Proposal No.** gating; consent checkboxes are ticked; not a second DB update.
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import difflib
@@ -57,6 +57,7 @@ from app.services.add_sales_commit_service import (
     insert_insurance_master_after_gi,
     update_insurance_master_policy_after_issue,
 )
+from app.services.hero_insure_reports_service import run_hero_insure_reports
 from app.services.handle_browser_opening import (
     _playwright_page_url_matches_site_base,
     get_or_open_site_page,
@@ -87,8 +88,10 @@ INSURANCE_KYC_IFRAME_SELECTOR = ""
 INSURANCE_VIN_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 
-# When True: skip clicking **Issue Policy** only (after proposal review steps); still scrapes preview fields.
-# **insurance_master** INSERT is before **Proposal Preview**; **Proposal Preview** / **Proposal Review** is always clicked after proposal fill (not gated by this flag).
+# When True: skip clicking **Issue Policy** only (after proposal review steps); still scrapes; one
+# ``update_insurance_master_policy_after_issue`` in ``main_process`` on that scrape.
+# **insurance_master** INSERT is before **Proposal Preview**; **Proposal Preview** / **Review** is prod-only
+# (``HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW``), not this flag.
 HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY = True
 
 # When True **and** ``ENVIRONMENT`` is prod/production: abort after proposal field fill (and optional
@@ -7999,7 +8002,7 @@ def _proposal_scroll_root_to_bottom(root) -> None:
         pass
 
 
-def _hero_misp_proposal_review_print_proposal_and_consent(
+def _hero_misp_proposal_review_consent_checkboxes(
     page,
     *,
     ocr_output_dir: Path | None,
@@ -8007,8 +8010,7 @@ def _hero_misp_proposal_review_print_proposal_and_consent(
     timeout_ms: int,
 ) -> str | None:
     """
-    On **Proposal Review**: click **Print Proposal** (``Submit3``), then check **chkAgree** and
-    **chkconsentagree**. Print click is best-effort (browser print dialog); consent checkboxes are required.
+    On **Proposal Review**: check **chkAgree** and **chkconsentagree** (required for the portal).
     """
     to = min(int(timeout_ms), 60_000)
     roots = _hero_misp_page_and_frame_roots(page, purpose="proposal")
@@ -8018,110 +8020,6 @@ def _hero_misp_proposal_review_print_proposal_and_consent(
     for r in roots:
         _proposal_scroll_root_to_bottom(r)
     _t(page, 300)
-
-    printed = False
-    for root in roots:
-        if printed:
-            break
-        try:
-            pb = root.locator("button").filter(has_text=re.compile(r"Print\s*Proposal", re.I))
-            if pb.count() > 0:
-                el = pb.first
-                if not el.is_visible(timeout=min(2_000, to)):
-                    _proposal_scroll_visible(el, timeout_ms=to)
-                el.click(timeout=to, force=True)
-                printed = True
-                append_playwright_insurance_line(
-                    ocr_output_dir,
-                    subfolder,
-                    "NOTE",
-                    "proposal_review: clicked Print Proposal (button element)",
-                )
-                logger.info("Hero Insurance: clicked Print Proposal (button).")
-        except Exception as exc:
-            logger.debug("Hero Insurance: Print Proposal button: %s", exc)
-
-        for sel in (
-            'input[type="button"][name="Submit3"][value="Print Proposal"]',
-            'input.btn-success[name="Submit3"]',
-            'input[type="button"][value="Print Proposal"]',
-        ):
-            try:
-                loc = root.locator(sel)
-                if loc.count() == 0:
-                    continue
-                el = loc.first
-                if not el.is_visible(timeout=min(3_000, to)):
-                    _proposal_scroll_visible(el, timeout_ms=to)
-                if not el.is_visible(timeout=min(3_500, to)):
-                    continue
-                el.click(timeout=to, force=True)
-                printed = True
-                append_playwright_insurance_line(
-                    ocr_output_dir,
-                    subfolder,
-                    "NOTE",
-                    "proposal_review: clicked Print Proposal (input name=Submit3)",
-                )
-                logger.info("Hero Insurance: clicked Print Proposal (Submit3).")
-                break
-            except Exception as exc:
-                logger.debug("Hero Insurance: Print Proposal selector %r: %s", sel[:56], exc)
-                continue
-        if printed:
-            break
-
-    if not printed:
-        for root in roots:
-            if printed:
-                break
-            try:
-                pr = root.get_by_role("button", name=re.compile(r"Print\s*Proposal", re.I))
-                if pr.count() > 0:
-                    el = pr.first
-                    if not el.is_visible(timeout=min(2_000, to)):
-                        _proposal_scroll_visible(el, timeout_ms=to)
-                    el.click(timeout=to, force=True)
-                    printed = True
-                    append_playwright_insurance_line(
-                        ocr_output_dir,
-                        subfolder,
-                        "NOTE",
-                        "proposal_review: clicked Print Proposal (role=button)",
-                    )
-                    logger.info("Hero Insurance: clicked Print Proposal (role=button).")
-                    break
-            except Exception as exc:
-                logger.debug("Hero Insurance: Print Proposal role=button: %s", exc)
-
-    if not printed:
-        for root in roots:
-            try:
-                lk = root.locator("a").filter(has_text=re.compile(r"Print\s*Proposal", re.I))
-                if lk.count() > 0:
-                    lk.first.click(timeout=to, force=True)
-                    printed = True
-                    append_playwright_insurance_line(
-                        ocr_output_dir,
-                        subfolder,
-                        "NOTE",
-                        "proposal_review: clicked Print Proposal (link)",
-                    )
-                    logger.info("Hero Insurance: clicked Print Proposal (link).")
-                    break
-            except Exception as exc:
-                logger.debug("Hero Insurance: Print Proposal link: %s", exc)
-
-    if not printed:
-        append_playwright_insurance_line(
-            ocr_output_dir,
-            subfolder,
-            "NOTE",
-            "proposal_review: Print Proposal control not found — skipped (check MISP layout)",
-        )
-        logger.warning("Hero Insurance: Print Proposal control not found; continuing to consent checkboxes.")
-
-    _t(page, 450)
 
     for cid in ("chkAgree", "chkconsentagree"):
         checked_ok = False
@@ -8254,8 +8152,8 @@ def _hero_misp_fill_proposal_and_review(
     """
     Proposal page after **I agree**: each fill is read back and logged (``Playwright_insurance.txt``);
     first failed step returns an error message. When ``customer_id`` / ``vehicle_id`` are set,
-    ``insert_insurance_master_after_gi`` runs (staging / fill values; no preview scrape yet), then
-    **Proposal Preview** (portal label) → scrape preview → ``update_insurance_master_policy_after_issue`` with that scrape.
+    ``insert_insurance_master_after_gi`` runs (staging / fill values; no preview scrape at insert), then
+    **Proposal Preview** (portal label) → scrape preview (logging / return) → **chkAgree** / **chkconsentagree**. Policy fields in ``insurance_master`` are updated once in ``main_process`` from the post–**Issue Policy** scrape.
     """
     append_playwright_insurance_line(
         ocr_output_dir,
@@ -8948,20 +8846,8 @@ def _hero_misp_fill_proposal_and_review(
     _hero_misp_note_proposal_review_scrape_for_insurance_master(
         ocr_output_dir, subfolder, preview
     )
-    if customer_id is not None and vehicle_id is not None:
-        try:
-            update_insurance_master_policy_after_issue(
-                int(customer_id),
-                int(vehicle_id),
-                scrape=preview,
-            )
-        except Exception as upd_exc:
-            logger.warning(
-                "Hero Insurance: insurance_master update from proposal preview scrape failed: %s",
-                upd_exc,
-            )
 
-    err_pr = _hero_misp_proposal_review_print_proposal_and_consent(
+    err_pr = _hero_misp_proposal_review_consent_checkboxes(
         page,
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
@@ -9038,8 +8924,8 @@ def main_process(
     ``form_insurance_view`` / ``_build_insurance_fill_values``; **email, add-ons, payment (HDFC),
     and registration date** use hardcoded defaults; **``hero_cpi``** controls **CPA Tenure** (0 only when **N**)
     and the bottom **NIC/CPI** add-on (see module docstring). **insurance_master** INSERT runs inside proposal fill,
-    before **Proposal Preview**; preview fields are updated after the preview scrape and again after **Issue Policy**
-    when applicable.     **Issue Policy** click may be skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``
+    before **Proposal Preview**; policy fields are updated once from the post–**Issue Policy** scrape in this function.
+    **Issue Policy** click may be skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``
     is True. **Proposal Preview** / **Proposal Review** is clicked only when ``ENVIRONMENT`` is
     ``prod`` / ``production`` (``HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW``); otherwise the flow
     completes successfully without that navigation.
@@ -9167,6 +9053,34 @@ def main_process(
             )
         except Exception as upd_exc:
             logger.warning("main_process: insurance_master post-issue update failed: %s", upd_exc)
+        hrep: dict = {}
+        try:
+            if subfolder and page and not page.is_closed():
+                _pn = (post_issue or {}).get("policy_num")
+                _ins = (values or {}).get("insurer")
+                if _pn and str(_pn).strip() and _ins and str(_ins).strip():
+                    _did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+                    hrep = run_hero_insure_reports(
+                        page,
+                        insurer=str(_ins).strip(),
+                        policy_num=str(_pn).strip(),
+                        uploads_dir=get_uploads_dir(_did) / subfolder,
+                        ocr_output_dir=ocr_output_dir,
+                        subfolder=subfolder,
+                    )
+                else:
+                    append_playwright_insurance_line(
+                        ocr_output_dir,
+                        subfolder,
+                        "NOTE",
+                        "main_process: MISP Print Policy report skipped (insurer or policy_num empty after scrape)",
+                    )
+        except Exception as hre:
+            logger.warning("main_process: run_hero_insure_reports: %s", hre)
+            append_playwright_insurance_line(
+                ocr_output_dir, subfolder, "ERROR", f"main_process: run_hero_insure_reports: {hre!s}"
+            )
+        out["hero_insure_reports"] = hrep
         out["success"] = True
         out["error"] = None
         append_playwright_insurance_line(
@@ -9175,7 +9089,7 @@ def main_process(
             "NOTE",
             "main_process: completed — insurance_master insert (pre-preview), "
             f"proposal review navigated={HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW}, "
-            f"preview + post-issue updates (Issue Policy click skipped={HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY})",
+            f"single policy update from post–Issue Policy scrape (Issue Policy click skipped={HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY})",
         )
         try:
             out["page_url"] = (page.url or "").strip() or None
@@ -9230,6 +9144,7 @@ def post_process(*, pre_result: dict, main_result: dict) -> dict:
         "page_url": main_result.get("page_url") or pre_result.get("page_url"),
         "login_url": pre_result.get("login_url"),
         "match_base": pre_result.get("match_base"),
+        "hero_insure_reports": main_result.get("hero_insure_reports") or {},
     }
 
 
@@ -9365,6 +9280,84 @@ def warm_insurance_browser_session(insurance_base_url: str) -> dict:
         out["error"] = str(e)
         logger.warning("fill_insurance_service: warm_insurance_browser_session %s", e)
     return out
+
+
+def open_misp_page_sign_in_and_2w_only(
+    insurance_base_url: str,
+    *,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> tuple[Any, str | None]:
+    """
+    Open the managed Insurance (MISP) tab, run the same **Sign In** + **2W** steps as
+    :func:`run_fill_insurance_only`, then stop (no **New Policy**, KYC, or VIN).
+
+    Intended for local smoke tests (e.g. :func:`app.services.hero_insure_reports_service.run_hero_insure_reports`).
+
+    Returns ``(page, None)`` on success, or ``(None, error_message)`` on failure. The caller should not
+    close the browser if further automation runs on ``page``.
+    """
+    u = (insurance_base_url or "").strip()
+    if not u:
+        return None, "insurance_base_url required"
+    reset_playwright_insurance_log(ocr_output_dir, subfolder)
+    append_playwright_insurance_line(
+        ocr_output_dir, subfolder, "NOTE", "open_misp_page_sign_in_and_2w_only: starting",
+    )
+    page, open_error = get_or_open_site_page(
+        u, "Insurance", require_login_on_open=False
+    )
+    if page is None:
+        append_playwright_insurance_line(
+            ocr_output_dir, subfolder, "NOTE", f"open_misp: could not open tab: {open_error}",
+        )
+        return None, open_error or "Could not open Insurance tab"
+
+    page.set_default_timeout(INSURANCE_ACTION_TIMEOUT_MS)
+    t0_flow = time.monotonic()
+    _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "page_open")
+    _insurance_click_settle(page)
+    _hero_insurance_log_page_diagnostics(
+        page,
+        phase="open_misp_2w_only_before_sign_in",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    _ins_clicked = _click_sign_in_if_visible(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
+    if not _ins_clicked:
+        _hero_insurance_log_page_diagnostics(
+            page,
+            phase="open_misp_2w_only_sign_in_not_clicked",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+        if not _still_on_heroinsurance_misp_partner_login(page):
+            append_playwright_insurance_line(
+                ocr_output_dir, subfolder, "NOTE",
+                "open_misp_2w_only: past partner login URL — Sign In automation skipped",
+            )
+        else:
+            append_playwright_insurance_line(
+                ocr_output_dir, subfolder, "NOTE",
+                "open_misp_2w_only: Sign In not auto-clicked — complete login manually if needed.",
+            )
+    _hero_misp_after_sign_in_settle(page)
+    _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_sign_in_settle")
+    page, err_2w = _misp_click_nav_step(
+        page, _click_2w_icon, "2W (two-wheeler)",
+        portal_base_url=u, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
+        ocr_output_dir=ocr_output_dir, subfolder=subfolder, t0_flow=t0_flow,
+    )
+    if err_2w:
+        logger.warning("open_misp_page_sign_in_and_2w_only: %s", err_2w)
+        append_playwright_insurance_line(ocr_output_dir, subfolder, "ERROR", err_2w)
+        return None, err_2w
+    append_playwright_insurance_line(
+        ocr_output_dir, subfolder, "NOTE", "open_misp_page_sign_in_and_2w_only: active tab after 2W",
+    )
+    _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_2w")
+    _insurance_click_settle(page)
+    return page, None
 
 
 def run_fill_insurance_only(

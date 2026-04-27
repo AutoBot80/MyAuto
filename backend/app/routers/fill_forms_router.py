@@ -232,6 +232,10 @@ class FillHeroInsuranceResponse(BaseModel):
     login_url: str | None = None
     match_base: str | None = None
     print_jobs: list[dict] = Field(default_factory=list)
+    hero_insure_reports: dict = Field(
+        default_factory=dict,
+        description="MISP Print Policy + applet: ok, error, pdf_path (see run_hero_insure_reports).",
+    )
 
 
 class PrintForm20Request(BaseModel):
@@ -935,6 +939,7 @@ async def fill_hero_insurance(
         login_url=result.get("login_url"),
         match_base=result.get("match_base"),
         print_jobs=print_jobs,
+        hero_insure_reports=dict(result.get("hero_insure_reports") or {}),
     )
 
 

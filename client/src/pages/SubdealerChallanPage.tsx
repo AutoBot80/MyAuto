@@ -407,8 +407,9 @@ export function SubdealerChallanPage({
     [],
   );
 
-  const onSaveAllFailedLineEdits = useCallback(async () => {
-    if (!selectedProcessedRow) return;
+  /** Save all pending failed-line edits. Returns true if successful (or nothing to save), false on error. */
+  const onSaveAllFailedLineEdits = useCallback(async (): Promise<boolean> => {
+    if (!selectedProcessedRow) return true;
     const toSave: { id: number; body: { raw_chassis: string; raw_engine: string } }[] = [];
     for (const fl of selectedBatchVehicleLines) {
       if ((fl.status || "").trim().toLowerCase() !== "failed") continue;
@@ -422,7 +423,7 @@ export function SubdealerChallanPage({
         body: { raw_chassis: d.raw_chassis.trim(), raw_engine: d.raw_engine.trim() },
       });
     }
-    if (toSave.length === 0) return;
+    if (toSave.length === 0) return true;
     setSavingFailedLineEdits(true);
     setProcessedError(null);
     try {
@@ -432,8 +433,10 @@ export function SubdealerChallanPage({
       setFailedLineDrafts({});
       await loadProcessed();
       onChallanCountsRefresh();
+      return true;
     } catch (err) {
       setProcessedError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       setSavingFailedLineEdits(false);
     }
@@ -471,6 +474,10 @@ export function SubdealerChallanPage({
 
   /** Re-run full batch (re-queues all Failed lines server-side, then prepare_vehicle + order). */
   const onRetryFailedBatch = async (challanBatchId: string) => {
+    // Auto-save any pending Engine/Chassis edits before retrying
+    const saveOk = await onSaveAllFailedLineEdits();
+    if (!saveOk) return;
+
     setRetryingProcessBatchId(challanBatchId);
     setProcessedError(null);
     try {
