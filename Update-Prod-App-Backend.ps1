@@ -56,6 +56,10 @@ param(
 # Do not use Stop: git/aws write to stderr; Stop can terminate before our Exit-Script pause.
 $ErrorActionPreference = "Continue"
 
+# Python-based AWS CLI v1: JSON with Unicode (e.g. from SSM) must not be printed in cp1252; avoids "charmap" errors.
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+
 trap {
     Write-Host ""
     Write-Fail "Unhandled error: $($_.Exception.Message)"
@@ -383,7 +387,8 @@ $remoteLines = @(
     'pip install -q -r backend/requirements.txt'
     'sudo systemctl restart saathi-api'
     # gunicorn/workers or pip can exceed a fixed 3s sleep; retry before failing deploy.
-    'ok=0; for i in $(seq 1 40); do if curl -sS -f http://127.0.0.1:8000/health; then ok=1; break; fi; sleep 2; done; if [ "$ok" -ne 1 ]; then echo "health check failed after ~80s; saathi-api status and recent logs:"; sudo systemctl --no-pager -l status saathi-api || true; journalctl -u saathi-api -n 80 --no-pager || true; exit 1; fi'
+    # systemctl "status" draws a bullet (U+25CF) and breaks Windows/aws JSON console encoding; use "show" (ASCII) instead.
+    'ok=0; for i in $(seq 1 40); do if curl -sS -f http://127.0.0.1:8000/health; then ok=1; break; fi; sleep 2; done; if [ "$ok" -ne 1 ]; then echo "health check failed after ~80s; saathi-api diagnostics (systemctl show + journal, no systemctl status):"; systemctl is-active saathi-api 2>&1 || true; systemctl show saathi-api -p Id,LoadState,ActiveState,SubState,Result,MainPID,ExecMainCode,ExecMainStatus,ExecMainError --no-pager 2>&1; echo "journal (last 80 lines):"; journalctl -u saathi-api -n 80 --no-pager 2>&1; exit 1; fi'
     'echo "remote deploy finished OK"'
 )
 
