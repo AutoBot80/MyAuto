@@ -382,8 +382,8 @@ $remoteLines = @(
     'source backend/venv/bin/activate'
     'pip install -q -r backend/requirements.txt'
     'sudo systemctl restart saathi-api'
-    'sleep 3'
-    'curl -sS -f http://127.0.0.1:8000/health'
+    # gunicorn/workers or pip can exceed a fixed 3s sleep; retry before failing deploy.
+    'ok=0; for i in $(seq 1 40); do if curl -sS -f http://127.0.0.1:8000/health; then ok=1; break; fi; sleep 2; done; if [ "$ok" -ne 1 ]; then echo "health check failed after ~80s; saathi-api status and recent logs:"; sudo systemctl --no-pager -l status saathi-api || true; journalctl -u saathi-api -n 80 --no-pager || true; exit 1; fi'
     'echo "remote deploy finished OK"'
 )
 
