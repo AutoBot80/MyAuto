@@ -1485,6 +1485,15 @@ def _attach_vehicle_to_bkg(
             if not _ch:
                 return False
             _ns = str(int(row_n))
+            # Per-line input id: ``<n>_s_1_l_VIN``. Row-1 VIN path matches committed (HEAD) behavior; only line 2+ adds
+            # jqGrid open / stricter readback; optional column note is line 2+ only.
+            _sieb_vin_input_id = f"{_ns}_s_1_l_VIN"
+            if int(row_n) >= 2:
+                note(
+                    f"attach_vehicle_to_bkg: line row {int(row_n)} — fill VIN value={_ch!r} into Siebel field id "
+                    f"``{_sieb_vin_input_id}`` (column ``s_1_l_VIN`` for this line’s input)."
+                )
+            # Committed (HEAD) selector list: ``#<n>_s_1_l_VIN`` first, then attribute form; no extra `input#` only pair.
             _vin_locator_css: tuple[str, ...] = (
                 f"#{_ns}_s_1_l_VIN",
                 f"[id='{_ns}_s_1_l_VIN']",
@@ -1499,7 +1508,193 @@ def _attach_vehicle_to_bkg(
                     "input[title*='VIN' i]",
                 )
 
-            def _vin_readback_ok(vin_loc) -> bool:
+            def _open_jqgrid_vin_cell_for_line() -> Any:
+                """Line 2+: VIN is usually a ``td`` until click/double-click; then ``<input id='{n}_s_1_l_VIN'>`` appears."""
+                _j = r"""(n0) => {
+            const n = Math.max(1, Number(n0) || 1);
+            const pickRows = (body) => {
+                let rows = Array.from(body.querySelectorAll("tr.jqgrow, tr[role='row']"));
+                if (rows.length === 0) {
+                    rows = Array.from(body.querySelectorAll("tr")).filter((tr) => {
+                    if (!tr || tr.querySelector("th")) return false;
+                    if ((tr.getAttribute("class") || "").indexOf("ui-jqgrid-h") >= 0) return false;
+                    return tr.querySelector("td");
+                    });
+                }
+                return rows;
+            };
+            for (const tbody of document.querySelectorAll(
+                "table.ui-jqgrid-btable tbody, .ui-jqgrid-bdiv tbody, .ui-jqgrid-bdiv table.ui-jqgrid-btable tbody"
+            )) {
+                const rows = pickRows(tbody);
+                if (rows.length < n) { continue; }
+                const tr = rows[n - 1];
+                if (!tr) { continue; }
+                // Must be the VIN column — do **not** use the first `td[role=gridcell]`; that is often line # / SKU, not VIN.
+                const listTds = Array.from(tr.querySelectorAll("td[role='gridcell'],td")).filter(
+                    (x) => x && !x.querySelector("th")
+                );
+                const looksVin = (td) => {
+                    if (!td) return false;
+                    const a = (td.getAttribute("aria-describedby") || "").toLowerCase();
+                    const t = (td.getAttribute("title") || "").toLowerCase();
+                    const l = (td.getAttribute("aria-label") || "").toLowerCase();
+                    if (a.indexOf("s_1_l_vin") >= 0) return true;
+                    if (a.indexOf("l_vin") >= 0) return true;
+                    if (a.indexOf("_vin") >= 0 && a.indexOf("l_") >= 0) return true;
+                    if (l.indexOf("vin") >= 0 || t.indexOf("vin") >= 0) return true;
+                    return false;
+                };
+                let tdV = tr.querySelector("td[aria-describedby*='_VIN'],td[aria-describedby*='_l_VIN']");
+                if (!tdV) {
+                    tdV = tr.querySelector("td[aria-label*='VIN' i],td[title*='VIN' i]") || null;
+                }
+                if (!tdV) {
+                    for (let i = 0; i < listTds.length; i++) {
+                        if (looksVin(listTds[i])) { tdV = listTds[i]; break; }
+                    }
+                }
+                if (!tdV) { continue; }
+                const b = tbody.closest && tbody.closest(".ui-jqgrid-bdiv");
+                if (b && b.scrollHeight) {
+                    try { b.scrollTop = b.scrollHeight - b.clientHeight; } catch (e) {}
+                }
+                try { tdV.scrollIntoView({ block: "end", inline: "nearest" }); } catch (e) {}
+                try { tdV.click(); } catch (e) {}
+                try {
+                    tdV.dispatchEvent(
+                    new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window })
+                    );
+                } catch (e) {}
+                const aria = (tdV.getAttribute("aria-describedby") || "").trim();
+                let innerInp =
+                    document.getElementById(n + "_s_1_l_VIN")
+                    || tr.querySelector("input[id$='_l_VIN'], input[name='VIN']")
+                    || null;
+                if (!innerInp) {
+                    innerInp = tr.querySelector("input[id$='_l_VIN'], input[name='VIN']");
+                }
+                return {
+                    ok: true,
+                    tdId: (tdV.id || "").trim(),
+                    ariaDescribedby: aria,
+                    columnKey: "s_1_l_VIN",
+                    innerInputId: (innerInp && innerInp.id) ? innerInp.id.trim() : ""
+                };
+            }
+            return { ok: false, tdId: "", ariaDescribedby: "", columnKey: "", innerInputId: "" };
+        }"""
+                for _root0 in _all_roots():
+                    try:
+                        _r: Any = _root0.evaluate(_j, int(row_n))
+                        if isinstance(_r, dict) and _r.get("ok"):
+                            return _r
+                    except Exception:
+                        continue
+                return False
+
+            def _playwright_dblclick_vin_td_on_jqgrow_row() -> bool:
+                """n-th data row, VIN column only. Mirrors manual open before typing; avoids header rows via ``tr.jqgrow``."""
+                n0 = int(row_n)
+                _gr_selectors: tuple[str, ...] = ("tr.jqgrow",)
+                _td_sels: tuple[str, ...] = (
+                    "td[aria-describedby*=\"s_1_l_VIN\" i]",
+                    "td[aria-describedby*=\"_l_VIN\" i]",
+                    "td[aria-describedby*=\"VIN\" i]",
+                )
+                for root in _all_roots():
+                    for _grs in _gr_selectors:
+                        try:
+                            grr = root.locator(_grs)
+                            if grr.count() < n0:
+                                continue
+                            r = grr.nth(n0 - 1)
+                            if r.count() <= 0:
+                                continue
+                            for tsel in _td_sels:
+                                try:
+                                    tdv = r.locator(tsel).first
+                                    if tdv.count() <= 0 or not tdv.is_visible(timeout=500):
+                                        continue
+                                    try:
+                                        tdv.scroll_into_view_if_needed(timeout=1200)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        tdv.click(timeout=1000)
+                                    except Exception:
+                                        try:
+                                            tdv.click(timeout=1000, force=True)
+                                        except Exception:
+                                            continue
+                                    _safe_page_wait(
+                                        page, 150, log_label="attach_after_pw_vin_td_click"
+                                    )
+                                    try:
+                                        tdv.dblclick(timeout=1000)
+                                    except Exception:
+                                        try:
+                                            tdv.dblclick(timeout=1000, force=True)
+                                        except Exception:
+                                            continue
+                                    _safe_page_wait(
+                                        page, 280, log_label="attach_after_pw_vin_td_dblclick"
+                                    )
+                                    note(
+                                        f"attach_vehicle_to_bkg: row {n0}: VIN column opened in UI via "
+                                        f"Playwright ({_grs!r} + {tsel!r}) — next: focus & type into `{_sieb_vin_input_id}`."
+                                    )
+                                    return True
+                                except Exception:
+                                    continue
+                        except Exception:
+                            continue
+                return False
+
+            def _exact_sieb_vin_input_is_visible() -> bool:
+                for r0 in _all_roots():
+                    for _css0 in (f"[id='{_sieb_vin_input_id}']", f"input[id='{_sieb_vin_input_id}']"):
+                        try:
+                            w0 = r0.locator(_css0).first
+                            if w0.count() > 0 and w0.is_visible(timeout=450):
+                                return True
+                        except Exception:
+                            continue
+                return False
+
+            if int(row_n) >= 2:
+                _oc = _open_jqgrid_vin_cell_for_line()
+                if isinstance(_oc, dict) and _oc.get("ok"):
+                    _tid = str(_oc.get("tdId") or "")
+                    _aria = str(_oc.get("ariaDescribedby") or "")
+                    _iin = str(_oc.get("innerInputId") or "")
+                    _colk = str(_oc.get("columnKey") or "s_1_l_VIN")
+                    note(
+                        f"attach_vehicle_to_bkg: row {int(row_n)} VIN cell opened (value to type={_ch!r}) — "
+                        f"Siebel list column `{_colk}` → this line’s control id `{_sieb_vin_input_id}`; "
+                        f"DOM: td#={_tid!r}, `aria-describedby`={_aria!r}, `input#`={_iin!r}."
+                    )
+                if not isinstance(_oc, dict) or not _oc.get("ok"):
+                    note(
+                        f"attach_vehicle_to_bkg: row {int(row_n)} JS jqGrid VIN-td open did not return ok — "
+                        "will use Playwright row click / poll for the line VIN field."
+                    )
+                _safe_page_wait(page, 400, log_label=f"after_open_vin_jqcell_r{int(row_n)}")
+                if not _exact_sieb_vin_input_is_visible():
+                    _playwright_dblclick_vin_td_on_jqgrow_row()
+                    _safe_page_wait(page, 500, log_label="after_playwright_vin_row_open")
+
+                for _p in range(48):
+                    if _exact_sieb_vin_input_is_visible():
+                        break
+                    _safe_page_wait(
+                        page,
+                        150,
+                        log_label=f"poll_visible_{_sieb_vin_input_id}_r{int(row_n)}_{_p}",
+                    )
+
+            def _vin_readback_ok_line1_untouched(vin_loc) -> bool:
+                # Row 1 only — do not change: legacy accept rules for the first line-item VIN field.
                 try:
                     got = (vin_loc.input_value(timeout=900) or "").strip()
                 except Exception:
@@ -1507,7 +1702,26 @@ def _attach_vehicle_to_bkg(
                 if not got:
                     return False
                 _digits = lambda s: re.sub(r"\D", "", s)
-                return _ch in got or _digits(_ch) in _digits(got) or len(_digits(got)) >= 8
+                return (
+                    _ch in got
+                    or _digits(_ch) in _digits(got)
+                    or len(_digits(got)) >= 8
+                )
+
+            def _vin_readback_ok_line2_plus(vin_loc) -> bool:
+                try:
+                    got = (vin_loc.input_value(timeout=900) or "").strip()
+                except Exception:
+                    got = ""
+                if not got:
+                    return False
+                _dch = re.sub(r"\D", "", _ch)
+                _dgt = re.sub(r"\D", "", got)
+                if _ch and (_ch in got or got in _ch):
+                    return True
+                if _dch and len(_dch) >= 6 and _dch in _dgt:
+                    return True
+                return False
 
             def _js_set_vin_value_on_element(vin_loc) -> None:
                 try:
@@ -1541,8 +1755,8 @@ def _attach_vehicle_to_bkg(
                     except Exception:
                         pass
 
-            def _try_fill_vin_locator(vin_loc) -> bool:
-                # Restored flow: full click enters jqGrid edit mode; then page.keyboard.type (same as before applet issues).
+            def _try_fill_vin_locator_row1_untouched(vin_loc) -> bool:
+                """Row 1 only: original order (page.keyboard first, then locator fallbacks). Do not change."""
                 try:
                     vin_loc.scroll_into_view_if_needed(timeout=_tmo)
                 except Exception:
@@ -1571,56 +1785,176 @@ def _attach_vehicle_to_bkg(
                     page.keyboard.type(_ch, delay=28)
                 except Exception:
                     pass
-                if not _vin_readback_ok(vin_loc):
+                if not _vin_readback_ok_line1_untouched(vin_loc):
                     try:
                         vin_loc.type(_ch, delay=28, timeout=min(8000, int(action_timeout_ms or 3000)))
                     except Exception:
                         pass
-                if not _vin_readback_ok(vin_loc):
+                if not _vin_readback_ok_line1_untouched(vin_loc):
                     try:
                         vin_loc.fill(_ch, timeout=2000)
                     except Exception:
                         pass
-                if not _vin_readback_ok(vin_loc):
+                if not _vin_readback_ok_line1_untouched(vin_loc):
                     _js_set_vin_value_on_element(vin_loc)
-                if not _vin_readback_ok(vin_loc):
+                if not _vin_readback_ok_line1_untouched(vin_loc):
                     return False
                 _tab_out_vin_like_institution(vin_loc)
                 return True
 
-            # After **New**, the jqGrid row / VIN input can appear slightly later than the New click wait.
-            for _wait_i in range(24):
-                _row_ready = False
+            def _try_fill_vin_locator_line2_plus(vin_loc) -> bool:
+                # Line 2+ only: locator-typed first (iframe / nested focus), then stricter readback.
+                try:
+                    vin_loc.scroll_into_view_if_needed(timeout=_tmo)
+                except Exception:
+                    pass
+                try:
+                    vin_loc.click(timeout=_tmo)
+                except Exception:
+                    try:
+                        vin_loc.click(timeout=_tmo, force=True)
+                    except Exception:
+                        return False
+                _safe_page_wait(page, 320, log_label="after_vin_click_l2p")
+                try:
+                    vin_loc.focus(timeout=1200)
+                except Exception:
+                    pass
+                try:
+                    vin_loc.press("Control+a", timeout=800)
+                except Exception:
+                    pass
+                try:
+                    vin_loc.fill("", timeout=1000)
+                except Exception:
+                    pass
+                try:
+                    vin_loc.type(
+                        _ch,
+                        delay=26,
+                        timeout=min(8000, int(action_timeout_ms or 3000)),
+                    )
+                except Exception:
+                    pass
+                if not _vin_readback_ok_line2_plus(vin_loc):
+                    try:
+                        page.keyboard.type(_ch, delay=28)
+                    except Exception:
+                        pass
+                if not _vin_readback_ok_line2_plus(vin_loc):
+                    try:
+                        vin_loc.type(
+                            _ch,
+                            delay=28,
+                            timeout=min(8000, int(action_timeout_ms or 3000)),
+                        )
+                    except Exception:
+                        pass
+                if not _vin_readback_ok_line2_plus(vin_loc):
+                    try:
+                        vin_loc.fill(_ch, timeout=2000)
+                    except Exception:
+                        pass
+                if not _vin_readback_ok_line2_plus(vin_loc):
+                    _js_set_vin_value_on_element(vin_loc)
+                if not _vin_readback_ok_line2_plus(vin_loc):
+                    return False
+                _tab_out_vin_like_institution(vin_loc)
+                return True
+
+            if int(row_n) == 1:
+                # Row 1: legacy poll + full selector list + _try_fill_vin_locator_row1_untouched only.
+                for _wait_i in range(24):
+                    _row_ready = False
+                    for root in _all_roots():
+                        for css in _vin_locator_css:
+                            try:
+                                _wl = root.locator(css).first
+                                if _wl.count() > 0 and _wl.is_visible(timeout=450):
+                                    _row_ready = True
+                                    break
+                            except Exception:
+                                continue
+                        if _row_ready:
+                            break
+                    if _row_ready:
+                        break
+                    _safe_page_wait(
+                        page, 200, log_label=f"attach_vin_row_ready_poll_{row_n}_{_wait_i}"
+                    )
+                _vin_filled = False
                 for root in _all_roots():
                     for css in _vin_locator_css:
                         try:
-                            _wl = root.locator(css).first
-                            if _wl.count() > 0 and _wl.is_visible(timeout=450):
-                                _row_ready = True
+                            vin_loc = root.locator(css).first
+                            if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=700):
+                                continue
+                            if _try_fill_vin_locator_row1_untouched(vin_loc):
+                                _vin_filled = True
+                                # Committed (HEAD) success line — row 1 only; do not change.
+                                note(
+                                    f"attach_vehicle_to_bkg: VIN filled via {css!r}, row={row_n}, chassis={_ch!r}."
+                                )
                                 break
                         except Exception:
                             continue
+                    if _vin_filled:
+                        break
+            else:
+                # After **New**, the jqGrid row / VIN input for line 2+ can appear slightly after the open sequence.
+                # Use same per-row id order as committed HEAD: ``#`` + ``[id='']``.
+                _css_poll: tuple[str, ...] = (
+                    f"#{_ns}_s_1_l_VIN",
+                    f"[id='{_sieb_vin_input_id}']",
+                )
+                for _wait_i in range(40):
+                    _row_ready = False
+                    for root in _all_roots():
+                        for css in _css_poll:
+                            try:
+                                _wl = root.locator(css).first
+                                if _wl.count() > 0 and _wl.is_visible(timeout=450):
+                                    _row_ready = True
+                                    break
+                            except Exception:
+                                continue
+                        if _row_ready:
+                            break
                     if _row_ready:
                         break
-                if _row_ready:
-                    break
-                _safe_page_wait(page, 200, log_label=f"attach_vin_row_ready_poll_{row_n}_{_wait_i}")
-
-            _vin_filled = False
-            for root in _all_roots():
-                for css in _vin_locator_css:
-                    try:
-                        vin_loc = root.locator(css).first
-                        if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=700):
+                    _safe_page_wait(
+                        page, 200, log_label=f"attach_vin_row_ready_poll_{row_n}_{_wait_i}"
+                    )
+                # Line 2+ only: same per-row id pair as committed HEAD; broad VIN heuristics stay row-1-only above.
+                _vin_try_css: tuple[str, ...] = (
+                    f"#{_ns}_s_1_l_VIN",
+                    f"[id='{_sieb_vin_input_id}']",
+                )
+                _vin_filled = False
+                for root in _all_roots():
+                    for css in _vin_try_css:
+                        try:
+                            vin_loc = root.locator(css).first
+                            if vin_loc.count() <= 0 or not vin_loc.is_visible(timeout=700):
+                                continue
+                            if _try_fill_vin_locator_line2_plus(vin_loc):
+                                _dom_id = ""
+                                try:
+                                    _dom_id = (
+                                        vin_loc.evaluate("el => (el && el.id) || ''") or ""
+                                    ).strip()
+                                except Exception:
+                                    pass
+                                _vin_filled = True
+                                note(
+                                    f"attach_vehicle_to_bkg: row {row_n}: VIN value={_ch!r} — column `s_1_l_VIN` → "
+                                    f"DOM `input#`={_dom_id!r} (Siebel id `{_sieb_vin_input_id}`); filled via {css!r}."
+                                )
+                                break
+                        except Exception:
                             continue
-                        if _try_fill_vin_locator(vin_loc):
-                            _vin_filled = True
-                            note(f"attach_vehicle_to_bkg: VIN filled via {css!r}, row={row_n}, chassis={_ch!r}.")
-                            break
-                    except Exception:
-                        continue
-                if _vin_filled:
-                    break
+                    if _vin_filled:
+                        break
 
             _js_vin_pick = """(payload) => {
           const vis = (el) => {
@@ -1660,9 +1994,29 @@ def _attach_vehicle_to_bkg(
                     try:
                         if bool(root.evaluate(_js_vin_pick, _pay)):
                             _vin_filled = True
-                            note(f"attach_vehicle_to_bkg: JS set VIN field (broad query), row={row_n}, chassis={_ch!r}.")
                             _safe_page_wait(page, 200, log_label="after_vin_js_fill")
-                            _id = f"#{int(row_n)}_s_1_l_VIN"
+                            if int(row_n) == 1:
+                                # Committed (HEAD): ``#<n>_s_1_l_VIN`` and original note; row 1 only.
+                                note(
+                                    f"attach_vehicle_to_bkg: JS set VIN field (broad query), row={row_n}, chassis={_ch!r}."
+                                )
+                                _id = f"#{int(row_n)}_s_1_l_VIN"
+                            else:
+                                _js_dom_id = ""
+                                try:
+                                    _js_dom_id = (
+                                        root.locator(f"[id='{_sieb_vin_input_id}']")
+                                        .first.evaluate("el => (el && el.id) || ''")
+                                        or ""
+                                    ).strip()
+                                except Exception:
+                                    _js_dom_id = ""
+                                note(
+                                    f"attach_vehicle_to_bkg: row {row_n}: VIN value={_ch!r} — column `s_1_l_VIN`, "
+                                    f"DOM `input#`={_js_dom_id!r} (Siebel id `{_sieb_vin_input_id}`); set via "
+                                    "document.getElementById/JS path."
+                                )
+                                _id = f"[id='{_sieb_vin_input_id}']"
                             try:
                                 _vl = root.locator(_id).first
                                 if _vl.count() > 0 and _vl.is_visible(timeout=600):
@@ -1743,6 +2097,125 @@ def _attach_vehicle_to_bkg(
                     page.keyboard.press("Tab")
                 except Exception:
                     pass
+
+            def _type_readback_and_tab_hhml_discount(
+                dloc, *, _log_src: str, _log_id: str, click_first: bool
+            ) -> bool:
+                """Type ``_disc_raw`` into a HHML line Discount field locator, verify, tab out. ``click_first`` = grid inline edit."""
+                if click_first:
+                    try:
+                        dloc.scroll_into_view_if_needed(timeout=500)
+                    except Exception:
+                        pass
+                    try:
+                        dloc.click(timeout=_tmo)
+                    except Exception:
+                        try:
+                            dloc.click(timeout=_tmo, force=True)
+                        except Exception:
+                            return False
+                    _safe_page_wait(page, 180, log_label="after_hhml_disc_locator_click")
+                else:
+                    try:
+                        dloc.scroll_into_view_if_needed(timeout=400)
+                    except Exception:
+                        pass
+                try:
+                    dloc.focus(timeout=1000)
+                except Exception:
+                    pass
+                try:
+                    dloc.press("Control+a", timeout=800)
+                except Exception:
+                    pass
+                try:
+                    dloc.fill("", timeout=1000)
+                except Exception:
+                    pass
+                try:
+                    page.keyboard.type(_disc_raw, delay=22)
+                except Exception:
+                    try:
+                        dloc.fill(_disc_raw, timeout=2000)
+                    except Exception:
+                        return False
+                if not _disc_readback_ok(dloc):
+                    try:
+                        dloc.type(_disc_raw, delay=22, timeout=6000)
+                    except Exception:
+                        pass
+                if not _disc_readback_ok(dloc):
+                    _js_set_discount_on_element(dloc)
+                if not _disc_readback_ok(dloc):
+                    return False
+                _tab_out_discount(dloc)
+                note(
+                    f"attach_vehicle_to_bkg: HHML Discount {_log_src} (id={_log_id!r}): value={_disc_raw!r}, row={row_n}."
+                )
+                return True
+
+            def _try_fill_discount_in_focused_field() -> bool:
+                """After 6× Tab, keyboard focus is in the line discount cell — type value and tab (no id matching; readback checks)."""
+                for _root in _all_roots():
+                    try:
+                        _fl = _root.locator(":focus").first
+                        if _fl.count() <= 0:
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        _tn = (str(_fl.evaluate("el => el && el.tagName ? el.tagName : ''") or "")).lower()
+                    except Exception:
+                        continue
+                    if _tn not in ("input", "textarea"):
+                        continue
+                    try:
+                        if _fl.evaluate("el => el && (el.readOnly || el.disabled)"):
+                            continue
+                    except Exception:
+                        pass
+                    try:
+                        _eid = str(_fl.evaluate("el => (el && el.id) || ''") or "")
+                    except Exception:
+                        _eid = ""
+                    if _type_readback_and_tab_hhml_discount(
+                        _fl, _log_src="(6× Tab — focused input)", _log_id=_eid or "(no id)", click_first=False
+                    ):
+                        return True
+                return False
+
+            def _try_fill_hhml_discount_by_id_search() -> bool:
+                """Locate HHML discount by id. Use [id='…'] only — ``#1_…`` is an invalid CSS selector in the browser."""
+                # Row-specific and template ids seen in the wild (e.g. 1_HHML_Discount, 1_s_1_l_HHML_Discount, s_1_l_HHML_Discount)
+                _cands: tuple[str, ...] = (
+                    f"[id='{_ns}_HHML_Discount']",
+                    f"[id='{_ns}_s_1_l_HHML_Discount']",
+                    "[id='s_1_l_HHML_Discount']",
+                    f"input[id='{_ns}_HHML_Discount']",
+                    f"input[id='{_ns}_s_1_l_HHML_Discount']",
+                    "input[id='s_1_l_HHML_Discount']",
+                )
+                for _root in _all_roots():
+                    for _c in _cands:
+                        try:
+                            _hl = _root.locator(_c).first
+                        except Exception:
+                            continue
+                        if _hl.count() <= 0 or not _hl.is_visible(timeout=500):
+                            continue
+                        if _type_readback_and_tab_hhml_discount(
+                            _hl,
+                            _log_src="(by id search + click)",
+                            _log_id=_c,
+                            click_first=True,
+                        ):
+                            return True
+                return False
+
+            if _try_fill_discount_in_focused_field():
+                return True
+            if _try_fill_hhml_discount_by_id_search():
+                return True
 
             def _try_fill_discount_locator(dloc) -> bool:
                 try:
@@ -1868,6 +2341,12 @@ def _attach_vehicle_to_bkg(
                 _safe_page_wait(page, 800, log_label=f"after_vin_tab_settle_row_{n}")
 
             if _disc_raw:
+                for _t6 in range(6):
+                    try:
+                        page.keyboard.press("Tab")
+                    except Exception:
+                        pass
+                    _safe_page_wait(page, 70, log_label=f"tab_to_line_discount_after_vin_r{n}_{_t6}")
                 if not _fill_discount_for_row(n, _disc_raw):
                     return (
                         False,
@@ -2251,61 +2730,6 @@ def _challan_read_pin_code_field(
     return ""
 
 
-def _challan_write_frame_diagnostics(
-    page: Page,
-    *,
-    dump_dir: str,
-    file_stem: str,
-    note: Callable[..., None],
-    field_summary: dict[str, str] | None = None,
-) -> str | None:
-    """
-    Write a text file with per-frame URL + innerText for Siebel debugging.
-    Returns the file path on success, None on failure.
-    """
-    import os
-    import tempfile
-    from datetime import datetime
-
-    try:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fname = f"{file_stem}_{ts}.txt"
-        d = Path(dump_dir) if dump_dir else Path(tempfile.gettempdir())
-        d.mkdir(parents=True, exist_ok=True)
-        fpath = d / fname
-
-        lines: list[str] = []
-        lines.append(f"=== Frame Dump: {file_stem} @ {ts} ===\n")
-        lines.append(f"Page URL: {page.url}\n")
-
-        if field_summary:
-            lines.append("\n--- Field Summary ---\n")
-            for k, v in field_summary.items():
-                lines.append(f"  {k}: {v!r}\n")
-            lines.append("\n")
-
-        for i, frame in enumerate(_ordered_frames(page)):
-            try:
-                url = frame.url or "(no url)"
-                txt = ""
-                try:
-                    txt = frame.evaluate("() => document.body ? document.body.innerText : ''") or ""
-                except Exception:
-                    txt = "(could not read innerText)"
-                lines.append(f"\n--- Frame {i}: {url[:200]} ---\n")
-                lines.append(txt[:8000])
-                lines.append("\n")
-            except Exception as e:
-                lines.append(f"\n--- Frame {i}: error {e!r} ---\n")
-
-        fpath.write_text("".join(lines), encoding="utf-8")
-        note(f"Frame dump written: {fpath}")
-        return str(fpath)
-    except Exception as e:
-        note(f"Frame dump failed: {e!r}")
-        return None
-
-
 def _fill_challan_account_institution_name_verify_pin(
     page: Page,
     *,
@@ -2314,7 +2738,6 @@ def _fill_challan_account_institution_name_verify_pin(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note: Callable[..., None],
-    challan_frame_dump_dir: str | None = None,
 ) -> tuple[bool, str]:
     """
     Subdealer challan: dismiss any open MVG applet (Escape), focus the **input** without using the
@@ -2372,20 +2795,6 @@ def _fill_challan_account_institution_name_verify_pin(
             return inst_loc.evaluate("el => el.value || ''") or ""
         except Exception:
             return ""
-
-    # --- Frame dump BEFORE filling ---
-    if challan_frame_dump_dir:
-        _challan_write_frame_diagnostics(
-            page,
-            dump_dir=challan_frame_dump_dir,
-            file_stem="challan_before_institution_fill",
-            note=note,
-            field_summary={
-                "Account/Institution Name (before)": _read_inst_value(),
-                "expected_pin": expected_pin or "",
-                "institution_name_to_fill": nm,
-            },
-        )
 
     try:
         inst_loc.scroll_into_view_if_needed(timeout=_tmo)
@@ -2497,16 +2906,6 @@ def _fill_challan_account_institution_name_verify_pin(
         5. Enter to confirm and close dialog
         """
         note("Pick Account MVG detected — handling popup with keyboard flow.")
-
-        # Frame dump of the popup
-        if challan_frame_dump_dir:
-            _challan_write_frame_diagnostics(
-                page,
-                dump_dir=challan_frame_dump_dir,
-                file_stem="challan_pick_account_mvg",
-                note=note,
-                field_summary={"institution_name": nm, "expected_pin": expected_pin or ""},
-            )
 
         _safe_page_wait(page, 400, log_label="pick_account_mvg_start")
 
@@ -2647,7 +3046,6 @@ def _create_order(
     network_dealer_name: str = "",
     challan_network_pin: str = "",
     expected_order_number: str = "",
-    challan_frame_dump_dir: str | None = None,
 ) -> tuple[bool, str | None, dict]:
     """
     Vehicle Sales → Sales Orders flow (same frame as the ``+`` New control):
@@ -3286,7 +3684,6 @@ def _create_order(
                     action_timeout_ms=action_timeout_ms,
                     content_frame_selector=content_frame_selector,
                     note=note,
-                    challan_frame_dump_dir=challan_frame_dump_dir,
                 )
                 if not _inst_ok:
                     return False, _inst_err, scraped
@@ -4984,7 +5381,6 @@ def prepare_order(
         str(dms_values.get("order_number") or "").strip()
         or str((out.get("vehicle") or {}).get("order_number") or "").strip()
     )
-    _challan_frame_dump = str(dms_values.get("challan_frame_dump_dir") or "").strip() or None
     ok_order, order_err, order_scraped = _create_order(
         page,
         mobile=mobile,
@@ -5008,7 +5404,6 @@ def prepare_order(
             dms_values.get("network_pin_code") or dms_values.get("pin_code") or ""
         ).strip(),
         expected_order_number=_expected_order,
-        challan_frame_dump_dir=_challan_frame_dump,
     )
     if not ok_order:
         step("Stopped: create_order flow failed.")

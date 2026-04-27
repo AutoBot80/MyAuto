@@ -235,7 +235,7 @@ def _run_order_phase(
         f"appending STEP/NOTE trace to challan log: {log_path}"
     )
     dms_values: dict = {}
-    dms_values["challan_frame_dump_dir"] = str(log_path.parent.resolve())
+    dms_values["challan_vin_frame_dump_dir"] = str(log_path.parent.resolve())
     prepare_customer_for_challan(
         dms_values,
         to_dealer_id=to_dealer_id,
