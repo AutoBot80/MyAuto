@@ -19,6 +19,7 @@ from app.services.add_subdealer_challan_service import (
     retry_order_only_batch,
     run_subdealer_challan_batch,
 )
+from app.services.playwright_executor import run_playwright_callable_sync
 from app.services.subdealer_challan_ocr_service import dedupe_raw_challan_lines, parse_subdealer_challan
 from app.services.upload_file_validation import read_upload_capped, validate_magic_jpeg_png_or_pdf
 from app.validation.text_limits import enforce_max_text_depth
@@ -180,7 +181,10 @@ def process_batch(
     base = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
-    result = run_subdealer_challan_batch(challan_batch_id=bid, dms_base_url=base, dealer_id=did)
+    # Same thread as Fill DMS / ``handle_browser_opening`` — Playwright sync API must not hop worker threads.
+    result = run_playwright_callable_sync(
+        lambda: run_subdealer_challan_batch(challan_batch_id=bid, dms_base_url=base, dealer_id=did)
+    )
     return result
 
 
@@ -277,10 +281,12 @@ def retry_staging_row_endpoint(
     base = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
-    return retry_failed_staging_row(
-        challan_staging_id=challan_detail_staging_id,
-        dms_base_url=base,
-        dealer_id=did,
+    return run_playwright_callable_sync(
+        lambda: retry_failed_staging_row(
+            challan_staging_id=challan_detail_staging_id,
+            dms_base_url=base,
+            dealer_id=did,
+        )
     )
 
 
@@ -300,7 +306,9 @@ def retry_order_endpoint(
     base = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
-    return retry_order_only_batch(challan_batch_id=bid, dms_base_url=base, dealer_id=did)
+    return run_playwright_callable_sync(
+        lambda: retry_order_only_batch(challan_batch_id=bid, dms_base_url=base, dealer_id=did)
+    )
 
 
 @router.post("/parse-scan")

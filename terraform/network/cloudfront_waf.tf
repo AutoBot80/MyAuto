@@ -79,8 +79,8 @@ resource "aws_wafv2_web_acl" "cloudfront" {
 
   # Exclude body-inspection rules that false-positive on multipart file uploads
   # (image/PDF binary data triggers SizeRestrictions_BODY, CrossSiteScripting_BODY,
-  #  etc.). Scoped to /uploads and /textract paths only so all other routes stay
-  #  fully protected.
+  #  etc.). Scoped to /uploads, /textract, and /subdealer-challan paths only so all
+  #  other routes stay fully protected.
   rule {
     name     = "AWSManagedRulesCommonRuleSet"
     priority = 10
@@ -124,6 +124,19 @@ resource "aws_wafv2_web_acl" "cloudfront" {
                     }
                   }
                 }
+                statement {
+                  byte_match_statement {
+                    search_string         = "/subdealer-challan"
+                    positional_constraint = "STARTS_WITH"
+                    field_to_match {
+                      uri_path {}
+                    }
+                    text_transformation {
+                      priority = 0
+                      type     = "LOWERCASE"
+                    }
+                  }
+                }
               }
             }
           }
@@ -138,8 +151,8 @@ resource "aws_wafv2_web_acl" "cloudfront" {
     }
   }
 
-  # Separate rule: apply CommonRuleSet to /uploads and /textract paths but
-  # exclude the body-inspection rules that break multipart binary uploads.
+  # Separate rule: apply CommonRuleSet to /uploads, /textract, and /subdealer-challan
+  # paths but exclude the body-inspection rules that break multipart binary uploads.
   rule {
     name     = "CommonRuleSetUploadsExclusions"
     priority = 11
@@ -190,6 +203,19 @@ resource "aws_wafv2_web_acl" "cloudfront" {
             statement {
               byte_match_statement {
                 search_string         = "/textract"
+                positional_constraint = "STARTS_WITH"
+                field_to_match {
+                  uri_path {}
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "LOWERCASE"
+                }
+              }
+            }
+            statement {
+              byte_match_statement {
+                search_string         = "/subdealer-challan"
                 positional_constraint = "STARTS_WITH"
                 field_to_match {
                   uri_path {}
