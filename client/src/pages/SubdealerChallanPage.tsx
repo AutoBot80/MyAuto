@@ -95,6 +95,17 @@ function formatPreparedOverTotal(r: ChallanMasterProcessedRow): string {
   return `${p}/${t}`;
 }
 
+/** Detail lines for one master row (failed rows first). Retry uses this with an explicit batch id because row click does not fire when pressing Retry (`stopPropagation`). */
+function sortedDetailLinesForBatch(row: ChallanMasterProcessedRow | null): ChallanFailedDetailLine[] {
+  if (!row) return [];
+  const lines = row.detail_lines !== undefined ? row.detail_lines : row.failed_lines ?? [];
+  return [...lines].sort((a, b) => {
+    const af = (a.status || "").trim().toLowerCase() === "failed" ? 0 : 1;
+    const bf = (b.status || "").trim().toLowerCase() === "failed" ? 0 : 1;
+    return af - bf;
+  });
+}
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
@@ -279,17 +290,10 @@ export function SubdealerChallanPage({
     [processedRows, selectedProcessedBatchId],
   );
 
-  const selectedBatchVehicleLines = useMemo(() => {
-    if (!selectedProcessedRow) return [];
-    const lines = selectedProcessedRow.detail_lines !== undefined
-      ? selectedProcessedRow.detail_lines
-      : selectedProcessedRow.failed_lines ?? [];
-    return [...lines].sort((a, b) => {
-      const af = (a.status || "").trim().toLowerCase() === "failed" ? 0 : 1;
-      const bf = (b.status || "").trim().toLowerCase() === "failed" ? 0 : 1;
-      return af - bf;
-    });
-  }, [selectedProcessedRow]);
+  const selectedBatchVehicleLines = useMemo(
+    () => sortedDetailLinesForBatch(selectedProcessedRow),
+    [selectedProcessedRow],
+  );
 
   const showSummaryBar =
     Boolean(challanNo || challanDateRaw || challanDateIso) || vehicleCount > 0;
@@ -407,46 +411,56 @@ export function SubdealerChallanPage({
     [],
   );
 
-  /** Save all pending failed-line edits. Returns true if successful (or nothing to save), false on error. */
-  const onSaveAllFailedLineEdits = useCallback(async (): Promise<boolean> => {
-    if (!selectedProcessedRow) return true;
-    const toSave: { id: number; body: { raw_chassis: string; raw_engine: string } }[] = [];
-    for (const fl of selectedBatchVehicleLines) {
-      if ((fl.status || "").trim().toLowerCase() !== "failed") continue;
-      const d = failedLineDrafts[fl.challan_detail_staging_id];
-      if (!d) continue;
-      const sc = (fl.raw_chassis || "").trim();
-      const se = (fl.raw_engine || "").trim();
-      if (d.raw_chassis.trim() === sc && d.raw_engine.trim() === se) continue;
-      toSave.push({
-        id: fl.challan_detail_staging_id,
-        body: { raw_chassis: d.raw_chassis.trim(), raw_engine: d.raw_engine.trim() },
-      });
-    }
-    if (toSave.length === 0) return true;
-    setSavingFailedLineEdits(true);
-    setProcessedError(null);
-    try {
-      for (const { id, body } of toSave) {
-        await patchChallanStagingFailedLine(id, body);
+  /**
+   * Save pending failed-line edits for the given batch (or the currently selected batch if omitted).
+   * Retry passes `batchIdForSave` because the Retry button uses `stopPropagation` and does not select the row first.
+   */
+  const onSaveAllFailedLineEdits = useCallback(
+    async (batchIdForSave?: string | null): Promise<boolean> => {
+      const bid = (batchIdForSave ?? selectedProcessedBatchId)?.trim() || null;
+      const row = bid !== null ? processedRows.find((r) => r.challan_batch_id === bid) ?? null : null;
+      if (!row) return true;
+
+      const lines = sortedDetailLinesForBatch(row);
+      const toSave: { id: number; body: { raw_chassis: string; raw_engine: string } }[] = [];
+      for (const fl of lines) {
+        if ((fl.status || "").trim().toLowerCase() !== "failed") continue;
+        const d = failedLineDrafts[fl.challan_detail_staging_id];
+        if (!d) continue;
+        const sc = (fl.raw_chassis || "").trim();
+        const se = (fl.raw_engine || "").trim();
+        if (d.raw_chassis.trim() === sc && d.raw_engine.trim() === se) continue;
+        toSave.push({
+          id: fl.challan_detail_staging_id,
+          body: { raw_chassis: d.raw_chassis.trim(), raw_engine: d.raw_engine.trim() },
+        });
       }
-      setFailedLineDrafts({});
-      await loadProcessed();
-      onChallanCountsRefresh();
-      return true;
-    } catch (err) {
-      setProcessedError(err instanceof Error ? err.message : String(err));
-      return false;
-    } finally {
-      setSavingFailedLineEdits(false);
-    }
-  }, [
-    selectedProcessedRow,
-    selectedBatchVehicleLines,
-    failedLineDrafts,
-    loadProcessed,
-    onChallanCountsRefresh,
-  ]);
+      if (toSave.length === 0) return true;
+      setSavingFailedLineEdits(true);
+      setProcessedError(null);
+      try {
+        for (const { id, body } of toSave) {
+          await patchChallanStagingFailedLine(id, body);
+        }
+        setFailedLineDrafts({});
+        await loadProcessed();
+        onChallanCountsRefresh();
+        return true;
+      } catch (err) {
+        setProcessedError(err instanceof Error ? err.message : String(err));
+        return false;
+      } finally {
+        setSavingFailedLineEdits(false);
+      }
+    },
+    [
+      selectedProcessedBatchId,
+      processedRows,
+      failedLineDrafts,
+      loadProcessed,
+      onChallanCountsRefresh,
+    ],
+  );
 
   const applyProcessedChallanSearch = useCallback(() => {
     setProcessedChallanSearchApplied(processedChallanSearchDraft.trim());
@@ -474,8 +488,8 @@ export function SubdealerChallanPage({
 
   /** Re-run full batch (re-queues all Failed lines server-side, then prepare_vehicle + order). */
   const onRetryFailedBatch = async (challanBatchId: string) => {
-    // Auto-save any pending Engine/Chassis edits before retrying
-    const saveOk = await onSaveAllFailedLineEdits();
+    setSelectedProcessedBatchId(challanBatchId);
+    const saveOk = await onSaveAllFailedLineEdits(challanBatchId);
     if (!saveOk) return;
 
     setRetryingProcessBatchId(challanBatchId);
@@ -485,7 +499,7 @@ export function SubdealerChallanPage({
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
       });
-      if (pr.error || pr.ok === false) {
+      if (pr.error || !pr.ok) {
         setProcessedError(pr.error || "Batch retry failed.");
       }
       await loadProcessed();
@@ -498,6 +512,7 @@ export function SubdealerChallanPage({
   };
 
   const onRetryOrderOnly = async (challanBatchId: string) => {
+    setSelectedProcessedBatchId(challanBatchId);
     setRetryingOrderBatchId(challanBatchId);
     setProcessedError(null);
     try {
@@ -505,7 +520,7 @@ export function SubdealerChallanPage({
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
       });
-      if (pr.error || pr.ok === false) {
+      if (pr.error || !pr.ok) {
         setProcessedError(pr.error || "Retry order failed.");
       }
       await loadProcessed();
@@ -605,7 +620,7 @@ export function SubdealerChallanPage({
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
       });
-      if (pr.error || pr.ok === false) {
+      if (pr.error || !pr.ok) {
         setError(pr.error || "Challan processing failed.");
         return;
       }
