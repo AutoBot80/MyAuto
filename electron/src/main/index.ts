@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, Menu } from "electron";
 import fs from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -17,6 +17,51 @@ if (_printTestDirEnv) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+
+/** Packaged apps do not get Chromium’s default shortcuts; wire DevTools explicitly. */
+function installDevToolsShortcuts(win: BrowserWindow): void {
+  win.webContents.on("before-input-event", (_event, input) => {
+    if (input.type !== "keyDown") return;
+    const k = input.key;
+    const isF12 = k === "F12";
+    const isCtrlShiftI =
+      (input.control || input.meta) && input.shift && (k === "I" || k === "i");
+    if (isF12 || isCtrlShiftI) {
+      win.webContents.toggleDevTools();
+    }
+  });
+}
+
+function setApplicationMenu(): void {
+  const viewSubmenu: Electron.MenuItemConstructorOptions[] = [
+    { role: "reload" },
+    { role: "forceReload" },
+    { type: "separator" },
+    {
+      label: "Toggle Developer Tools",
+      accelerator: process.platform === "darwin" ? "Alt+Command+I" : "F12",
+      // Electron 34+ types `focusedWindow` as BaseWindow (no webContents); we only have one BrowserWindow.
+      click: () => {
+        mainWindow?.webContents.toggleDevTools();
+      },
+    },
+    { type: "separator" },
+    { role: "resetZoom" },
+    { role: "zoomIn" },
+    { role: "zoomOut" },
+  ];
+  const template: Electron.MenuItemConstructorOptions[] =
+    process.platform === "darwin"
+      ? [{ role: "appMenu" }, { label: "View", submenu: viewSubmenu }]
+      : [
+          {
+            label: "File",
+            submenu: [{ role: "quit" }],
+          },
+          { label: "View", submenu: viewSubmenu },
+        ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
 
 function loadUi(win: BrowserWindow): void {
   const packaged = app.isPackaged;
@@ -55,6 +100,7 @@ function createWindow(): void {
     width: 1280,
     height: 800,
     show: false,
+    autoHideMenuBar: false,
     ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
       preload: path.join(__dirname, "..", "preload", "index.js"),
@@ -62,6 +108,9 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
+
+  setApplicationMenu();
+  installDevToolsShortcuts(mainWindow);
 
   mainWindow.maximize();
   mainWindow.show();
