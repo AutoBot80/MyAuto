@@ -174,6 +174,20 @@ function formatChallanDateDisplay(s: string | null | undefined): string {
 
 const LATEST_RUN_TZ = "Asia/Kolkata";
 
+/** Production Electron builds set ``VITE_API_URL`` to the cloud API; subdealer challan DMS then runs on the server, not on this PC. */
+function remoteProdApiHostNotice(): string | null {
+  const raw = (import.meta.env.VITE_API_URL ?? "").trim();
+  if (!raw) return null;
+  try {
+    const u = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    const host = u.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1") return null;
+    return host;
+  } catch {
+    return "configured API";
+  }
+}
+
 /** Batch last DMS run: dd/mm/yyyy hh:mm (IST). */
 function formatLatestRunDisplay(iso: string | null | undefined): string {
   const t = (iso || "").trim();
@@ -270,18 +284,21 @@ export function SubdealerChallanPage({
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** Multi-page OCR: ``parse-scan`` is one file per request. */
   const [parseOcrProgress, setParseOcrProgress] = useState<{ current: number; total: number } | null>(null);
-  /** One-shot warm trigger per page session; keeps upload actions snappy without repeated launches. */
-  const dmsWarmTriggeredRef = useRef(false);
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
 
+  const remoteApiNoticeHost = useMemo(() => remoteProdApiHostNotice(), []);
+
+  /**
+   * Warm / bind DMS browser via the local sidecar (Electron) or cloud API fallback.
+   * Always attempts attach — if browser is open, binds to it; otherwise opens a new one.
+   * Safe to call multiple times (backend handles idempotent attach-or-open).
+   */
   const triggerSubdealerDmsWarm = useCallback(() => {
-    if (dmsWarmTriggeredRef.current) return;
     const base = (dmsUrl || "").trim();
     if (!base) return;
-    dmsWarmTriggeredRef.current = true;
     void warmDmsBrowserLocal({ dms_base_url: base }).catch(() => {
-      // Keep this non-blocking for Subdealer Challan OCR flow.
+      // Non-blocking; errors logged server-side.
     });
   }, [dmsUrl]);
 
@@ -468,6 +485,7 @@ export function SubdealerChallanPage({
 
   useEffect(() => {
     if (challanSubTab === "processed") {
+      triggerSubdealerDmsWarm();
       void loadProcessed();
     } else {
       setProcessedRows([]);
@@ -477,7 +495,7 @@ export function SubdealerChallanPage({
       setProcessedChallanSearchDraft("");
       setProcessedChallanSearchApplied("");
     }
-  }, [challanSubTab, loadProcessed]);
+  }, [challanSubTab, loadProcessed, triggerSubdealerDmsWarm]);
 
   useEffect(() => {
     if (challanSubTab !== "processed") return;
@@ -488,6 +506,7 @@ export function SubdealerChallanPage({
 
   /** Re-run full batch (re-queues all Failed lines server-side, then prepare_vehicle + order). */
   const onRetryFailedBatch = async (challanBatchId: string) => {
+    triggerSubdealerDmsWarm();
     setSelectedProcessedBatchId(challanBatchId);
     const saveOk = await onSaveAllFailedLineEdits(challanBatchId);
     if (!saveOk) return;
@@ -512,6 +531,7 @@ export function SubdealerChallanPage({
   };
 
   const onRetryOrderOnly = async (challanBatchId: string) => {
+    triggerSubdealerDmsWarm();
     setSelectedProcessedBatchId(challanBatchId);
     setRetryingOrderBatchId(challanBatchId);
     setProcessedError(null);
@@ -575,6 +595,7 @@ export function SubdealerChallanPage({
   };
 
   const onCreateChallans = async () => {
+    triggerSubdealerDmsWarm();
     if (selectedToDealerId === null) {
       setError("Select a subdealer (To Dealer).");
       return;
@@ -637,6 +658,13 @@ export function SubdealerChallanPage({
 
   return (
     <div className="subdealer-challan">
+      {remoteApiNoticeHost ? (
+        <div className="subdealer-challan-api-notice" role="note">
+          <strong>Remote API ({remoteApiNoticeHost}).</strong> Process / Retry runs DMS automation on the server. A
+          browser window will not open on this computer (unlike Create Invoice, which uses the local sidecar). Expect a
+          fast response if the server cannot drive Siebel there.
+        </div>
+      ) : null}
       <nav className="challans-subtabs" role="tablist" aria-label="Subdealer Challans">
         <button
           type="button"

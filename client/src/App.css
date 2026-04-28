@@ -2869,6 +2869,21 @@
   border: 0;
 }
 
+.subdealer-challan-api-notice {
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: #fff8e6;
+  border: 1px solid #e0c96a;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #3d3500;
+  line-height: 1.45;
+}
+
+.subdealer-challan-api-notice strong {
+  font-weight: 600;
+}
+
 .subdealer-challan-extract-banner {
   display: flex;
   flex-wrap: wrap;
