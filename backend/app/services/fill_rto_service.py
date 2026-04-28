@@ -420,14 +420,15 @@ def _init_cap_place_name(s: str) -> str:
 # Document resolution
 # ---------------------------------------------------------------------------
 #
-# Typical per-sale folder (``uploads/{dealer_id}/{mobile}_{ddmmyy}/``) — optional ``{mobile}_`` prefix
+# Typical per-sale folder (``uploads/{dealer_id}/{mobile}_{ddmmyyyy}/``) — optional ``{mobile}_`` prefix
 # on PDFs; Aadhaar often unprefixed. Example layout::
 #
 #   ``{mobile}_Form_20`` / ``_Form_20`` / ``Form 20``  → FORM 20
 #   ``{mobile}_Sale_Certificate``  → FORM 21
 #   ``{mobile}_Form22`` / ``_Form_22``  → FORM 22
 #   ``{mobile}_GST_Retail_Invoice``  → INVOICE ORIGINAL
-#   ``{mobile}_Insurance*`` / ``*Insurance*Certificate*``  → INSURANCE CERTIFICATE
+#   ``{mobile}_Insurance_{ddmmyyyy}.pdf`` (``ddmmyyyy`` = same 8 digits as folder ``{mobile}_{ddmmyyyy}``)
+#   → INSURANCE CERTIFICATE; legacy ``*Insurance*.pdf`` names if absent
 #   ``Aadhar_front`` (use pattern ``*aadhaar_front*``)  → AADHAAR FRONT; ``Aadhar_back``  → AADHAAR BACK
 #   ``Sales Detail Sheet`` / ``*Detail Sheet*``  → OWNER UNDERTAKING
 #
@@ -441,6 +442,7 @@ _DOC_PATTERNS: list[tuple[str, list[str], list[str]]] = [
     ("FORM 21", ["*Sale_Certificate*", "*Sale Certificate*", "*Form_21*", "*Form 21*", "*FORM_21*"], [".pdf"]),
     # e.g. ``{mobile}_Form22.pdf`` (no underscore before 22) or ``Form_22``
     ("FORM 22", ["*Form_22*", "*Form22*", "*FORM22*", "*Form 22*", "*FORM_22*", "*FORM 22*"], [".pdf"]),
+    # Canonical file is resolved separately (``{mobile}_Insurance_{ddmmyyyy}.pdf``); keep patterns for fallback.
     (
         "INSURANCE CERTIFICATE",
         [
@@ -501,7 +503,54 @@ _DOC_PATTERNS: list[tuple[str, list[str], list[str]]] = [
 ]
 
 
-def _resolve_sale_documents(sale_dir: Path) -> dict[str, Path | None]:
+def _ddmmyyyy_suffix_from_sale_subfolder(subfolder: str, mob_fn: str) -> str | None:
+    """If subfolder leaf is ``{mob_fn}_{ddmmyyyy}``, return the ``ddmmyyyy`` segment."""
+    leaf = Path(str(subfolder).strip().replace("\\", "/")).name
+    prefix = f"{mob_fn}_"
+    if not leaf.startswith(prefix):
+        return None
+    rest = leaf[len(prefix) :]
+    return rest if re.fullmatch(r"\d{8}", rest) else None
+
+
+def _canonical_insurance_certificate_pdf(sale_dir: Path, subfolder: str, mob_fn: str) -> Path | None:
+    """``{mob_fn}_Insurance_{ddmmyyyy}.pdf`` with ``ddmmyyyy`` aligned to the sale subfolder name."""
+    suf = _ddmmyyyy_suffix_from_sale_subfolder(subfolder, mob_fn)
+    if not suf:
+        return None
+    p = sale_dir / f"{mob_fn}_Insurance_{suf}.pdf"
+    return p if p.is_file() else None
+
+
+def _resolve_insurance_certificate(
+    sale_dir: Path,
+    all_files: list[Path],
+    subfolder: str,
+    mob_fn: str,
+) -> Path | None:
+    canon = _canonical_insurance_certificate_pdf(sale_dir, subfolder, mob_fn)
+    if canon is not None:
+        return canon
+    ins_entry = next(x for x in _DOC_PATTERNS if x[0] == "INSURANCE CERTIFICATE")
+    patterns, extensions = ins_entry[1], ins_entry[2]
+    for pat in patterns:
+        for f in all_files:
+            if not f.is_file():
+                continue
+            name_lower = f.name.lower()
+            pat_lower = pat.lower().replace("*", "")
+            parts = [p for p in pat_lower.split("*") if p] if "*" in pat_lower else [pat_lower]
+            if all(p in name_lower for p in parts) and f.suffix.lower() in extensions:
+                return f
+    return None
+
+
+def _resolve_sale_documents(
+    sale_dir: Path,
+    *,
+    subfolder: str = "",
+    mob_fn: str = "",
+) -> dict[str, Path | None]:
     """Map Vahan sub-category names to files found in the sale directory."""
     result: dict[str, Path | None] = {}
     if not sale_dir.is_dir():
@@ -512,6 +561,8 @@ def _resolve_sale_documents(sale_dir: Path) -> dict[str, Path | None]:
 
     all_files = list(sale_dir.iterdir())
     for cat, patterns, extensions in _DOC_PATTERNS:
+        if cat == "INSURANCE CERTIFICATE":
+            continue
         found: Path | None = None
         for pat in patterns:
             for f in all_files:
@@ -528,7 +579,37 @@ def _resolve_sale_documents(sale_dir: Path) -> dict[str, Path | None]:
             if found:
                 break
         result[cat] = found
+
+    result["INSURANCE CERTIFICATE"] = _resolve_insurance_certificate(
+        sale_dir, all_files, subfolder, mob_fn
+    )
     return result
+
+
+def resolve_rto_print_bundle_pdfs(
+    sale_dir: Path,
+    *,
+    subfolder: str,
+    mobile: str,
+) -> tuple[Path | None, Path | None]:
+    """
+    Paths for **Print forms & queue RTO** (Sale Certificate, then Insurance — Gate Pass is separate).
+
+    Uses the same rules as Vahan document resolution: **FORM 21** (*Sale Certificate*, …) and
+    ``{mobile}_Insurance_{ddmmyyyy}.pdf`` aligned to the sale folder name, with legacy *Insurance*
+    fallbacks (see module docstring above ``_DOC_PATTERNS``).
+
+    Returns ``(sale_certificate_pdf, insurance_pdf)``.
+    """
+    dig = re.sub(r"\D", "", str(mobile or ""))
+    if len(dig) >= 10:
+        mob_fn = dig[-10:]
+    elif dig:
+        mob_fn = dig.zfill(10)[:10]
+    else:
+        mob_fn = "0000000000"
+    doc_map = _resolve_sale_documents(sale_dir, subfolder=subfolder, mob_fn=mob_fn)
+    return doc_map.get("FORM 21"), doc_map.get("INSURANCE CERTIFICATE")
 
 
 # ---------------------------------------------------------------------------
@@ -4251,7 +4332,11 @@ def fill_rto_row(row: dict) -> dict:
                 f"searched folder: (none — file_location empty for sales_id={row.get('sales_id')})"
             )
 
-        docs = _resolve_sale_documents(sale_dir) if sale_dir else {cat: None for cat, _, _ in _DOC_PATTERNS}
+        docs = (
+            _resolve_sale_documents(sale_dir, subfolder=subfolder or "", mob_fn=mob_fn)
+            if sale_dir
+            else {cat: None for cat, _, _ in _DOC_PATTERNS}
+        )
 
         found = {k: v.name for k, v in docs.items() if v is not None}
         missing = [k for k, v in docs.items() if v is None]

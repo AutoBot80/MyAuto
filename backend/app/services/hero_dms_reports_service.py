@@ -1,5 +1,9 @@
 """
-Hero DMS: download / print forms and reports after DB persistence (facade).
+Hero DMS: download forms and reports after DB persistence (facade).
+
+# Physical printing / Electron ``print_jobs`` from DMS were deferred to Add Sales
+# **Print Forms & Queue RTO** (ordered Sale Certificate → Insurance → Gate Pass).
+# This module still only downloads Run Report PDFs via ``print_hero_dms_forms``.
 
 Implementation remains in ``hero_dms_playwright_invoice.print_hero_dms_forms`` so Playwright
 selectors stay in one place.
@@ -33,9 +37,12 @@ def run_hero_dms_reports(
 
     ``execution_log_path``: optional ``Playwright_DMS_*.txt`` path; appends a
     ``run_hero_dms_reports`` section with download dir and per-report results.
+
+    # Post-DMS auto-print / ``fill-forms`` ``print_jobs`` — see ``fill_forms_router`` (commented).
     """
     from app.services.hero_dms_playwright_invoice import print_hero_dms_forms
 
+    # Downloads only; printing deferred to Print Forms button (see module docstring).
     return print_hero_dms_forms(
         page,
         mobile=mobile,

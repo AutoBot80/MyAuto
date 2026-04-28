@@ -362,7 +362,10 @@ export async function printForm20(req: PrintForm20Request): Promise<PrintForm20R
   });
 }
 
-/** Gate Pass only: Word template → PDF under Uploaded scans, then server schedules print/open. */
+/**
+ * Resolves Sale Certificate + Insurance PDFs in the sale folder, generates Gate Pass, returns
+ * ordered ``print_jobs`` (1. Sale Certificate, 2. Insurance, 3. Gate Pass) for Electron.
+ */
 export async function printGatePass(req: PrintForm20Request): Promise<PrintForm20Response> {
   return apiFetch<PrintForm20Response>("/fill-forms/print-gate-pass", {
     method: "POST",

@@ -217,15 +217,31 @@ export async function printPdfsFromPresignedUrls(
 }
 
 /**
- * Dev / smoke: print every ``*.pdf`` in ``absDir`` using the same local-path path as production
+ * Dev / smoke: print PDF(s) from ``absDir`` using the same local-path path as production
  * (``printPdfsFromPresignedUrls``). Used when ``SAATHI_PRINT_TEST_DIR`` is set in main.
+ *
+ * If ``SAATHI_PRINT_TEST_ONLY`` is set (e.g. ``Report`` or ``Report.pdf``), only that file is printed.
  */
 export async function runPrintTestFromDir(absDir: string): Promise<{ ok: boolean; printed: number; error?: string }> {
   const { readdir } = await import("fs/promises");
   const { join } = await import("path");
-  const names = (await readdir(absDir))
+  let names = (await readdir(absDir))
     .filter((n) => n.toLowerCase().endsWith(".pdf"))
     .sort();
+
+  const onlyRaw = process.env.SAATHI_PRINT_TEST_ONLY?.trim();
+  if (onlyRaw) {
+    const want = onlyRaw.toLowerCase().endsWith(".pdf") ? onlyRaw : `${onlyRaw}.pdf`;
+    names = names.filter((n) => n.toLowerCase() === want.toLowerCase());
+    if (!names.length) {
+      return {
+        ok: false,
+        printed: 0,
+        error: `No PDF matching SAATHI_PRINT_TEST_ONLY=${onlyRaw} in ${absDir}`,
+      };
+    }
+  }
+
   const items: PresignedPrintItem[] = names.map((filename) => ({
     presigned_url: join(absDir, filename),
     filename,

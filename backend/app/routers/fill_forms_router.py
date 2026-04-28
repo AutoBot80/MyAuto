@@ -36,7 +36,7 @@ from app.services.fill_hero_insurance_service import (
     pre_process,
     warm_insurance_browser_session,
 )
-from app.services.fill_rto_service import warm_vahan_browser_session
+from app.services.fill_rto_service import resolve_rto_print_bundle_pdfs, warm_vahan_browser_session
 from app.services.playwright_executor import get_playwright_executor
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
@@ -251,6 +251,26 @@ class PrintForm20Response(BaseModel):
     pdfs_saved: list[str]
     error: str | None = None
     print_jobs: list[dict] = Field(default_factory=list)
+
+
+def _mobile_for_print_forms(req: PrintForm20Request) -> str:
+    """Customer mobile, or 10 digits parsed from subfolder leaf ``{mobile}_{ddmmyyyy}``."""
+    m = (req.customer.mobile_number or req.customer.mobile or "").strip()
+    if m:
+        return m
+    leaf = Path(str(req.subfolder or "").strip().replace("\\", "/")).name
+    mm = re.match(r"^(\d{10})_\d{8}$", leaf)
+    return mm.group(1) if mm else ""
+
+
+def _mobile_10_digits_for_overlay(raw_mobile: str) -> str:
+    """10-digit string for :func:`form20_pencil_overlay.form20_pencil_overlay_write_only`."""
+    dig = re.sub(r"\D", "", (raw_mobile or "").strip())
+    if len(dig) >= 10:
+        return dig[-10:]
+    if dig:
+        return dig.zfill(10)[:10]
+    return "0000000000"
 
 
 class WarmDmsBrowserRequest(BaseModel):
@@ -597,26 +617,27 @@ async def fill_dms_only(
     if vv is None:
         vv = result.get("vehicle_id")
     print_jobs: list[dict] = []
-    if result.get("error") is None:
-        from app.services.upload_scans_invoice_print import (
-            collect_invoice_print_jobs_s3,
-            schedule_dispatch_pdfs_after_create_invoice,
-        )
-
-        if STORAGE_USE_S3:
-            print_jobs = collect_invoice_print_jobs_s3(
-                did,
-                subfolder_resolved,
-                _mobile_for_invoice_dispatch(staging_payload, customer_dict),
-                _invoice_dispatch_pdf_paths(result),
-            )
-        else:
-            schedule_dispatch_pdfs_after_create_invoice(
-                did,
-                subfolder_resolved,
-                _mobile_for_invoice_dispatch(staging_payload, customer_dict),
-                _invoice_dispatch_pdf_paths(result),
-            )
+    # Deferred to Add Sales **Print Forms & Queue RTO** — keep ``print_jobs`` empty; do not auto-print GST/Sale from DMS response.
+    # if result.get("error") is None:
+    #     from app.services.upload_scans_invoice_print import (
+    #         collect_invoice_print_jobs_s3,
+    #         schedule_dispatch_pdfs_after_create_invoice,
+    #     )
+    #
+    #     if STORAGE_USE_S3:
+    #         print_jobs = collect_invoice_print_jobs_s3(
+    #             did,
+    #             subfolder_resolved,
+    #             _mobile_for_invoice_dispatch(staging_payload, customer_dict),
+    #             _invoice_dispatch_pdf_paths(result),
+    #         )
+    #     else:
+    #         schedule_dispatch_pdfs_after_create_invoice(
+    #             did,
+    #             subfolder_resolved,
+    #             _mobile_for_invoice_dispatch(staging_payload, customer_dict),
+    #             _invoice_dispatch_pdf_paths(result),
+    #         )
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,
@@ -738,8 +759,12 @@ async def print_gate_pass(
     principal: Principal = Depends(get_principal),
 ) -> PrintForm20Response:
     """
-    Generate ``Gate Pass.pdf`` from ``templates/word/Gate Pass Template.docx`` (or ``GATE_PASS_TEMPLATE_DOCX``),
-    save under Uploaded scans, then schedule print/open per ``ENVIRONMENT`` (non-blocking).
+    Generate ``Gate Pass.pdf``, resolve **Sale Certificate** and **Insurance** PDFs in the same sale folder,
+    then return ordered ``print_jobs`` for the Electron client: (1) Sale Certificate, (2) Insurance,
+    (3) Gate Pass — all under ``Uploaded scans/{dealer_id}/{subfolder}/``.
+
+    After a successful print-job build, best-effort: if ``pencil_mark.*`` and a Form 20 PDF exist in the folder,
+    write ``{Form20 stem}_with_pencil_mark.pdf`` (stamp top-right of page 1). Failures are logged only.
     """
     enforce_max_text_depth(req.model_dump())
     did = resolve_dealer_id(principal, req.dealer_id)
@@ -758,9 +783,34 @@ async def print_gate_pass(
         vehicle_dict["frame_num"] = vehicle_dict.get("frame_no")
     if "engine_no" in vehicle_dict and "engine_num" not in vehicle_dict:
         vehicle_dict["engine_num"] = vehicle_dict.get("engine_no")
+    safe_sub = re.sub(r"[^\w\-]", "_", (req.subfolder or "").strip()) or "default"
+    sale_dir = uploads_dir / safe_sub
+    mob_for_resolve = _mobile_for_print_forms(req)
+
     try:
         from app.services.form20_service import generate_gate_pass_pdf_only
-        from app.services.upload_scans_pdf_dispatch import schedule_dispatch_local_pdf
+
+        sale_pdf, ins_pdf = resolve_rto_print_bundle_pdfs(
+            sale_dir,
+            subfolder=safe_sub,
+            mobile=mob_for_resolve,
+        )
+        missing: list[str] = []
+        if sale_pdf is None or not sale_pdf.is_file():
+            missing.append(
+                "Sale Certificate (*Sale Certificate*, *Sale_Certificate*, or Form 21 PDF from DMS Run Report)"
+            )
+        if ins_pdf is None or not ins_pdf.is_file():
+            missing.append(
+                "Insurance certificate ({mobile}_Insurance_{ddmmyyyy}.pdf from Generate Insurance, or *Insurance*.pdf)"
+            )
+        if missing:
+            return PrintForm20Response(
+                success=False,
+                pdfs_saved=[],
+                error="Missing PDFs in sale folder — run Fill DMS (reports) and Generate Insurance first. "
+                + "; ".join(missing),
+            )
 
         pdf_path = generate_gate_pass_pdf_only(
             subfolder=req.subfolder,
@@ -770,17 +820,63 @@ async def print_gate_pass(
             dealer_id=did,
             uploads_dir=uploads_dir,
         )
+
+        ordered = [
+            (sale_pdf.resolve(), "sale_certificate"),
+            (ins_pdf.resolve(), "insurance"),
+            (pdf_path.resolve(), "gate_pass"),
+        ]
+
         print_jobs: list[dict] = []
         if STORAGE_USE_S3:
             from app.services.dealer_storage import presigned_uploads_get_by_rel_path, sync_uploads_subfolder_to_s3
 
-            safe_sub = re.sub(r"[^\w\-]", "_", (req.subfolder or "").strip()) or "default"
             sync_uploads_subfolder_to_s3(did, safe_sub)
-            url = presigned_uploads_get_by_rel_path(did, f"{safe_sub}/Gate Pass.pdf")
-            if url:
-                print_jobs.append({"filename": "Gate Pass.pdf", "presigned_url": url, "kind": "gate_pass"})
+            for path_obj, kind in ordered:
+                rel = f"{safe_sub}/{path_obj.name}"
+                url = presigned_uploads_get_by_rel_path(did, rel)
+                if url:
+                    print_jobs.append({"filename": path_obj.name, "presigned_url": url, "kind": kind})
+                else:
+                    logger.warning("print_gate_pass: no presigned URL for %s", rel)
+            if len(print_jobs) != 3:
+                return PrintForm20Response(
+                    success=False,
+                    pdfs_saved=["Gate Pass.pdf"],
+                    error="Could not build presigned URLs for all three PDFs (check S3 sync).",
+                )
         else:
-            schedule_dispatch_local_pdf(pdf_path)
+            for path_obj, kind in ordered:
+                print_jobs.append(
+                    {"filename": path_obj.name, "presigned_url": str(path_obj), "kind": kind}
+                )
+
+        # Best-effort: pencil_mark.* + Form 20 in ``sale_dir`` → ``*_with_pencil_mark.pdf`` (does not fail Print Forms).
+        try:
+            from app.services.form20_pencil_overlay import form20_pencil_overlay_write_only
+
+            mob10 = _mobile_10_digits_for_overlay(mob_for_resolve)
+            stamped = form20_pencil_overlay_write_only(sale_dir, mob10)
+            if stamped is not None:
+                logger.info("print_gate_pass: Form 20 pencil overlay written: %s", stamped)
+                if STORAGE_USE_S3:
+                    try:
+                        from app.services.dealer_storage import sync_uploads_subfolder_to_s3
+
+                        sync_uploads_subfolder_to_s3(did, safe_sub)
+                    except Exception as sync_exc:
+                        logger.info(
+                            "print_gate_pass: S3 sync after pencil overlay skipped (non-fatal): %s",
+                            sync_exc,
+                        )
+            else:
+                logger.info(
+                    "print_gate_pass: Form 20 pencil overlay skipped (no Form 20 PDF and/or no pencil-mark asset in %s)",
+                    sale_dir,
+                )
+        except Exception as exc:
+            logger.info("print_gate_pass: Form 20 pencil overlay best-effort skipped: %s", exc)
+
         return PrintForm20Response(success=True, pdfs_saved=["Gate Pass.pdf"], print_jobs=print_jobs)
     except HTTPException:
         raise
@@ -1028,26 +1124,27 @@ async def fill_dms(
     if vv is None:
         vv = result.get("vehicle_id")
     print_jobs: list[dict] = []
-    if result.get("error") is None:
-        from app.services.upload_scans_invoice_print import (
-            collect_invoice_print_jobs_s3,
-            schedule_dispatch_pdfs_after_create_invoice,
-        )
-
-        if STORAGE_USE_S3:
-            print_jobs = collect_invoice_print_jobs_s3(
-                did,
-                subfolder_resolved,
-                _mobile_for_invoice_dispatch(staging_payload, customer_dict),
-                _invoice_dispatch_pdf_paths(result),
-            )
-        else:
-            schedule_dispatch_pdfs_after_create_invoice(
-                did,
-                subfolder_resolved,
-                _mobile_for_invoice_dispatch(staging_payload, customer_dict),
-                _invoice_dispatch_pdf_paths(result),
-            )
+    # Deferred to Add Sales **Print Forms & Queue RTO** — keep ``print_jobs`` empty; do not auto-print GST/Sale from DMS response.
+    # if result.get("error") is None:
+    #     from app.services.upload_scans_invoice_print import (
+    #         collect_invoice_print_jobs_s3,
+    #         schedule_dispatch_pdfs_after_create_invoice,
+    #     )
+    #
+    #     if STORAGE_USE_S3:
+    #         print_jobs = collect_invoice_print_jobs_s3(
+    #             did,
+    #             subfolder_resolved,
+    #             _mobile_for_invoice_dispatch(staging_payload, customer_dict),
+    #             _invoice_dispatch_pdf_paths(result),
+    #         )
+    #     else:
+    #         schedule_dispatch_pdfs_after_create_invoice(
+    #             did,
+    #             subfolder_resolved,
+    #             _mobile_for_invoice_dispatch(staging_payload, customer_dict),
+    #             _invoice_dispatch_pdf_paths(result),
+    #         )
     return FillDmsResponse(
         success=result.get("error") is None,
         vehicle=scraped,

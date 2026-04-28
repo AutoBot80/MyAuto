@@ -90,7 +90,10 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   const printTestDir = process.env.SAATHI_PRINT_TEST_DIR?.trim();
   if (printTestDir) {
-    logInfo(`SAATHI_PRINT_TEST_DIR smoke print: ${printTestDir}`);
+    const only = process.env.SAATHI_PRINT_TEST_ONLY?.trim();
+    logInfo(
+      `SAATHI_PRINT_TEST_DIR smoke print: ${printTestDir}${only ? ` (only: ${only})` : ""}`
+    );
     const r = await runPrintTestFromDir(printTestDir);
     if (r.ok) {
       logInfo(`print test ok: printed=${r.printed}`);

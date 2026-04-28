@@ -8,7 +8,8 @@ if not exist "%CD%\electron\package.json" (
   exit /b 1
 )
 echo Repo: %CD%
-echo Print folder: D:\Saathi\Uploaded scans\100001\8905969604_210426
+echo Print folder: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\9784542030_250426
+echo PDF: 9784542030_Insurance_27042026.pdf
 echo.
 python "%~dp0test_prod_printing.py"
 set EXITCODE=%ERRORLEVEL%
