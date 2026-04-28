@@ -50,6 +50,32 @@ def _script_cache_dir(saathi_base: str) -> Path:
     return Path(saathi_base) / "script_cache"
 
 
+def _load_dotenv_safe(env_path: Path) -> None:
+    """
+    Load a .env file; tolerate UTF-8 BOM, plain UTF-8, and Windows ANSI (cp1252).
+
+    Users sometimes save ``Saathi\\.env`` from Notepad as "ANSI" or paste Word
+    punctuation — byte 0x97 etc. — which raises UnicodeDecodeError with the
+    default UTF-8-only load.
+    """
+    if not env_path.is_file():
+        return
+    from dotenv import load_dotenv
+
+    for enc in ("utf-8-sig", "utf-8", "cp1252"):
+        try:
+            load_dotenv(env_path, encoding=enc)
+            if enc == "cp1252":
+                logging.warning(
+                    "Loaded %s as Windows-1252 (ANSI); re-save as UTF-8 (Notepad: Save As → UTF-8) to avoid issues.",
+                    env_path,
+                )
+            return
+        except UnicodeDecodeError:
+            continue
+    load_dotenv(env_path, encoding="latin-1")
+
+
 def _sync_scripts(api_url: str, jwt: str, saathi_base: str) -> None:
     """
     In frozen (packaged) mode, check whether the local script cache matches
@@ -127,10 +153,7 @@ def _bootstrap_imports(saathi_base: str, *, api_url: str = "", jwt: str = "") ->
     os.environ["SAATHI_BASE_DIR"] = saathi_base
     saathi_path = Path(saathi_base)
     env_file = saathi_path / ".env"
-    if env_file.is_file():
-        from dotenv import load_dotenv
-
-        load_dotenv(env_file)
+    _load_dotenv_safe(env_file)
 
     if _is_frozen and api_url:
         _sync_scripts(api_url, jwt, saathi_base)
@@ -140,18 +163,13 @@ def _bootstrap_imports(saathi_base: str, *, api_url: str = "", jwt: str = "") ->
         if (cache / "backend").is_dir():
             sys.path.insert(0, str(cache / "backend"))
             be_env = cache / "backend" / ".env"
-            if be_env.is_file():
-                from dotenv import load_dotenv
-                load_dotenv(be_env)
+            _load_dotenv_safe(be_env)
             return
 
     backend = _repo_backend()
     sys.path.insert(0, str(backend))
     be_env = backend / ".env"
-    if be_env.is_file():
-        from dotenv import load_dotenv
-
-        load_dotenv(be_env)
+    _load_dotenv_safe(be_env)
 
 
 # ---------------------------------------------------------------------------
