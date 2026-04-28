@@ -190,6 +190,14 @@ export function UploadScansPanel({
 
   async function onChooseConsolidatedFile() {
     setScannerFolderError(null);
+    const scannerArchiveUi =
+      !isPreUploaded && fsAccessSupported() && hasConsolidated && !individualMode;
+    if (scannerArchiveUi && !scannerRootHandle) {
+      setScannerFolderError(
+        "Please select the scanner folder location first. Use the Scans Folder button and choose the folder that contains landing and processed."
+      );
+      return;
+    }
     if (fsAccessSupported() && scannerRootHandle) {
       try {
         const picked = await pickConsolidatedPdfFromLanding(scannerRootHandle);
@@ -201,6 +209,13 @@ export function UploadScansPanel({
         });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
+        const platformBlocked =
+          /not allowed by the user agent|user agent or the platform/i.test(msg);
+        if (platformBlocked) {
+          setScannerFolderError(null);
+          consolidatedInputRef.current?.click();
+          return;
+        }
         setScannerFolderError(
           msg.includes("landing") || msg.includes("NotFound")
             ? 'Missing "landing" folder under the scanner folder, or permission was denied.'

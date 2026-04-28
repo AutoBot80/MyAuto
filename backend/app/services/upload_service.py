@@ -676,6 +676,11 @@ class UploadService:
             dest.write_bytes(content)
             saved_paths.append(dest)
 
+        # Send an SSE chunk before heavy OCR work so proxies (CloudFront/nginx) see activity on the
+        # response stream. Multi-file uploads otherwise finish the POST body then sit idle until the
+        # first extraction event — clients report "network error" / connection reset.
+        yield f"data: {json.dumps({'event': 'received', 'files_saved': len(saved_paths)})}\n\n"
+
         dest_pdf = saved_paths[0]
         extra_image_paths = saved_paths[1:] if len(saved_paths) > 1 else None
         defer_post_ocr = background_tasks is not None

@@ -54,8 +54,16 @@ async function idbSet(key: string, value: unknown): Promise<void> {
   });
 }
 
+/**
+ * File System Access API (`showDirectoryPicker`, persisted handles, `getDirectoryHandle`) requires
+ * a supported secure context. Packaged Electron loads the SPA from `file://`, where Chromium
+ * rejects `getDirectoryHandle` with "The request is not allowed by the user agent or the platform".
+ * Use the classic `<input type="file">` path instead (`http://localhost` dev is fine).
+ */
 export function fsAccessSupported(): boolean {
-  return typeof window !== "undefined" && "showDirectoryPicker" in window && "showOpenFilePicker" in window;
+  if (typeof window === "undefined") return false;
+  if (window.location.protocol === "file:") return false;
+  return "showDirectoryPicker" in window && "showOpenFilePicker" in window;
 }
 
 export async function loadScannerRootHandle(): Promise<FileSystemDirectoryHandle | null> {

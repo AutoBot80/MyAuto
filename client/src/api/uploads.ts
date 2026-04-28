@@ -165,7 +165,18 @@ export async function uploadScansV2ConsolidatedStream(
   let final: UploadScansResponse | null = null;
 
   while (true) {
-    const { done, value } = await reader.read();
+    let chunk: ReadableStreamReadResult<Uint8Array>;
+    try {
+      chunk = await reader.read();
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Connection lost while reading the upload response (${raw}). ` +
+          "If this happens with multiple files or large scans, a proxy (e.g. CloudFront) may be closing " +
+          "idle responses — retry as one multi-page PDF or ask ops to raise timeouts for POST /uploads."
+      );
+    }
+    const { done, value } = chunk;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     let sep: number;
