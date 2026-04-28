@@ -6,8 +6,8 @@ import {
   listRecentChallanStaging,
   parseSubdealerChallanScans,
   patchChallanStagingFailedLine,
-  processChallanBatch,
-  retryChallanOrderOnly,
+  processChallanBatchLocal,
+  retryChallanOrderOnlyLocal,
   type ChallanFailedDetailLine,
   type ChallanMasterProcessedRow,
   type SubdealerChallanLine,
@@ -174,20 +174,6 @@ function formatChallanDateDisplay(s: string | null | undefined): string {
 
 const LATEST_RUN_TZ = "Asia/Kolkata";
 
-/** Production Electron builds set ``VITE_API_URL`` to the cloud API; subdealer challan DMS then runs on the server, not on this PC. */
-function remoteProdApiHostNotice(): string | null {
-  const raw = (import.meta.env.VITE_API_URL ?? "").trim();
-  if (!raw) return null;
-  try {
-    const u = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
-    const host = u.hostname.toLowerCase();
-    if (host === "localhost" || host === "127.0.0.1") return null;
-    return host;
-  } catch {
-    return "configured API";
-  }
-}
-
 /** Batch last DMS run: dd/mm/yyyy hh:mm (IST). */
 function formatLatestRunDisplay(iso: string | null | undefined): string {
   const t = (iso || "").trim();
@@ -286,8 +272,6 @@ export function SubdealerChallanPage({
   const [parseOcrProgress, setParseOcrProgress] = useState<{ current: number; total: number } | null>(null);
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
-
-  const remoteApiNoticeHost = useMemo(() => remoteProdApiHostNotice(), []);
 
   /**
    * Warm / bind DMS browser via the local sidecar (Electron) or cloud API fallback.
@@ -514,7 +498,7 @@ export function SubdealerChallanPage({
     setRetryingProcessBatchId(challanBatchId);
     setProcessedError(null);
     try {
-      const pr = await processChallanBatch(challanBatchId, {
+      const pr = await processChallanBatchLocal(challanBatchId, {
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
       });
@@ -536,7 +520,7 @@ export function SubdealerChallanPage({
     setRetryingOrderBatchId(challanBatchId);
     setProcessedError(null);
     try {
-      const pr = await retryChallanOrderOnly(challanBatchId, {
+      const pr = await retryChallanOrderOnlyLocal(challanBatchId, {
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
       });
@@ -637,7 +621,7 @@ export function SubdealerChallanPage({
       setRows((prev) =>
         prev.map((r) => (rowHasVehicleData(r) ? { ...r, status: "Queued" } : r)),
       );
-      const pr = await processChallanBatch(st.challan_batch_id, {
+      const pr = await processChallanBatchLocal(st.challan_batch_id, {
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
       });
@@ -658,13 +642,6 @@ export function SubdealerChallanPage({
 
   return (
     <div className="subdealer-challan">
-      {remoteApiNoticeHost ? (
-        <div className="subdealer-challan-api-notice" role="note">
-          <strong>Remote API ({remoteApiNoticeHost}).</strong> Process / Retry runs DMS automation on the server. A
-          browser window will not open on this computer (unlike Create Invoice, which uses the local sidecar). Expect a
-          fast response if the server cannot drive Siebel there.
-        </div>
-      ) : null}
       <nav className="challans-subtabs" role="tablist" aria-label="Subdealer Challans">
         <button
           type="button"

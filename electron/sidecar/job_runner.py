@@ -762,6 +762,219 @@ def _dispatch_fill_vahan_batch(params: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Subdealer Challan — resolve (API) → Playwright (local) → commit (API)
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_fill_subdealer_challan(params: dict) -> dict:
+    """
+    Run subdealer challan DMS automation locally:
+    1. Resolve batch data from API
+    2. Run prepare_vehicle for each row (local Playwright)
+    3. Run order phase (local Playwright)
+    4. Commit results to API
+    """
+    api_url, jwt = _require_api_credentials(params)
+
+    challan_batch_id = params.get("challan_batch_id")
+    if not challan_batch_id:
+        return {"ok": False, "error": "challan_batch_id required"}
+
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+
+    resolve_body = {
+        "challan_batch_id": challan_batch_id,
+        "dealer_id": dealer_id,
+    }
+    try:
+        ctx = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body)
+    except Exception as exc:
+        return {"ok": False, "error": f"Resolve failed: {exc}"}
+
+    dms_base_url = ctx.get("dms_base_url") or ""
+    if not dms_base_url:
+        return {"ok": False, "error": "dms_base_url not configured on server"}
+
+    from_dealer_id = ctx["from_dealer_id"]
+    to_dealer_id = ctx["to_dealer_id"]
+    challan_date = ctx.get("challan_date")
+    challan_book_num = ctx.get("challan_book_num")
+    detail_rows = ctx.get("detail_rows") or []
+
+    if not detail_rows:
+        return {"ok": False, "error": "No detail rows in batch"}
+
+    from app.config import (
+        DMS_REAL_URL_CONTACT,
+        DMS_REAL_URL_ENQUIRY,
+        DMS_REAL_URL_LINE_ITEMS,
+        DMS_REAL_URL_PDI,
+        DMS_REAL_URL_PRECHECK,
+        DMS_REAL_URL_REPORTS,
+        DMS_REAL_URL_VEHICLE,
+        DMS_REAL_URL_VEHICLES,
+        DMS_SIEBEL_ACTION_TIMEOUT_MS,
+        DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
+        DMS_SIEBEL_NAV_TIMEOUT_MS,
+        dms_automation_is_real_siebel,
+    )
+    from app.services.fill_hero_dms_service import _install_playwright_js_dialog_handler
+    from app.services.handle_browser_opening import get_or_open_site_page
+    from app.services.hero_dms_playwright_vehicle import prepare_vehicle
+    from app.services.hero_dms_shared_utilities import SiebelDmsUrls
+
+    if not dms_automation_is_real_siebel():
+        return {"ok": False, "error": "DMS_MODE must be real/siebel"}
+
+    urls = SiebelDmsUrls(
+        contact=DMS_REAL_URL_CONTACT,
+        vehicles=DMS_REAL_URL_VEHICLES,
+        precheck=DMS_REAL_URL_PRECHECK,
+        pdi=DMS_REAL_URL_PDI,
+        vehicle=DMS_REAL_URL_VEHICLE,
+        enquiry=DMS_REAL_URL_ENQUIRY,
+        line_items=DMS_REAL_URL_LINE_ITEMS,
+        reports=DMS_REAL_URL_REPORTS,
+    )
+    frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
+
+    page, open_error = get_or_open_site_page(dms_base_url, "DMS", require_login_on_open=True)
+    if page is None:
+        return {"ok": False, "error": open_error or "Could not open DMS"}
+
+    _install_playwright_js_dialog_handler(page)
+
+    detail_results: list[dict] = []
+    last_vehicle_scrape: dict = {}
+    steps: list[str] = []
+
+    def note(msg: str) -> None:
+        steps.append(msg)
+        logging.info("subdealer_challan sidecar: %s", msg)
+
+    def ms_done(_label: str) -> None:
+        pass
+
+    def step_msg(msg: str) -> None:
+        steps.append(msg)
+
+    def form_trace(*_a, **_k) -> None:
+        pass
+
+    pending = [r for r in detail_rows if (r.get("status") or "").strip() == "Queued"]
+
+    for row in pending:
+        sid = int(row["challan_staging_id"])
+        rc = row.get("raw_chassis", "")
+        re_ = row.get("raw_engine", "")
+        row_to_dealer = int(row.get("to_dealer_id", to_dealer_id))
+
+        dv = {
+            "frame_partial": rc,
+            "engine_partial": re_,
+            "key_partial": "",
+            "battery_partial": "",
+        }
+
+        logging.info("subdealer_challan sidecar: sid=%s chassis=%r engine=%r", sid, rc, re_)
+
+        try:
+            ok, err, scraped, _in_tr, _crit, _info = prepare_vehicle(
+                page,
+                dv,
+                urls,
+                nav_timeout_ms=DMS_SIEBEL_NAV_TIMEOUT_MS,
+                action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
+                content_frame_selector=frame_sel,
+                note=note,
+                form_trace=form_trace,
+                ms_done=ms_done,
+                step=step_msg,
+            )
+            if not ok:
+                detail_results.append({
+                    "challan_staging_id": sid,
+                    "status": "Failed",
+                    "error": (err or "prepare_vehicle failed")[:2000],
+                    "to_dealer_id": row_to_dealer,
+                })
+                continue
+
+            last_vehicle_scrape = dict(scraped or {})
+            detail_results.append({
+                "challan_staging_id": sid,
+                "status": "Ready",
+                "scraped_vehicle": last_vehicle_scrape,
+                "to_dealer_id": row_to_dealer,
+            })
+        except Exception as exc:
+            logging.warning("subdealer_challan sidecar prepare_vehicle: %s", exc)
+            detail_results.append({
+                "challan_staging_id": sid,
+                "status": "Failed",
+                "error": str(exc)[:2000],
+                "to_dealer_id": row_to_dealer,
+            })
+
+    all_ready = all(
+        (r.get("status") or "").strip() in ("Ready", "Committed")
+        for r in detail_rows
+        if (r.get("status") or "").strip() != "Queued"
+    ) and all(
+        dr.get("status") == "Ready"
+        for dr in detail_results
+    )
+
+    order_result: dict | None = None
+    if all_ready and detail_results:
+        from app.services.hero_dms_playwright_customer_challan import prepare_customer_for_challan
+        from app.services.fill_hero_dms_service import Playwright_Hero_DMS_fill_subdealer_challan_order_only
+
+        try:
+            dms_values = prepare_customer_for_challan(to_dealer_id)
+            dms_values["challan_date"] = challan_date
+            dms_values["challan_book_num"] = challan_book_num
+
+            order_out: dict = {"dms_step_messages": steps, "vehicle": last_vehicle_scrape}
+            Playwright_Hero_DMS_fill_subdealer_challan_order_only(
+                page,
+                dms_values,
+                frame_sel,
+                order_out,
+            )
+            challan_id = order_out.get("challan_id")
+            if challan_id:
+                order_result = {"challan_id": challan_id}
+            else:
+                order_result = {"error": order_out.get("error") or "Order phase did not return challan_id"}
+        except Exception as exc:
+            logging.warning("subdealer_challan sidecar order phase: %s", exc)
+            order_result = {"error": str(exc)[:2000]}
+
+    commit_body = {
+        "challan_batch_id": challan_batch_id,
+        "dealer_id": dealer_id,
+        "detail_results": detail_results,
+        "order_result": order_result,
+    }
+    try:
+        commit_resp = _api_post(api_url, jwt, "/sidecar/subdealer-challan/commit", commit_body)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"Commit failed: {exc}",
+            "dms_step_messages": steps,
+        }
+
+    return {
+        "ok": commit_resp.get("ok", False),
+        "error": commit_resp.get("error"),
+        "challan_id": commit_resp.get("challan_id"),
+        "dms_step_messages": steps,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -797,6 +1010,9 @@ def dispatch(payload: dict) -> dict:
         return {"success": True, "data": data}
     if job_type == "fill_vahan_batch":
         data = _dispatch_fill_vahan_batch(params)
+        return {"success": True, "data": data}
+    if job_type == "fill_subdealer_challan":
+        data = _dispatch_fill_subdealer_challan(params)
         return {"success": True, "data": data}
     return {"success": False, "error": f"Unknown job type: {job_type}"}
 

@@ -560,6 +560,172 @@ async def upload_artifacts(
 
 
 # ---------------------------------------------------------------------------
+# Subdealer Challan endpoints
+# ---------------------------------------------------------------------------
+
+
+class SubdealerChallanResolveRequest(BaseModel):
+    challan_batch_id: str
+    dealer_id: int | None = None
+
+
+class SubdealerChallanResolveResponse(BaseModel):
+    challan_batch_id: str
+    from_dealer_id: int
+    to_dealer_id: int
+    challan_date: str | None
+    challan_book_num: str | None
+    detail_rows: list[dict[str, Any]]
+    dms_base_url: str
+    headed: bool
+    remote_debug_port: int
+
+
+class SubdealerChallanCommitRequest(BaseModel):
+    challan_batch_id: str
+    dealer_id: int | None = None
+    detail_results: list[dict[str, Any]]
+    order_result: dict[str, Any] | None = None
+
+
+class SubdealerChallanCommitResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+    challan_id: int | None = None
+
+
+@router.post("/subdealer-challan/resolve", response_model=SubdealerChallanResolveResponse)
+async def subdealer_challan_resolve(
+    req: SubdealerChallanResolveRequest,
+    principal: Principal = Depends(get_principal),
+) -> SubdealerChallanResolveResponse:
+    """
+    Return batch data for local sidecar processing.
+    The sidecar runs Playwright locally and calls /commit with results.
+    """
+    from uuid import UUID as PyUUID
+
+    from app.repositories import challan_details_staging as detail_repo
+
+    did = resolve_dealer_id(principal, req.dealer_id)
+    try:
+        bid = PyUUID(req.challan_batch_id.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
+
+    rows = detail_repo.fetch_batch_rows(bid)
+    if not rows:
+        raise HTTPException(status_code=404, detail="No staging rows for this batch")
+
+    from_dealer_id = int(rows[0]["from_dealer_id"])
+    if from_dealer_id != did and not principal.admin:
+        raise HTTPException(status_code=403, detail="Not authorized for this batch")
+
+    to_dealer_id = int(rows[0]["to_dealer_id"])
+    challan_date = rows[0].get("challan_date")
+    challan_book_num = rows[0].get("challan_book_num")
+
+    detail_rows = [
+        {
+            "challan_staging_id": int(r["challan_staging_id"]),
+            "raw_chassis": (r.get("raw_chassis") or "").strip(),
+            "raw_engine": (r.get("raw_engine") or "").strip(),
+            "status": (r.get("status") or "").strip(),
+            "to_dealer_id": int(r["to_dealer_id"]),
+        }
+        for r in rows
+    ]
+
+    return SubdealerChallanResolveResponse(
+        challan_batch_id=str(bid),
+        from_dealer_id=from_dealer_id,
+        to_dealer_id=to_dealer_id,
+        challan_date=str(challan_date).strip() if challan_date else None,
+        challan_book_num=str(challan_book_num).strip() if challan_book_num else None,
+        detail_rows=detail_rows,
+        dms_base_url=(DMS_BASE_URL or "").strip(),
+        headed=bool(DMS_PLAYWRIGHT_HEADED),
+        remote_debug_port=int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333),
+    )
+
+
+@router.post("/subdealer-challan/commit", response_model=SubdealerChallanCommitResponse)
+async def subdealer_challan_commit(
+    req: SubdealerChallanCommitRequest,
+    principal: Principal = Depends(get_principal),
+) -> SubdealerChallanCommitResponse:
+    """
+    Persist sidecar results: update detail statuses, inventory, and optionally commit order.
+    """
+    from uuid import UUID as PyUUID
+
+    from app.repositories import challan_details_staging as detail_repo
+    from app.repositories import challan_master_staging as master_repo
+    from app.repositories.vehicle_inventory import upsert_from_prepare_vehicle_scrape
+
+    did = resolve_dealer_id(principal, req.dealer_id)
+    try:
+        bid = PyUUID(req.challan_batch_id.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
+
+    rows = detail_repo.fetch_batch_rows(bid)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    from_dealer_id = int(rows[0]["from_dealer_id"])
+    if from_dealer_id != did and not principal.admin:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    for dr in req.detail_results:
+        sid = int(dr.get("challan_staging_id", 0))
+        status = (dr.get("status") or "").strip()
+        error = dr.get("error")
+        scraped = dr.get("scraped_vehicle") or {}
+        to_dealer_id = int(dr.get("to_dealer_id", 0))
+
+        if status == "Ready" and scraped:
+            try:
+                iid = upsert_from_prepare_vehicle_scrape(to_dealer_id=to_dealer_id, vehicle=scraped)
+                detail_repo.update_detail_status(
+                    sid,
+                    status="Ready",
+                    last_error=None,
+                    vehicle_inventory_id=iid,
+                )
+            except Exception as exc:
+                detail_repo.update_detail_status(sid, status="Failed", last_error=str(exc)[:2000])
+        elif status == "Failed":
+            detail_repo.update_detail_status(sid, status="Failed", last_error=(error or "")[:2000])
+
+    master_repo.refresh_prepared_count(bid)
+
+    challan_id = None
+    order_error = None
+    if req.order_result:
+        challan_id = req.order_result.get("challan_id")
+        order_error = req.order_result.get("error")
+        if order_error:
+            master_repo.set_invoice_state(bid, invoice_status="Failed", invoice_complete=False)
+        elif challan_id:
+            from app.services.add_subdealer_challan_commit_service import commit_challan_masters
+
+            try:
+                commit_challan_masters(bid, int(challan_id))
+            except Exception as exc:
+                order_error = str(exc)[:2000]
+                master_repo.set_invoice_state(bid, invoice_status="Failed", invoice_complete=False)
+
+    master_repo.touch_last_run_at(bid)
+
+    return SubdealerChallanCommitResponse(
+        ok=order_error is None,
+        error=order_error,
+        challan_id=challan_id,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Script sync (hot-reload backend/app for thin sidecar)
 # ---------------------------------------------------------------------------
 

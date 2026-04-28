@@ -1,8 +1,13 @@
-import { apiFetch } from "./client";
+import { apiFetch, getBaseUrl } from "./client";
 import { DEALER_ID } from "./dealerId";
+import { isElectron } from "../electron";
+import { getAccessToken } from "../auth/token";
 
 /** Matches server default for Processed list and failed badge window. */
 export const CHALLAN_STAGING_RECENT_DAYS = 15;
+
+/** Timeout for sidecar subdealer challan processing (same order as Fill DMS). */
+const SUBDEALER_CHALLAN_TIMEOUT_MS = 900_000;
 
 export type SubdealerChallanLine = {
   engine_no: string;
@@ -239,6 +244,43 @@ export async function processChallanBatch(
   });
 }
 
+/**
+ * Electron-aware Process Challan: routes through the local sidecar (Playwright on the dealer PC)
+ * when running inside Electron, falls back to the cloud API otherwise.
+ */
+export async function processChallanBatchLocal(
+  challanBatchId: string,
+  body: ProcessChallanBody = {}
+): Promise<ProcessChallanResponse> {
+  if (!isElectron()) return processChallanBatch(challanBatchId, body);
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "fill_subdealer_challan",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: {
+        challan_batch_id: challanBatchId,
+        dealer_id: body.dealer_id ?? undefined,
+      },
+      timeoutMs: SUBDEALER_CHALLAN_TIMEOUT_MS,
+    });
+    if (result.timedOut) {
+      return { ok: false, error: "Subdealer challan processing timed out." };
+    }
+    const data = (result.parsed as { data?: ProcessChallanResponse })?.data;
+    if (data) return data;
+    return {
+      ok: result.success,
+      error: result.error ?? (result.success ? undefined : "Sidecar returned no data."),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 /** One staging line under a batch (from GET /staging/recent ``detail_lines`` / ``failed_lines``). */
 export type ChallanFailedDetailLine = {
   challan_detail_staging_id: number;
@@ -332,6 +374,18 @@ export async function retryChallanOrderOnly(
       body: JSON.stringify(body),
     }
   );
+}
+
+/**
+ * Electron-aware Retry Order Only: routes through the local sidecar when in Electron.
+ * All lines must be Ready; skips prepare_vehicle and runs order phase only.
+ */
+export async function retryChallanOrderOnlyLocal(
+  challanBatchId: string,
+  body: ProcessChallanBody = {}
+): Promise<ProcessChallanResponse> {
+  if (!isElectron()) return retryChallanOrderOnly(challanBatchId, body);
+  return processChallanBatchLocal(challanBatchId, body);
 }
 
 export type PatchChallanStagingFailedLineBody = {
