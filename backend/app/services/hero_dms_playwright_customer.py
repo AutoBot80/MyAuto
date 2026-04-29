@@ -80,6 +80,10 @@ from app.services.hero_dms_playwright_vehicle import (
 
 logger = logging.getLogger(__name__)
 
+# Cap Playwright click/fill/select timeouts in branch (2) contact → Address helpers so multi-root
+# scans abandon dead-end matches quickly (was capped at 6000 ms per attempt).
+_BRANCH2_PLAYWRIGHT_ACTION_CAP_MS = 500
+
 
 def _try_fill_mobile_dom_scan(page: Page, value: str) -> bool:
     """Last resort: pick the highest-scoring visible text input in each frame by label/title/name."""
@@ -3138,7 +3142,7 @@ def _branch2_fill_scoped_in_root(
     v = (value or "").strip()
     if not v:
         return False
-    t = min(int(action_timeout_ms), 6000)
+    t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
 
     def _fill_locator(loc, sc: str, css: str) -> bool:
         try:
@@ -3256,7 +3260,7 @@ def _branch2_try_fill_contact_input(
     v = (value or "").strip()
     if not v:
         return False
-    t = min(int(action_timeout_ms), 6000)
+    t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
     for root in _siebel_all_search_roots(page, content_frame_selector):
         for css in selectors:
             try:
@@ -3286,7 +3290,7 @@ def _branch2_select_address_via_third_level_view_bar(
     (``aria-label="Third Level View Bar"``). **Address** is ``value="tabScreen6"``. This must run before
     relying on **Address** ``ui-tabs-anchor`` clicks (tabs may not be exposed as links until selected).
     """
-    t = min(int(action_timeout_ms), 6000)
+    t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
     for root in _siebel_all_search_roots(page, content_frame_selector):
         for css in _SIEBEL_THIRD_LEVEL_VIEW_BAR_SELECTORS:
             try:
@@ -3335,7 +3339,7 @@ def _branch2_click_address_tab_under_s_vctrl(
         note=note,
     ):
         return True
-    t = min(int(action_timeout_ms), 6000)
+    t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
     addr_pat = re.compile(r"^\s*Address\s*$", re.I)
     for root in _siebel_all_search_roots(page, content_frame_selector):
         try:
@@ -3403,7 +3407,7 @@ def _siebel_video_branch2_address_postal_and_save(
     if not pin:
         note("Branch (2) Address: pin_code empty — skipping Address tab / Postal Code fill.")
         return False
-    t = min(int(action_timeout_ms), 6000)
+    t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
     hp = (home_phone or "").strip()
     em = (contact_email if contact_email is not None else "NA").strip()
     if not em:

@@ -881,6 +881,7 @@ def _run_vehicle_sales_my_orders_mobile_search(
     try:
         dd = root.locator('[name="s_1_1_1_0"]').first
         dd.scroll_into_view_if_needed(timeout=_tmo)
+        _safe_page_wait(page, 500, log_label="before_my_orders_find_dropdown_actions")
         try:
             dd.click(timeout=_tmo)
         except Exception:
@@ -959,6 +960,7 @@ def _run_vehicle_sales_my_orders_mobile_search(
             page.keyboard.press("Enter")
         except Exception:
             pass
+        _safe_page_wait(page, 500, log_label="after_my_orders_enter_grid_settle")
         _safe_page_wait(page, min(2500, _tmo), log_label="after_my_orders_find_enter")
         rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
         _full_row_count = len(rows or [])
