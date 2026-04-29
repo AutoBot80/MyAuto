@@ -1252,15 +1252,29 @@ def _siebel_click_service_request_list_new_record(
         "[title*='Precheck List:New' i]",
         "[title*='Pre-check List:New' i]",
     )
+    # PDI: never let CSS try ``s_3_1_12_0`` (Pre-check list ``+``) before ``s_2_1_14_0`` — the tuple below had
+    # ``*_sr_new_selectors`` with ``s_3`` first, so Playwright could click the wrong ``+`` and skip the PDI grid.
+    _sr_css_no_s3 = tuple(s for s in _sr_new_selectors if "s_3_1_12" not in s)
+    _sr_css_s3_only = tuple(s for s in _sr_new_selectors if "s_3_1_12" in s)
     if _ctx_upper == "PDI":
-        _sr_new_selectors_eff: tuple[str, ...] = (
+        _sr_new_selectors_eff = (
+            "div#S_A2 button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
+            "div#s_S_A2_div button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
+            "div#S_A2 button#s_2_1_14_0_Ctrl",
+            "div#s_S_A2_div button#s_2_1_14_0_Ctrl",
+            "div#s_S_A2_div[title='Service Request List'] button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
+            "div[aria-label='Service Request in Vehicles'] button#s_2_1_14_0_Ctrl",
+            "button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
+            "button#s_2_1_14_0_Ctrl",
+            "button.siebui-icon-newrecord[id='s_2_1_14_0_Ctrl']",
             "button.siebui-icon-newrecord[aria-label='PDI List:New']",
             "button.siebui-icon-newrecord[aria-label='HHML PDI List:New']",
             "button.siebui-icon-newrecord[title='PDI List:New']",
             "button[aria-label='PDI List:New']",
             "button[aria-label='HHML PDI List:New']",
             "[aria-label='PDI List:New']",
-            *_sr_new_selectors,
+            *_sr_css_no_s3,
+            *_sr_css_s3_only,
         )
     else:
         _sr_new_selectors_eff = _sr_new_selectors
@@ -1396,6 +1410,48 @@ def _siebel_click_service_request_list_new_record(
         _js_plus_template.replace("__IDS_ARRAY__", _ids_js_body.strip())
         .replace("__PREFER_PDI_SCAN__", _prefer_pdi_scan_js)
     )
+
+    # PDI: click ``s_2_1_14_0_Ctrl`` via Playwright **before** per-frame ``evaluate()``. The root list
+    # includes ``FrameLocator``\ s, which have ``locator()`` but not ``evaluate()``—JS never ran on those
+    # documents, and CSS was able to match ``s_3_1_12`` (Pre-check) first. A direct loc click hits the
+    # **Service Request List** applet ``+`` under ``#S_A2`` / ``#s_S_A2_div`` (see DOM: *Service Request
+    # in Vehicles*), not a bare id match elsewhere in the same frame.
+    if _ctx_upper == "PDI":
+        _pdi_plus_css = (
+            "div#S_A2 button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
+            "div#s_S_A2_div button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
+            "div#S_A2 button#s_2_1_14_0_Ctrl",
+            "div#s_S_A2_div button#s_2_1_14_0_Ctrl",
+            "div#s_S_A2_div[title='Service Request List'] button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
+            "div[aria-label='Service Request in Vehicles'] button#s_2_1_14_0_Ctrl",
+            "button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
+            "button#s_2_1_14_0_Ctrl",
+        )
+        for _root in roots():
+            for _pdi_css in _pdi_plus_css:
+                try:
+                    _pdi_loc = _root.locator(_pdi_css)
+                    if _pdi_loc.count() < 1:
+                        continue
+                    _pdi_first = _pdi_loc.first
+                    _pdi_first.wait_for(
+                        state="visible",
+                        timeout=int(min(4000, max(1000, _vis_tmo))),
+                    )
+                    _pdi_first.scroll_into_view_if_needed(timeout=1500)
+                    try:
+                        _pdi_first.click(timeout=_tmo)
+                    except Exception:
+                        _pdi_first.click(timeout=_tmo, force=True)
+                    _branch_hit("_click_sr_list_new", f"pdi_playwright_{_pdi_css[:20]}")
+                    _fw = _playwright_root_debug_label(_root)
+                    note(
+                        f"{log_prefix}: clicked {context} + (Playwright direct) frame={_fw!r} "
+                        f"css={_pdi_css!r} — Service Request list New (s_2_1_14_0_Ctrl)"
+                    )
+                    return True
+                except Exception:
+                    continue
 
     for _root in roots():
         try:
