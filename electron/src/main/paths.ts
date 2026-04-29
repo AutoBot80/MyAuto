@@ -2,15 +2,28 @@ import { app } from "electron";
 import fs from "fs";
 import path from "path";
 
-/** Dev-mode fallback when not running from a packaged build. */
+/** Dev-mode fallback when not running from a packaged build (no ``SAATHI_BASE_DIR``). */
 const DEV_SAATHI_BASE = "D:\\Saathi";
 
-/** When the app is in ...\Saathi\Dealer Saathi, use the ...\Saathi root (matches installer, survives updates to the app folder). */
+/**
+ * When the app is under ``...\Saathi\Dealer Saathi`` or ``...\Saath\Dealer Saathi`` (common typo),
+ * use the parent folder as data root so ``.env`` and uploads stay outside the app folder.
+ */
 function packagedSaathiDataRoot(installDir: string): string {
   if (path.basename(installDir).toLowerCase() !== "dealer saathi") return installDir;
   const parent = path.resolve(installDir, "..");
-  if (path.basename(parent).toLowerCase() !== "saathi") return installDir;
+  const leaf = path.basename(parent).toLowerCase();
+  if (leaf !== "saathi" && leaf !== "saath") return installDir;
   return parent;
+}
+
+/** Prefer ``D:\Saath`` when that tree has ``.env`` (matches typo install ``D:\Saath\Dealer Saathi``). */
+function resolveDevSaathiBase(): string {
+  const saathEnv = path.join("D:\\Saath", ".env");
+  const saathiEnv = path.join("D:\\Saathi", ".env");
+  if (fs.existsSync(saathEnv)) return "D:\\Saath";
+  if (fs.existsSync(saathiEnv)) return "D:\\Saathi";
+  return DEV_SAATHI_BASE;
 }
 
 export function getSaathiBaseDir(): string {
@@ -20,7 +33,7 @@ export function getSaathiBaseDir(): string {
     const installDir = path.resolve(path.dirname(app.getPath("exe")));
     return packagedSaathiDataRoot(installDir);
   }
-  return DEV_SAATHI_BASE;
+  return resolveDevSaathiBase();
 }
 
 export function getLogsDir(): string {
