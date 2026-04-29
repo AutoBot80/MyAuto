@@ -110,6 +110,12 @@ HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE = ENVIRONMENT_IS_PRODUCTION
 HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER = (os.getenv("HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER") or "DUMMY111").strip() or "DUMMY111"
 # Insurance MISP: click **Proposal Preview** / **Proposal Review** only in production; dev/test skip and succeed without it.
 HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW = ENVIRONMENT_IS_PRODUCTION
+# Video SOP: skip **Generate Booking** toolbar step in ``prepare_order`` (before ``_create_order``).
+# Default **true** in all environments (commit/deploy carries behavior). Set env
+# ``HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER=false`` to run the GB toolbar step again.
+HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER = os.getenv(
+    "HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER", "true"
+).lower() in ("1", "true", "yes")
 
 # --- Auth (JWT) ---
 # When true, requests skip JWT validation and use a dev Principal (DEALER_ID, admin=True). Local use only.

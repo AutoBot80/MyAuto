@@ -25,6 +25,7 @@ from app.config import (
     DMS_SIEBEL_INTER_ACTION_DELAY_MS,
     DMS_SIEBEL_POST_GOTO_WAIT_MS,
     HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE,
+    HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER,
     get_uploaded_scans_sale_folder,
 )
 from app.services.hero_dms_shared_utilities import (
@@ -5776,6 +5777,7 @@ def prepare_order(
 ) -> dict:
     """
     Generate Booking + ``_create_order`` + merge scrape into ``out[\"vehicle\"]``.
+    When ``HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER`` is set, the Generate Booking toolbar step is skipped.
     Returns ``order_scraped`` from ``_create_order`` (may be empty). On failure sets ``out[\"error\"]``.
     """
     full_chassis = (
@@ -5787,20 +5789,26 @@ def prepare_order(
     if _enq_u:
         _goto(page, _enq_u, "enquiry_for_booking_video", nav_timeout_ms=nav_timeout_ms)
         _siebel_after_goto_wait(page, floor_ms=900)
-    _safe_page_wait(page, 500, log_label="before_generate_booking_video")
-    if _try_click_generate_booking(
-        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-    ):
-        note("Video path: clicked Generate Booking before create_order.")
-        if callable(ms_done):
-            ms_done("Booking generated")
-    else:
-        step("Stopped: Generate Booking was not found before create_order (video path).")
-        out["error"] = (
-            "Siebel: Generate Booking control was not found before create_order. "
-            "Booking is mandatory when no existing order is present."
+    if HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER:
+        note(
+            "Create Order: skipping Generate Booking before create_order "
+            "(HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER)."
         )
-        return {}
+    else:
+        _safe_page_wait(page, 500, log_label="before_generate_booking_video")
+        if _try_click_generate_booking(
+            page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+        ):
+            note("Video path: clicked Generate Booking before create_order.")
+            if callable(ms_done):
+                ms_done("Booking generated")
+        else:
+            step("Stopped: Generate Booking was not found before create_order (video path).")
+            out["error"] = (
+                "Siebel: Generate Booking control was not found before create_order. "
+                "Booking is mandatory when no existing order is present."
+            )
+            return {}
 
     if callable(form_trace):
         form_trace(

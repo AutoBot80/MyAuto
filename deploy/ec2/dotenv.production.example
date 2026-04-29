@@ -19,6 +19,8 @@ CORS_ORIGINS=https://app.example.com
 # Portal bases (validated at startup) — set to your real production URLs.
 DMS_BASE_URL=
 DMS_MODE=real
+# Optional: app defaults to skipping Generate Booking before create_order; set false only if you need GB:
+# HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER=false
 VAHAN_BASE_URL=
 INSURANCE_BASE_URL=
 
