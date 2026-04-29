@@ -10,6 +10,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
   - ``/sidecar/vahan/row-result``  → report per-row result (completed/failed/pending)
   - ``/sidecar/upload-artifacts`` → multipart upload of one file into uploads or ocr tree (syncs to S3)
+  - ``/sidecar/subdealer-challan/*`` → resolve / per-line prepare / order-context / finalize (no local ``DATABASE_URL``)
 
 All endpoints are JWT-protected via ``get_principal`` / ``resolve_dealer_id``.
 """
@@ -632,6 +633,7 @@ async def subdealer_challan_resolve(
             "raw_engine": (r.get("raw_engine") or "").strip(),
             "status": (r.get("status") or "").strip(),
             "to_dealer_id": int(r["to_dealer_id"]),
+            "last_error": (r.get("last_error") or "").strip() if r.get("last_error") else None,
         }
         for r in rows
     ]
@@ -646,6 +648,177 @@ async def subdealer_challan_resolve(
         dms_base_url=(DMS_BASE_URL or "").strip(),
         headed=bool(DMS_PLAYWRIGHT_HEADED),
         remote_debug_port=int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333),
+    )
+
+
+class SubdealerChallanRequeueRequest(BaseModel):
+    challan_batch_id: str
+    dealer_id: int | None = None
+
+
+class SubdealerChallanRequeueResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+    requeued: int = 0
+
+
+@router.post("/subdealer-challan/requeue-failed", response_model=SubdealerChallanRequeueResponse)
+async def subdealer_challan_requeue_failed(
+    req: SubdealerChallanRequeueRequest,
+    principal: Principal = Depends(get_principal),
+) -> SubdealerChallanRequeueResponse:
+    """Reset Failed detail rows to Queued (same as server full-run start)."""
+    from uuid import UUID as PyUUID
+
+    from app.services.add_subdealer_challan_service import sidecar_requeue_failed_for_batch
+
+    did = resolve_dealer_id(principal, req.dealer_id)
+    try:
+        bid = PyUUID(req.challan_batch_id.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
+
+    out = sidecar_requeue_failed_for_batch(challan_batch_id=bid, dealer_id=int(did))
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=str(out.get("error") or "requeue failed"))
+    return SubdealerChallanRequeueResponse(
+        ok=True,
+        error=None,
+        requeued=int(out.get("requeued") or 0),
+    )
+
+
+class SubdealerChallanPrepareResultRequest(BaseModel):
+    challan_batch_id: str
+    dealer_id: int | None = None
+    challan_staging_id: int
+    to_dealer_id: int
+    ok: bool
+    error: str | None = None
+    scraped_vehicle: dict[str, Any] | None = None
+
+
+class SubdealerChallanPrepareResultResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+    inventory_line_id: int | None = None
+
+
+@router.post("/subdealer-challan/prepare-result", response_model=SubdealerChallanPrepareResultResponse)
+async def subdealer_challan_prepare_result(
+    req: SubdealerChallanPrepareResultRequest,
+    principal: Principal = Depends(get_principal),
+) -> SubdealerChallanPrepareResultResponse:
+    """Persist one local ``prepare_vehicle`` outcome."""
+    from uuid import UUID as PyUUID
+
+    from app.services.add_subdealer_challan_service import sidecar_apply_prepare_vehicle_row
+
+    did = resolve_dealer_id(principal, req.dealer_id)
+    try:
+        bid = PyUUID(req.challan_batch_id.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
+
+    out = sidecar_apply_prepare_vehicle_row(
+        challan_batch_id=bid,
+        dealer_id=int(did),
+        challan_staging_id=int(req.challan_staging_id),
+        to_dealer_id=int(req.to_dealer_id),
+        ok=bool(req.ok),
+        error=req.error,
+        scraped_vehicle=req.scraped_vehicle,
+    )
+    if out.get("ok"):
+        return SubdealerChallanPrepareResultResponse(
+            ok=True,
+            error=None,
+            inventory_line_id=int(out["inventory_line_id"])
+            if out.get("inventory_line_id") is not None
+            else None,
+        )
+    err = out.get("error")
+    return SubdealerChallanPrepareResultResponse(
+        ok=False,
+        error=str(err) if err else "prepare failed",
+        inventory_line_id=None,
+    )
+
+
+class SubdealerChallanOrderContextRequest(BaseModel):
+    challan_batch_id: str
+    dealer_id: int | None = None
+    last_vehicle_scrape: dict[str, Any] | None = None
+
+
+@router.post("/subdealer-challan/order-context")
+async def subdealer_challan_order_context(
+    req: SubdealerChallanOrderContextRequest,
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Build Siebel order-phase payload (discounts + ``order_line_vehicles``) — dealer sets trace dir locally."""
+    from uuid import UUID as PyUUID
+
+    from app.services.add_subdealer_challan_service import sidecar_build_order_playwright_package
+
+    did = resolve_dealer_id(principal, req.dealer_id)
+    try:
+        bid = PyUUID(req.challan_batch_id.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
+
+    out = sidecar_build_order_playwright_package(
+        challan_batch_id=bid,
+        dealer_id=int(did),
+        last_vehicle_scrape=req.last_vehicle_scrape,
+    )
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=str(out.get("error") or "order context failed"))
+    return out
+
+
+class SubdealerChallanFinalizeOrderRequest(BaseModel):
+    challan_batch_id: str
+    dealer_id: int | None = None
+    playwright_result: dict[str, Any]
+
+
+class SubdealerChallanFinalizeOrderResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+    challan_id: int | None = None
+    vehicle: dict[str, Any] = {}
+    dms_step_messages: list[str] = []
+
+
+@router.post("/subdealer-challan/finalize-order", response_model=SubdealerChallanFinalizeOrderResponse)
+async def subdealer_challan_finalize_order(
+    req: SubdealerChallanFinalizeOrderRequest,
+    principal: Principal = Depends(get_principal),
+) -> SubdealerChallanFinalizeOrderResponse:
+    """Persist order/invoice + challan_master after local order-phase Playwright."""
+    from uuid import UUID as PyUUID
+
+    from app.services.add_subdealer_challan_service import sidecar_finalize_order_playwright_result
+
+    did = resolve_dealer_id(principal, req.dealer_id)
+    try:
+        bid = PyUUID(req.challan_batch_id.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
+
+    out = sidecar_finalize_order_playwright_result(
+        challan_batch_id=bid,
+        dealer_id=int(did),
+        playwright_result=dict(req.playwright_result or {}),
+    )
+    err = out.get("error")
+    return SubdealerChallanFinalizeOrderResponse(
+        ok=bool(out.get("ok")),
+        error=str(err) if err else None,
+        challan_id=int(out["challan_id"]) if out.get("challan_id") is not None else None,
+        vehicle=dict(out.get("vehicle") or {}),
+        dms_step_messages=list(out.get("dms_step_messages") or []),
     )
 
 
@@ -691,7 +864,7 @@ async def subdealer_challan_commit(
                     sid,
                     status="Ready",
                     last_error=None,
-                    vehicle_inventory_id=iid,
+                    inventory_line_id=iid,
                 )
             except Exception as exc:
                 detail_repo.update_detail_status(sid, status="Failed", last_error=str(exc)[:2000])
@@ -700,29 +873,9 @@ async def subdealer_challan_commit(
 
     master_repo.refresh_prepared_count(bid)
 
-    challan_id = None
-    order_error = None
-    if req.order_result:
-        challan_id = req.order_result.get("challan_id")
-        order_error = req.order_result.get("error")
-        if order_error:
-            master_repo.set_invoice_state(bid, invoice_status="Failed", invoice_complete=False)
-        elif challan_id:
-            from app.services.add_subdealer_challan_commit_service import commit_challan_masters
-
-            try:
-                commit_challan_masters(bid, int(challan_id))
-            except Exception as exc:
-                order_error = str(exc)[:2000]
-                master_repo.set_invoice_state(bid, invoice_status="Failed", invoice_complete=False)
-
     master_repo.touch_last_run_at(bid)
 
-    return SubdealerChallanCommitResponse(
-        ok=order_error is None,
-        error=order_error,
-        challan_id=challan_id,
-    )
+    return SubdealerChallanCommitResponse(ok=True, error=None, challan_id=None)
 
 
 # ---------------------------------------------------------------------------

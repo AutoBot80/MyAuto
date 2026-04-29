@@ -223,6 +223,11 @@ export async function createChallanStaging(
 export type ProcessChallanBody = {
   dms_base_url?: string | null;
   dealer_id?: number | null;
+  /**
+   * Electron sidecar only — matches server ``run_subdealer_challan_batch`` phase:
+   * ``full`` (prepare + order, default) or ``order_only`` (Retry Order when all lines Ready).
+   */
+  subdealer_phase?: "full" | "order_only";
 };
 
 export type ProcessChallanResponse = {
@@ -261,6 +266,8 @@ export async function processChallanBatchLocal(
       params: {
         challan_batch_id: challanBatchId,
         dealer_id: body.dealer_id ?? undefined,
+        dms_base_url: body.dms_base_url ?? undefined,
+        phase: body.subdealer_phase ?? "full",
       },
       timeoutMs: SUBDEALER_CHALLAN_TIMEOUT_MS,
     });
@@ -385,7 +392,10 @@ export async function retryChallanOrderOnlyLocal(
   body: ProcessChallanBody = {}
 ): Promise<ProcessChallanResponse> {
   if (!isElectron()) return retryChallanOrderOnly(challanBatchId, body);
-  return processChallanBatchLocal(challanBatchId, body);
+  return processChallanBatchLocal(challanBatchId, {
+    ...body,
+    subdealer_phase: "order_only",
+  });
 }
 
 export type PatchChallanStagingFailedLineBody = {

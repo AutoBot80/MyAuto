@@ -7,7 +7,7 @@ import time
 import uuid
 from pathlib import Path
 from collections.abc import Callable
-from typing import Literal
+from typing import Any, Literal
 
 from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -293,6 +293,247 @@ def _run_order_phase(
     )
     logln(f"SUCCESS challan_master_id={cid} order={oid!r} invoice={iid_inv!r}")
     return out_partial, None
+
+
+def sidecar_requeue_failed_for_batch(*, challan_batch_id: uuid.UUID, dealer_id: int) -> dict[str, object]:
+    """Electron sidecar: reset Failed→Queued for batch (same as server start of full run)."""
+    rows = detail_repo.fetch_batch_rows(challan_batch_id)
+    if not rows:
+        return {"ok": False, "error": "No staging rows for this batch.", "requeued": 0}
+    if int(rows[0]["from_dealer_id"]) != int(dealer_id):
+        return {"ok": False, "error": "Session dealer does not match batch from_dealer_id.", "requeued": 0}
+    n_rq = detail_repo.reset_all_failed_details_for_batch(challan_batch_id)
+    master_repo.refresh_prepared_count(challan_batch_id)
+    return {"ok": True, "error": None, "requeued": int(n_rq)}
+
+
+def sidecar_apply_prepare_vehicle_row(
+    *,
+    challan_batch_id: uuid.UUID,
+    dealer_id: int,
+    challan_staging_id: int,
+    to_dealer_id: int,
+    ok: bool,
+    error: str | None,
+    scraped_vehicle: dict | None,
+) -> dict[str, object]:
+    """
+    Electron sidecar: persist one prepare_vehicle outcome (mirrors one iteration of
+    ``_run_prepare_vehicle_loop`` without local PostgreSQL).
+    """
+    rows = detail_repo.fetch_batch_rows(challan_batch_id)
+    if not rows:
+        return {"ok": False, "error": "Batch not found"}
+    if int(rows[0]["from_dealer_id"]) != int(dealer_id):
+        return {"ok": False, "error": "Not authorized for this batch"}
+    row = next((r for r in rows if int(r["challan_staging_id"]) == int(challan_staging_id)), None)
+    if not row:
+        return {"ok": False, "error": "Staging row not in batch"}
+    if int(row["to_dealer_id"]) != int(to_dealer_id):
+        return {"ok": False, "error": "to_dealer_id does not match staging row"}
+    sid = int(challan_staging_id)
+    if ok:
+        try:
+            sc = dict(scraped_vehicle or {})
+            iid = upsert_from_prepare_vehicle_scrape(to_dealer_id=int(to_dealer_id), vehicle=sc)
+            detail_repo.update_detail_status(
+                sid,
+                status="Ready",
+                last_error=None,
+                inventory_line_id=iid,
+            )
+            master_repo.refresh_prepared_count(challan_batch_id)
+            return {"ok": True, "error": None, "inventory_line_id": int(iid)}
+        except Exception as exc:
+            es = str(exc)[:2000]
+            logger.warning("sidecar_apply_prepare_vehicle_row: %s", exc)
+            detail_repo.update_detail_status(sid, status="Failed", last_error=es)
+            master_repo.refresh_prepared_count(challan_batch_id)
+            return {"ok": False, "error": es}
+    err_s = (error or "prepare_vehicle failed")[:2000]
+    detail_repo.update_detail_status(sid, status="Failed", last_error=err_s)
+    master_repo.refresh_prepared_count(challan_batch_id)
+    return {"ok": False, "error": None}
+
+
+def sidecar_build_order_playwright_package(
+    *,
+    challan_batch_id: uuid.UUID,
+    dealer_id: int,
+    last_vehicle_scrape: dict | None,
+) -> dict[str, object]:
+    """
+    Build JSON-safe inputs for ``Playwright_Hero_DMS_fill_subdealer_challan_order_only`` on the dealer PC.
+    Caller must set ``dms_values["challan_vin_frame_dump_dir"]`` to the local trace directory before Playwright.
+    """
+    out: dict[str, object] = {
+        "ok": False,
+        "error": None,
+        "dms_values": None,
+        "urls": None,
+        "action_timeout_ms": int(DMS_SIEBEL_ACTION_TIMEOUT_MS),
+        "nav_timeout_ms": int(DMS_SIEBEL_NAV_TIMEOUT_MS),
+        "content_frame_selector": (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None,
+    }
+    rows = detail_repo.fetch_batch_rows(challan_batch_id)
+    if not rows:
+        out["error"] = "No staging rows for this batch."
+        return out
+    from_dealer_id = int(rows[0]["from_dealer_id"])
+    to_dealer_id = int(rows[0]["to_dealer_id"])
+    challan_date = rows[0].get("challan_date")
+    challan_book = rows[0].get("challan_book_num")
+    cd = None if challan_date is None else str(challan_date).strip() or None
+    cb = None if challan_book is None else str(challan_book).strip() or None
+
+    if int(from_dealer_id) != int(dealer_id):
+        out["error"] = "Session dealer does not match batch from_dealer_id."
+        return out
+    if not detail_repo.batch_all_ready_for_order(challan_batch_id):
+        out["error"] = "Not all vehicles are Ready; complete prepare_vehicle first."
+        return out
+
+    final_rows = detail_repo.fetch_batch_rows(challan_batch_id)
+    inv_ids = [int(r["inventory_line_id"]) for r in final_rows if r.get("inventory_line_id")]
+    for r in final_rows:
+        iid = r.get("inventory_line_id")
+        if not iid:
+            continue
+        inv = get_by_id(int(iid))
+        if not inv:
+            continue
+        model = (inv.get("model") or "").strip()
+        disc = get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)
+        update_discount_and_ex_showroom(int(iid), discount=float(disc))
+
+    inv_rows = fetch_lines_for_batch_inventory(inv_ids)
+    order_lines: list[dict] = []
+    for ir in inv_rows:
+        ch = (ir.get("chassis_no") or "").strip()
+        if not ch:
+            continue
+        d = ir.get("discount")
+        disc_s = "" if d is None else f"{float(d):.2f}"
+        order_lines.append({"full_chassis": ch, "line_item_discount": disc_s})
+
+    if not order_lines:
+        out["error"] = "No order lines to attach (missing chassis on inventory)."
+        return out
+
+    dms_values: dict = {}
+    prepare_customer_for_challan(
+        dms_values,
+        to_dealer_id=to_dealer_id,
+        from_dealer_id=from_dealer_id,
+    )
+    dms_values["order_line_vehicles"] = order_lines
+    dms_values["_challan_last_vehicle"] = dict(last_vehicle_scrape or {})
+
+    urls_dict = {
+        "contact": DMS_REAL_URL_CONTACT,
+        "vehicles": DMS_REAL_URL_VEHICLES,
+        "precheck": DMS_REAL_URL_PRECHECK,
+        "pdi": DMS_REAL_URL_PDI,
+        "vehicle": DMS_REAL_URL_VEHICLE,
+        "enquiry": DMS_REAL_URL_ENQUIRY,
+        "line_items": DMS_REAL_URL_LINE_ITEMS,
+        "reports": DMS_REAL_URL_REPORTS,
+    }
+    out["ok"] = True
+    out["error"] = None
+    out["dms_values"] = dms_values
+    out["urls"] = urls_dict
+    out["challan_date"] = cd
+    out["challan_book_num"] = cb
+    out["from_dealer_id"] = from_dealer_id
+    out["to_dealer_id"] = to_dealer_id
+    out["inventory_line_ids"] = inv_ids
+    out["artifact_leaf"] = challan_artifact_leaf_name(cb, cd)
+    return out
+
+
+def sidecar_finalize_order_playwright_result(
+    *,
+    challan_batch_id: uuid.UUID,
+    dealer_id: int,
+    playwright_result: dict[str, Any],
+) -> dict[str, object]:
+    """
+    After local order-phase Playwright, persist discounts/order/challan_master (same as ``_run_order_phase`` tail).
+    ``playwright_result`` is the dict returned by ``Playwright_Hero_DMS_fill_subdealer_challan_order_only``.
+    """
+    out: dict[str, object] = {
+        "ok": False,
+        "error": None,
+        "challan_id": None,
+        "vehicle": {},
+        "dms_step_messages": [],
+    }
+    rows = detail_repo.fetch_batch_rows(challan_batch_id)
+    if not rows:
+        out["error"] = "No staging rows for this batch."
+        return out
+    from_dealer_id = int(rows[0]["from_dealer_id"])
+    to_dealer_id = int(rows[0]["to_dealer_id"])
+    challan_date = rows[0].get("challan_date")
+    challan_book = rows[0].get("challan_book_num")
+    cd = None if challan_date is None else str(challan_date).strip() or None
+    cb = None if challan_book is None else str(challan_book).strip() or None
+
+    if int(from_dealer_id) != int(dealer_id):
+        out["error"] = "Session dealer does not match batch from_dealer_id."
+        return out
+
+    inv_ids = [int(r["inventory_line_id"]) for r in rows if r.get("inventory_line_id")]
+    if not inv_ids:
+        out["error"] = "No inventory_line_id on staging rows; complete prepare_vehicle first."
+        master_repo.touch_last_run_at(challan_batch_id)
+        return out
+
+    veh_partial = dict(playwright_result.get("vehicle") or {})
+    out["vehicle"] = veh_partial
+    out["dms_step_messages"] = list(playwright_result.get("dms_step_messages") or [])
+
+    err = playwright_result.get("error")
+    if err:
+        master_repo.set_invoice_state(challan_batch_id, invoice_status="Failed", invoice_complete=False)
+        master_repo.touch_last_run_at(challan_batch_id)
+        out["error"] = str(err)
+        return out
+
+    update_inventory_ex_showroom_from_order_scrape(inv_ids, veh_partial)
+
+    oid = (veh_partial.get("order_number") or "").strip() or None
+    iid_inv = (veh_partial.get("invoice_number") or "").strip() or None
+
+    cid = commit_challan_masters(
+        challan_date=cd,
+        challan_book_num=cb,
+        dealer_from=from_dealer_id,
+        dealer_to=to_dealer_id,
+        inventory_line_ids=inv_ids,
+        order_number=oid,
+        invoice_number=iid_inv,
+    )
+    out["challan_id"] = int(cid)
+    for r in rows:
+        if r.get("challan_staging_id"):
+            detail_repo.update_detail_status(
+                int(r["challan_staging_id"]),
+                status="Committed",
+                last_error=None,
+            )
+
+    inv_num_ok = bool(iid_inv and str(iid_inv).strip())
+    master_repo.set_invoice_state(
+        challan_batch_id,
+        invoice_complete=inv_num_ok,
+        invoice_status="Completed" if inv_num_ok else "Pending",
+    )
+    master_repo.touch_last_run_at(challan_batch_id)
+    out["ok"] = True
+    out["error"] = None
+    return out
 
 
 def run_subdealer_challan_batch(
