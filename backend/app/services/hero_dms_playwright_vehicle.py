@@ -1178,10 +1178,14 @@ def _siebel_click_service_request_list_new_record(
     scans visible ``siebui-icon-newrecord`` for **Service Request** / **PDI List** / **Precheck** ``List:New``
     labels; ``get_by_role`` for those names; CSS (skip **Menu**). PDI often uses **PDI List:New** or ``s_2_*``
     ids, not only **Service Request List:New**. See **LLD** **6.240**, **6.243**.
+
+    When ``context`` is **PDI**, ``s_3_1_12_0_Ctrl`` (Pre-check list ``+``) is tried **after** ``s_2_*`` so we do
+    not click the hidden/wrong applet ``+`` and then edit the first **PDI** grid row without inserting a line.
     """
+    _ctx_upper = str(context or "").strip().upper()
     _tmo = min(int(action_timeout_ms or 3000), 4000)
     _vis_tmo = 600
-    if str(context or "").strip().upper() == "PDI":
+    if _ctx_upper == "PDI":
         _vis_tmo = min(max(int(action_timeout_ms or 3000), 1500), 8000)
 
     def _label_is_list_new_not_menu(el) -> bool:
@@ -1248,10 +1252,36 @@ def _siebel_click_service_request_list_new_record(
         "[title*='Precheck List:New' i]",
         "[title*='Pre-check List:New' i]",
     )
+    if _ctx_upper == "PDI":
+        _sr_new_selectors_eff: tuple[str, ...] = (
+            "button.siebui-icon-newrecord[aria-label='PDI List:New']",
+            "button.siebui-icon-newrecord[aria-label='HHML PDI List:New']",
+            "button.siebui-icon-newrecord[title='PDI List:New']",
+            "button[aria-label='PDI List:New']",
+            "button[aria-label='HHML PDI List:New']",
+            "[aria-label='PDI List:New']",
+            *_sr_new_selectors,
+        )
+    else:
+        _sr_new_selectors_eff = _sr_new_selectors
 
-    # Pre-check tab usually exposes ``s_3_1_12_0_Ctrl``; PDI tab often uses ``s_2_*`` applets — try several
-    # ids, then scan all visible ``siebui-icon-newrecord`` buttons (same idea as Pre-check when labels match).
-    _js_plus = """() => {
+    # Pre-check tab usually exposes ``s_3_1_12_0_Ctrl``; PDI tab uses ``s_2_*`` applets. For **PDI**, try ``s_2_*``
+    # before ``s_3_1_12_0_Ctrl`` so we don't click the Pre-check list ``+`` (still in DOM) and skip the PDI grid.
+    _PLUS_IDS_JS_PRECHECK = """[
+            's_3_1_12_0_Ctrl', 's_2_1_14_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl',
+            's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl', 's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
+            's_2_1_12_0', 's_3_1_12_0',
+        ]"""
+    _PLUS_IDS_JS_PDI = """[
+            's_2_1_14_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl',
+            's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl', 's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
+            's_2_1_12_0',
+            's_3_1_12_0_Ctrl', 's_3_1_12_0',
+        ]"""
+    _ids_js_body = _PLUS_IDS_JS_PDI if _ctx_upper == "PDI" else _PLUS_IDS_JS_PRECHECK
+    _prefer_pdi_scan_js = "true" if _ctx_upper == "PDI" else "false"
+
+    _js_plus_template = """() => {
         const vis = (el) => {
             if (!el) return false;
             const st = window.getComputedStyle(el);
@@ -1328,18 +1358,32 @@ def _siebel_click_service_request_list_new_record(
             const tg = String(b.tagName || '').toLowerCase();
             diag.allNewrecordBtns.push(tg + ':' + bid + '|al=' + al + '|tt=' + tt + '|vis=' + v);
         }
-        const ids = [
-            's_3_1_12_0_Ctrl', 's_2_1_14_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl',
-            's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl', 's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
-            's_2_1_12_0', 's_3_1_12_0',
-        ];
+        const ids = __IDS_ARRAY__;
+        const preferPdiToolbar = __PREFER_PDI_SCAN__;
         for (const hid of ids) {
             if (tryClickId(hid)) return diag;
         }
         for (const hid of ids) {
             if (tryClickSpanOrAnchorNew(hid)) return diag;
         }
-        for (const el of combinedBtns) {
+        let scanTargets = combinedBtns;
+        if (preferPdiToolbar) {
+            const pri = [];
+            const sec = [];
+            for (const el of combinedBtns) {
+                if (!vis(el) || !isListNewNotMenu(el)) continue;
+                const id = (el.id || '').toLowerCase();
+                const al = (el.getAttribute('aria-label') || '').toLowerCase();
+                const tt = (el.getAttribute('title') || '').toLowerCase();
+                const looksPdi = id.startsWith('s_2_')
+                    || (al.includes('pdi') && al.includes('new'))
+                    || (tt.includes('pdi') && tt.includes('new'));
+                if (looksPdi) pri.push(el);
+                else sec.push(el);
+            }
+            scanTargets = [...pri, ...sec];
+        }
+        for (const el of scanTargets) {
             if (!vis(el) || !isListNewNotMenu(el)) continue;
             try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
             el.click();
@@ -1348,6 +1392,10 @@ def _siebel_click_service_request_list_new_record(
         }
         return diag;
     }"""
+    _js_plus = (
+        _js_plus_template.replace("__IDS_ARRAY__", _ids_js_body.strip())
+        .replace("__PREFER_PDI_SCAN__", _prefer_pdi_scan_js)
+    )
 
     for _root in roots():
         try:
@@ -1382,12 +1430,24 @@ def _siebel_click_service_request_list_new_record(
 
     note(f"{log_prefix}: {context} + JS phase exhausted all roots, trying role-based scan.")
 
-    for _sr_role_name in (
-        "Service Request List:New",
-        "PDI List:New",
-        "Precheck List:New",
-        "Pre-check List:New",
-    ):
+    if _ctx_upper == "PDI":
+        _sr_role_names = (
+            "PDI List:New",
+            "HHML PDI List:New",
+            "Pdi List:New",
+            "Service Request List:New",
+            "Precheck List:New",
+            "Pre-check List:New",
+        )
+    else:
+        _sr_role_names = (
+            "Service Request List:New",
+            "PDI List:New",
+            "HHML PDI List:New",
+            "Precheck List:New",
+            "Pre-check List:New",
+        )
+    for _sr_role_name in _sr_role_names:
         for _root in roots():
             for _role in ("link", "button"):
                 try:
@@ -1420,7 +1480,7 @@ def _siebel_click_service_request_list_new_record(
     note(f"{log_prefix}: {context} + role-based scan exhausted, trying CSS selectors.")
 
     for _root in roots():
-        for _css in _sr_new_selectors:
+        for _css in _sr_new_selectors_eff:
             try:
                 _grp = _root.locator(_css)
                 _n = _grp.count()
@@ -3697,31 +3757,38 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 continue
         return _rc
 
-    def _pdi_focus_first_pdi_jqgrow() -> None:
-        """Focus first visible PDI jqGrid data row so pick icons bind to the intended line."""
-        _jq_js = """() => {
-            const vis = (el) => {
+    def _pdi_focus_pdi_jqgrow(*, prefer_last: bool) -> None:
+        """Focus a PDI jqGrid data row so LOV pick icons bind to that line.
+
+        After **Service Request List:New**, Siebel often keeps older rows above the new line.
+        When the grid already had rows before **New**, prefer **last** visible ``jqgrow`` so we
+        do not open picks on an existing populated row.
+        """
+        _prefer = "true" if prefer_last else "false"
+        _jq_js = f"""() => {{
+            const preferLast = {_prefer};
+            const vis = (el) => {{
                 if (!el) return false;
                 const st = window.getComputedStyle(el);
                 if (st.display === 'none' || st.visibility === 'hidden') return false;
                 const r = el.getBoundingClientRect();
                 return r.width > 0 && r.height > 0;
-            };
-            const isLeftSearchPane = (el) => {
+            }};
+            const isLeftSearchPane = (el) => {{
                 let n = el;
-                for (let d = 0; d < 22 && n; d++) {
+                for (let d = 0; d < 22 && n; d++) {{
                     const pid = String(n.id || '').toLowerCase();
-                    if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
+                    if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {{
                         return true;
-                    }
+                    }}
                     n = n.parentElement;
-                }
+                }}
                 return false;
-            };
-            const isPdiScoped = (el) => {
+            }};
+            const isPdiScoped = (el) => {{
                 if (isLeftSearchPane(el)) return false;
                 let n = el;
-                for (let d = 0; d < 28 && n; d++) {
+                for (let d = 0; d < 28 && n; d++) {{
                     const id = String(n.id || '').toLowerCase();
                     const nm = String(n.getAttribute('name') || '').toLowerCase();
                     const tit = String(n.getAttribute('title') || '').toLowerCase();
@@ -3730,34 +3797,38 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     if (id.includes('s_2_l') || id.includes('gview_s_2') || id === 'gbox_s_2_l') return true;
                     if (id.includes('s_4_l') || id.includes('gview_s_4') || id === 'gbox_s_4_l') return true;
                     if (id.includes('s_5_l') || id.includes('gview_s_5') || id === 'gbox_s_5_l') return true;
-                    if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
+                    if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {{
                         return true;
-                    }
+                    }}
                     n = n.parentElement;
-                }
+                }}
                 return false;
-            };
+            }};
             const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
                 (tb) => vis(tb) && isPdiScoped(tb)
             );
-            for (const tb of tables) {
-                const tr = tb.querySelector('tbody tr.jqgrow');
-                if (!tr || !vis(tr)) continue;
-                try { tr.scrollIntoView({ block: 'center' }); } catch (e) {}
+            for (const tb of tables) {{
+                const rows = Array.from(tb.querySelectorAll('tbody tr.jqgrow')).filter(vis);
+                if (!rows.length) continue;
+                const tr = preferLast ? rows[rows.length - 1] : rows[0];
+                try {{ tr.scrollIntoView({{ block: 'center' }}); }} catch (e) {{}}
                 const tds = tr.querySelectorAll('td');
-                if (tds.length && vis(tds[0])) {
+                if (tds.length && vis(tds[0])) {{
                     tds[0].click();
                     return true;
-                }
+                }}
                 tr.click();
                 return true;
-            }
+            }}
             return false;
-        }"""
+        }}"""
         for _root in _roots():
             try:
                 if bool(_root.evaluate(_jq_js)):
-                    note(f"{log_prefix}: focused PDI list first data row (jqgrow) before pick icon.")
+                    _which = "last" if prefer_last else "first"
+                    note(
+                        f"{log_prefix}: focused PDI list {_which} data row (jqgrow) before pick icon."
+                    )
                     _safe_page_wait(page, 300, log_label="after_pdi_jqgrow_focus")
                     return
             except Exception:
@@ -3951,7 +4022,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             )
         _safe_page_wait(page, 300, log_label="after_sr_list_new")
 
-        _pdi_focus_first_pdi_jqgrow()
+        _pdi_focus_pdi_jqgrow(prefer_last=_pdi_rows_before_new > 0)
         _pdi_pick_ok = False
         _pdi_pick_used = ""
         for _pdi_pick_try in range(6):
