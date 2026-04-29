@@ -1071,6 +1071,11 @@ def dispatch(payload: dict) -> dict:
         return {"success": False, "error": "Missing type"}
     if job_type == "ping":
         return {"success": True, "data": {"pong": True}}
+    if job_type == "teardown_local_browsers":
+        from app.services.handle_browser_opening import teardown_local_automation_browsers
+
+        data = teardown_local_automation_browsers()
+        return {"success": True, "data": data}
 
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
     # Propagate top-level api_url / jwt into params for convenience

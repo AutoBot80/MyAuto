@@ -62,7 +62,7 @@ The web client continues to work in the browser unchanged; Electron is detected 
 | ID | Requirement |
 |----|-------------|
 | NFR-E1 | Sidecar **must not** rely on system Python in production; ship **`job_runner.exe`** via PyInstaller. |
-| NFR-E2 | No orphan automation processes on app quit; **kill tracked PIDs** on `will-quit`. |
+| NFR-E2 | On app quit: run sidecar job **`teardown_local_browsers`** (disconnect Playwright CDP clients, terminate OS process(es) listening on the **managed** remote-debug port from `PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT`, default **9333**—not arbitrary operator Chrome ports), then **kill tracked sidecar PIDs** on `will-quit`. |
 | NFR-E3 | **Deterministic** release build: one command chain from clean git state. |
 | NFR-E4 | **Security:** `contextIsolation`, no `nodeIntegration` in the renderer; path sandbox in main process. |
 
@@ -113,6 +113,7 @@ The web client continues to work in the browser unchanged; Electron is detected 
 | 3.3c Print | Renderer → IPC `print:html` → hidden `BrowserWindow` → `webContents.print` (silent, then fallback). |
 | 3.3d Files | Renderer → IPC `file:*` → `fs` after path resolution under base dir. |
 | 3.3e Updates | `electron-updater` (packaged builds only) → events → renderer notifications → user `updater:install`. |
+| 3.3f Quit / CDP | `before-quit` → IPC sidecar `teardown_local_browsers` (see NFR-E2) → `killAllSidecarJobs` → `app.quit`; `will-quit` runs kill again as a safety net. |
 
 ### 3.4 Configuration
 

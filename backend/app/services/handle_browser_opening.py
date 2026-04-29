@@ -8,7 +8,8 @@ Used by Fill DMS, Vahan, and Insurance — independent of Siebel/DMS business lo
 user-data-dir (``<project>/.browser-profile``) and ``--remote-debugging-port``.  It survives backend
 restarts, retries, and frontend reloads.  On next startup the CDP reconnection logic in
 ``_refresh_cdp_browsers`` re-attaches to the same process (session cookies, Vahan login,
-captcha/OTP state all survive).  No code path calls ``Browser.close()`` for operator sessions.
+captcha/OTP state all survive).  Normal flows do not call ``Browser.close()``; Electron quit sends a
+``teardown_local_browsers`` sidecar job that disconnects CDP and terminates the managed debug-port process.
 
 **No new tabs:** For single-session portals like Vahan, a second tab to the same host would
 invalidate the running session.  ``get_or_open_site_page`` never opens an extra tab — it
@@ -34,6 +35,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from app.config import DMS_PLAYWRIGHT_HEADED, PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT
+from app.services.playwright_executor import run_playwright_callable_sync
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +190,143 @@ def _cdp_url_http_reachable(cdp_url: str) -> bool:
         return False
 
 
+def force_invalidate_cdp_cache() -> None:
+    """Next ``_refresh_cdp_browsers`` runs full reconnect logic (TTL bypass)."""
+    global _LAST_CDP_REFRESH_MONO
+    _LAST_CDP_REFRESH_MONO = 0.0
+
+
+def _close_playwright_browser_handle(browser: object) -> None:
+    try:
+        close = getattr(browser, "close", None)
+        if callable(close):
+            close()
+    except Exception:
+        pass
+
+
+def _disconnect_all_playwright_browsers_on_worker_thread() -> None:
+    """Must run on the Playwright sync worker thread (via ``run_playwright_callable_sync``)."""
+    for b in list(_KEEP_OPEN_BROWSERS):
+        _close_playwright_browser_handle(b)
+    _KEEP_OPEN_BROWSERS.clear()
+    for _url, b in list(_CDP_BROWSERS_BY_URL.items()):
+        _close_playwright_browser_handle(b)
+    _CDP_BROWSERS_BY_URL.clear()
+    for b in list(_RETAINED_BROWSERS_NO_CLOSE):
+        _close_playwright_browser_handle(b)
+    _RETAINED_BROWSERS_NO_CLOSE.clear()
+
+
+def _kill_os_processes_listening_on_tcp_port(port: int) -> None:
+    """
+    Best-effort: terminate listener(s) on ``port`` so Chromium profile/SingletonLock releases.
+    Only the managed debug port should be passed (default 9333); never arbitrary operator ports.
+    """
+    if port <= 0 or port > 65535:
+        return
+    creationflags = 0
+    if sys.platform == "win32" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+    try:
+        if sys.platform == "win32":
+            out = subprocess.check_output(
+                ["netstat", "-ano"],
+                text=True,
+                timeout=15,
+                creationflags=creationflags,
+            )
+            pids: set[int] = set()
+            needle = f":{port}"
+            for line in out.splitlines():
+                line_l = line.strip()
+                if "LISTENING" not in line_l.upper():
+                    continue
+                if needle not in line_l:
+                    continue
+                parts = line_l.split()
+                if len(parts) < 2:
+                    continue
+                try:
+                    pids.add(int(parts[-1]))
+                except ValueError:
+                    continue
+            for pid in pids:
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        capture_output=True,
+                        timeout=30,
+                        check=False,
+                        creationflags=creationflags,
+                    )
+                except Exception as exc:
+                    logger.debug("handle_browser_opening: taskkill pid=%s: %s", pid, exc)
+        else:
+            try:
+                out = subprocess.check_output(
+                    ["lsof", "-ti", f":{port}"],
+                    text=True,
+                    timeout=15,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+                subprocess.run(
+                    ["fuser", "-k", f"{port}/tcp"],
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                return
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    pid = int(line)
+                except ValueError:
+                    continue
+                try:
+                    os.kill(pid, 15)
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    try:
+                        os.kill(pid, 9)
+                    except Exception:
+                        pass
+    except Exception as exc:
+        logger.warning("handle_browser_opening: port %s cleanup failed: %s", port, exc)
+
+
+def teardown_local_automation_browsers() -> dict[str, object]:
+    """
+    Disconnect Playwright CDP clients and terminate the managed Chromium process (debug port).
+    Called from Electron quit (sidecar job) so profile locks do not persist across app sessions.
+    """
+    try:
+        run_playwright_callable_sync(_disconnect_all_playwright_browsers_on_worker_thread)
+    except Exception as exc:
+        logger.warning("handle_browser_opening: Playwright disconnect failed: %s", exc)
+    force_invalidate_cdp_cache()
+    port = int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333)
+    _kill_os_processes_listening_on_tcp_port(port)
+    return {"teardown": True, "managed_debug_port": port}
+
+
+def _evict_unreachable_cached_cdp_browsers() -> None:
+    """Drop stale CDP handles when the HTTP endpoint is gone (operator closed the browser)."""
+    for url in list(_CDP_BROWSERS_BY_URL.keys()):
+        if _cdp_url_http_reachable(url):
+            continue
+        stale = _CDP_BROWSERS_BY_URL.pop(url, None)
+        if stale is None:
+            continue
+        try:
+            run_playwright_callable_sync(lambda b=stale: _close_playwright_browser_handle(b))
+        except Exception:
+            pass
+
+
 def _ordered_cdp_urls_for_connect(candidates: list[str], reachable: dict[str, bool]) -> list[str]:
     """Prefer URLs that responded to HTTP probe (parallel), then try the rest in original order."""
     yes = [u for u in candidates if reachable.get(u) is True]
@@ -196,6 +335,7 @@ def _ordered_cdp_urls_for_connect(candidates: list[str], reachable: dict[str, bo
 
 
 def _refresh_cdp_browsers() -> None:
+    _evict_unreachable_cached_cdp_browsers()
     global _LAST_CDP_REFRESH_MONO
     now = time.monotonic()
     with _CDP_REFRESH_LOCK:

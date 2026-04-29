@@ -395,6 +395,13 @@ export function AddSalesPage({
     return raw.length > 280 ? `${raw.slice(0, 280)}…` : raw;
   }, []);
 
+  /** Substrings aligned with backend ``_is_browser_disconnected_error`` for same-session warm retry. */
+  const messageLooksLikeAutomationBrowserLost = useCallback((msg: string): boolean => {
+    return /(connection closed|target closed|browser has been closed|econnreset|websocket error|socket hang up)/i.test(
+      msg
+    );
+  }, []);
+
   const triggerWarmBrowsers = useCallback(
     (subfolder: string) => {
       const sf = (subfolder || "").trim();
@@ -407,12 +414,14 @@ export function AddSalesPage({
       if (dmsBase) {
         tasks.push(
           warmDmsBrowserLocal({ dms_base_url: dmsBase }).catch((err) => {
+            warmBrowsersSubfolderRef.current = null;
             setFillDmsStatus(`DMS warm-up did not finish: ${formatWarmBrowserFailure(err, "DMS")}`);
           })
         );
       }
       tasks.push(
         warmInsuranceBrowserLocal({}).catch((err) => {
+          warmBrowsersSubfolderRef.current = null;
           setFillInsuranceStatus(
             `Insurance warm-up did not finish: ${formatWarmBrowserFailure(err, "Insurance")}`
           );
@@ -1103,6 +1112,11 @@ export function AddSalesPage({
         setFillDmsStatus(err instanceof Error ? err.message : "Create Invoice (DMS) failed.");
       }
       setDmsRunEndedWithError(true);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (messageLooksLikeAutomationBrowserLost(msg) && savedTo) {
+        warmBrowsersSubfolderRef.current = null;
+        triggerWarmBrowsers(savedTo);
+      }
     } finally {
       setIsFillDmsLoading(false);
       void (async () => {
@@ -1227,6 +1241,11 @@ export function AddSalesPage({
         setFillInsuranceStatus("Insurance request timed out. Browser remains open for operator.");
       } else {
         setFillInsuranceStatus(insuranceErr instanceof Error ? insuranceErr.message : "Insurance fill failed.");
+      }
+      const msg = insuranceErr instanceof Error ? insuranceErr.message : String(insuranceErr);
+      if (messageLooksLikeAutomationBrowserLost(msg) && savedTo) {
+        warmBrowsersSubfolderRef.current = null;
+        triggerWarmBrowsers(savedTo);
       }
     } finally {
       setIsFillInsuranceLoading(false);

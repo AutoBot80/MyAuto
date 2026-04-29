@@ -53,6 +53,9 @@ function defaultTimeoutMs(payload: SidecarJobPayload): number {
   if (payload.type === "fill_dms" || payload.type === "fill_insurance") {
     return 900_000;
   }
+  if (payload.type === "teardown_local_browsers") {
+    return 15_000;
+  }
   return 120_000;
 }
 

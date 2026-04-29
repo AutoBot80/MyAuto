@@ -6,7 +6,7 @@ import { logError, logInfo } from "./logger";
 import { getAppIconPath, getRepoRootFromMain } from "./paths";
 import { registerIpc } from "./ipc-handlers";
 import { runPrintTestFromDir } from "./printer";
-import { killAllSidecarJobs } from "./sidecar";
+import { killAllSidecarJobs, runSidecarJob } from "./sidecar";
 
 /** Print-smoke / SAATHI_PRINT_TEST_DIR: use a dedicated userData + disk cache under %TEMP% to avoid Chromium cache lock / Access denied (0x5) on the default profile. */
 const _printTestDirEnv = process.env.SAATHI_PRINT_TEST_DIR?.trim();
@@ -17,6 +17,9 @@ if (_printTestDirEnv) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+
+/** After cooperative CDP teardown we allow the real quit to proceed (avoid ``before-quit`` loops). */
+let quitAfterSidecarTeardown = false;
 
 /** Packaged apps do not get Chromium’s default shortcuts; wire DevTools explicitly. */
 function installDevToolsShortcuts(win: BrowserWindow): void {
@@ -174,6 +177,29 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", async (e) => {
+  if (quitAfterSidecarTeardown) {
+    return;
+  }
+  e.preventDefault();
+  quitAfterSidecarTeardown = true;
+  try {
+    const result = await runSidecarJob({
+      type: "teardown_local_browsers",
+      timeoutMs: 15_000,
+    });
+    if (!result.success) {
+      logError(`teardown_local_browsers: ${result.error ?? "failed"}`);
+    } else {
+      logInfo("teardown_local_browsers completed");
+    }
+  } catch (err) {
+    logError("teardown_local_browsers", err);
+  }
+  killAllSidecarJobs();
+  app.quit();
 });
 
 app.on("will-quit", () => {
