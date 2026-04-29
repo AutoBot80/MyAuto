@@ -1763,7 +1763,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         content_frame_selector=content_frame_selector,
     )
 
-    _safe_page_wait(page, 2000, log_label="precheck_tab_post_networkidle_settle")
+    _safe_page_wait(page, 3000, log_label="precheck_tab_post_networkidle_settle")
 
     _on_wrong_precheck_view = False
     try:
@@ -2149,7 +2149,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     log_prefix=log_prefix,
                     content_frame_selector=content_frame_selector,
                 )
-                _safe_page_wait(page, 2000, log_label="precheck_tab_post_chassis_recovery_settle")
+                _safe_page_wait(page, 3000, log_label="precheck_tab_post_chassis_recovery_settle")
                 try:
                     _post_chassis = (page.url or "").replace(" ", "+")
                     if (
