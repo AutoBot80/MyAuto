@@ -1754,6 +1754,31 @@ def _dump_frames_and_elements_for_debug(
             note(f"{log_prefix}: frame dump failed — {exc!r}")
 
 
+def _precheck_submit_popup_implies_technician_lov(msg: str | None) -> bool:
+    """True when Siebel text after Pre-check Submit likely means \"set Technician / mechanic\" LOV.
+
+    If we Tab to the Technician pick icon on unrelated validation (finance, duplicate row, session,
+    etc.), focus lands on Technician while the real error is elsewhere — a Siebel-side false positive
+    for our older \"any popup → try Technician\" heuristic.
+    """
+    if not msg:
+        return False
+    t = (msg or "").lower().replace("_", " ")
+    needles = (
+        "technician",
+        "mechanic",
+        "hhml",
+        "hhml mechanic",
+        "operator",
+        "service resource",
+        "assign technician",
+        "mechanic full name",
+        "field service engineer",
+        "fse",
+    )
+    return any(n in t for n in needles)
+
+
 def _siebel_run_vehicle_serial_detail_precheck_pdi(
     page: Page,
     *,
@@ -1827,7 +1852,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: feature-id scrape cubic_capacity={_cc_log!r}, vehicle_type={vt!r}."
         )
 
-    _safe_page_wait(page, 1000, log_label="before_precheck_pdi_tab_lookup_settle")
+    _safe_page_wait(page, 3000, log_label="before_precheck_pdi_tab_lookup_settle")
     note(f"{log_prefix}: 1s settle before Pre-check / third-level tab lookup.")
 
     _siebel_note_frame_focus_snapshot(
@@ -2907,16 +2932,31 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
         # Many tenants: pick **Open** (and operator) in one LOV → **Submit** here. Extra **Tab**s before Technician
         # break focus and never reach Submit — try save first, then optional Technician only if needed.
+        #
+        # Do **not** assume every Siebel dialog after Submit means \"fill Technician\": unrelated errors
+        # used to drive Tab→Technician and leave focus on the wrong column. Only run the Technician LOV
+        # when Submit did not fire (legacy focus) or the popup text hints mechanic/technician/HHML.
         _submit_done = _precheck_try_submit()
         _err_after_submit = _detect_siebel_error_popup(page, content_frame_selector)
-        _will_try_technician = not (_submit_done and not _err_after_submit)
         if _submit_done and not _err_after_submit:
             note(f"{log_prefix}: Pre-check saved after Open LOV (Submit/Ctrl+S; Technician step skipped).")
         else:
+            if _submit_done and _err_after_submit and not _precheck_submit_popup_implies_technician_lov(
+                _err_after_submit
+            ):
+                note(
+                    f"{log_prefix}: Pre-check Submit returned a Siebel dialog that does not look like a "
+                    f"Technician/mechanic prompt — not Tab-ing to Technician LOV. text={_err_after_submit!r:.320}"
+                )
+                return (
+                    False,
+                    "Siebel error after Pre-check Submit (unrelated to Technician column; "
+                    f"automation skipped Technician LOV): {_err_after_submit[:220]}",
+                )
             if _submit_done and _err_after_submit:
                 note(
-                    f"{log_prefix}: Pre-check Submit after Open returned validation/error — "
-                    "trying Technician LOV if pick icon is available."
+                    f"{log_prefix}: Pre-check Submit after Open returned validation/error that suggests "
+                    "Technician/mechanic — trying Technician LOV if pick icon is available."
                 )
             elif not _submit_done:
                 note(
@@ -3813,12 +3853,38 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 continue
         return _rc
 
+    _PDI_S2_RC_TOTAL_JS = """() => {
+        const el = document.getElementById('s_2_rc');
+        if (!el) return { ok: false, raw: '', total: null };
+        const raw = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+        let total = null;
+        const r1 = raw.match(/\\d+\\s*-\\s*\\d+\\s+of\\s+(\\d+)/i);
+        const r2 = raw.match(/^\\s*(\\d+)\\s+of\\s+(\\d+)/i);
+        const r3 = raw.match(/of\\s+(\\d+)\\s*$/i);
+        if (r1) total = parseInt(r1[1], 10);
+        else if (r2) total = parseInt(r2[2], 10);
+        else if (r3) total = parseInt(r3[1], 10);
+        if (total === null || isNaN(total)) return { ok: false, raw, total: null };
+        return { ok: true, raw, total };
+    }"""
+
+    def _pdi_s2_rc_total() -> tuple[int | None, str]:
+        """Best-effort total row count from Service Request list counter ``#s_2_rc`` (e.g. ``1 - 5 of 5``)."""
+        for _proot in _roots():
+            try:
+                d = _proot.evaluate(_PDI_S2_RC_TOTAL_JS)
+                if isinstance(d, dict) and d.get("ok") and d.get("total") is not None:
+                    return int(d["total"]), str(d.get("raw") or "")
+            except Exception:
+                continue
+        return None, ""
+
     def _pdi_focus_pdi_jqgrow(*, prefer_last: bool) -> None:
         """Focus a PDI jqGrid data row so LOV pick icons bind to that line.
 
-        After **Service Request List:New**, Siebel often keeps older rows above the new line.
-        When the grid already had rows before **New**, prefer **last** visible ``jqgrow`` so we
-        do not open picks on an existing populated row.
+        HMCL **inserts the new Service Request line at the top** of ``s_2_l`` (not the bottom). Only part of
+        the rows may be visible (virtualized viewport); when ``prefer_last`` is **False**, scroll the
+        list container to the top before clicking the **first** ``jqgrow`` so the new line is in view.
         """
         _prefer = "true" if prefer_last else "false"
         _jq_js = f"""() => {{
@@ -3860,6 +3926,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 }}
                 return false;
             }};
+            if (!preferLast) {{
+                for (const sid of ['s_2_l_scroll', 'gview_s_2_l', 'gbox_s_2_l']) {{
+                    const sc = document.getElementById(sid);
+                    if (sc && vis(sc)) {{
+                        try {{ sc.scrollTop = 0; }} catch (e) {{}}
+                    }}
+                }}
+            }}
             const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
                 (tb) => vis(tb) && isPdiScoped(tb)
             );
@@ -4024,39 +4098,80 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
     if _pdi_need_new_row:
         _pdi_rows_before_new = _eval_pdi_grid_rowcount()
+        _pdi_rc_baseline, _pdi_rc_baseline_raw = _pdi_s2_rc_total()
         note(
-            f"{log_prefix}: PDI new-row flow — Service Request list rowCount≈{_pdi_rows_before_new} "
-            "(before New)."
+            f"{log_prefix}: PDI new-row flow — jqGrid rowCount≈{_pdi_rows_before_new} "
+            f"(before New); s_2_rc total={_pdi_rc_baseline!r} raw={_pdi_rc_baseline_raw!r}."
         )
         _safe_page_wait(page, 300, log_label="before_pdi_service_request_list_new")
-        _pdi_new_ok = False
+
+        def _pdi_new_row_effective_added() -> bool:
+            _rc_n, _rc_raw = _pdi_s2_rc_total()
+            if _pdi_rc_baseline is not None and _rc_n is not None and _rc_n > _pdi_rc_baseline:
+                note(
+                    f"{log_prefix}: PDI + verified — s_2_rc total increased "
+                    f"{_pdi_rc_baseline}→{_rc_n} raw={_rc_raw!r}."
+                )
+                return True
+            _ge = _eval_pdi_grid_rowcount()
+            if _ge > _pdi_rows_before_new:
+                note(
+                    f"{log_prefix}: PDI + verified (jqGrid eval fallback) "
+                    f"{_pdi_rows_before_new}→{_ge} (s_2_rc missing or unchanged)."
+                )
+                return True
+            return False
+
+        _pdi_plus_verified = False
+        _pdi_click_succeeded_once = False
         for _pdi_new_attempt in range(4):
-            if _siebel_click_service_request_list_new_record(
+            _pdi_new_ok = _siebel_click_service_request_list_new_record(
                 page,
                 roots=_roots,
                 action_timeout_ms=action_timeout_ms,
                 note=note,
                 log_prefix=log_prefix,
                 context="PDI",
-            ):
-                _pdi_new_ok = True
-                if _pdi_new_attempt > 0:
+            )
+            if not _pdi_new_ok:
+                if _pdi_new_attempt < 3:
                     note(
-                        f"{log_prefix}: Service Request List:New succeeded on attempt "
-                        f"{_pdi_new_attempt + 1}/4."
+                        f"{log_prefix}: Service Request List:New click failed "
+                        f"attempt {_pdi_new_attempt + 1}/4 — retrying."
                     )
-                break
-            if _pdi_new_attempt < 3:
-                note(
-                    f"{log_prefix}: Service Request List:New attempt {_pdi_new_attempt + 1}/4 failed — "
-                    "retrying."
-                )
+                    _safe_page_wait(
+                        page,
+                        400,
+                        log_label=f"pdi_service_request_list_new_retry_{_pdi_new_attempt + 1}",
+                    )
+                continue
+
+            _pdi_click_succeeded_once = True
+            _safe_page_wait(page, 280, log_label="after_sr_list_new_settle")
+            for _pdi_vp in range(15):
+                if _pdi_new_row_effective_added():
+                    _pdi_plus_verified = True
+                    if _pdi_new_attempt > 0:
+                        note(
+                            f"{log_prefix}: PDI + added row on click attempt "
+                            f"{_pdi_new_attempt + 1}/4 (after prior false positives or slow grid)."
+                        )
+                    break
                 _safe_page_wait(
                     page,
-                    300,
-                    log_label=f"pdi_service_request_list_new_retry_{_pdi_new_attempt + 1}",
+                    400,
+                    log_label=f"pdi_plus_verify_{_pdi_new_attempt}_{_pdi_vp}",
                 )
-        if not _pdi_new_ok:
+            if _pdi_plus_verified:
+                break
+            note(
+                f"{log_prefix}: PDI + click did not increase s_2_rc / row count (false positive or still "
+                f"loading) — retry {_pdi_new_attempt + 1}/4."
+            )
+            if _pdi_new_attempt < 3:
+                _safe_page_wait(page, 500, log_label="pdi_plus_retry_backoff")
+
+        if not _pdi_plus_verified:
             _pdi_note_service_request_new_click_diagnostics(
                 page,
                 roots=_roots,
@@ -4067,18 +4182,26 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             )
             _dump_frames_and_elements_for_debug(
                 page, content_frame_selector=content_frame_selector,
-                output_dir=_debug_dump_dir, label="pdi_plus_not_found",
+                output_dir=_debug_dump_dir,
+                label="pdi_plus_unverified" if _pdi_click_succeeded_once else "pdi_plus_not_found",
                 note=note, log_prefix=log_prefix,
             )
+            if not _pdi_click_succeeded_once:
+                return (
+                    False,
+                    "Could not click 'Service Request List:New' on PDI tab "
+                    "(tried s_3_1_12_0_Ctrl / s_2_1_14_0_Ctrl / s_2_2_32_0 + scan; "
+                    "see _siebel_click_service_request_list_new_record).",
+                )
             return (
                 False,
-                "Could not click 'Service Request List:New' on PDI tab "
-                "(tried s_3_1_12_0_Ctrl / s_2_1_14_0_Ctrl / s_2_2_32_0 + scan; "
-                "see _siebel_click_service_request_list_new_record).",
+                "PDI Service Request List:New did not add a line (s_2_rc total and jqGrid count unchanged "
+                "after +); the click may have been a no-op.",
             )
-        _safe_page_wait(page, 300, log_label="after_sr_list_new")
 
-        _pdi_focus_pdi_jqgrow(prefer_last=_pdi_rows_before_new > 0)
+        # New line is **prepended** at the **top** of ``s_2_l``; viewport may only show 5–6 of many rows.
+        # Scroll to top, then first ``jqgrow`` = new / active line for LOV.
+        _pdi_focus_pdi_jqgrow(prefer_last=False)
         _pdi_pick_ok = False
         _pdi_pick_used = ""
         for _pdi_pick_try in range(6):
@@ -4159,16 +4282,28 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if _pdi_rows_after_submit <= _pdi_rows_before_new:
             _safe_page_wait(page, 300, log_label="pdi_rowcount_recheck")
             _pdi_rows_after_submit = _eval_pdi_grid_rowcount()
-        if _pdi_rows_after_submit <= _pdi_rows_before_new:
+        _rc_after_submit, _rc_after_submit_raw = _pdi_s2_rc_total()
+        _pdi_submit_list_ok = False
+        if _pdi_rc_baseline is not None and _rc_after_submit is not None:
+            if _rc_after_submit > _pdi_rc_baseline:
+                _pdi_submit_list_ok = True
+                note(
+                    f"{log_prefix}: PDI Submit list OK — s_2_rc total {_pdi_rc_baseline}→{_rc_after_submit} "
+                    f"raw={_rc_after_submit_raw!r}."
+                )
+        if not _pdi_submit_list_ok and _pdi_rows_after_submit > _pdi_rows_before_new:
+            _pdi_submit_list_ok = True
+            note(
+                f"{log_prefix}: PDI Submit list OK (jqGrid eval) "
+                f"{_pdi_rows_before_new}→{_pdi_rows_after_submit}."
+            )
+        if not _pdi_submit_list_ok:
             return (
                 False,
                 "PDI Submit did not increase the Service Request list row count "
-                f"(before={_pdi_rows_before_new}, after={_pdi_rows_after_submit}).",
+                f"(jqGrid before={_pdi_rows_before_new}, after={_pdi_rows_after_submit}; "
+                f"s_2_rc baseline={_pdi_rc_baseline!r}, after={_rc_after_submit!r} raw={_rc_after_submit_raw!r}).",
             )
-        note(
-            f"{log_prefix}: PDI list row count increased after Submit "
-            f"({_pdi_rows_before_new} → {_pdi_rows_after_submit})."
-        )
 
     note(f"{log_prefix}: PDI completed successfully.")
     if callable(form_trace):
