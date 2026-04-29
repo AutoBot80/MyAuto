@@ -4,6 +4,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   sidecar: {
     runJob: (payload: unknown) => ipcRenderer.invoke("sidecar:runJob", payload),
   },
+  dealerSign: {
+    overlaySalePdfs: (payload: { dealerId: number; subfolder: string }) =>
+      ipcRenderer.invoke("dealerSign:overlaySalePdfs", payload),
+  },
   print: {
     getPrinters: () => ipcRenderer.invoke("print:getPrinters"),
     printHtml: (opts: { html: string; deviceName?: string; silent?: boolean; copies?: number }) =>

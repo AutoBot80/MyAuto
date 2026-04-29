@@ -102,6 +102,24 @@ export function dispatchPrintJobsFromApi(jobs: ApiPrintJob[] | undefined | null)
   void fn(jobs);
 }
 
+/**
+ * Electron only: headless dealer signature overlay on Form 20 / GST / Sale Certificate PDFs
+ * in the local sale folder — must run before ``printGatePass``. Non-fatal on failure.
+ */
+export async function overlayDealerSignaturesLocal(params: {
+  dealerId: number;
+  subfolder: string;
+}): Promise<void> {
+  if (!isElectron()) return;
+  const fn = window.electronAPI?.dealerSign?.overlaySalePdfs;
+  if (!fn) return;
+  try {
+    await fn({ dealerId: params.dealerId, subfolder: params.subfolder });
+  } catch {
+    /* best-effort */
+  }
+}
+
 /** DMS full flow / Create Invoice — keep in sync with `vite.config.ts` LONG_RUNNING_MS + fetch abort. */
 const FILL_FORMS_TIMEOUT_MS = 900_000; // 15 min
 /** Pre-open DMS browser after upload; allow enough time for first managed-browser launch. */

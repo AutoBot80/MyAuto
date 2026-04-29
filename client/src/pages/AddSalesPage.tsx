@@ -11,6 +11,7 @@ import {
   dispatchPrintJobsFromApi,
   fillDmsLocal,
   fillHeroInsuranceLocal,
+  overlayDealerSignaturesLocal,
   printGatePass,
   isFillDmsAbortError,
   warmDmsBrowserLocal,
@@ -1293,6 +1294,14 @@ export function AddSalesPage({
       }
     } else {
       statusLines.push("RTO queue skipped (customer/vehicle IDs missing — run Create Invoice first).");
+    }
+
+    if (dealerId != null && dealerId > 0 && savedTo) {
+      try {
+        await overlayDealerSignaturesLocal({ dealerId, subfolder: savedTo });
+      } catch {
+        /* headless overlay is best-effort */
+      }
     }
 
     let gatePassSucceeded = false;

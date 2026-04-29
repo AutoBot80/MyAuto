@@ -14,6 +14,12 @@ export interface ElectronAPI {
   sidecar: {
     runJob: (payload: Record<string, unknown>) => Promise<SidecarJobResult>;
   };
+  dealerSign?: {
+    overlaySalePdfs: (payload: {
+      dealerId: number;
+      subfolder: string;
+    }) => Promise<{ ok: boolean; message?: string }>;
+  };
   print: {
     getPrinters: () => Promise<Array<{ name: string; displayName?: string; description?: string }>>;
     printHtml: (opts: { html: string; deviceName?: string; silent?: boolean; copies?: number }) => Promise<{

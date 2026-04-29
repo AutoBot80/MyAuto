@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { warmVahanBrowserLocal } from "../api/fillForms";
 import {
   getRtoBatchStatus,
@@ -32,6 +32,16 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   const [mobileChangeInput, setMobileChangeInput] = useState("");
   const [otpSubmitting, setOtpSubmitting] = useState(false);
   const [otpSubmitError, setOtpSubmitError] = useState<string | null>(null);
+
+  /**
+   * Warm / attach Vahan browser via the local sidecar (Electron) or cloud API fallback.
+   * Idempotent attach-or-open; safe to call multiple times. Non-blocking.
+   */
+  const triggerVahanWarm = useCallback(() => {
+    void warmVahanBrowserLocal().catch(() => {
+      // Errors logged server-side / sidecar.
+    });
+  }, []);
 
   const fetchFromDb = (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -71,6 +81,10 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   }, [dealerId]);
 
   useEffect(() => {
+    triggerVahanWarm();
+  }, [dealerId, triggerVahanWarm]);
+
+  useEffect(() => {
     setVahanReadyForBatch(false);
     setVahanWarmMessage(null);
   }, [dealerId]);
@@ -99,6 +113,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
 
   const handleStartBatch = async () => {
     setBatchError(null);
+    triggerVahanWarm();
 
     if (!vahanReadyForBatch) {
       setStartingBatch(true);
@@ -196,6 +211,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
 
   const handleTryAgain = async (queueId: number) => {
     setBatchError(null);
+    triggerVahanWarm();
     setRetryingQueueId(queueId);
     try {
       await retryRtoQueueRow(queueId);
