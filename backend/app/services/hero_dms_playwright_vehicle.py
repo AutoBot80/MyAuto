@@ -3794,6 +3794,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 break
         if not _ok:
             _css_fb = (
+                "span.siebui-icon-pick",
+                "a.siebui-icon-pick",
+                "img.siebui-icon-pick",
+                "[class*='siebui-icon-pick' i]",
                 "a.siebui-icon-picklist",
                 "img.siebui-icon-picklist",
                 "[class*='siebui-icon-picklist' i]",
@@ -3951,30 +3955,77 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             )
         _safe_page_wait(page, 300, log_label="after_sr_list_new")
 
-        _pdi_focus_first_pdi_jqgrow()
+        # After clicking +, focus lands on technician field. Click the adjacent pick icon.
+        # First try JS to find the focused/active input and click the siebui-icon-pick next to it.
+        _pdi_pick_js = """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            // Try to find pick icon by known ID first
+            const pickIds = ['s_2_2_32_0_icon', 's_2_2_32_0', 's_2_2_31_0_icon', 's_2_2_31_0'];
+            for (const pid of pickIds) {
+                const el = document.getElementById(pid);
+                if (el && vis(el)) {
+                    el.scrollIntoView({ block: 'center' });
+                    el.click();
+                    return { ok: true, method: 'id', id: pid };
+                }
+            }
+            // Fallback: find any visible siebui-icon-pick and click it
+            const picks = Array.from(document.querySelectorAll('.siebui-icon-pick, [class*="siebui-icon-pick"]'));
+            for (const p of picks) {
+                if (vis(p)) {
+                    p.scrollIntoView({ block: 'center' });
+                    p.click();
+                    return { ok: true, method: 'css', id: p.id || 'no-id' };
+                }
+            }
+            return { ok: false, method: 'none', id: '' };
+        }"""
+
         _pdi_pick_ok = False
         _pdi_pick_used = ""
-        for _pdi_pick_try in range(6):
-            if _pdi_pick_try > 0:
-                try:
-                    page.keyboard.press("Tab")
-                    _safe_page_wait(page, 300, log_label=f"pdi_tab_before_pick_try_{_pdi_pick_try}")
-                except Exception:
-                    pass
-            _pdi_pick_ok, _pdi_pick_used = _click_pdi_pick_icon("pdi_after_new")
-            if _pdi_pick_ok:
-                if _pdi_pick_try > 0:
+        for _proot in _roots():
+            try:
+                _pick_result = _proot.evaluate(_pdi_pick_js)
+                if isinstance(_pick_result, dict) and _pick_result.get("ok"):
+                    _pdi_pick_ok = True
+                    _pdi_pick_used = f"{_pick_result.get('method')}:{_pick_result.get('id')}"
                     note(
-                        f"{log_prefix}: PDI pick icon succeeded after {_pdi_pick_try} extra Tab(s)."
+                        f"{log_prefix}: PDI pick icon clicked via JS "
+                        f"(method={_pick_result.get('method')!r}, id={_pick_result.get('id')!r})."
                     )
-                note(
-                    f"{log_prefix}: PDI pick icon clicked "
-                    f"(id={_pdi_pick_used!r}, tabs_before={_pdi_pick_try})."
-                )
-                break
+                    break
+            except Exception:
+                continue
+
+        # Fallback to original approach if JS didn't work
+        if not _pdi_pick_ok:
+            for _pdi_pick_try in range(6):
+                if _pdi_pick_try > 0:
+                    try:
+                        page.keyboard.press("Tab")
+                        _safe_page_wait(page, 300, log_label=f"pdi_tab_before_pick_try_{_pdi_pick_try}")
+                    except Exception:
+                        pass
+                _pdi_pick_ok, _pdi_pick_used = _click_pdi_pick_icon("pdi_after_new")
+                if _pdi_pick_ok:
+                    if _pdi_pick_try > 0:
+                        note(
+                            f"{log_prefix}: PDI pick icon succeeded after {_pdi_pick_try} extra Tab(s)."
+                        )
+                    note(
+                        f"{log_prefix}: PDI pick icon clicked "
+                        f"(id={_pdi_pick_used!r}, tabs_before={_pdi_pick_try})."
+                    )
+                    break
         if not _pdi_pick_ok:
             note(
-                f"{log_prefix}: PDI pick icon not found after id + CSS fallback (with Tab retries) — "
+                f"{log_prefix}: PDI pick icon not found after JS + id + CSS fallback (with Tab retries) — "
                 "continuing after Service Request List:New only."
             )
             _pdi_log_picklist_miss_diag()
@@ -4042,6 +4093,178 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: PDI list row count increased after Submit "
             f"({_pdi_rows_before_new} → {_pdi_rows_after_submit})."
         )
+    else:
+        # Valid PDI row exists — check if technician is filled; if not, fill it.
+        _tech_check_js = """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            const isLeftSearchPane = (el) => {
+                let n = el;
+                for (let d = 0; d < 22 && n; d++) {
+                    const pid = String(n.id || '').toLowerCase();
+                    if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                return false;
+            };
+            const isPdiScoped = (el) => {
+                if (isLeftSearchPane(el)) return false;
+                let n = el;
+                for (let d = 0; d < 28 && n; d++) {
+                    const id = String(n.id || '').toLowerCase();
+                    const nm = String(n.getAttribute('name') || '').toLowerCase();
+                    const tit = String(n.getAttribute('title') || '').toLowerCase();
+                    const hay = id + ' ' + nm + ' ' + tit;
+                    if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) return false;
+                    if (id.includes('s_2_l') || id.includes('gview_s_2') || id === 'gbox_s_2_l') return true;
+                    if (id.includes('s_4_l') || id.includes('gview_s_4') || id === 'gbox_s_4_l') return true;
+                    if (id.includes('s_5_l') || id.includes('gview_s_5') || id === 'gbox_s_5_l') return true;
+                    if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                return false;
+            };
+            const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
+                (tb) => vis(tb) && isPdiScoped(tb)
+            );
+            for (const tb of tables) {
+                const headers = Array.from(tb.closest('.ui-jqgrid-view')?.querySelectorAll('th') || []);
+                let techColIdx = -1;
+                for (let i = 0; i < headers.length; i++) {
+                    const hText = (headers[i].textContent || '').toLowerCase();
+                    if (hText.includes('technician') || hText.includes('mechanic') || hText.includes('hhml')) {
+                        techColIdx = i;
+                        break;
+                    }
+                }
+                const tr = tb.querySelector('tbody tr.jqgrow');
+                if (!tr || !vis(tr)) continue;
+                const tds = tr.querySelectorAll('td');
+                if (techColIdx >= 0 && techColIdx < tds.length) {
+                    const techVal = (tds[techColIdx].textContent || '').trim();
+                    // Click on the row to select it
+                    if (tds[0]) tds[0].click();
+                    return { found: true, techValue: techVal, techEmpty: !techVal, colIdx: techColIdx };
+                }
+                // Fallback: check last few columns for empty values that might be technician
+                if (tds.length >= 3) {
+                    if (tds[0]) tds[0].click();
+                    const lastVal = (tds[tds.length - 1].textContent || '').trim();
+                    return { found: true, techValue: lastVal, techEmpty: !lastVal, colIdx: tds.length - 1 };
+                }
+            }
+            return { found: false, techValue: '', techEmpty: true, colIdx: -1 };
+        }"""
+
+        _tech_filled = True
+        for _proot in _roots():
+            try:
+                _tech_result = _proot.evaluate(_tech_check_js)
+                if isinstance(_tech_result, dict) and _tech_result.get("found"):
+                    _tech_filled = not _tech_result.get("techEmpty", True)
+                    _tech_val = _tech_result.get("techValue", "")
+                    note(
+                        f"{log_prefix}: PDI existing row technician check: "
+                        f"value={_tech_val!r:.60}, filled={_tech_filled}"
+                    )
+                    break
+            except Exception:
+                continue
+
+        if not _tech_filled:
+            note(f"{log_prefix}: PDI existing row has empty technician — filling it now.")
+            _safe_page_wait(page, 300, log_label="pdi_existing_row_before_tech_pick")
+
+            # Use same JS approach as new row to click pick icon
+            _pdi_existing_pick_js = """() => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                };
+                // Try to find pick icon by known ID first
+                const pickIds = ['s_2_2_32_0_icon', 's_2_2_32_0', 's_2_2_31_0_icon', 's_2_2_31_0'];
+                for (const pid of pickIds) {
+                    const el = document.getElementById(pid);
+                    if (el && vis(el)) {
+                        el.scrollIntoView({ block: 'center' });
+                        el.click();
+                        return { ok: true, method: 'id', id: pid };
+                    }
+                }
+                // Fallback: find any visible siebui-icon-pick and click it
+                const picks = Array.from(document.querySelectorAll('.siebui-icon-pick, [class*="siebui-icon-pick"]'));
+                for (const p of picks) {
+                    if (vis(p)) {
+                        p.scrollIntoView({ block: 'center' });
+                        p.click();
+                        return { ok: true, method: 'css', id: p.id || 'no-id' };
+                    }
+                }
+                return { ok: false, method: 'none', id: '' };
+            }"""
+
+            _pdi_tech_pick_ok = False
+            _pdi_tech_pick_used = ""
+            for _proot in _roots():
+                try:
+                    _pick_result = _proot.evaluate(_pdi_existing_pick_js)
+                    if isinstance(_pick_result, dict) and _pick_result.get("ok"):
+                        _pdi_tech_pick_ok = True
+                        _pdi_tech_pick_used = f"{_pick_result.get('method')}:{_pick_result.get('id')}"
+                        note(
+                            f"{log_prefix}: PDI existing row pick icon clicked via JS "
+                            f"(method={_pick_result.get('method')!r}, id={_pick_result.get('id')!r})."
+                        )
+                        break
+                except Exception:
+                    continue
+
+            # Fallback to original approach if JS didn't work
+            if not _pdi_tech_pick_ok:
+                for _pdi_tech_try in range(4):
+                    if _pdi_tech_try > 0:
+                        try:
+                            page.keyboard.press("Tab")
+                            _safe_page_wait(page, 300, log_label=f"pdi_existing_tab_to_tech_{_pdi_tech_try}")
+                        except Exception:
+                            pass
+                    _pdi_tech_pick_ok, _pdi_tech_pick_used = _click_pdi_pick_icon("pdi_existing_technician")
+                    if _pdi_tech_pick_ok:
+                        note(
+                            f"{log_prefix}: PDI existing row technician pick icon clicked "
+                            f"(id={_pdi_tech_pick_used!r}, tabs={_pdi_tech_try})."
+                        )
+                        break
+
+            if _pdi_tech_pick_ok:
+                _siebel_lov_pick_first_row_ok_pdi_style(
+                    page,
+                    roots=_roots,
+                    action_timeout_ms=action_timeout_ms,
+                    note=note,
+                    log_prefix=log_prefix,
+                    stage_label="PDI Existing Technician",
+                )
+                note(f"{log_prefix}: PDI existing row technician LOV completed.")
+            else:
+                note(
+                    f"{log_prefix}: PDI existing row technician pick icon not found — "
+                    "technician may remain empty."
+                )
+        else:
+            note(f"{log_prefix}: PDI existing row already has technician filled — no action needed.")
 
     note(f"{log_prefix}: PDI completed successfully.")
     if callable(form_trace):
