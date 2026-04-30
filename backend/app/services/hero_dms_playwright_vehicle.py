@@ -1178,9 +1178,6 @@ def _siebel_click_service_request_list_new_record(
     scans visible ``siebui-icon-newrecord`` for **Service Request** / **PDI List** / **Precheck** ``List:New``
     labels; ``get_by_role`` for those names; CSS (skip **Menu**). PDI often uses **PDI List:New** or ``s_2_*``
     ids, not only **Service Request List:New**. See **LLD** **6.240**, **6.243**.
-
-    When ``context`` is **PDI**, ``s_3_1_12_0_Ctrl`` (Pre-check list ``+``) is tried **after** ``s_2_*`` so we do
-    not click the hidden/wrong applet ``+`` and then edit the first **PDI** grid row without inserting a line.
     """
     _ctx_upper = str(context or "").strip().upper()
     _tmo = min(int(action_timeout_ms or 3000), 4000)
@@ -1252,50 +1249,10 @@ def _siebel_click_service_request_list_new_record(
         "[title*='Precheck List:New' i]",
         "[title*='Pre-check List:New' i]",
     )
-    # PDI: never let CSS try ``s_3_1_12_0`` (Pre-check list ``+``) before ``s_2_1_14_0`` — the tuple below had
-    # ``*_sr_new_selectors`` with ``s_3`` first, so Playwright could click the wrong ``+`` and skip the PDI grid.
-    _sr_css_no_s3 = tuple(s for s in _sr_new_selectors if "s_3_1_12" not in s)
-    _sr_css_s3_only = tuple(s for s in _sr_new_selectors if "s_3_1_12" in s)
-    if _ctx_upper == "PDI":
-        _sr_new_selectors_eff = (
-            "div#S_A2 button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
-            "div#s_S_A2_div button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
-            "div#S_A2 button#s_2_1_14_0_Ctrl",
-            "div#s_S_A2_div button#s_2_1_14_0_Ctrl",
-            "div#s_S_A2_div[title='Service Request List'] button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
-            "div[aria-label='Service Request in Vehicles'] button#s_2_1_14_0_Ctrl",
-            "button#s_2_1_14_0_Ctrl.siebui-icon-newrecord",
-            "button#s_2_1_14_0_Ctrl",
-            "button.siebui-icon-newrecord[id='s_2_1_14_0_Ctrl']",
-            "button.siebui-icon-newrecord[aria-label='PDI List:New']",
-            "button.siebui-icon-newrecord[aria-label='HHML PDI List:New']",
-            "button.siebui-icon-newrecord[title='PDI List:New']",
-            "button[aria-label='PDI List:New']",
-            "button[aria-label='HHML PDI List:New']",
-            "[aria-label='PDI List:New']",
-            *_sr_css_no_s3,
-            *_sr_css_s3_only,
-        )
-    else:
-        _sr_new_selectors_eff = _sr_new_selectors
 
-    # Pre-check tab usually exposes ``s_3_1_12_0_Ctrl``; PDI tab uses ``s_2_*`` applets. For **PDI**, try ``s_2_*``
-    # before ``s_3_1_12_0_Ctrl`` so we don't click the Pre-check list ``+`` (still in DOM) and skip the PDI grid.
-    _PLUS_IDS_JS_PRECHECK = """[
-            's_3_1_12_0_Ctrl', 's_2_1_14_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl',
-            's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl', 's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
-            's_2_1_12_0', 's_3_1_12_0',
-        ]"""
-    _PLUS_IDS_JS_PDI = """[
-            's_2_1_14_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl',
-            's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl', 's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
-            's_2_1_12_0',
-            's_3_1_12_0_Ctrl', 's_3_1_12_0',
-        ]"""
-    _ids_js_body = _PLUS_IDS_JS_PDI if _ctx_upper == "PDI" else _PLUS_IDS_JS_PRECHECK
-    _prefer_pdi_scan_js = "true" if _ctx_upper == "PDI" else "false"
-
-    _js_plus_template = """() => {
+    # Pre-check tab usually exposes ``s_3_1_12_0_Ctrl``; PDI tab often uses ``s_2_*`` applets — try several
+    # ids, then scan all visible ``siebui-icon-newrecord`` buttons (same idea as Pre-check when labels match).
+    _js_plus = """() => {
         const vis = (el) => {
             if (!el) return false;
             const st = window.getComputedStyle(el);
@@ -1372,32 +1329,18 @@ def _siebel_click_service_request_list_new_record(
             const tg = String(b.tagName || '').toLowerCase();
             diag.allNewrecordBtns.push(tg + ':' + bid + '|al=' + al + '|tt=' + tt + '|vis=' + v);
         }
-        const ids = __IDS_ARRAY__;
-        const preferPdiToolbar = __PREFER_PDI_SCAN__;
+        const ids = [
+            's_3_1_12_0_Ctrl', 's_2_1_14_0_Ctrl', 's_2_2_32_0', 's_2_1_12_0_Ctrl',
+            's_2_2_31_0_Ctrl', 's_2_2_33_0_Ctrl', 's_2_1_11_0_Ctrl', 's_2_2_30_0_Ctrl',
+            's_2_1_12_0', 's_3_1_12_0',
+        ];
         for (const hid of ids) {
             if (tryClickId(hid)) return diag;
         }
         for (const hid of ids) {
             if (tryClickSpanOrAnchorNew(hid)) return diag;
         }
-        let scanTargets = combinedBtns;
-        if (preferPdiToolbar) {
-            const pri = [];
-            const sec = [];
-            for (const el of combinedBtns) {
-                if (!vis(el) || !isListNewNotMenu(el)) continue;
-                const id = (el.id || '').toLowerCase();
-                const al = (el.getAttribute('aria-label') || '').toLowerCase();
-                const tt = (el.getAttribute('title') || '').toLowerCase();
-                const looksPdi = id.startsWith('s_2_')
-                    || (al.includes('pdi') && al.includes('new'))
-                    || (tt.includes('pdi') && tt.includes('new'));
-                if (looksPdi) pri.push(el);
-                else sec.push(el);
-            }
-            scanTargets = [...pri, ...sec];
-        }
-        for (const el of scanTargets) {
+        for (const el of combinedBtns) {
             if (!vis(el) || !isListNewNotMenu(el)) continue;
             try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
             el.click();
@@ -1406,10 +1349,6 @@ def _siebel_click_service_request_list_new_record(
         }
         return diag;
     }"""
-    _js_plus = (
-        _js_plus_template.replace("__IDS_ARRAY__", _ids_js_body.strip())
-        .replace("__PREFER_PDI_SCAN__", _prefer_pdi_scan_js)
-    )
 
     for _root in roots():
         try:
@@ -1444,24 +1383,12 @@ def _siebel_click_service_request_list_new_record(
 
     note(f"{log_prefix}: {context} + JS phase exhausted all roots, trying role-based scan.")
 
-    if _ctx_upper == "PDI":
-        _sr_role_names = (
-            "PDI List:New",
-            "HHML PDI List:New",
-            "Pdi List:New",
-            "Service Request List:New",
-            "Precheck List:New",
-            "Pre-check List:New",
-        )
-    else:
-        _sr_role_names = (
-            "Service Request List:New",
-            "PDI List:New",
-            "HHML PDI List:New",
-            "Precheck List:New",
-            "Pre-check List:New",
-        )
-    for _sr_role_name in _sr_role_names:
+    for _sr_role_name in (
+        "Service Request List:New",
+        "PDI List:New",
+        "Precheck List:New",
+        "Pre-check List:New",
+    ):
         for _root in roots():
             for _role in ("link", "button"):
                 try:
@@ -1494,7 +1421,7 @@ def _siebel_click_service_request_list_new_record(
     note(f"{log_prefix}: {context} + role-based scan exhausted, trying CSS selectors.")
 
     for _root in roots():
-        for _css in _sr_new_selectors_eff:
+        for _css in _sr_new_selectors:
             try:
                 _grp = _root.locator(_css)
                 _n = _grp.count()
@@ -1710,31 +1637,6 @@ def _dump_frames_and_elements_for_debug(
         logger.warning("_dump_frames_and_elements_for_debug failed: %s", exc)
         if note:
             note(f"{log_prefix}: frame dump failed — {exc!r}")
-
-
-def _precheck_submit_popup_implies_technician_lov(msg: str | None) -> bool:
-    """True when Siebel text after Pre-check Submit likely means \"set Technician / mechanic\" LOV.
-
-    If we Tab to the Technician pick icon on unrelated validation (finance, duplicate row, session,
-    etc.), focus lands on Technician while the real error is elsewhere — a Siebel-side false positive
-    for our older \"any popup → try Technician\" heuristic.
-    """
-    if not msg:
-        return False
-    t = (msg or "").lower().replace("_", " ")
-    needles = (
-        "technician",
-        "mechanic",
-        "hhml",
-        "hhml mechanic",
-        "operator",
-        "service resource",
-        "assign technician",
-        "mechanic full name",
-        "field service engineer",
-        "fse",
-    )
-    return any(n in t for n in needles)
 
 
 def _siebel_run_vehicle_serial_detail_precheck_pdi(
@@ -2890,31 +2792,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
         # Many tenants: pick **Open** (and operator) in one LOV → **Submit** here. Extra **Tab**s before Technician
         # break focus and never reach Submit — try save first, then optional Technician only if needed.
-        #
-        # Do **not** assume every Siebel dialog after Submit means \"fill Technician\": unrelated errors
-        # used to drive Tab→Technician and leave focus on the wrong column. Only run the Technician LOV
-        # when Submit did not fire (legacy focus) or the popup text hints mechanic/technician/HHML.
         _submit_done = _precheck_try_submit()
         _err_after_submit = _detect_siebel_error_popup(page, content_frame_selector)
+        _will_try_technician = not (_submit_done and not _err_after_submit)
         if _submit_done and not _err_after_submit:
             note(f"{log_prefix}: Pre-check saved after Open LOV (Submit/Ctrl+S; Technician step skipped).")
         else:
-            if _submit_done and _err_after_submit and not _precheck_submit_popup_implies_technician_lov(
-                _err_after_submit
-            ):
-                note(
-                    f"{log_prefix}: Pre-check Submit returned a Siebel dialog that does not look like a "
-                    f"Technician/mechanic prompt — not Tab-ing to Technician LOV. text={_err_after_submit!r:.320}"
-                )
-                return (
-                    False,
-                    "Siebel error after Pre-check Submit (unrelated to Technician column; "
-                    f"automation skipped Technician LOV): {_err_after_submit[:220]}",
-                )
             if _submit_done and _err_after_submit:
                 note(
-                    f"{log_prefix}: Pre-check Submit after Open returned validation/error that suggests "
-                    "Technician/mechanic — trying Technician LOV if pick icon is available."
+                    f"{log_prefix}: Pre-check Submit after Open returned validation/error — "
+                    "trying Technician LOV if pick icon is available."
                 )
             elif not _submit_done:
                 note(
@@ -3810,32 +3697,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             except Exception:
                 continue
         return _rc
-
-    _PDI_S2_RC_TOTAL_JS = """() => {
-        const el = document.getElementById('s_2_rc');
-        if (!el) return { ok: false, raw: '', total: null };
-        const raw = (el.textContent || '').replace(/\\s+/g, ' ').trim();
-        let total = null;
-        const r1 = raw.match(/\\d+\\s*-\\s*\\d+\\s+of\\s+(\\d+)/i);
-        const r2 = raw.match(/^\\s*(\\d+)\\s+of\\s+(\\d+)/i);
-        const r3 = raw.match(/of\\s+(\\d+)\\s*$/i);
-        if (r1) total = parseInt(r1[1], 10);
-        else if (r2) total = parseInt(r2[2], 10);
-        else if (r3) total = parseInt(r3[1], 10);
-        if (total === null || isNaN(total)) return { ok: false, raw, total: null };
-        return { ok: true, raw, total };
-    }"""
-
-    def _pdi_s2_rc_total() -> tuple[int | None, str]:
-        """Best-effort total row count from Service Request list counter ``#s_2_rc`` (e.g. ``1 - 5 of 5``)."""
-        for _proot in _roots():
-            try:
-                d = _proot.evaluate(_PDI_S2_RC_TOTAL_JS)
-                if isinstance(d, dict) and d.get("ok") and d.get("total") is not None:
-                    return int(d["total"]), str(d.get("raw") or "")
-            except Exception:
-                continue
-        return None, ""
 
     def _pdi_focus_first_pdi_jqgrow() -> None:
         """Focus first visible PDI jqGrid data row so pick icons bind to the intended line."""
