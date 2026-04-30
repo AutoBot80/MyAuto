@@ -8,6 +8,7 @@ declare module "electron-updater" {
     autoDownload: boolean;
     autoInstallOnAppQuit: boolean;
     checkForUpdates(): Promise<unknown>;
+    downloadUpdate(): Promise<string[]>;
     quitAndInstall(isSilent?: boolean, isForceRunAfter?: boolean): void;
     on(event: "checking-for-update", cb: () => void): AppUpdater;
     on(event: "update-available", cb: (info: UpdateInfo) => void): AppUpdater;

@@ -38,7 +38,9 @@ export function UpdateBanner() {
       )}
       {phase === "ready" && (
         <>
-          <span>Update ready{version ? ` (v${version})` : ""}.</span>
+          <span>
+            Update ready{version ? ` (v${version})` : ""}. It will install the next time you start the app.
+          </span>
           <button
             type="button"
             onClick={() => window.electronAPI!.updater.install()}
