@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from psycopg2 import errors as pg_errors
 from pydantic import BaseModel, Field
 
-from app.config import DMS_BASE_URL, UPLOAD_MAX_FILE_BYTES
+from app.config import DMS_BASE_URL, MAX_TEXT_CHARS, UPLOAD_MAX_FILE_BYTES
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
 from app.repositories import challan_details_staging as detail_repo
@@ -27,6 +27,9 @@ from app.validation.text_limits import enforce_max_text_depth
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/subdealer-challan", tags=["subdealer-challan"])
+
+# OCR can exceed default ``MAX_TEXT_CHARS`` (300) on book/date or merged table cells in engine/chassis.
+_CHALLAN_STAGING_TEXT_MAX = max(MAX_TEXT_CHARS, 4096)
 
 # Returned as HTTP 503 detail when DDL 23/24 was not applied (relation does not exist).
 CHALLAN_STAGING_SCHEMA_HINT = (
@@ -90,7 +93,7 @@ def create_staging(
     (Queued / Failed / Ready / Committed) are dropped to avoid duplicate detail rows; duplicate rows within the
     request are deduped. If nothing remains, HTTP 400.
     """
-    enforce_max_text_depth(req.model_dump())
+    enforce_max_text_depth(req.model_dump(), max_len=_CHALLAN_STAGING_TEXT_MAX)
     if not principal.admin and int(req.from_dealer_id) != int(principal.dealer_id):
         raise HTTPException(
             status_code=403,
