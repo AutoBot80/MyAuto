@@ -50,7 +50,11 @@ function defaultTimeoutMs(payload: SidecarJobPayload): number {
   if (typeof payload.timeoutMs === "number" && payload.timeoutMs > 0) {
     return payload.timeoutMs;
   }
-  if (payload.type === "fill_dms" || payload.type === "fill_insurance") {
+  if (
+    payload.type === "fill_dms" ||
+    payload.type === "fill_insurance" ||
+    payload.type === "fill_subdealer_challan"
+  ) {
     return 900_000;
   }
   if (payload.type === "teardown_local_browsers") {

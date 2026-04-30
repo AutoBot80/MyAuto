@@ -208,6 +208,19 @@ def _api_post(api_url: str, jwt: str, path: str, body: dict, timeout: int = 120)
         raise RuntimeError(f"API {path} returned {exc.code}: {detail}") from exc
 
 
+def _run_sidecar_playwright_job(fn):
+    """
+    Run Playwright / CDP browser work on the dedicated Playwright worker thread (matches the API server).
+
+    The Electron sidecar daemon handles stdin on its own thread; ``handle_browser_opening`` binds
+    sync Playwright to one OS thread. Without this wrapper, CDP refresh/teardown can hop threads and
+    automation may attach to the wrong browser or never run prefilled login clicks.
+    """
+    from app.services.playwright_executor import run_playwright_callable_sync
+
+    return run_playwright_callable_sync(fn)
+
+
 def _multipart_upload_file(
     api_url: str,
     jwt: str,
@@ -379,7 +392,7 @@ def _dispatch_warm_vahan(params: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _dispatch_fill_dms(params: dict) -> dict:
+def _dispatch_fill_dms_impl(params: dict) -> dict:
     from app.routers.fill_forms_router import (
         DMS_NO_VEHICLE_ERROR,
         _dms_response_warning_and_mode,
@@ -555,7 +568,7 @@ def _dispatch_fill_dms(params: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _dispatch_fill_insurance(params: dict) -> dict:
+def _dispatch_fill_insurance_impl(params: dict) -> dict:
     from app.services.upload_scans_invoice_print import collect_insurance_print_jobs_electron_local
 
     api_url, jwt = _require_api_credentials(params)
@@ -697,7 +710,7 @@ def _dispatch_fill_insurance(params: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _dispatch_fill_vahan_batch(params: dict) -> dict:
+def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
     api_url, jwt = _require_api_credentials(params)
 
     claim_body = {
@@ -771,7 +784,7 @@ _SUBDEALER_MAX_PREP_ROUNDS = 3
 _SUBDEALER_RETRY_WAIT_SEC = 3.0
 
 
-def _dispatch_fill_subdealer_challan(params: dict) -> dict:
+def _fill_subdealer_challan_impl(params: dict) -> dict:
     api_url, jwt = _require_api_credentials(params)
 
     challan_batch_id = params.get("challan_batch_id")
@@ -1085,25 +1098,25 @@ def dispatch(payload: dict) -> dict:
         params["jwt"] = payload["jwt"]
 
     if job_type == "warm_browser":
-        data = _dispatch_warm_browser(params)
+        data = _run_sidecar_playwright_job(lambda: _dispatch_warm_browser(params))
         return {"success": True, "data": data}
     if job_type == "warm_insurance":
-        data = _dispatch_warm_insurance(params)
+        data = _run_sidecar_playwright_job(lambda: _dispatch_warm_insurance(params))
         return {"success": True, "data": data}
     if job_type == "warm_vahan":
-        data = _dispatch_warm_vahan(params)
+        data = _run_sidecar_playwright_job(lambda: _dispatch_warm_vahan(params))
         return {"success": True, "data": data}
     if job_type == "fill_dms":
-        data = _dispatch_fill_dms(params)
+        data = _run_sidecar_playwright_job(lambda: _dispatch_fill_dms_impl(params))
         return {"success": True, "data": data}
     if job_type == "fill_insurance":
-        data = _dispatch_fill_insurance(params)
+        data = _run_sidecar_playwright_job(lambda: _dispatch_fill_insurance_impl(params))
         return {"success": True, "data": data}
     if job_type == "fill_vahan_batch":
-        data = _dispatch_fill_vahan_batch(params)
+        data = _run_sidecar_playwright_job(lambda: _dispatch_fill_vahan_batch_impl(params))
         return {"success": True, "data": data}
     if job_type == "fill_subdealer_challan":
-        data = _dispatch_fill_subdealer_challan(params)
+        data = _run_sidecar_playwright_job(lambda: _fill_subdealer_challan_impl(params))
         return {"success": True, "data": data}
     return {"success": False, "error": f"Unknown job type: {job_type}"}
 
