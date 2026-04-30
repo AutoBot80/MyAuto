@@ -2374,6 +2374,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 break
         if not _ok:
             _css_fb = (
+                "span.siebui-icon-pick",
+                "a.siebui-icon-pick",
+                "img.siebui-icon-pick",
+                "[class*='siebui-icon-pick' i]",
                 "a.siebui-icon-picklist",
                 "img.siebui-icon-picklist",
                 "[class*='siebui-icon-picklist' i]",
@@ -3795,6 +3799,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 break
         if not _ok:
             _css_fb = (
+                "span.siebui-icon-pick",
+                "a.siebui-icon-pick",
+                "img.siebui-icon-pick",
+                "[class*='siebui-icon-pick' i]",
                 "a.siebui-icon-picklist",
                 "img.siebui-icon-picklist",
                 "[class*='siebui-icon-picklist' i]",
@@ -3952,7 +3960,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             )
         _safe_page_wait(page, 300, log_label="after_sr_list_new")
 
-        _pdi_focus_first_pdi_jqgrow()
         _pdi_pick_ok = False
         _pdi_pick_used = ""
         for _pdi_pick_try in range(6):
