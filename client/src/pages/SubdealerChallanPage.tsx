@@ -12,7 +12,6 @@ import {
   type ChallanMasterProcessedRow,
   type SubdealerChallanLine,
 } from "../api/subdealerChallan";
-import { warmDmsBrowserLocal } from "../api/fillForms";
 
 const ROWS_PER_TABLE = 13;
 const TABLE_COUNT = 2;
@@ -273,18 +272,6 @@ export function SubdealerChallanPage({
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
 
-  /**
-   * Warm / bind DMS browser via the local sidecar (Electron) or cloud API fallback.
-   * Always attempts attach — if browser is open, binds to it; otherwise opens a new one.
-   * Safe to call multiple times (backend handles idempotent attach-or-open).
-   */
-  const triggerSubdealerDmsWarm = useCallback(() => {
-    const base = (dmsUrl || "").trim();
-    if (!base) return;
-    void warmDmsBrowserLocal({ dms_base_url: base }).catch(() => {
-      // Non-blocking; errors logged server-side.
-    });
-  }, [dmsUrl]);
 
   const selectedProcessedRow = useMemo(
     () => processedRows.find((r) => r.challan_batch_id === selectedProcessedBatchId) ?? null,
@@ -469,7 +456,6 @@ export function SubdealerChallanPage({
 
   useEffect(() => {
     if (challanSubTab === "processed") {
-      triggerSubdealerDmsWarm();
       void loadProcessed();
     } else {
       setProcessedRows([]);
@@ -479,7 +465,7 @@ export function SubdealerChallanPage({
       setProcessedChallanSearchDraft("");
       setProcessedChallanSearchApplied("");
     }
-  }, [challanSubTab, loadProcessed, triggerSubdealerDmsWarm]);
+  }, [challanSubTab, loadProcessed]);
 
   useEffect(() => {
     if (challanSubTab !== "processed") return;
@@ -490,7 +476,6 @@ export function SubdealerChallanPage({
 
   /** Re-run full batch (re-queues all Failed lines server-side, then prepare_vehicle + order). */
   const onRetryFailedBatch = async (challanBatchId: string) => {
-    triggerSubdealerDmsWarm();
     setSelectedProcessedBatchId(challanBatchId);
     const saveOk = await onSaveAllFailedLineEdits(challanBatchId);
     if (!saveOk) return;
@@ -515,7 +500,6 @@ export function SubdealerChallanPage({
   };
 
   const onRetryOrderOnly = async (challanBatchId: string) => {
-    triggerSubdealerDmsWarm();
     setSelectedProcessedBatchId(challanBatchId);
     setRetryingOrderBatchId(challanBatchId);
     setProcessedError(null);
@@ -579,7 +563,6 @@ export function SubdealerChallanPage({
   };
 
   const onCreateChallans = async () => {
-    triggerSubdealerDmsWarm();
     if (selectedToDealerId === null) {
       setError("Select a subdealer (To Dealer).");
       return;
@@ -735,7 +718,6 @@ export function SubdealerChallanPage({
             className="app-button subdealer-challan-inline-btn"
             disabled={loading}
             onClick={() => {
-              triggerSubdealerDmsWarm();
               fileInputRef.current?.click();
             }}
             title="PDF or JPEG/PNG, one or more files (e.g. multiple challan pages)"
@@ -751,7 +733,7 @@ export function SubdealerChallanPage({
             className="app-button subdealer-challan-inline-btn"
             disabled
             onClick={() => {
-              triggerSubdealerDmsWarm();
+              // Placeholder for scanner integration
             }}
           >
             From Scanner

@@ -1179,10 +1179,9 @@ def _siebel_click_service_request_list_new_record(
     labels; ``get_by_role`` for those names; CSS (skip **Menu**). PDI often uses **PDI List:New** or ``s_2_*``
     ids, not only **Service Request List:New**. See **LLD** **6.240**, **6.243**.
     """
-    _ctx_upper = str(context or "").strip().upper()
     _tmo = min(int(action_timeout_ms or 3000), 4000)
     _vis_tmo = 600
-    if _ctx_upper == "PDI":
+    if str(context or "").strip().upper() == "PDI":
         _vis_tmo = min(max(int(action_timeout_ms or 3000), 1500), 8000)
 
     def _label_is_list_new_not_menu(el) -> bool:
@@ -1712,7 +1711,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: feature-id scrape cubic_capacity={_cc_log!r}, vehicle_type={vt!r}."
         )
 
-    _safe_page_wait(page, 3000, log_label="before_precheck_pdi_tab_lookup_settle")
+    _safe_page_wait(page, 1000, log_label="before_precheck_pdi_tab_lookup_settle")
     note(f"{log_prefix}: 1s settle before Pre-check / third-level tab lookup.")
 
     _siebel_note_frame_focus_snapshot(
@@ -1764,7 +1763,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         content_frame_selector=content_frame_selector,
     )
 
-    _safe_page_wait(page, 3000, log_label="precheck_tab_post_networkidle_settle")
+    _safe_page_wait(page, 2000, log_label="precheck_tab_post_networkidle_settle")
 
     _on_wrong_precheck_view = False
     try:
@@ -2150,7 +2149,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     log_prefix=log_prefix,
                     content_frame_selector=content_frame_selector,
                 )
-                _safe_page_wait(page, 3000, log_label="precheck_tab_post_chassis_recovery_settle")
+                _safe_page_wait(page, 2000, log_label="precheck_tab_post_chassis_recovery_settle")
                 try:
                     _post_chassis = (page.url or "").replace(" ", "+")
                     if (
@@ -2374,10 +2373,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 break
         if not _ok:
             _css_fb = (
-                "span.siebui-icon-pick",
-                "a.siebui-icon-pick",
-                "img.siebui-icon-pick",
-                "[class*='siebui-icon-pick' i]",
                 "a.siebui-icon-picklist",
                 "img.siebui-icon-picklist",
                 "[class*='siebui-icon-picklist' i]",
@@ -3799,10 +3794,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 break
         if not _ok:
             _css_fb = (
-                "span.siebui-icon-pick",
-                "a.siebui-icon-pick",
-                "img.siebui-icon-pick",
-                "[class*='siebui-icon-pick' i]",
                 "a.siebui-icon-picklist",
                 "img.siebui-icon-picklist",
                 "[class*='siebui-icon-picklist' i]",
@@ -3960,6 +3951,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             )
         _safe_page_wait(page, 300, log_label="after_sr_list_new")
 
+        _pdi_focus_first_pdi_jqgrow()
         _pdi_pick_ok = False
         _pdi_pick_used = ""
         for _pdi_pick_try in range(6):
