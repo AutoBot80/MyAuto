@@ -3837,38 +3837,31 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 continue
         return None, ""
 
-    def _pdi_focus_pdi_jqgrow(*, prefer_last: bool) -> None:
-        """Focus a PDI jqGrid data row so LOV pick icons bind to that line.
-
-        HMCL **inserts the new Service Request line at the top** of ``s_2_l`` (not the bottom). Only part of
-        the rows may be visible (virtualized viewport); when ``prefer_last`` is **False**, scroll the
-        list container to the top before clicking the **first** ``jqgrow`` so the new line is in view.
-        """
-        _prefer = "true" if prefer_last else "false"
-        _jq_js = f"""() => {{
-            const preferLast = {_prefer};
-            const vis = (el) => {{
+    def _pdi_focus_first_pdi_jqgrow() -> None:
+        """Focus first visible PDI jqGrid data row so pick icons bind to the intended line."""
+        _jq_js = """() => {
+            const vis = (el) => {
                 if (!el) return false;
                 const st = window.getComputedStyle(el);
                 if (st.display === 'none' || st.visibility === 'hidden') return false;
                 const r = el.getBoundingClientRect();
                 return r.width > 0 && r.height > 0;
-            }};
-            const isLeftSearchPane = (el) => {{
+            };
+            const isLeftSearchPane = (el) => {
                 let n = el;
-                for (let d = 0; d < 22 && n; d++) {{
+                for (let d = 0; d < 22 && n; d++) {
                     const pid = String(n.id || '').toLowerCase();
-                    if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {{
+                    if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
                         return true;
-                    }}
+                    }
                     n = n.parentElement;
-                }}
+                }
                 return false;
-            }};
-            const isPdiScoped = (el) => {{
+            };
+            const isPdiScoped = (el) => {
                 if (isLeftSearchPane(el)) return false;
                 let n = el;
-                for (let d = 0; d < 28 && n; d++) {{
+                for (let d = 0; d < 28 && n; d++) {
                     const id = String(n.id || '').toLowerCase();
                     const nm = String(n.getAttribute('name') || '').toLowerCase();
                     const tit = String(n.getAttribute('title') || '').toLowerCase();
@@ -3877,46 +3870,34 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     if (id.includes('s_2_l') || id.includes('gview_s_2') || id === 'gbox_s_2_l') return true;
                     if (id.includes('s_4_l') || id.includes('gview_s_4') || id === 'gbox_s_4_l') return true;
                     if (id.includes('s_5_l') || id.includes('gview_s_5') || id === 'gbox_s_5_l') return true;
-                    if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {{
+                    if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
                         return true;
-                    }}
+                    }
                     n = n.parentElement;
-                }}
+                }
                 return false;
-            }};
-            if (!preferLast) {{
-                for (const sid of ['s_2_l_scroll', 'gview_s_2_l', 'gbox_s_2_l']) {{
-                    const sc = document.getElementById(sid);
-                    if (sc && vis(sc)) {{
-                        try {{ sc.scrollTop = 0; }} catch (e) {{}}
-                    }}
-                }}
-            }}
+            };
             const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
                 (tb) => vis(tb) && isPdiScoped(tb)
             );
-            for (const tb of tables) {{
-                const rows = Array.from(tb.querySelectorAll('tbody tr.jqgrow')).filter(vis);
-                if (!rows.length) continue;
-                const tr = preferLast ? rows[rows.length - 1] : rows[0];
-                try {{ tr.scrollIntoView({{ block: 'center' }}); }} catch (e) {{}}
+            for (const tb of tables) {
+                const tr = tb.querySelector('tbody tr.jqgrow');
+                if (!tr || !vis(tr)) continue;
+                try { tr.scrollIntoView({ block: 'center' }); } catch (e) {}
                 const tds = tr.querySelectorAll('td');
-                if (tds.length && vis(tds[0])) {{
+                if (tds.length && vis(tds[0])) {
                     tds[0].click();
                     return true;
-                }}
+                }
                 tr.click();
                 return true;
-            }}
+            }
             return false;
-        }}"""
+        }"""
         for _root in _roots():
             try:
                 if bool(_root.evaluate(_jq_js)):
-                    _which = "last" if prefer_last else "first"
-                    note(
-                        f"{log_prefix}: focused PDI list {_which} data row (jqgrow) before pick icon."
-                    )
+                    note(f"{log_prefix}: focused PDI list first data row (jqgrow) before pick icon.")
                     _safe_page_wait(page, 300, log_label="after_pdi_jqgrow_focus")
                     return
             except Exception:
@@ -4056,80 +4037,39 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
     if _pdi_need_new_row:
         _pdi_rows_before_new = _eval_pdi_grid_rowcount()
-        _pdi_rc_baseline, _pdi_rc_baseline_raw = _pdi_s2_rc_total()
         note(
-            f"{log_prefix}: PDI new-row flow — jqGrid rowCount≈{_pdi_rows_before_new} "
-            f"(before New); s_2_rc total={_pdi_rc_baseline!r} raw={_pdi_rc_baseline_raw!r}."
+            f"{log_prefix}: PDI new-row flow — Service Request list rowCount≈{_pdi_rows_before_new} "
+            "(before New)."
         )
         _safe_page_wait(page, 300, log_label="before_pdi_service_request_list_new")
-
-        def _pdi_new_row_effective_added() -> bool:
-            _rc_n, _rc_raw = _pdi_s2_rc_total()
-            if _pdi_rc_baseline is not None and _rc_n is not None and _rc_n > _pdi_rc_baseline:
-                note(
-                    f"{log_prefix}: PDI + verified — s_2_rc total increased "
-                    f"{_pdi_rc_baseline}→{_rc_n} raw={_rc_raw!r}."
-                )
-                return True
-            _ge = _eval_pdi_grid_rowcount()
-            if _ge > _pdi_rows_before_new:
-                note(
-                    f"{log_prefix}: PDI + verified (jqGrid eval fallback) "
-                    f"{_pdi_rows_before_new}→{_ge} (s_2_rc missing or unchanged)."
-                )
-                return True
-            return False
-
-        _pdi_plus_verified = False
-        _pdi_click_succeeded_once = False
+        _pdi_new_ok = False
         for _pdi_new_attempt in range(4):
-            _pdi_new_ok = _siebel_click_service_request_list_new_record(
+            if _siebel_click_service_request_list_new_record(
                 page,
                 roots=_roots,
                 action_timeout_ms=action_timeout_ms,
                 note=note,
                 log_prefix=log_prefix,
                 context="PDI",
-            )
-            if not _pdi_new_ok:
-                if _pdi_new_attempt < 3:
+            ):
+                _pdi_new_ok = True
+                if _pdi_new_attempt > 0:
                     note(
-                        f"{log_prefix}: Service Request List:New click failed "
-                        f"attempt {_pdi_new_attempt + 1}/4 — retrying."
+                        f"{log_prefix}: Service Request List:New succeeded on attempt "
+                        f"{_pdi_new_attempt + 1}/4."
                     )
-                    _safe_page_wait(
-                        page,
-                        400,
-                        log_label=f"pdi_service_request_list_new_retry_{_pdi_new_attempt + 1}",
-                    )
-                continue
-
-            _pdi_click_succeeded_once = True
-            _safe_page_wait(page, 280, log_label="after_sr_list_new_settle")
-            for _pdi_vp in range(15):
-                if _pdi_new_row_effective_added():
-                    _pdi_plus_verified = True
-                    if _pdi_new_attempt > 0:
-                        note(
-                            f"{log_prefix}: PDI + added row on click attempt "
-                            f"{_pdi_new_attempt + 1}/4 (after prior false positives or slow grid)."
-                        )
-                    break
+                break
+            if _pdi_new_attempt < 3:
+                note(
+                    f"{log_prefix}: Service Request List:New attempt {_pdi_new_attempt + 1}/4 failed — "
+                    "retrying."
+                )
                 _safe_page_wait(
                     page,
-                    400,
-                    log_label=f"pdi_plus_verify_{_pdi_new_attempt}_{_pdi_vp}",
+                    300,
+                    log_label=f"pdi_service_request_list_new_retry_{_pdi_new_attempt + 1}",
                 )
-            if _pdi_plus_verified:
-                break
-            note(
-                f"{log_prefix}: PDI + click did not increase s_2_rc / row count (false positive or still "
-                f"loading) — retry {_pdi_new_attempt + 1}/4."
-            )
-            if _pdi_new_attempt < 3:
-                _safe_page_wait(page, 500, log_label="pdi_plus_retry_backoff")
-
-        if not _pdi_plus_verified:
+        if not _pdi_new_ok:
             _pdi_note_service_request_new_click_diagnostics(
                 page,
                 roots=_roots,
@@ -4140,26 +4080,18 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             )
             _dump_frames_and_elements_for_debug(
                 page, content_frame_selector=content_frame_selector,
-                output_dir=_debug_dump_dir,
-                label="pdi_plus_unverified" if _pdi_click_succeeded_once else "pdi_plus_not_found",
+                output_dir=_debug_dump_dir, label="pdi_plus_not_found",
                 note=note, log_prefix=log_prefix,
             )
-            if not _pdi_click_succeeded_once:
-                return (
-                    False,
-                    "Could not click 'Service Request List:New' on PDI tab "
-                    "(tried s_3_1_12_0_Ctrl / s_2_1_14_0_Ctrl / s_2_2_32_0 + scan; "
-                    "see _siebel_click_service_request_list_new_record).",
-                )
             return (
                 False,
-                "PDI Service Request List:New did not add a line (s_2_rc total and jqGrid count unchanged "
-                "after +); the click may have been a no-op.",
+                "Could not click 'Service Request List:New' on PDI tab "
+                "(tried s_3_1_12_0_Ctrl / s_2_1_14_0_Ctrl / s_2_2_32_0 + scan; "
+                "see _siebel_click_service_request_list_new_record).",
             )
+        _safe_page_wait(page, 300, log_label="after_sr_list_new")
 
-        # New line is **prepended** at the **top** of ``s_2_l``; viewport may only show 5–6 of many rows.
-        # Scroll to top, then first ``jqgrow`` = new / active line for LOV.
-        _pdi_focus_pdi_jqgrow(prefer_last=False)
+        _pdi_focus_first_pdi_jqgrow()
         _pdi_pick_ok = False
         _pdi_pick_used = ""
         for _pdi_pick_try in range(6):
@@ -4240,28 +4172,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if _pdi_rows_after_submit <= _pdi_rows_before_new:
             _safe_page_wait(page, 300, log_label="pdi_rowcount_recheck")
             _pdi_rows_after_submit = _eval_pdi_grid_rowcount()
-        _rc_after_submit, _rc_after_submit_raw = _pdi_s2_rc_total()
-        _pdi_submit_list_ok = False
-        if _pdi_rc_baseline is not None and _rc_after_submit is not None:
-            if _rc_after_submit > _pdi_rc_baseline:
-                _pdi_submit_list_ok = True
-                note(
-                    f"{log_prefix}: PDI Submit list OK — s_2_rc total {_pdi_rc_baseline}→{_rc_after_submit} "
-                    f"raw={_rc_after_submit_raw!r}."
-                )
-        if not _pdi_submit_list_ok and _pdi_rows_after_submit > _pdi_rows_before_new:
-            _pdi_submit_list_ok = True
-            note(
-                f"{log_prefix}: PDI Submit list OK (jqGrid eval) "
-                f"{_pdi_rows_before_new}→{_pdi_rows_after_submit}."
-            )
-        if not _pdi_submit_list_ok:
+        if _pdi_rows_after_submit <= _pdi_rows_before_new:
             return (
                 False,
                 "PDI Submit did not increase the Service Request list row count "
-                f"(jqGrid before={_pdi_rows_before_new}, after={_pdi_rows_after_submit}; "
-                f"s_2_rc baseline={_pdi_rc_baseline!r}, after={_rc_after_submit!r} raw={_rc_after_submit_raw!r}).",
+                f"(before={_pdi_rows_before_new}, after={_pdi_rows_after_submit}).",
             )
+        note(
+            f"{log_prefix}: PDI list row count increased after Submit "
+            f"({_pdi_rows_before_new} → {_pdi_rows_after_submit})."
+        )
 
     note(f"{log_prefix}: PDI completed successfully.")
     if callable(form_trace):
