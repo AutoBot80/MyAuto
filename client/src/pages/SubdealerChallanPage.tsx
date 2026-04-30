@@ -987,7 +987,7 @@ export function SubdealerChallanPage({
           <p className="app-table-empty challans-processed-loading-msg">
             {processedChallanSearchApplied.trim()
               ? "No challan found for this Challan No."
-              : "No matching batches in the last 15 days (failed vehicles or failed invoice)."}
+              : "No matching batches in the last 15 days (Queued / Failed lines, failed invoice, or search by Challan No.)."}
           </p>
         ) : (
           <div className="challans-processed-split">
