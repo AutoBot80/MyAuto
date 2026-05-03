@@ -8,6 +8,19 @@ from typing import Any
 from app.db import get_connection
 
 
+def _sql_norm_model_for_discount_prefix(column_or_param: str) -> str:
+    """
+    SQL expression: lowercase, trim, collapse whitespace, normalize spaces around ``+``
+    so DMS strings like ``SPLENDOR+ XTEC`` prefix-match master rows stored as ``Splendor +``.
+    ``column_or_param`` is ``%s`` (bind) or ``s.model`` (column ref).
+    """
+    return (
+        "trim(regexp_replace(regexp_replace(lower(BTRIM("
+        + column_or_param
+        + ")), E'\\\\s*\\\\+\\\\s*', ' + ', 'g'), E'\\\\s+', ' ', 'g'))"
+    )
+
+
 def today_dd_mm_yyyy() -> str:
     return datetime.now().strftime("%d/%m/%Y")
 
@@ -166,14 +179,18 @@ def get_subdealer_challan_discount(
 
     Reads ``dealer_ref.subdealer_type`` for ``to_dealer_id`` and looks up
     ``subdealer_discount_master_ref`` for ``dealer_id = from_dealer_id``,
-    matching ``subdealer_type`` and ``valid_flag = 'Y'``. **Model** match is **prefix**:
-    the reference row's ``model`` is the start of the DMS value (DMS may have extra trailing
-    characters). If several rows match, the **longest** reference ``model`` wins. If no row
-    matches or discount is null, returns ``FALLBACK_SUBDEALER_CHALLAN_DISCOUNT`` (1500).
+    matching ``subdealer_type`` and ``valid_flag = 'Y'``. **Model** match is **prefix** on a
+    normalized form: case-insensitive, whitespace collapsed, and ``+`` surrounded by single spaces
+    (so e.g. ``SPLENDOR+ XTEC`` matches a master row ``Splendor +``). If several rows match, the
+    **longest** normalized reference ``model`` wins. If no row matches or discount is null, returns
+    ``FALLBACK_SUBDEALER_CHALLAN_DISCOUNT`` (1500).
     """
     m = (model or "").strip()[:64]
     if not m:
         return FALLBACK_SUBDEALER_CHALLAN_DISCOUNT
+
+    _nm_dms = _sql_norm_model_for_discount_prefix("%s")
+    _nm_ref = _sql_norm_model_for_discount_prefix("s.model")
 
     conn = get_connection()
     try:
@@ -187,11 +204,17 @@ def get_subdealer_challan_discount(
                  AND TRIM(s.subdealer_type) = TRIM(COALESCE(d.subdealer_type, ''))
                  AND s.valid_flag = 'Y'
                  AND BTRIM(s.model) <> ''
-                 AND starts_with(BTRIM(%s), BTRIM(s.model))
+                 AND starts_with("""
+                + _nm_dms
+                + """, """
+                + _nm_ref
+                + """)
                 WHERE d.dealer_id = %s
                   AND d.subdealer_type IS NOT NULL
                   AND TRIM(COALESCE(d.subdealer_type, '')) <> ''
-                ORDER BY LENGTH(BTRIM(s.model)) DESC
+                ORDER BY LENGTH("""
+                + _nm_ref
+                + """) DESC
                 LIMIT 1
                 """,
                 (int(from_dealer_id), m, int(to_dealer_id)),

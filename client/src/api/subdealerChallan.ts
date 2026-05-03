@@ -246,6 +246,7 @@ export async function processChallanBatch(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(SUBDEALER_CHALLAN_TIMEOUT_MS),
   });
 }
 
@@ -364,6 +365,7 @@ export async function retryChallanStagingRow(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SUBDEALER_CHALLAN_TIMEOUT_MS),
     }
   );
 }
@@ -379,6 +381,7 @@ export async function retryChallanOrderOnly(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(SUBDEALER_CHALLAN_TIMEOUT_MS),
     }
   );
 }

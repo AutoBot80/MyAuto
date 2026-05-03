@@ -35,7 +35,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from app.config import DMS_PLAYWRIGHT_HEADED, PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT
-from app.services.playwright_executor import run_playwright_callable_sync
+from app.services.playwright_executor import get_playwright_executor, run_playwright_callable_sync
 
 logger = logging.getLogger(__name__)
 
@@ -298,18 +298,36 @@ def _kill_os_processes_listening_on_tcp_port(port: int) -> None:
         logger.warning("handle_browser_opening: port %s cleanup failed: %s", port, exc)
 
 
+_TEARDOWN_PLAYWRIGHT_DISCONNECT_TIMEOUT_SEC = 5.0
+
+
 def teardown_local_automation_browsers() -> dict[str, object]:
     """
     Disconnect Playwright CDP clients and terminate the managed Chromium process (debug port).
-    Called from Electron quit (sidecar job) so profile locks do not persist across app sessions.
+    Called from Electron quit (sidecar job) and from the dev SPA on tab-close / Retry-click so
+    profile locks and zombie debug-port owners do not persist across runs.
+
+    Order: **port kill first**, then cache invalidation, then Playwright disconnect (bounded by a
+    timeout). Killing the OS process first frees a wedged Playwright executor whose previous job
+    is still waiting on the now-dead browser; without that, ``run_playwright_callable_sync`` for
+    the disconnect step would queue forever behind the stuck job.
     """
-    try:
-        run_playwright_callable_sync(_disconnect_all_playwright_browsers_on_worker_thread)
-    except Exception as exc:
-        logger.warning("handle_browser_opening: Playwright disconnect failed: %s", exc)
-    force_invalidate_cdp_cache()
     port = int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333)
     _kill_os_processes_listening_on_tcp_port(port)
+    force_invalidate_cdp_cache()
+    try:
+        get_playwright_executor().submit(
+            _disconnect_all_playwright_browsers_on_worker_thread
+        ).result(timeout=_TEARDOWN_PLAYWRIGHT_DISCONNECT_TIMEOUT_SEC)
+    except concurrent.futures.TimeoutError:
+        logger.warning(
+            "handle_browser_opening: Playwright disconnect timed out after %.1fs (executor busy); "
+            "port-%s process kill already issued.",
+            _TEARDOWN_PLAYWRIGHT_DISCONNECT_TIMEOUT_SEC,
+            port,
+        )
+    except Exception as exc:
+        logger.warning("handle_browser_opening: Playwright disconnect failed: %s", exc)
     return {"teardown": True, "managed_debug_port": port}
 
 
@@ -495,7 +513,9 @@ def _launch_managed_browser_for_site(
             )
             logger.info("handle_browser_opening: launched %s independently (port %s)", channel, port)
             _cdp_t0 = time.monotonic()
-            _cdp_deadline = _cdp_t0 + 8.0
+            # After a fresh OS spawn, CDP can take well above 8s on busy Windows; falling through to
+            # Playwright-managed launch would leave this Edge running and open a second browser (focus race).
+            _cdp_deadline = _cdp_t0 + 22.0
             while time.monotonic() < _cdp_deadline:
                 try:
                     browser = pw.chromium.connect_over_cdp(cdp_url)
@@ -607,11 +627,14 @@ def _launch_managed_browser_for_site(
                     pass
                 time.sleep(0.05)
             logger.warning(
-                "handle_browser_opening: launched %s but could not connect via CDP at %s within ~8s — "
-                "falling back to Playwright-managed launch (Create Invoice still works; session is non-persistent).",
+                "handle_browser_opening: launched %s but could not attach via CDP at %s within ~22s — "
+                "not starting a second Playwright-managed browser (close duplicate Edge if any, wait, retry).",
                 channel,
                 cdp_url,
             )
+            # Avoid chromium.launch fallback: an Edge process was already spawned above; fallback would
+            # race two windows for focus and lose the persistent profile session on the first window.
+            return None, None
         except Exception as exc:
             logger.warning(
                 "handle_browser_opening: independent launch of %s failed: %s — falling back to Playwright-managed launch",

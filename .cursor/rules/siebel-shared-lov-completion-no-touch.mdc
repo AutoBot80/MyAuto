@@ -1,0 +1,23 @@
+---
+description: Do not edit shared Siebel LOV completion (Pre-check + PDI) unless the user explicitly requests it
+alwaysApply: true
+---
+
+# Siebel shared LOV completion — no edits without explicit ask
+
+**Owner constraint:** Logic that **completes** the pick-applet flow after the technician (or equivalent) pick icon opens — shared between **Pre-check** and **PDI** — must **not** be changed unless the user **explicitly** asks to modify that shared completion behavior (by name, file, or unambiguous intent).
+
+## In scope (non-exhaustive)
+
+- **`_siebel_lov_pick_first_row_ok_pdi_style`** in `backend/app/services/hero_dms_playwright_vehicle.py` and any helpers **only** used to implement that same settle / first-row / OK pattern for both tabs.
+- Do **not** refactor, “improve”, or extend this path for a single-tab fix without the user naming shared completion as the change target.
+
+## Allowed without naming shared completion
+
+- Tab-specific steps **before** shared completion runs (e.g. opening the correct pick icon, PDI vs Pre-check navigation, retries that only affect how the LOV is **opened**).
+- Other files and flows that do **not** implement this shared completion.
+
+## Required agent behavior
+
+1. If a bug fix or feature appears to need changes **inside** shared LOV completion, **stop** and ask the user to confirm editing that shared path vs implementing a tab-local workaround.
+2. Do **not** merge divergent behaviors into shared completion “for convenience” without explicit approval.

@@ -54,6 +54,7 @@ from app.routers import (
     add_sales_router,
     subdealer_challan_router,
     sidecar_proxy_router,
+    system_router,
 )
 from app.routers.auth import router as auth_router
 
@@ -130,3 +131,4 @@ app.include_router(admin_router)
 app.include_router(add_sales_router)
 app.include_router(subdealer_challan_router)
 app.include_router(sidecar_proxy_router)
+app.include_router(system_router)

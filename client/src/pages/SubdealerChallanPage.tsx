@@ -12,7 +12,6 @@ import {
   type ChallanMasterProcessedRow,
   type SubdealerChallanLine,
 } from "../api/subdealerChallan";
-
 const ROWS_PER_TABLE = 13;
 const TABLE_COUNT = 2;
 const PAGE_SIZE = ROWS_PER_TABLE * TABLE_COUNT;
@@ -483,6 +482,9 @@ export function SubdealerChallanPage({
     setRetryingProcessBatchId(challanBatchId);
     setProcessedError(null);
     try {
+      // Local dev: reuse the existing managed Edge session (same profile / login). Teardown before
+      // Retry was killing a good browser and could trigger a second Playwright-launched window when
+      // CDP attach lagged (two processes racing for focus). If automation is wedged, restart uvicorn.
       const pr = await processChallanBatchLocal(challanBatchId, {
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
@@ -493,7 +495,16 @@ export function SubdealerChallanPage({
       await loadProcessed();
       onChallanCountsRefresh();
     } catch (err) {
-      setProcessedError(err instanceof Error ? err.message : String(err));
+      const aborted =
+        (err instanceof Error && err.name === "AbortError") ||
+        (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError");
+      setProcessedError(
+        aborted
+          ? "Request timed out or was cancelled. If you closed the automation browser during a run, restart the API (uvicorn) and try Retry again."
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      );
     } finally {
       setRetryingProcessBatchId(null);
     }
@@ -514,7 +525,16 @@ export function SubdealerChallanPage({
       await loadProcessed();
       onChallanCountsRefresh();
     } catch (err) {
-      setProcessedError(err instanceof Error ? err.message : String(err));
+      const aborted =
+        (err instanceof Error && err.name === "AbortError") ||
+        (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError");
+      setProcessedError(
+        aborted
+          ? "Request timed out or was cancelled. If you closed the automation browser during a run, restart the API (uvicorn) and try Retry again."
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      );
     } finally {
       setRetryingOrderBatchId(null);
     }

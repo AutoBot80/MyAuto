@@ -17,6 +17,7 @@ from .admin import router as admin_router
 from .add_sales import router as add_sales_router
 from .subdealer_challan import router as subdealer_challan_router
 from .sidecar_proxy import router as sidecar_proxy_router
+from .system_router import router as system_router
 
 __all__ = [
     "health_router",
@@ -38,4 +39,5 @@ __all__ = [
     "add_sales_router",
     "subdealer_challan_router",
     "sidecar_proxy_router",
+    "system_router",
 ]

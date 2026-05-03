@@ -1,0 +1,381 @@
+2026-04-27T12:19:28.286+05:30  === subdealer challan run start ===
+2026-04-27T12:19:28.286+05:30  challan_batch_id=93bbc5ab-eb40-44cc-bf49-efc8b7d0fc4b phase=order_only log_file=C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\917_25042026\playwright_challan.txt
+2026-04-27T12:19:28.287+05:30  dealer_id(session)=100001 from_dealer_id=100001 to_dealer_id=100006
+2026-04-27T12:19:28.288+05:30  challan_book_num='917' challan_date='25042026' artifact_folder=917_25042026
+2026-04-27T12:19:28.288+05:30  staging_row_count=25
+2026-04-27T12:19:28.289+05:30  dms_base_url='https://connect.heromotocorp.biz/edealerHMCL_enu?SWECmd=Start'
+2026-04-27T12:19:34.183+05:30  DMS tab opened (get_or_open_site_page OK)
+2026-04-27T12:19:34.369+05:30  All staging rows Ready — applying discounts and building order lines
+2026-04-27T12:19:41.507+05:30  Order phase: 25 line(s); appending STEP/NOTE trace to challan log: C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Challans\917_25042026\playwright_challan.txt
+
+
+--- subdealer challan order phase (structured STEP/NOTE trace) ---
+started_ist=2026-04-27T12:19:41.661+05:30
+2026-04-27T12:19:41.661+05:30 [STEP] Subdealer challan: Sales Orders / create order (Network, multi-VIN).
+2026-04-27T12:19:53.700+05:30 [NOTE] Video path: clicked Generate Booking before create_order.
+2026-04-27T12:19:53.700+05:30 [MILESTONE] Booking generated
+2026-04-27T12:19:53.700+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=vehicle_sales_new_order_then_pick_contact_then_vin_search_price_allocate | first_name='SHIV' | mobile_phone='0000000000'
+2026-04-27T12:19:53.700+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales / Sales Orders | action=open_vehicle_sales_then_create_order | mobile_phone='0000000000'
+2026-04-27T12:19:53.701+05:30 [NOTE] Create Order: navigating to Vehicle Sales URL. base=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/
+2026-04-27T12:19:59.217+05:30 [NOTE] Create Order: arrived at Vehicle Sales (post-goto wait). URL=https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+My+Orders+View+(Sales
+2026-04-27T12:19:59.223+05:30 [NOTE] Create Order: add_subdealer_challan — skipping My Orders mobile search; opening new booking via Sales Orders List:New (+).
+2026-04-27T12:20:00.758+05:30 [NOTE] Create Order: clicked Sales Orders New:List (+).
+2026-04-27T12:20:03.924+05:30 [NOTE] Create Order: set Booking Order Type = Normal Booking.
+2026-04-27T12:20:04.947+05:30 [NOTE] Create Order: set Customer Type = Network (challan).
+2026-04-27T12:20:06.422+05:30 [NOTE] Account/Institution Name after fill (before Tab): 'SHIV AUTO CENTER'
+2026-04-27T12:20:08.464+05:30 [NOTE] Account/Institution Name after Tab: '' (tab_ok=True)
+2026-04-27T12:20:08.650+05:30 [NOTE] Pick Account MVG detected — handling popup with keyboard flow.
+2026-04-27T12:20:09.329+05:30 [NOTE] Pick Account MVG: focused dropdown.
+2026-04-27T12:20:09.964+05:30 [NOTE] Pick Account MVG: selected 'Account Name' via 2x ArrowDown.
+2026-04-27T12:20:10.354+05:30 [NOTE] Pick Account MVG: Tab pressed (dropdown → value field).
+2026-04-27T12:20:11.297+05:30 [NOTE] Pick Account MVG: typed 'SHIV AUTO CENTER' in value field.
+2026-04-27T12:20:11.738+05:30 [NOTE] Pick Account MVG: Tab pressed (value field → next).
+2026-04-27T12:20:12.072+05:30 [NOTE] Pick Account MVG: Enter pressed to confirm and close.
+2026-04-27T12:20:13.129+05:30 [NOTE] Account/Institution Name after Pick Account MVG: 'SHIV AUTO CENTER'
+2026-04-27T12:20:13.623+05:30 [NOTE] Create Order: Pin Code autopopulated after Institution → '321203'.
+2026-04-27T12:20:14.341+05:30 [NOTE] Create Order: filled Comments (challan) → 'From Arya Agencies. Helmet credited'.
+2026-04-27T12:20:14.341+05:30 [FORM] siebel_step=v4_create_order_comments | form=Sales order / create booking | action=fill_Comments_challan_helmet | comments='From Arya Agencies. Helmet credited'
+2026-04-27T12:20:14.705+05:30 [NOTE] Create Order: subdealer challan — skipped Contact Last Name F2 applet.
+2026-04-27T12:20:16.308+05:30 [NOTE] Create Order: pressed Ctrl+S on Sales Order form.
+2026-04-27T12:20:18.304+05:30 [NOTE] Create Order: scraped Order#='11870-02-SVSO-0426-343' after save.
+2026-04-27T12:20:18.576+05:30 [NOTE] attach_vehicle_to_bkg: clicked Order header drill-down via "a[name='Order Number'][tabindex='-1']".
+2026-04-27T12:20:21.724+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:20:28.619+05:30 [NOTE] attach_vehicle_to_bkg: VIN filled via "input[name='VIN']", row=1, chassis='MBLHAW482T9D45391'.
+2026-04-27T12:20:31.825+05:30 [NOTE] attach_vehicle_to_bkg: HHML Discount (6× Tab — focused input) (id='1_HHML_Discount'): value='1852.00', row=1.
+2026-04-27T12:20:32.341+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:20:33.588+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:20:33.925+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] a. scroll left done, wait 300ms.
+2026-04-27T12:20:34.285+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:20:35.837+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] b. clicked New, wait 300ms.
+2026-04-27T12:20:36.714+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] c. clicked VIN cell TD via "td[id='2_s_1_l_VIN']".
+2026-04-27T12:20:38.416+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] d. filled VIN='MBLHAW489T9D45419' via 'input:focus'.
+2026-04-27T12:20:39.177+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] d. Tab out after VIN.
+2026-04-27T12:20:40.566+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] e. clicked Discount(Pre-VAT) cell TD via "td[id='2_s_1_l_HHML_Discount']".
+2026-04-27T12:20:42.547+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] f. filled Discount='1852.00' via "input[id='2_HHML_Discount']".
+2026-04-27T12:20:43.265+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] f. Tab out after Discount.
+2026-04-27T12:20:43.587+05:30 [NOTE] attach_vehicle_to_bkg: [row 2] Playwright attach sequence complete (VIN='MBLHAW489T9D45419', Discount='1852.00').
+2026-04-27T12:20:44.108+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:20:44.135+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:20:44.465+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] a. scroll left done, wait 300ms.
+2026-04-27T12:20:45.007+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:20:46.568+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] b. clicked New, wait 300ms.
+2026-04-27T12:20:47.507+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] c. clicked VIN cell TD via "td[id='3_s_1_l_VIN']".
+2026-04-27T12:20:49.028+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] d. filled VIN='MBLHAW480T9D45387' via 'input:focus'.
+2026-04-27T12:20:50.029+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] d. Tab out after VIN.
+2026-04-27T12:20:51.186+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] e. clicked Discount(Pre-VAT) cell TD via "td[id='3_s_1_l_HHML_Discount']".
+2026-04-27T12:20:52.399+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] f. filled Discount='1852.00' via "input[id='3_HHML_Discount']".
+2026-04-27T12:20:53.924+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] f. Tab out after Discount.
+2026-04-27T12:20:54.286+05:30 [NOTE] attach_vehicle_to_bkg: [row 3] Playwright attach sequence complete (VIN='MBLHAW480T9D45387', Discount='1852.00').
+2026-04-27T12:20:54.817+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:20:54.847+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:20:55.188+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] a. scroll left done, wait 300ms.
+2026-04-27T12:20:55.769+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:20:57.383+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] b. clicked New, wait 300ms.
+2026-04-27T12:20:58.050+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] c. clicked VIN cell TD via "td[id='4_s_1_l_VIN']".
+2026-04-27T12:20:59.777+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] d. filled VIN='MBLHAW48XT9D45378' via 'input:focus'.
+2026-04-27T12:21:01.259+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] d. Tab out after VIN.
+2026-04-27T12:21:02.367+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] e. clicked Discount(Pre-VAT) cell TD via "td[id='4_s_1_l_HHML_Discount']".
+2026-04-27T12:21:03.959+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] f. filled Discount='1852.00' via "input[id='4_HHML_Discount']".
+2026-04-27T12:21:05.258+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] f. Tab out after Discount.
+2026-04-27T12:21:05.585+05:30 [NOTE] attach_vehicle_to_bkg: [row 4] Playwright attach sequence complete (VIN='MBLHAW48XT9D45378', Discount='1852.00').
+2026-04-27T12:21:06.116+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:21:06.149+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:21:06.493+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] a. scroll left done, wait 300ms.
+2026-04-27T12:21:07.055+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:21:08.608+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] b. clicked New, wait 300ms.
+2026-04-27T12:21:09.576+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:21:11.546+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] d. filled VIN='MBLHAW480T9D45406' via 'input:focus'.
+2026-04-27T12:21:12.943+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] d. Tab out after VIN.
+2026-04-27T12:21:14.155+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:21:15.562+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:21:17.045+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] f. Tab out after Discount.
+2026-04-27T12:21:17.367+05:30 [NOTE] attach_vehicle_to_bkg: [row 5] Playwright attach sequence complete (VIN='MBLHAW480T9D45406', Discount='1852.00').
+2026-04-27T12:21:17.915+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:21:17.943+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:21:18.269+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] a. scroll left done, wait 300ms.
+2026-04-27T12:21:18.687+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:21:20.251+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] b. clicked New, wait 300ms.
+2026-04-27T12:21:21.187+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:21:22.879+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] d. filled VIN='MBLHAW475THD43079' via 'input:focus'.
+2026-04-27T12:21:23.963+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] d. Tab out after VIN.
+2026-04-27T12:21:25.236+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:21:26.948+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:21:28.300+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] f. Tab out after Discount.
+2026-04-27T12:21:28.636+05:30 [NOTE] attach_vehicle_to_bkg: [row 6] Playwright attach sequence complete (VIN='MBLHAW475THD43079', Discount='1852.00').
+2026-04-27T12:21:29.173+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:21:29.220+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:21:29.542+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] a. scroll left done, wait 300ms.
+2026-04-27T12:21:30.044+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:21:31.643+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] b. clicked New, wait 300ms.
+2026-04-27T12:21:32.288+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:21:33.740+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] d. filled VIN='MBLHAW470THD10734' via 'input:focus'.
+2026-04-27T12:21:34.104+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] d. Tab out after VIN.
+2026-04-27T12:21:34.947+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:21:36.103+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:21:37.401+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] f. Tab out after Discount.
+2026-04-27T12:21:37.724+05:30 [NOTE] attach_vehicle_to_bkg: [row 7] Playwright attach sequence complete (VIN='MBLHAW470THD10734', Discount='1852.00').
+2026-04-27T12:21:38.261+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:21:38.296+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:21:38.623+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] a. scroll left done, wait 300ms.
+2026-04-27T12:21:38.835+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:21:40.362+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] b. clicked New, wait 300ms.
+2026-04-27T12:21:40.869+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:21:42.423+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] d. filled VIN='MBLHAW48XT9D45428' via 'input:focus'.
+2026-04-27T12:21:42.889+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] d. Tab out after VIN.
+2026-04-27T12:21:43.729+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:21:44.843+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:21:45.446+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] f. Tab out after Discount.
+2026-04-27T12:21:45.763+05:30 [NOTE] attach_vehicle_to_bkg: [row 8] Playwright attach sequence complete (VIN='MBLHAW48XT9D45428', Discount='1852.00').
+2026-04-27T12:21:46.273+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:21:46.285+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:21:46.611+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] a. scroll left done, wait 300ms.
+2026-04-27T12:21:46.780+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:21:48.326+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] b. clicked New, wait 300ms.
+2026-04-27T12:21:48.858+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:21:50.425+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] d. filled VIN='MBLHAW470THD10717' via 'input:focus'.
+2026-04-27T12:21:50.877+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] d. Tab out after VIN.
+2026-04-27T12:21:51.798+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:21:53.018+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:21:53.564+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] f. Tab out after Discount.
+2026-04-27T12:21:53.884+05:30 [NOTE] attach_vehicle_to_bkg: [row 9] Playwright attach sequence complete (VIN='MBLHAW470THD10717', Discount='1852.00').
+2026-04-27T12:21:54.397+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:21:54.412+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:21:54.732+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] a. scroll left done, wait 300ms.
+2026-04-27T12:21:54.984+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:21:56.520+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] b. clicked New, wait 300ms.
+2026-04-27T12:21:57.892+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:21:59.479+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] d. filled VIN='MBLHAW472THDA6115' via 'input:focus'.
+2026-04-27T12:22:00.084+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] d. Tab out after VIN.
+2026-04-27T12:22:01.096+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:22:02.395+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:22:03.495+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] f. Tab out after Discount.
+2026-04-27T12:22:03.807+05:30 [NOTE] attach_vehicle_to_bkg: [row 10] Playwright attach sequence complete (VIN='MBLHAW472THDA6115', Discount='1852.00').
+2026-04-27T12:22:04.346+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:22:04.377+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:22:04.703+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] a. scroll left done, wait 300ms.
+2026-04-27T12:22:05.228+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:22:06.778+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] b. clicked New, wait 300ms.
+2026-04-27T12:22:07.494+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:22:09.254+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] d. filled VIN='MBLHAW474THD10588' via 'input:focus'.
+2026-04-27T12:22:09.853+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] d. Tab out after VIN.
+2026-04-27T12:22:11.179+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:22:12.641+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:22:13.398+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] f. Tab out after Discount.
+2026-04-27T12:22:13.722+05:30 [NOTE] attach_vehicle_to_bkg: [row 11] Playwright attach sequence complete (VIN='MBLHAW474THD10588', Discount='1852.00').
+2026-04-27T12:22:14.242+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:22:14.264+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:22:14.600+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] a. scroll left done, wait 300ms.
+2026-04-27T12:22:14.942+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:22:16.525+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] b. clicked New, wait 300ms.
+2026-04-27T12:22:17.478+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:22:19.726+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] d. filled VIN='MBLHAW471THD10581' via 'input:focus'.
+2026-04-27T12:22:20.892+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] d. Tab out after VIN.
+2026-04-27T12:22:21.844+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:22:23.018+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:22:23.804+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] f. Tab out after Discount.
+2026-04-27T12:22:24.137+05:30 [NOTE] attach_vehicle_to_bkg: [row 12] Playwright attach sequence complete (VIN='MBLHAW471THD10581', Discount='1852.00').
+2026-04-27T12:22:24.670+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:22:24.711+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:22:25.051+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] a. scroll left done, wait 300ms.
+2026-04-27T12:22:25.655+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:22:27.181+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] b. clicked New, wait 300ms.
+2026-04-27T12:22:27.740+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:22:29.201+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] d. filled VIN='MBLHAW473THDA6124' via 'input:focus'.
+2026-04-27T12:22:29.631+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] d. Tab out after VIN.
+2026-04-27T12:22:30.631+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:22:32.103+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:22:32.944+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] f. Tab out after Discount.
+2026-04-27T12:22:33.271+05:30 [NOTE] attach_vehicle_to_bkg: [row 13] Playwright attach sequence complete (VIN='MBLHAW473THDA6124', Discount='1852.00').
+2026-04-27T12:22:33.802+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:22:33.839+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:22:34.170+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] a. scroll left done, wait 300ms.
+2026-04-27T12:22:34.574+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:22:36.128+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] b. clicked New, wait 300ms.
+2026-04-27T12:22:36.835+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:22:38.527+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] d. filled VIN='MBLHAW470THDA6033' via 'input:focus'.
+2026-04-27T12:22:39.218+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] d. Tab out after VIN.
+2026-04-27T12:22:40.374+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:22:42.042+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:22:42.732+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] f. Tab out after Discount.
+2026-04-27T12:22:43.063+05:30 [NOTE] attach_vehicle_to_bkg: [row 14] Playwright attach sequence complete (VIN='MBLHAW470THDA6033', Discount='1852.00').
+2026-04-27T12:22:43.586+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:22:43.614+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:22:43.960+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] a. scroll left done, wait 300ms.
+2026-04-27T12:22:44.456+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:22:46.002+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] b. clicked New, wait 300ms.
+2026-04-27T12:22:46.864+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:22:48.315+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] d. filled VIN='MBLHAW471THD10676' via 'input:focus'.
+2026-04-27T12:22:49.303+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] d. Tab out after VIN.
+2026-04-27T12:22:50.363+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:22:52.023+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:22:52.777+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] f. Tab out after Discount.
+2026-04-27T12:22:53.183+05:30 [NOTE] attach_vehicle_to_bkg: [row 15] Playwright attach sequence complete (VIN='MBLHAW471THD10676', Discount='1852.00').
+2026-04-27T12:22:53.708+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:22:53.739+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:22:54.060+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] a. scroll left done, wait 300ms.
+2026-04-27T12:22:54.464+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:22:56.017+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] b. clicked New, wait 300ms.
+2026-04-27T12:22:57.040+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:22:58.784+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] d. filled VIN='MBLHAW471THD43175' via 'input:focus'.
+2026-04-27T12:22:59.237+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] d. Tab out after VIN.
+2026-04-27T12:23:00.504+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:23:02.020+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:23:02.562+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] f. Tab out after Discount.
+2026-04-27T12:23:02.883+05:30 [NOTE] attach_vehicle_to_bkg: [row 16] Playwright attach sequence complete (VIN='MBLHAW471THD43175', Discount='1852.00').
+2026-04-27T12:23:03.402+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:23:03.433+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:23:03.758+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] a. scroll left done, wait 300ms.
+2026-04-27T12:23:04.215+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:23:05.769+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] b. clicked New, wait 300ms.
+2026-04-27T12:23:06.567+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:23:08.433+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] d. filled VIN='MBLHAW473THDA6009' via 'input:focus'.
+2026-04-27T12:23:08.917+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] d. Tab out after VIN.
+2026-04-27T12:23:10.175+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:23:11.536+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:23:12.229+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] f. Tab out after Discount.
+2026-04-27T12:23:12.591+05:30 [NOTE] attach_vehicle_to_bkg: [row 17] Playwright attach sequence complete (VIN='MBLHAW473THDA6009', Discount='1852.00').
+2026-04-27T12:23:13.113+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:23:13.143+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:23:13.467+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] a. scroll left done, wait 300ms.
+2026-04-27T12:23:13.868+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:23:15.414+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] b. clicked New, wait 300ms.
+2026-04-27T12:23:16.110+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:23:17.850+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] d. filled VIN='MBLHAW474THDA6116' via 'input:focus'.
+2026-04-27T12:23:18.300+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] d. Tab out after VIN.
+2026-04-27T12:23:19.813+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:23:21.020+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:23:21.703+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] f. Tab out after Discount.
+2026-04-27T12:23:22.027+05:30 [NOTE] attach_vehicle_to_bkg: [row 18] Playwright attach sequence complete (VIN='MBLHAW474THDA6116', Discount='1852.00').
+2026-04-27T12:23:22.546+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:23:22.581+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:23:22.912+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] a. scroll left done, wait 300ms.
+2026-04-27T12:23:23.347+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:23:24.891+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] b. clicked New, wait 300ms.
+2026-04-27T12:23:25.903+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:23:28.038+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] d. filled VIN='MBLHAW483T9D45271' via 'input:focus'.
+2026-04-27T12:23:28.683+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] d. Tab out after VIN.
+2026-04-27T12:23:29.750+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:23:31.414+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:23:31.974+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] f. Tab out after Discount.
+2026-04-27T12:23:32.328+05:30 [NOTE] attach_vehicle_to_bkg: [row 19] Playwright attach sequence complete (VIN='MBLHAW483T9D45271', Discount='1852.00').
+2026-04-27T12:23:32.847+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:23:32.876+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:23:33.202+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] a. scroll left done, wait 300ms.
+2026-04-27T12:23:33.672+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:23:35.222+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] b. clicked New, wait 300ms.
+2026-04-27T12:23:36.004+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:23:37.685+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] d. filled VIN='MBLHAW486T9D45264' via 'input:focus'.
+2026-04-27T12:23:38.268+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] d. Tab out after VIN.
+2026-04-27T12:23:39.464+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:23:40.954+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:23:41.692+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] f. Tab out after Discount.
+2026-04-27T12:23:42.016+05:30 [NOTE] attach_vehicle_to_bkg: [row 20] Playwright attach sequence complete (VIN='MBLHAW486T9D45264', Discount='1852.00').
+2026-04-27T12:23:42.545+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:23:42.578+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:23:42.912+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] a. scroll left done, wait 300ms.
+2026-04-27T12:23:43.492+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:23:45.063+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] b. clicked New, wait 300ms.
+2026-04-27T12:23:46.115+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:23:47.748+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] d. filled VIN='MBLHAW485T9D45398' via 'input:focus'.
+2026-04-27T12:23:48.418+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] d. Tab out after VIN.
+2026-04-27T12:23:50.092+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:23:51.454+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:23:51.989+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] f. Tab out after Discount.
+2026-04-27T12:23:52.301+05:30 [NOTE] attach_vehicle_to_bkg: [row 21] Playwright attach sequence complete (VIN='MBLHAW485T9D45398', Discount='1852.00').
+2026-04-27T12:23:52.823+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:23:52.852+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:23:53.186+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] a. scroll left done, wait 300ms.
+2026-04-27T12:23:53.643+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:23:55.195+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] b. clicked New, wait 300ms.
+2026-04-27T12:23:56.261+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:23:58.079+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] d. filled VIN='MBLHAW480T9D45390' via 'input:focus'.
+2026-04-27T12:23:58.602+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] d. Tab out after VIN.
+2026-04-27T12:23:59.972+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:24:01.099+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:24:01.765+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] f. Tab out after Discount.
+2026-04-27T12:24:02.074+05:30 [NOTE] attach_vehicle_to_bkg: [row 22] Playwright attach sequence complete (VIN='MBLHAW480T9D45390', Discount='1852.00').
+2026-04-27T12:24:02.596+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:24:02.643+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:24:02.980+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] a. scroll left done, wait 300ms.
+2026-04-27T12:24:03.394+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:24:04.960+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] b. clicked New, wait 300ms.
+2026-04-27T12:24:05.933+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:24:07.702+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] d. filled VIN='MBLHAW482T9D45410' via 'input:focus'.
+2026-04-27T12:24:08.265+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] d. Tab out after VIN.
+2026-04-27T12:24:09.415+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:24:10.766+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:24:11.361+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] f. Tab out after Discount.
+2026-04-27T12:24:11.677+05:30 [NOTE] attach_vehicle_to_bkg: [row 23] Playwright attach sequence complete (VIN='MBLHAW482T9D45410', Discount='1852.00').
+2026-04-27T12:24:12.199+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:24:12.232+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:24:12.572+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] a. scroll left done, wait 300ms.
+2026-04-27T12:24:13.078+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:24:14.639+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] b. clicked New, wait 300ms.
+2026-04-27T12:24:15.197+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:24:17.241+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] d. filled VIN='MBLHAW482T9D45360' via 'input:focus'.
+2026-04-27T12:24:17.915+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] d. Tab out after VIN.
+2026-04-27T12:24:19.431+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:24:20.909+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:24:21.865+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] f. Tab out after Discount.
+2026-04-27T12:24:22.188+05:30 [NOTE] attach_vehicle_to_bkg: [row 24] Playwright attach sequence complete (VIN='MBLHAW482T9D45360', Discount='1852.00').
+2026-04-27T12:24:22.719+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] starting Playwright-based sequence for multi-VIN attach.
+2026-04-27T12:24:22.747+05:30 [NOTE] attach_vehicle_to_bkg: [row>=2] scrolled Line Items grid to left (VIN column visible).
+2026-04-27T12:24:23.089+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] a. scroll left done, wait 300ms.
+2026-04-27T12:24:23.675+05:30 [NOTE] attach_vehicle_to_bkg: clicked New button (id='s_1_1_35_0_Ctrl').
+2026-04-27T12:24:25.227+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] b. clicked New, wait 300ms.
+2026-04-27T12:24:26.408+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] c. clicked VIN cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_VIN']".
+2026-04-27T12:24:28.449+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] d. filled VIN='MBLHAW485T9D45417' via 'input:focus'.
+2026-04-27T12:24:29.412+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] d. Tab out after VIN.
+2026-04-27T12:24:30.938+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] e. clicked Discount(Pre-VAT) cell TD via "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']".
+2026-04-27T12:24:32.199+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] f. filled Discount='1852.00' via "tr.jqgrow:last-child input[id$='_HHML_Discount']".
+2026-04-27T12:24:32.887+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] f. Tab out after Discount.
+2026-04-27T12:24:33.205+05:30 [NOTE] attach_vehicle_to_bkg: [row 25] Playwright attach sequence complete (VIN='MBLHAW485T9D45417', Discount='1852.00').
+2026-04-27T12:24:37.193+05:30 [NOTE] attach_vehicle_to_bkg: clicked Price All (name='s_1_1_7_0').
+2026-04-27T12:24:39.905+05:30 [NOTE] attach_vehicle_to_bkg: clicked Allocate All (id='s_1_1_9_0_Ctrl').
+2026-04-27T12:24:43.326+05:30 [NOTE] attach_vehicle_to_bkg: scrolled Line Items grid to right (Total Ex-Showroom column visible).
+2026-04-27T12:24:44.114+05:30 [NOTE] attach_vehicle_to_bkg: row 1 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:44.452+05:30 [NOTE] attach_vehicle_to_bkg: row 2 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:44.757+05:30 [NOTE] attach_vehicle_to_bkg: row 3 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:45.013+05:30 [NOTE] attach_vehicle_to_bkg: row 4 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:45.183+05:30 [NOTE] attach_vehicle_to_bkg: row 5 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:45.344+05:30 [NOTE] attach_vehicle_to_bkg: row 6 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:45.506+05:30 [NOTE] attach_vehicle_to_bkg: row 7 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:45.680+05:30 [NOTE] attach_vehicle_to_bkg: row 8 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:45.956+05:30 [NOTE] attach_vehicle_to_bkg: row 9 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:46.182+05:30 [NOTE] attach_vehicle_to_bkg: row 10 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:46.363+05:30 [NOTE] attach_vehicle_to_bkg: row 11 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:46.533+05:30 [NOTE] attach_vehicle_to_bkg: row 12 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:46.701+05:30 [NOTE] attach_vehicle_to_bkg: row 13 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:46.909+05:30 [NOTE] attach_vehicle_to_bkg: row 14 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:47.134+05:30 [NOTE] attach_vehicle_to_bkg: row 15 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:47.372+05:30 [NOTE] attach_vehicle_to_bkg: row 16 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:47.533+05:30 [NOTE] attach_vehicle_to_bkg: row 17 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:47.693+05:30 [NOTE] attach_vehicle_to_bkg: row 18 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:47.846+05:30 [NOTE] attach_vehicle_to_bkg: row 19 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:48.014+05:30 [NOTE] attach_vehicle_to_bkg: row 20 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:48.191+05:30 [NOTE] attach_vehicle_to_bkg: row 21 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:48.358+05:30 [NOTE] attach_vehicle_to_bkg: row 22 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:48.518+05:30 [NOTE] attach_vehicle_to_bkg: row 23 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:48.718+05:30 [NOTE] attach_vehicle_to_bkg: row 24 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:48.934+05:30 [NOTE] attach_vehicle_to_bkg: row 25 Ex-showroom missing or not numeric (''); VIN readback=''.
+2026-04-27T12:24:48.935+05:30 [NOTE] attach_vehicle_to_bkg: no per-row Ex-showroom passed validation after multi-line scrape (best-effort).
+2026-04-27T12:24:48.935+05:30 [NOTE] attach_vehicle_to_bkg: skipped VIN drilldown, Serial Number, and Pre-check/PDI through PDI submit (disabled).
+2026-04-27T12:24:48.950+05:30 [NOTE] attach_vehicle_to_bkg: clicked Order link ('Order:11870-02-SVSO-0426-343').
+2026-04-27T12:24:57.148+05:30 [NOTE] attach_vehicle_to_bkg: clicked Apply Campaign.
+2026-04-27T12:24:58.789+05:30 [NOTE] attach_vehicle_to_bkg: Create Invoice not auto-clicked (set ENVIRONMENT=prod or ENVIRONMENT=production in backend/.env to enable in production).
+2026-04-27T12:24:58.793+05:30 [NOTE] attach_vehicle_to_bkg: all steps completed (Order → VIN → Pre-check → PDI → Apply Campaign).
+2026-04-27T12:24:59.745+05:30 [NOTE] Create Order: refreshed Order#='1852' after header drill-down.
+2026-04-27T12:24:59.772+05:30 [NOTE] Create Order: Invoice# not on screen or not readable yet (best-effort).
+2026-04-27T12:24:59.773+05:30 [FORM] siebel_step=v4_create_order | form=Vehicle Sales — order header | action=attach_vehicle_to_bkg_click_order_number_header | order_number='1852'
+
+--- vehicle_snapshot (video_create_order_scrape_merge) ---
+order_line_ex_showroom="[{'full_chassis': 'MBLHAW482T9D45391', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW489T9D45419', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW480T9D45387', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW48XT9D45378', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW480T9D45406', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW475THD43079', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW470THD10734', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW48XT9D45428', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW470THD10717', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW472THDA6115', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW474THD10588', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW471THD10581', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW473THDA6124', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW470THDA6033', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW471THD10676', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW471THD43175', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW473THDA6009', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW474THDA6116', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW483T9D45271', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW486T9D45264', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW485T9D45398', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW480T9D45390', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW482T9D45410', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW482T9D45360', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW485T9D45417', 'vehicle_ex_showroom_cost': ''}]"
+order_number='1852'
+
+--- vehicle_snapshot (challan_prepare_order_merge) ---
+order_line_ex_showroom="[{'full_chassis': 'MBLHAW482T9D45391', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW489T9D45419', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW480T9D45387', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW48XT9D45378', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW480T9D45406', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW475THD43079', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW470THD10734', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW48XT9D45428', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW470THD10717', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW472THDA6115', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW474THD10588', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW471THD10581', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW473THDA6124', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW470THDA6033', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW471THD10676', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW471THD43175', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW473THDA6009', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW474THDA6116', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW483T9D45271', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW486T9D45264', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW485T9D45398', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW480T9D45390', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW482T9D45410', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW482T9D45360', 'vehicle_ex_showroom_cost': ''}, {'full_chassis': 'MBLHAW485T9D45417', 'vehicle_ex_showroom_cost': ''}]"
+order_number='1852'
+2026-04-27T12:24:59.774+05:30 [STEP] Subdealer challan: prepare_order completed.
+
+2026-04-27T12:24:59.774+05:30 [END] error=None
+2026-04-27T12:25:00.001+05:30  EXCEPTION: 0

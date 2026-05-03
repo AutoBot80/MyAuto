@@ -1,0 +1,17 @@
+---
+description: Production commits and deploys must go through the deploy scripts, not manual git commit/push
+alwaysApply: true
+---
+
+# No Manual Production Commits
+
+Never commit and push to `main` manually (via `git add`, `git commit`, `git push`) when the intent is a production deploy.
+
+Use the appropriate deploy script instead:
+
+- **Backend changes** -- `Update-Prod-App-Backend.ps1` (auto-bumps version in `backend/VERSION`, commits, pushes, tags, and deploys to EC2 via SSM)
+- **Electron/client changes** -- `Update-Prod-App-Electron.ps1` (auto-bumps version, commits, pushes, tags, and builds the installer)
+
+Both scripts handle version bumping, tagging, and deployment in one atomic flow. Manual commits bypass version tracking and can desync the tag history.
+
+If only the SSM deploy step is needed (code already committed and pushed), pass `-SkipCommit -SkipPush` to the backend script.

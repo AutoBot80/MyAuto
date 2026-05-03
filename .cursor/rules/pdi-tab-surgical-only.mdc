@@ -1,0 +1,13 @@
+# PDI tab — surgical edits only
+
+**Owner constraint:** Changes that target **Pre-check**, **Features**, or shared helpers used only for non-PDI flows must **not** be modified unless the user **explicitly** asks to change that area.
+
+## Required agent behavior
+
+1. Prefer edits **inside** `_siebel_run_vehicle_serial_detail_precheck_pdi` under **PDI-only** branches (`if _pdi_need_new_row`, `else` valid-existing PDI path, and **PDI-local** nested helpers such as `_click_pdi_pick_icon`).
+2. Do **not** change `_click_precheck_pick_icon`, Pre-check tab clicks, Features tab navigation/scrape, or docstrings that describe Pre-check unless the user names that behavior.
+3. Shared utilities (`hero_dms_shared_utilities.py`, `_siebel_click_by_id_anywhere`, etc.) — **do not** touch for PDI-only fixes unless unavoidable; ask first.
+
+## Hints
+
+PDI technician pick targets **`s_2_2_32_0_icon`** / **`s_2_2_32_0`** only — avoid generic `.siebui-icon-pick` scans that hit **product** LOVs.

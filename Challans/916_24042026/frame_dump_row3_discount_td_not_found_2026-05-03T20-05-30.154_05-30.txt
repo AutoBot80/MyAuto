@@ -1,0 +1,45 @@
+timestamp_ist=2026-05-03T20:05:30.154+05:30
+reason=discount_td_not_found
+row_n=3
+selectors_tried=["td[id='3_s_1_l_HHML_Discount']", 'td#3_s_1_l_HHML_Discount', "tr.jqgrow:last-child td[aria-describedby*='HHML_Discount']", "tr.jqgrow:last-child td[aria-describedby*='_l_HHML_Discount']", "tr.jqgrow.ui-state-highlight td[id$='_s_1_l_HHML_Discount']", "tr.ui-state-highlight td[id$='_s_1_l_HHML_Discount']"]
+main_page_url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+Shipment+Line+Detail+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=HHML+eAuto+Asset+Mgmt+-+Asset+Pick+Applet+Auto+Sales&SWERowId0=2-1KE32937'
+
+--- main_page ---
+{
+  "documentTitle": "Hero Connect",
+  "locationHref": "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+Shipment+Line+Detail+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=HHML+eAuto+Asset+Mgmt+-+Asset+Pick+Applet+Auto+Sales&SWERowId0=2-1KE32937",
+  "activeElement": {
+    "tag": "BODY",
+    "id": "",
+    "name": "",
+    "className": "",
+    "ariaLabel": "",
+    "ariaDescribedby": ""
+  },
+  "newButtons": [],
+  "gridRows": [],
+  "vinCells": [],
+  "discountCells": [],
+  "allInputs": [],
+  "allTDs": []
+}
+
+--- frame[0] name='' url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+Shipment+Line+Detail+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=HHML+eAuto+Asset+Mgmt+-+Asset+Pic' ---
+{
+  "documentTitle": "Hero Connect",
+  "locationHref": "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=Order+Entry+-+Shipment+Line+Detail+View+(Sales)&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=HHML+eAuto+Asset+Mgmt+-+Asset+Pick+Applet+Auto+Sales&SWERowId0=2-1KE32937",
+  "activeElement": {
+    "tag": "BODY",
+    "id": "",
+    "name": "",
+    "className": "",
+    "ariaLabel": "",
+    "ariaDescribedby": ""
+  },
+  "newButtons": [],
+  "gridRows": [],
+  "vinCells": [],
+  "discountCells": [],
+  "allInputs": [],
+  "allTDs": []
+}

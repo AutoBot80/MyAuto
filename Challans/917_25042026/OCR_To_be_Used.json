@@ -1,0 +1,132 @@
+{
+  "challan_no": "917",
+  "challan_date_raw": "25/4/26",
+  "challan_date_iso": "2026-04-25",
+  "lines": [
+    {
+      "engine_no": "10803",
+      "chassis_no": "10734",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06530",
+      "chassis_no": "45428",
+      "status": "queued"
+    },
+    {
+      "engine_no": "10869",
+      "chassis_no": "10717",
+      "status": "queued"
+    },
+    {
+      "engine_no": "L1225",
+      "chassis_no": "A6115",
+      "status": "queued"
+    },
+    {
+      "engine_no": "10764",
+      "chassis_no": "10588",
+      "status": "queued"
+    },
+    {
+      "engine_no": "10738",
+      "chassis_no": "10581",
+      "status": "queued"
+    },
+    {
+      "engine_no": "05269",
+      "chassis_no": "A6124",
+      "status": "queued"
+    },
+    {
+      "engine_no": "77463",
+      "chassis_no": "AA6033",
+      "status": "queued"
+    },
+    {
+      "engine_no": "10755",
+      "chassis_no": "10676",
+      "status": "queued"
+    },
+    {
+      "engine_no": "08002",
+      "chassis_no": "43175",
+      "status": "queued"
+    },
+    {
+      "engine_no": "77431",
+      "chassis_no": "A6009",
+      "status": "queued"
+    },
+    {
+      "engine_no": "Log60",
+      "chassis_no": "A6116A",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06187",
+      "chassis_no": "45271",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06306",
+      "chassis_no": "45264",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06571",
+      "chassis_no": "45398",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06542",
+      "chassis_no": "45390",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06489",
+      "chassis_no": "45410",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06557",
+      "chassis_no": "45360",
+      "status": "queued"
+    },
+    {
+      "engine_no": "20590",
+      "chassis_no": "45417",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06515",
+      "chassis_no": "45391",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06191",
+      "chassis_no": "45419",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06450",
+      "chassis_no": "45387",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06576",
+      "chassis_no": "45378",
+      "status": "queued"
+    },
+    {
+      "engine_no": "06589",
+      "chassis_no": "45406",
+      "status": "queued"
+    },
+    {
+      "engine_no": "04394",
+      "chassis_no": "43079",
+      "status": "queued"
+    }
+  ]
+}

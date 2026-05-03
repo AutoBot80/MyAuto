@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, Component, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, Component, type ReactNode } from "react";
 import "./App.css";
 import type { Page } from "./types";
 import { useToday } from "./hooks/useToday";
@@ -20,11 +20,13 @@ import { getDealer } from "./api/dealers";
 import { getBulkLoadPendingCount } from "./api/bulkLoads";
 import { getChallanStagingFailedCount } from "./api/subdealerChallan";
 import { getSiteUrls, type SiteUrls } from "./api/siteUrls";
+import { teardownLocalBrowsers } from "./api/system";
 import { usePageVisible } from "./hooks/usePageVisible";
 import { LoginPage } from "./pages/LoginPage";
 import { ALL_HOME_TILES_TRUE, getMe, type HomeTileFlags } from "./api/auth";
 import { ApiHttpError } from "./api/client";
 import { clearAccessToken, getAccessToken } from "./auth/token";
+import { isElectron } from "./electron";
 
 const authDisabled = import.meta.env.VITE_AUTH_DISABLED === "true";
 
@@ -249,6 +251,28 @@ function App() {
     else if (mode === "dealer" && !homeTiles.tile_dealer) setMode("home");
     else if (mode === "admin" && !sessionAdmin) setMode("home");
   }, [boot, authDisabled, mode, homeTiles, sessionAdmin]);
+
+  // Dev SPA tab-close: tell the local FastAPI to kill the managed Chromium debug-port owner
+  // and drop cached Playwright handles, so a previous run that the operator force-closed mid-flow
+  // does not block the next launch on reload. Skipped in Electron (handled at app quit) and
+  // when not authed (no JWT to send).
+  const teardownFiredRef = useRef(false);
+  useEffect(() => {
+    if (boot !== "ready") return;
+    if (isElectron()) return;
+    teardownFiredRef.current = false;
+    const fire = (): void => {
+      if (teardownFiredRef.current) return;
+      teardownFiredRef.current = true;
+      void teardownLocalBrowsers({ keepalive: true });
+    };
+    window.addEventListener("pagehide", fire);
+    window.addEventListener("beforeunload", fire);
+    return () => {
+      window.removeEventListener("pagehide", fire);
+      window.removeEventListener("beforeunload", fire);
+    };
+  }, [boot]);
 
   const dmsUrl = siteUrls?.dms_base_url ?? "";
 

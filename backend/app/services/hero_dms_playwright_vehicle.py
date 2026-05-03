@@ -995,13 +995,18 @@ def _siebel_lov_pick_first_row_ok_pdi_style(
     note,
     log_prefix: str,
     stage_label: str,
+    ctrl_s_after_close: bool = False,
 ) -> tuple[bool, bool]:
     """
     PDI **Service Request** pick-applet pattern (shared with Pre-check **Technician** LOV).
 
     Sequence matches the inline PDI block: **300ms** settle → click first plausible table data row
     (``table tbody tr`` / ``table tr``) → **300ms** → click **OK** (five selectors, **300ms** visibility) →
-    **300ms** → **300ms** after-dialog settle.
+    **500ms** → **500ms** after-dialog settle.
+
+    When ``ctrl_s_after_close`` is True (PDI technician only), **Ctrl+S** runs immediately after the
+    final settle (no **Tab** — tabbing after LOV close moves focus onto jqGrid duplicate rows and
+    clears the technician Siebel had just applied). Then the caller may Submit.
 
     Returns ``(row_clicked, ok_clicked)``. Caller may require both before **Submit** / **Ctrl+S**.
     """
@@ -1059,7 +1064,7 @@ def _siebel_lov_pick_first_row_ok_pdi_style(
                         ok_loc.click(timeout=_tmo, force=True)
                     _ok_done = True
                     note(f"{log_prefix}: clicked OK on pick applet ({stage_label}).")
-                    _safe_page_wait(page, 300, log_label=f"after_{stage_label}_ok")
+                    _safe_page_wait(page, 500, log_label=f"after_{stage_label}_ok")
                     break
             except Exception:
                 continue
@@ -1068,7 +1073,15 @@ def _siebel_lov_pick_first_row_ok_pdi_style(
     if not _ok_done:
         note(f"{log_prefix}: OK button not found on pick applet ({stage_label}) (best-effort).")
 
-    _safe_page_wait(page, 300, log_label=f"after_{stage_label}_lov_close_settle")
+    _safe_page_wait(page, 500, log_label=f"after_{stage_label}_lov_close_settle")
+    if ctrl_s_after_close:
+        try:
+            page.keyboard.press("Control+s")
+            _safe_page_wait(page, 300, log_label=f"after_{stage_label}_lov_ctrl_s")
+            note(f"{log_prefix}: Ctrl+S after pick applet close ({stage_label}).")
+        except Exception as _ex:
+            note(f"{log_prefix}: Ctrl+S after pick applet close ({stage_label}) failed → {_ex!r}")
+
     return _row_hit, _ok_done
 
 
@@ -1466,10 +1479,35 @@ def _click_third_level_view_bar_tab(
 
     Used for **Pre-check** and **PDI** tabs. Production-observed: ``s_vctrl_div`` is the
     consistent container; hyphen-insensitive match (e.g. "Pre-check" ↔ "PreCheck").
+    Before clicking, polls up to **10** times (**500** ms between attempts) for a visible
+    third-level strip with Pre-check or PDI labels (same heuristic as post-tab settle poll);
+    if still not ready, attempts the click anyway.
     """
     tab_norm = (tab_text or "").strip().lower()
     if not tab_norm:
         return False
+
+    _THIRD_LEVEL_BAR_READY_JS = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const bar = document.getElementById('s_vctrl_div');
+        if (!bar || !vis(bar)) return { loaded: false, tabs: [] };
+        const compact = (s) => s.replace(/[-\\s]+/g, '').toLowerCase();
+        const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
+            .filter(t => vis(t))
+            .map(t => (t.innerText || t.textContent || '').trim())
+            .filter(t => t.length > 0 && t.length < 40);
+        const hasTabs = tabs.some(t => {
+            const c = compact(t);
+            return c === 'precheck' || c === 'pre-check' || c === 'pdi';
+        });
+        return { loaded: hasTabs, tabs };
+    }"""
 
     _TAB_JS = """(tabNeedle) => {
         const vis = (el) => {
@@ -1515,7 +1553,33 @@ def _click_third_level_view_bar_tab(
     }"""
 
     _ = content_frame_selector
-    for root in list(_ordered_frames(page)) + [page.main_frame]:
+    _roots_tl = list(_ordered_frames(page)) + [page.main_frame]
+    _bar_ready = False
+    for _poll_i in range(10):
+        for _root in _roots_tl:
+            try:
+                _poll_res = _root.evaluate(_THIRD_LEVEL_BAR_READY_JS)
+                if isinstance(_poll_res, dict) and _poll_res.get("loaded"):
+                    _bar_ready = True
+                    note(
+                        f"{log_prefix}: third-level bar ready (#s_vctrl_div) before {tab_text} "
+                        f"click (attempt {_poll_i + 1}/10) tabs={_poll_res.get('tabs')!r}"
+                    )
+                    break
+            except Exception:
+                continue
+        if _bar_ready:
+            break
+        if _poll_i < 9:
+            _safe_page_wait(page, 500, log_label=f"third_level_bar_poll_{tab_norm}_{_poll_i}")
+    if not _bar_ready:
+        logger.debug(
+            "third_level_bar_poll: #s_vctrl_div tab strip not ready after 10 attempts (tab=%r %s)",
+            tab_text,
+            log_prefix,
+        )
+
+    for root in _roots_tl:
         try:
             _res = root.evaluate(_TAB_JS, tab_norm)
             if isinstance(_res, dict) and _res.get("ok"):
@@ -1745,7 +1809,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             wait_ms=1500,
         )
     if not _precheck_tab_ok:
-        return False, "Could not open Pre-check tab (Third Level View Bar text match failed)."
+        return False, "Could not find Pre-check tab."
 
     try:
         _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab")
@@ -2694,25 +2758,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 output_dir=_debug_dump_dir, label="precheck_plus_not_found",
                 note=note, log_prefix=log_prefix,
             )
-            _tab_hint = ""
             if not _precheck_third_level_tabs_loaded:
-                _tab_hint = (
-                    " Third-level tabs (PreCheck/PDI/Features) are NOT loaded in #s_vctrl_div — "
-                    "the Pre-check tab click may not have navigated to the serial detail view. "
-                    "s_3_1_12_0 exists as a SPAN (not BUTTON) when tabs are missing."
-                )
                 note(
-                    f"{log_prefix}: DIAGNOSTIC — third-level tabs not loaded. "
-                    "The serial detail view (PreCheck/PDI/Features tabs) did not render. "
-                    "s_3_1_12_0_Ctrl (button) is absent; s_3_1_12_0 exists only as an empty SPAN."
+                    f"{log_prefix}: DIAGNOSTIC — third-level tabs not loaded in #s_vctrl_div "
+                    "(Pre-check tab may not have reached serial detail). "
+                    "s_3_1_12_0_Ctrl button often absent; s_3_1_12_0 may exist as empty SPAN only."
                 )
-            return (
-                False,
-                "Could not click Pre-check list '+' "
-                "(tried button#s_3_1_12_0_Ctrl / s_2_1_14_0_Ctrl / s_2_2_32_0 siebui-icon-newrecord, "
-                "Service Request List:New, Precheck List:New; skipped Service Request List: Menu)."
-                + _tab_hint,
-            )
+            return False, "Could not find + button in Pre-check tab."
         note(f"{log_prefix}: clicked Pre-check list New (+).")
         _safe_page_wait(page, 300, log_label="after_precheck_list_new")
 
@@ -2738,19 +2790,12 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 )
                 break
     if not _precheck_icon_ok:
-        return False, (
-            "Could not click Pre-check pick icon for Open status "
-            "(tried icon ids + CSS; jqgrow focus + up to 6 Tab steps; s_3_1_12_0_Ctrl is header + only, not LOV)."
-        )
+        return False, "Could not find Open pick in Pre-check tab."
 
     if not _precheck_already_present:
         _open_pick_complete = _pick_first_row_and_ok("precheck_open_status")
         if not _open_pick_complete:
-            return (
-                False,
-                "Pre-check: Open status pick applet did not complete (row/OK not confirmed). "
-                "Technician step was not run; Pre-check Submit and PDI were skipped.",
-            )
+            return False, "Could not complete Pre-check Open list."
 
         def _precheck_try_submit() -> bool:
             _done = False
@@ -2847,12 +2892,12 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             if not (_submit_done and not _err_after_submit):
                 _submit_done = _precheck_try_submit()
             if not _submit_done:
-                return False, "Could not click Submit on Pre-check or save with Ctrl+S."
+                return False, "Could not save Pre-check."
 
         _submit_err = _detect_siebel_error_popup(page, content_frame_selector)
         if _submit_err:
-            note(f"{log_prefix}: Siebel error after Pre-check Submit → {_submit_err!r:.300}")
-            return False, f"Siebel error after Pre-check Submit: {_submit_err[:200]}"
+            note(f"{log_prefix}: Siebel error after Pre-check Submit → {_submit_err[:500]!r}")
+            return False, "Siebel blocked Pre-check save."
         note(f"{log_prefix}: Pre-check completed.")
 
     if _precheck_third_level_tabs_loaded:
@@ -3050,7 +3095,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             output_dir=_debug_dump_dir, label="pdi_tab_not_found",
             note=note, log_prefix=log_prefix,
         )
-        return False, "Could not click PDI tab."
+        return False, "Could not find PDI tab."
     note(f"{log_prefix}: clicked PDI tab.")
     _safe_page_wait(page, 3000, log_label="after_pdi_tab")
     try:
@@ -3546,136 +3591,196 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if _pdi_expiry_raw_aria or _pdi_table_expiry_raw:
         _pdi_header_matched = bool(_pdi_header_matched or _pdi_expiry_raw_aria)
 
-    _pdi_datetimes: list[datetime] = []
-    _pdi_dates_only: list[date] = []
-    for _raw in _pdi_expiry_raw:
-        _dt = _siebel_parse_pdi_expiry_cell_to_datetime(_raw)
-        if _dt is not None:
-            _pdi_datetimes.append(_dt)
-            continue
-        _d = _siebel_parse_grid_date_cell_to_date(_raw)
-        if _d is not None:
-            _pdi_dates_only.append(_d)
-    _pdi_expiry_dates_combined: list[date] = list(_pdi_dates_only)
-    for _dt in _pdi_datetimes:
-        _pdi_expiry_dates_combined.append(_dt.date())
-    _today = _siebel_ist_today()
     _pdi_buffer = timedelta(minutes=15)
-    _pdi_valid, _pdi_best_d, _pdi_best_dt = _siebel_pdi_expiry_still_valid(
-        expiry_dates=_pdi_expiry_dates_combined,
-        expiry_datetimes=_pdi_datetimes,
-        buffer=_pdi_buffer,
-    )
-    _pdi_max_expiry: date | None = _pdi_best_d
-    _parsed_any = bool(_pdi_datetimes or _pdi_dates_only)
+
+    # --- superseded: grid-wide PDI expiry parse + still_valid (gate uses Closed-row expiry samples only)
+    # _pdi_datetimes: list[datetime] = []
+    # _pdi_dates_only: list[date] = []
+    # for _raw in _pdi_expiry_raw:
+    #     _dt = _siebel_parse_pdi_expiry_cell_to_datetime(_raw)
+    #     if _dt is not None:
+    #         _pdi_datetimes.append(_dt)
+    #         continue
+    #     _d = _siebel_parse_grid_date_cell_to_date(_raw)
+    #     if _d is not None:
+    #         _pdi_dates_only.append(_d)
+    # _pdi_expiry_dates_combined: list[date] = list(_pdi_dates_only)
+    # for _dt in _pdi_datetimes:
+    #     _pdi_expiry_dates_combined.append(_dt.date())
+    # _today = _siebel_ist_today()
+    # _pdi_valid, _pdi_best_d, _pdi_best_dt = _siebel_pdi_expiry_still_valid(
+    #     expiry_dates=_pdi_expiry_dates_combined,
+    #     expiry_datetimes=_pdi_datetimes,
+    #     buffer=_pdi_buffer,
+    # )
+    # _pdi_max_expiry: date | None = _pdi_best_d
+    # _parsed_any = bool(_pdi_datetimes or _pdi_dates_only)
+
+    # --- superseded: Closed + mechanic-filled probe (PDI gate now = Closed + per-row future expiry)
+    # _pdi_has_closed_complete_row = False
+    # if _parsed_any and _pdi_valid and _pdi_row_count > 0:
+    #     _pdi_closed_complete_js = """() => { ... }"""
+    #     ...
+
+    _pdi_closed_expiry_collect_js = """() => {
+            const vis = (el) => {
+                if (!el) return false;
+                const st = window.getComputedStyle(el);
+                if (st.display === 'none' || st.visibility === 'hidden') return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            };
+            const isLeftSearchPane = (el) => {
+                let n = el;
+                for (let d = 0; d < 22 && n; d++) {
+                    const pid = String(n.id || '').toLowerCase();
+                    if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                return false;
+            };
+            const isPdiScoped = (el) => {
+                if (isLeftSearchPane(el)) return false;
+                let n = el;
+                for (let d = 0; d < 28 && n; d++) {
+                    const id = String(n.id || '').toLowerCase();
+                    const nm = String(n.getAttribute('name') || '').toLowerCase();
+                    const tit = String(n.getAttribute('title') || '').toLowerCase();
+                    const hay = id + ' ' + nm + ' ' + tit;
+                    if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) return false;
+                    if (id.includes('s_2_l') || id.includes('gview_s_2') || id === 'gbox_s_2_l') return true;
+                    if (id.includes('s_4_l') || id.includes('gview_s_4') || id === 'gbox_s_4_l') return true;
+                    if (id.includes('s_5_l') || id.includes('gview_s_5') || id === 'gbox_s_5_l') return true;
+                    if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
+                        return true;
+                    }
+                    n = n.parentElement;
+                }
+                return false;
+            };
+            const findRowStatusTd = (tr) => {
+                for (const td of tr.querySelectorAll('td[role="gridcell"], td')) {
+                    const id = String(td.id || '');
+                    if (!id) continue;
+                    if (id.endsWith('_l_Status')) return td;
+                }
+                return null;
+            };
+            const findRowExpiryTd = (tr) => {
+                for (const td of tr.querySelectorAll('td[role="gridcell"], td')) {
+                    const id = String(td.id || '').toLowerCase();
+                    if (id.includes('hmcl_pdi_expiry_date') || id.includes('pdi_expiry')) return td;
+                }
+                return null;
+            };
+            const rowStatusClosed = (td) => {
+                if (!td || !vis(td)) return false;
+                const t = String(td.getAttribute('title') || td.textContent || '').trim();
+                return /\\bclosed\\b/i.test(t) || t.toLowerCase() === 'closed';
+            };
+            const raws = [];
+            const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
+                (tb) => vis(tb) && isPdiScoped(tb)
+            );
+            for (const tb of tables) {
+                const rowNodes = tb.querySelectorAll('tbody tr.jqgrow');
+                for (const tr of rowNodes) {
+                    if (!vis(tr)) continue;
+                    const statusTd = findRowStatusTd(tr);
+                    if (!rowStatusClosed(statusTd)) continue;
+                    const expTd = findRowExpiryTd(tr);
+                    const raw = expTd
+                        ? String(expTd.getAttribute('title') || expTd.textContent || '').trim()
+                        : '';
+                    raws.push(raw);
+                }
+            }
+            return { raws };
+        }"""
+    _pdi_has_closed_future_expiry_row = False
+    _pdi_closed_expiry_raws: list[str] = []
+    if _pdi_row_count > 0:
+        for _proot in _roots():
+            try:
+                _cec = _proot.evaluate(_pdi_closed_expiry_collect_js)
+                if isinstance(_cec, dict):
+                    _pdi_closed_expiry_raws.extend([str(x) for x in (_cec.get("raws") or [])])
+            except Exception:
+                continue
+        for _cer in _pdi_closed_expiry_raws:
+            _cer_s = str(_cer or "").strip()
+            if not _cer_s:
+                continue
+            _dt_c = _siebel_parse_pdi_expiry_cell_to_datetime(_cer_s)
+            _dd_c = _siebel_parse_grid_date_cell_to_date(_cer_s) if _dt_c is None else None
+            _row_ed: list[date] = []
+            _row_edt: list[datetime] = []
+            if _dt_c is not None:
+                _row_edt.append(_dt_c)
+            elif _dd_c is not None:
+                _row_ed.append(_dd_c)
+            else:
+                continue
+            _row_ok, _, _ = _siebel_pdi_expiry_still_valid(
+                expiry_dates=_row_ed,
+                expiry_datetimes=_row_edt,
+                buffer=_pdi_buffer,
+            )
+            if _row_ok:
+                _pdi_has_closed_future_expiry_row = True
+                break
 
     if _pdi_row_count == 0:
         _pdi_need_new_row = True
-    elif not _pdi_expiry_raw:
-        _pdi_need_new_row = True
-    elif _parsed_any:
-        _pdi_need_new_row = not _pdi_valid
     else:
-        _pdi_need_new_row = True
+        _pdi_need_new_row = not _pdi_has_closed_future_expiry_row
 
-    _pdi_saw_row = _pdi_row_count > 0
-    _raw_samples_log: list[str] = []
-    for _sx in _pdi_expiry_raw[:12]:
-        _t = str(_sx or "").replace("\n", " ").strip()
-        if len(_t) > 96:
-            _t = _t[:93] + "..."
-        _raw_samples_log.append(_t)
-    _pd_iso = [d.isoformat() for d in _pdi_dates_only]
-    _pdt_iso = [dt.isoformat(timespec="seconds") for dt in _pdi_datetimes]
+    # _pdi_saw_row = _pdi_row_count > 0  # was only for removed verbose PDI scrape diagnostics
+    # _raw_samples_log / parsed iso lists — were only used by removed verbose scrape diagnostics
+    # _raw_samples_log: list[str] = []
+    # for _sx in _pdi_expiry_raw[:12]:
+    #     ...
+    # _pd_iso = ...
+    # _pdt_iso = ...
     if not _pdi_need_new_row:
-        _pdi_decision_reason = "valid_skip"
+        _pdi_decision_reason = "closed_future_pdi_expiry_ok"
     elif _pdi_row_count == 0:
         _pdi_decision_reason = "empty_list"
-    elif not _pdi_expiry_raw:
-        _pdi_decision_reason = "no_expiry_raw"
-    elif not _parsed_any:
-        _pdi_decision_reason = "unparsed"
-    elif not _pdi_valid:
-        _pdi_decision_reason = "expired"
     else:
-        _pdi_decision_reason = "unknown"
-    _pdi_dates_diag: dict = {}
-    _pdi_dates_js = """() => {
-        const read = (id) => {
-            const el = document.getElementById(id);
-            return el ? (el.innerText || el.textContent || '').trim().slice(0, 48) : '';
-        };
-        return {
-            expiry_s2: read('1_s_2_l_HMCL_PDI_Expiry_Date'),
-            battery_s2: read('1_s_2_l_HMCL_PDI_Battery_Expiry_Flag'),
-            expiry_s3: read('1_s_3_l_HMCL_PDI_Expiry_Date'),
-            row_counter_s2: read('s_2_rc'),
-            row_counter_s3: read('s_3_rc'),
-        };
-    }"""
-    for _root in _roots():
-        try:
-            _pdd = _root.evaluate(_pdi_dates_js)
-            if isinstance(_pdd, dict) and any(_pdd.values()):
-                _pdi_dates_diag = _pdd
-                break
-        except Exception:
-            continue
-    note(
-        f"{log_prefix}: pdi_date_cells expiry_s2={_pdi_dates_diag.get('expiry_s2', '')!r} "
-        f"battery_s2={_pdi_dates_diag.get('battery_s2', '')!r} "
-        f"expiry_s3={_pdi_dates_diag.get('expiry_s3', '')!r} "
-        f"rc_s2={_pdi_dates_diag.get('row_counter_s2', '')!r} "
-        f"rc_s3={_pdi_dates_diag.get('row_counter_s3', '')!r}"
-    )
+        _pdi_decision_reason = "no_closed_row_future_pdi_expiry"
 
     note(
-        f"{log_prefix}: pdi_scrape_saw_row saw_row={_pdi_saw_row} "
-        f"row_count={_pdi_row_count} header_matched={_pdi_header_matched}"
-    )
-    note(
-        f"{log_prefix}: pdi_scrape_expiry raw_count={len(_pdi_expiry_raw)} "
-        f"raw_samples={_raw_samples_log[:8]!r} parsed_dates={_pd_iso!r} "
-        f"parsed_datetimes={_pdt_iso!r} pdi_valid={_pdi_valid}"
-    )
-    note(
-        f"{log_prefix}: pdi_decision need_new_row={_pdi_need_new_row} reason={_pdi_decision_reason}"
+        f"{log_prefix}: pdi_decision need_new_row={_pdi_need_new_row} reason={_pdi_decision_reason} "
+        f"closed_future_expiry_row={_pdi_has_closed_future_expiry_row} "
+        f"row_count={_pdi_row_count}"
     )
 
-    if _pdi_row_count > 0 and _pdi_expiry_raw and not _parsed_any:
-        note(
-            f"{log_prefix}: PDI list has row(s) (count≈{_pdi_row_count}) but PDI Expiry text did not parse "
-            f"(samples={_pdi_expiry_raw[:3]!r}) — will add a new PDI row."
-        )
-
-    if _pdi_row_count > 0 and not _pdi_need_new_row:
-        _exp_note = ""
-        if _pdi_best_dt is not None:
-            _exp_note = f"latest PDI Expiry (datetime)={_pdi_best_dt.isoformat(timespec='seconds')}"
-        elif _pdi_max_expiry is not None:
-            _exp_note = f"latest PDI Expiry (date)={_pdi_max_expiry.isoformat()}"
-        note(
-            f"{log_prefix}: PDI list has row(s) with valid expiry ({_exp_note}, "
-            f"grace={_pdi_buffer.total_seconds() / 60:.0f}m vs now IST, today={_today.isoformat()}) — "
-            "skipping Service Request New / pick / Submit."
-        )
-    elif _pdi_need_new_row and _pdi_row_count > 0 and _parsed_any and not _pdi_valid:
-        note(
-            f"{log_prefix}: PDI Expiry not valid vs now (grace={_pdi_buffer.total_seconds() / 60:.0f}m) — "
-            "adding a new PDI row."
-        )
-    elif _pdi_row_count == 0:
-        note(f"{log_prefix}: PDI list has no data rows — adding new PDI row.")
+    if _pdi_row_count == 0:
+        note(f"{log_prefix}: PDI grid has no data rows — Service Request List:New.")
         _dump_frames_and_elements_for_debug(
             page, content_frame_selector=content_frame_selector,
             output_dir=_debug_dump_dir, label="pdi_scrape_zero_rows",
             note=note, log_prefix=log_prefix,
         )
+    elif _pdi_need_new_row:
+        note(
+            f"{log_prefix}: PDI List:New — no Closed row with parsable future PDI Expiry "
+            f"(IST grace={_pdi_buffer.total_seconds() / 60:.0f}m)."
+        )
+    else:
+        note(
+            f"{log_prefix}: PDI skip List:New — at least one Closed row with future PDI Expiry "
+            f"(IST grace={_pdi_buffer.total_seconds() / 60:.0f}m)."
+        )
 
     logger.debug(
-        "pdi_existing: rows=%d header=%s need_new=%s expiry=%s",
-        _pdi_row_count, _pdi_header_matched, _pdi_need_new_row,
-        _pdi_max_expiry.isoformat() if _pdi_max_expiry else "",
+        "pdi_gate: rows=%d need_new=%s reason=%s closed_future=%s",
+        _pdi_row_count,
+        _pdi_need_new_row,
+        _pdi_decision_reason,
+        _pdi_has_closed_future_expiry_row,
     )
 
     def _eval_pdi_grid_rowcount() -> int:
@@ -3696,6 +3801,39 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             except Exception:
                 continue
         return _rc
+
+    def _pdi_closed_future_expiry_present_now() -> bool:
+        """True if any Closed row has parsable PDI expiry still valid (same IST buffer as pre-check gate)."""
+        _raws_now: list[str] = []
+        for _proot in _roots():
+            try:
+                _cec = _proot.evaluate(_pdi_closed_expiry_collect_js)
+                if isinstance(_cec, dict):
+                    _raws_now.extend([str(x) for x in (_cec.get("raws") or [])])
+            except Exception:
+                continue
+        for _cer in _raws_now:
+            _cer_s = str(_cer or "").strip()
+            if not _cer_s:
+                continue
+            _dt_c = _siebel_parse_pdi_expiry_cell_to_datetime(_cer_s)
+            _dd_c = _siebel_parse_grid_date_cell_to_date(_cer_s) if _dt_c is None else None
+            _row_ed: list[date] = []
+            _row_edt: list[datetime] = []
+            if _dt_c is not None:
+                _row_edt.append(_dt_c)
+            elif _dd_c is not None:
+                _row_ed.append(_dd_c)
+            else:
+                continue
+            _row_ok, _, _ = _siebel_pdi_expiry_still_valid(
+                expiry_dates=_row_ed,
+                expiry_datetimes=_row_edt,
+                buffer=_pdi_buffer,
+            )
+            if _row_ok:
+                return True
+        return False
 
     def _pdi_focus_first_pdi_jqgrow() -> None:
         """Focus first visible PDI jqGrid data row so pick icons bind to the intended line."""
@@ -3792,52 +3930,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 _used = _pdi_pick_id
                 _branch_hit("_click_pdi_pick_icon", f"id_{_pdi_pick_id}_{stage_label}")
                 break
-        if not _ok:
-            _css_fb = (
-                "span.siebui-icon-pick",
-                "a.siebui-icon-pick",
-                "img.siebui-icon-pick",
-                "[class*='siebui-icon-pick' i]",
-                "a.siebui-icon-picklist",
-                "img.siebui-icon-picklist",
-                "[class*='siebui-icon-picklist' i]",
-                "a[title*='Pick' i]",
-                "img[title*='Pick' i]",
-            )
-            for _css in _css_fb:
-                for _root in _roots():
-                    try:
-                        _grp = _root.locator(_css)
-                        _nmax = _grp.count()
-                        if _nmax < 1:
-                            continue
-                        for _ni in (0, 1, 2, 3):
-                            if _ni >= _nmax:
-                                continue
-                            _loc = _grp.nth(_ni)
-                            if not _loc.is_visible(timeout=300):
-                                continue
-                            try:
-                                _loc.scroll_into_view_if_needed(timeout=300)
-                            except Exception:
-                                pass
-                            try:
-                                _loc.click(timeout=_tmo)
-                            except Exception:
-                                _loc.click(timeout=_tmo, force=True)
-                            _ok, _used = True, f"{_css}@nth={_ni}"
-                            _branch_hit("_click_pdi_pick_icon", f"css_{_css[:30]}_{stage_label}")
-                            note(
-                                f"{log_prefix}: PDI pick via CSS {_css!r} nth={_ni} [{stage_label}] "
-                                "(fallback after id misses)."
-                            )
-                            break
-                        if _ok:
-                            break
-                    except Exception:
-                        continue
-                if _ok:
-                    break
         return _ok, _used
 
     def _pdi_log_picklist_miss_diag() -> None:
@@ -3899,7 +3991,570 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         else:
             note(f"{log_prefix}: PDI pick icon miss — no per-root diagnostics collected.")
 
+    def _pdi_submit_after_edit(
+        *,
+        verify_row_count_increased: bool,
+        rows_before: int | None,
+        log_suffix: str,
+        verify_closed_future_expiry: bool = False,
+    ) -> tuple[bool, str | None]:
+        """PDI tab only: Submit after pick-applet edit; verify row-count delta and/or Closed+future expiry."""
+        _sub_done = False
+        for root in _roots():
+            for sub_css in (
+                "button:has-text('Submit')",
+                "a:has-text('Submit')",
+                "input[type='button'][value='Submit' i]",
+                "button[aria-label*='Submit' i]",
+                "a[aria-label*='Submit' i]",
+                "button[title*='Submit' i]",
+                "a[title*='Submit' i]",
+            ):
+                try:
+                    sub_loc = root.locator(sub_css).first
+                    if sub_loc.count() > 0 and sub_loc.is_visible(timeout=300):
+                        try:
+                            sub_loc.click(timeout=_tmo)
+                        except Exception:
+                            sub_loc.click(timeout=_tmo, force=True)
+                        _sub_done = True
+                        note(f"{log_prefix}: clicked Submit on PDI form ({log_suffix}).")
+                        _safe_page_wait(page, 300, log_label=f"after_pdi_submit_{log_suffix}")
+                        break
+                except Exception:
+                    continue
+            if _sub_done:
+                break
+        if not _sub_done:
+            return False, "Could not save PDI."
+
+        _sub_err = _detect_siebel_error_popup(page, content_frame_selector)
+        if _sub_err:
+            note(f"{log_prefix}: Siebel error after PDI Submit ({log_suffix}) → {_sub_err[:500]!r}")
+            return False, "Siebel blocked PDI save."
+
+        _safe_page_wait(page, 300, log_label=f"pdi_post_submit_verify_{log_suffix}")
+        _sub_err_late = _detect_siebel_error_popup(page, content_frame_selector)
+        if _sub_err_late:
+            note(
+                f"{log_prefix}: Siebel error after PDI Submit ({log_suffix}, delayed) → "
+                f"{_sub_err_late[:500]!r}"
+            )
+            return False, "Siebel blocked PDI save."
+
+        if verify_closed_future_expiry:
+            if _pdi_closed_future_expiry_present_now():
+                note(
+                    f"{log_prefix}: PDI post-Submit verified — Closed row with future PDI Expiry "
+                    f"(IST grace={_pdi_buffer.total_seconds() / 60:.0f}m, {log_suffix})."
+                )
+                logger.debug("pdi_post_submit_ok closed_future_expiry %s", log_suffix)
+                return True, None
+            _safe_page_wait(page, 300, log_label=f"pdi_closed_expiry_recheck_{log_suffix}")
+            if _pdi_closed_future_expiry_present_now():
+                note(
+                    f"{log_prefix}: PDI post-Submit verified after wait — Closed row with future PDI Expiry "
+                    f"(IST grace={_pdi_buffer.total_seconds() / 60:.0f}m, {log_suffix})."
+                )
+                logger.debug("pdi_post_submit_ok closed_future_expiry_recheck %s", log_suffix)
+                return True, None
+            note(
+                f"{log_prefix}: PDI post-Submit: no Closed row with future PDI Expiry "
+                f"(IST grace={_pdi_buffer.total_seconds() / 60:.0f}m, {log_suffix})."
+            )
+            logger.debug("pdi_post_submit_fail no_closed_future_expiry %s", log_suffix)
+            return False, "Could not complete PDI save."
+
+        # Legacy: jqGrid heuristic row-count delta (often misreports vs visible rows).
+        if verify_row_count_increased and rows_before is not None:
+            _rows_after = _eval_pdi_grid_rowcount()
+            if _rows_after <= rows_before:
+                _safe_page_wait(page, 300, log_label=f"pdi_rowcount_recheck_{log_suffix}")
+                _rows_after = _eval_pdi_grid_rowcount()
+            if _rows_after <= rows_before:
+                note(
+                    f"{log_prefix}: PDI row count unchanged after Submit ({log_suffix}) "
+                    f"(before={rows_before}, after={_rows_after})."
+                )
+                return False, "Could not complete PDI save."
+            note(
+                f"{log_prefix}: PDI list row count increased after Submit ({log_suffix}) "
+                f"({rows_before} → {_rows_after})."
+            )
+        return True, None
+
+    # _pdi_existing_open_probe_js = """() => {
+        # const vis = (el) => {
+            # if (!el) return false;
+            # const st = window.getComputedStyle(el);
+            # if (st.display === 'none' || st.visibility === 'hidden') return false;
+            # const r = el.getBoundingClientRect();
+            # return r.width > 0 && r.height > 0;
+        # };
+        # const isLeftSearchPane = (el) => {
+            # let n = el;
+            # for (let d = 0; d < 22 && n; d++) {
+                # const pid = String(n.id || '').toLowerCase();
+                # if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
+                    # return true;
+                # }
+                # n = n.parentElement;
+            # }
+            # return false;
+        # };
+        # const tb = document.getElementById('s_2_l');
+        # if (!tb || !vis(tb) || isLeftSearchPane(tb)) return { editExisting: false };
+#
+        # const parseCreatedMs = (raw) => {
+            # const t = String(raw || '').trim().replace(/\\s+/g, ' ');
+            # const m = t.match(/(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})\\s+(\\d{1,2}):(\\d{2}):(\\d{2})\\s*(AM|PM)?/i);
+            # if (m) {
+                # let h = parseInt(m[4], 10);
+                # const mi = parseInt(m[5], 10);
+                # const se = parseInt(m[6], 10);
+                # const ap = (m[7] || '').toUpperCase();
+                # if (ap === 'PM' && h < 12) h += 12;
+                # if (ap === 'AM' && h === 12) h = 0;
+                # return new Date(
+                    # parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10), h, mi, se
+                # ).getTime();
+            # }
+            # const m2 = t.match(/(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/);
+            # if (m2) {
+                # return new Date(
+                    # parseInt(m2[3], 10), parseInt(m2[2], 10) - 1, parseInt(m2[1], 10)
+                # ).getTime();
+            # }
+            # return -1;
+        # };
+#
+        # const mechanicLooksEmpty = (mechTd) => {
+            # const inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+            # const val = inp ? String(inp.value || '').trim() : '';
+            # const tit = String(mechTd.getAttribute('title') || '')
+                # .replace(/\\u00a0/g, ' ')
+                # .trim();
+            # const txt = String(mechTd.innerText || mechTd.textContent || '')
+                # .replace(/\\s+/g, ' ')
+                # .replace(/\\u00a0/g, ' ')
+                # .trim();
+            # const blob = val || tit || txt;
+            # return blob.length === 0;
+        # };
+#
+        # const rows = Array.from(tb.querySelectorAll('tbody tr.jqgrow'));
+        # let best = null;
+        # let bestMs = -1;
+        # let fallbackLast = null;
+        # for (const tr of rows) {
+            # if (!vis(tr)) continue;
+            # const statusTd = tr.querySelector('td[id*="_l_Status"]');
+            # const createdTd = tr.querySelector('td[id*="_l_Created"]');
+            # const mechTd = tr.querySelector('td[id*="HHML_Mechanic_Full_Name"]');
+            # if (!statusTd || !createdTd || !mechTd) continue;
+            # const stRaw = String(statusTd.getAttribute('title') || statusTd.textContent || '').trim();
+            # const stLow = stRaw.toLowerCase();
+            # if (!/\\bopen\\b/.test(stLow) && stLow !== 'open') continue;
+            # if (!mechanicLooksEmpty(mechTd)) continue;
+#
+            # const crRaw = String(createdTd.getAttribute('title') || createdTd.textContent || '').trim();
+            # const cms = parseCreatedMs(crRaw);
+            # const cand = { tr, mechTd, createdRaw: crRaw, cms };
+            # fallbackLast = cand;
+            # if (cms >= 0 && cms >= bestMs) {
+                # bestMs = cms;
+                # best = cand;
+            # }
+        # }
+        # const pick = best || fallbackLast;
+        # if (!pick) return { editExisting: false };
+        # return {
+            # editExisting: true,
+            # createdRaw: pick.createdRaw,
+            # createdMs: pick.cms,
+        # };
+    # }"""
+#
+    # _pdi_existing_open_focus_pick_js = """() => {
+        # const relaxedVis = (el) => {
+            # if (!el) return false;
+            # const st = window.getComputedStyle(el);
+            # return st.display !== 'none' && st.visibility !== 'hidden';
+        # };
+        # const vis = (el) => {
+            # if (!el) return false;
+            # const st = window.getComputedStyle(el);
+            # if (st.display === 'none' || st.visibility === 'hidden') return false;
+            # const r = el.getBoundingClientRect();
+            # return r.width > 0 && r.height > 0;
+        # };
+        # const tdVis = (el) => relaxedVis(el) && (() => {
+            # const r = el.getBoundingClientRect();
+            # return r.width > 0 && r.height > 0;
+        # })();
+        # const isLeftSearchPane = (el) => {
+            # let n = el;
+            # for (let d = 0; d < 22 && n; d++) {
+                # const pid = String(n.id || '').toLowerCase();
+                # if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
+                    # return true;
+                # }
+                # n = n.parentElement;
+            # }
+            # return false;
+        # };
+        # const tb = document.getElementById('s_2_l');
+        # if (!tb || !relaxedVis(tb) || isLeftSearchPane(tb)) return { ok: false, reason: 'no_table' };
+#
+        # const parseCreatedMs = (raw) => {
+            # const t = String(raw || '').trim().replace(/\\s+/g, ' ');
+            # const m = t.match(/(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})\\s+(\\d{1,2}):(\\d{2}):(\\d{2})\\s*(AM|PM)?/i);
+            # if (m) {
+                # let h = parseInt(m[4], 10);
+                # const mi = parseInt(m[5], 10);
+                # const se = parseInt(m[6], 10);
+                # const ap = (m[7] || '').toUpperCase();
+                # if (ap === 'PM' && h < 12) h += 12;
+                # if (ap === 'AM' && h === 12) h = 0;
+                # return new Date(
+                    # parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10), h, mi, se
+                # ).getTime();
+            # }
+            # const m2 = t.match(/(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/);
+            # if (m2) {
+                # return new Date(
+                    # parseInt(m2[3], 10), parseInt(m2[2], 10) - 1, parseInt(m2[1], 10)
+                # ).getTime();
+            # }
+            # return -1;
+        # };
+#
+        # const mechanicLooksEmpty = (mechTd) => {
+            # const inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+            # const val = inp ? String(inp.value || '').trim() : '';
+            # const tit = String(mechTd.getAttribute('title') || '')
+                # .replace(/\\u00a0/g, ' ')
+                # .trim();
+            # const txt = String(mechTd.innerText || mechTd.textContent || '')
+                # .replace(/\\s+/g, ' ')
+                # .replace(/\\u00a0/g, ' ')
+                # .trim();
+            # const blob = val || tit || txt;
+            # return blob.length === 0;
+        # };
+#
+        # const rows = Array.from(tb.querySelectorAll('tbody tr.jqgrow'));
+        # let best = null;
+        # let bestMs = -1;
+        # let fallbackLast = null;
+        # for (const tr of rows) {
+            # if (!vis(tr)) continue;
+            # const statusTd = tr.querySelector('td[id*="_l_Status"]');
+            # const createdTd = tr.querySelector('td[id*="_l_Created"]');
+            # const mechTd = tr.querySelector('td[id*="HHML_Mechanic_Full_Name"]');
+            # if (!statusTd || !createdTd || !mechTd) continue;
+            # const stRaw = String(statusTd.getAttribute('title') || statusTd.textContent || '').trim();
+            # const stLow = stRaw.toLowerCase();
+            # if (!/\\bopen\\b/.test(stLow) && stLow !== 'open') continue;
+            # if (!mechanicLooksEmpty(mechTd)) continue;
+#
+            # const crRaw = String(createdTd.getAttribute('title') || createdTd.textContent || '').trim();
+            # const cms = parseCreatedMs(crRaw);
+            # const cand = { tr, mechTd, createdRaw: crRaw, cms };
+            # fallbackLast = cand;
+            # if (cms >= 0 && cms >= bestMs) {
+                # bestMs = cms;
+                # best = cand;
+            # }
+        # }
+        # const pick = best || fallbackLast;
+        # if (!pick) return { ok: false, reason: 'no_candidate' };
+#
+        # const { tr, mechTd } = pick;
+        # try { tr.scrollIntoView({ block: 'center' }); } catch (e0) {}
+        # const tds = tr.querySelectorAll('td');
+        # if (tds.length && tdVis(tds[0])) {
+            # try { tds[0].click(); } catch (e1) {}
+        # } else {
+            # try { tr.click(); } catch (e2) {}
+        # }
+        # try { mechTd.click(); } catch (e2b) {}
+        # let inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+        # if (!inp) {
+            # try {
+                # mechTd.dispatchEvent(new MouseEvent('dblclick', {
+                    # bubbles: true, cancelable: true, view: window,
+                # }));
+            # } catch (e2c) {}
+            # inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+        # }
+        # if (!inp) {
+            # try {
+                # tr.dispatchEvent(new MouseEvent('dblclick', {
+                    # bubbles: true, cancelable: true, view: window,
+                # }));
+            # } catch (e2d) {}
+            # inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+        # }
+        # if (inp) {
+            # try { inp.focus(); } catch (e3) {}
+            # try { inp.click(); } catch (e4) {}
+        # }
+#
+        # const spanPick = mechTd.querySelector('span.siebui-icon-pick');
+        # if (spanPick && relaxedVis(spanPick)) {
+            # try { spanPick.scrollIntoView({ block: 'center' }); } catch (e5) {}
+            # try { spanPick.click(); } catch (e6) {}
+            # return { ok: true, via: 'span_pick', createdRaw: pick.createdRaw };
+        # }
+        # const icon = mechTd.querySelector('[id="s_2_2_32_0_icon"]');
+        # if (icon && relaxedVis(icon)) {
+            # try { icon.scrollIntoView({ block: 'center' }); } catch (e7) {}
+            # try { icon.click(); } catch (e8) {}
+            # return { ok: true, via: 'icon_in_cell', createdRaw: pick.createdRaw };
+        # }
+        # return { ok: false, reason: 'no_pick_control', createdRaw: pick.createdRaw };
+    # }"""
+#
+    _pdi_post_new_focus_pick_js = """() => {
+        const relaxedVis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            return st.display !== 'none' && st.visibility !== 'hidden';
+        };
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const tdVis = (el) => relaxedVis(el) && (() => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        })();
+        const isLeftSearchPane = (el) => {
+            let n = el;
+            for (let d = 0; d < 22 && n; d++) {
+                const pid = String(n.id || '').toLowerCase();
+                if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
+                    return true;
+                }
+                n = n.parentElement;
+            }
+            return false;
+        };
+        const tb = document.getElementById('s_2_l');
+        if (!tb || !relaxedVis(tb) || isLeftSearchPane(tb)) return { ok: false, reason: 'no_table' };
+
+        const mechanicLooksEmpty = (mechTd) => {
+            const inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+            const val = inp ? String(inp.value || '').trim() : '';
+            const tit = String(mechTd.getAttribute('title') || '')
+                .replace(/\\u00a0/g, ' ')
+                .trim();
+            const txt = String(mechTd.innerText || mechTd.textContent || '')
+                .replace(/\\s+/g, ' ')
+                .replace(/\\u00a0/g, ' ')
+                .trim();
+            const blob = val || tit || txt;
+            return blob.length === 0;
+        };
+
+        const parseCreatedMs = (raw) => {
+            const t = String(raw || '').trim().replace(/\\s+/g, ' ');
+            const m = t.match(/(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})\\s+(\\d{1,2}):(\\d{2}):(\\d{2})\\s*(AM|PM)?/i);
+            if (m) {
+                let h = parseInt(m[4], 10);
+                const mi = parseInt(m[5], 10);
+                const se = parseInt(m[6], 10);
+                const ap = (m[7] || '').toUpperCase();
+                if (ap === 'PM' && h < 12) h += 12;
+                if (ap === 'AM' && h === 12) h = 0;
+                return new Date(
+                    parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10), h, mi, se
+                ).getTime();
+            }
+            const m2 = t.match(/(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/);
+            if (m2) {
+                return new Date(
+                    parseInt(m2[3], 10), parseInt(m2[2], 10) - 1, parseInt(m2[1], 10)
+                ).getTime();
+            }
+            return -1;
+        };
+
+        const rows = Array.from(tb.querySelectorAll('tbody tr.jqgrow'));
+        let best = null;
+        let bestMs = -1;
+        let firstOpenEmpty = null;
+        for (const tr of rows) {
+            if (!vis(tr)) continue;
+            const statusTd = tr.querySelector('td[id*="_l_Status"]');
+            const createdTd = tr.querySelector('td[id*="_l_Created"]');
+            const mechTd = tr.querySelector('td[id*="HHML_Mechanic_Full_Name"]');
+            if (!mechTd || !mechanicLooksEmpty(mechTd)) continue;
+            const stRaw = statusTd
+                ? String(statusTd.getAttribute('title') || statusTd.textContent || '').trim()
+                : '';
+            const stLow = stRaw.toLowerCase();
+            const isOpen = !stRaw || /\\bopen\\b/.test(stLow) || stLow === 'open';
+            if (!isOpen) continue;
+            const crRaw = createdTd
+                ? String(createdTd.getAttribute('title') || createdTd.textContent || '').trim()
+                : '';
+            const cms = parseCreatedMs(crRaw);
+            const hasEdit = mechTd.classList.contains('edit-cell')
+                || !!mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+            const cand = { tr, mechTd, createdRaw: crRaw, cms, hasEdit };
+            if (!firstOpenEmpty) firstOpenEmpty = cand;
+            if (cms >= 0 && cms > bestMs) {
+                bestMs = cms;
+                best = cand;
+            }
+        }
+        let pick = null;
+        let rowHint = 'newest_open_empty';
+        if (best && bestMs >= 0) {
+            pick = { tr: best.tr, mechTd: best.mechTd, rowHint };
+        } else if (firstOpenEmpty) {
+            pick = {
+                tr: firstOpenEmpty.tr,
+                mechTd: firstOpenEmpty.mechTd,
+                rowHint: 'first_open_empty_dom',
+            };
+        }
+        if (!pick) return { ok: false, reason: 'no_candidate' };
+
+        const { tr, mechTd } = pick;
+        try { tr.scrollIntoView({ block: 'center' }); } catch (e0) {}
+        const tds = tr.querySelectorAll('td');
+        if (tds.length && tdVis(tds[0])) {
+            try { tds[0].click(); } catch (e1) {}
+        } else {
+            try { tr.click(); } catch (e2) {}
+        }
+        try { mechTd.click(); } catch (e2b) {}
+        let inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+        if (!inp) {
+            try {
+                mechTd.dispatchEvent(new MouseEvent('dblclick', {
+                    bubbles: true, cancelable: true, view: window,
+                }));
+            } catch (e2c) {}
+            inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+        }
+        if (!inp) {
+            try {
+                tr.dispatchEvent(new MouseEvent('dblclick', {
+                    bubbles: true, cancelable: true, view: window,
+                }));
+            } catch (e2d) {}
+            inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
+        }
+        if (inp) {
+            try { inp.focus(); } catch (e3) {}
+            try { inp.click(); } catch (e4) {}
+        }
+
+        const spanPick = mechTd.querySelector('span.siebui-icon-pick');
+        if (spanPick && relaxedVis(spanPick)) {
+            try { spanPick.scrollIntoView({ block: 'center' }); } catch (e5) {}
+            try { spanPick.click(); } catch (e6) {}
+            return { ok: true, via: 'span_pick', rowHint: pick.rowHint };
+        }
+        const icon = mechTd.querySelector('[id="s_2_2_32_0_icon"]');
+        if (icon && relaxedVis(icon)) {
+            try { icon.scrollIntoView({ block: 'center' }); } catch (e7) {}
+            try { icon.click(); } catch (e8) {}
+            return { ok: true, via: 'icon_in_cell', rowHint: pick.rowHint };
+        }
+        return { ok: false, reason: 'no_pick_control', rowHint: pick.rowHint };
+    }"""
+#
+    # def _pdi_probe_existing_open_needs_technician() -> bool:
+        # for _proot in _roots():
+            # try:
+                # _probe = _proot.evaluate(_pdi_existing_open_probe_js)
+                # if isinstance(_probe, dict) and _probe.get("editExisting"):
+                    # return True
+            # except Exception:
+                # continue
+        # return False
+
     if _pdi_need_new_row:
+        # _pdi_edit_existing_open = bool(_pdi_row_count > 0 and _pdi_probe_existing_open_needs_technician())
+        #
+        # if _pdi_edit_existing_open:
+        #     note(
+        #         f"{log_prefix}: PDI edit-existing-open path — newest Open row missing Technician "
+        #         "(skip Service Request List:New)."
+        #     )
+        #     _safe_page_wait(page, 300, log_label="before_pdi_existing_open_pick")
+        #
+        #     _pdi_pick_ok = False
+        #     _pdi_pick_used = ""
+        #     for _proot in _roots():
+        #         try:
+        #             _pick_result = _proot.evaluate(_pdi_existing_open_focus_pick_js)
+        #             if isinstance(_pick_result, dict) and _pick_result.get("ok"):
+        #                 _pdi_pick_ok = True
+        #                 _pdi_pick_used = str(_pick_result.get("via") or "existing_open_js")
+        #                 note(
+        #                     f"{log_prefix}: PDI technician pick opened via existing-open JS "
+        #                     f"(via={_pdi_pick_used!r}, created={_pick_result.get('createdRaw')!r})."
+        #                 )
+        #                 break
+        #         except Exception:
+        #             continue
+        #
+        #     # Fallback (disabled): Tab + global pick-id retries / miss diagnostics after anchored JS fails.
+        #     # if not _pdi_pick_ok:
+        #     #     for _pdi_pick_try in range(6):
+        #     #         if _pdi_pick_try > 0:
+        #     #             try:
+        #     #                 page.keyboard.press("Tab")
+        #     #                 _safe_page_wait(
+        #     #                     page, 300, log_label=f"pdi_tab_existing_open_pick_try_{_pdi_pick_try}",
+        #     #                 )
+        #     #             except Exception:
+        #     #                 pass
+        #     #         _pdi_pick_ok, _pdi_pick_used = _click_pdi_pick_icon("pdi_existing_open")
+        #     #         if _pdi_pick_ok:
+        #     #             if _pdi_pick_try > 0:
+        #     #                 note(
+        #     #                     f"{log_prefix}: PDI existing-open pick icon succeeded after "
+        #     #                     f"{_pdi_pick_try} extra Tab(s)."
+        #     #                 )
+        #     #             note(
+        #     #                 f"{log_prefix}: PDI existing-open pick icon clicked "
+        #     #                 f"(id={_pdi_pick_used!r}, tabs_before={_pdi_pick_try})."
+        #     #             )
+        #     #             break
+        #     # if not _pdi_pick_ok:
+        #     #     note(
+        #     #         f"{log_prefix}: PDI existing-open pick icon not found after JS + id scan + Tab retries "
+        #     #         "— continuing to LOV step anyway."
+        #     #     )
+        #     #     _pdi_log_picklist_miss_diag()
+        #
+        #     _siebel_lov_pick_first_row_ok_pdi_style(
+        #         page,
+        #         roots=_roots,
+        #         action_timeout_ms=action_timeout_ms,
+        #         note=note,
+        #         log_prefix=log_prefix,
+        #         stage_label="PDI",
+        #         ctrl_s_after_close=True,
+        #     )
+        #
+        #     _sub_ok, _sub_err = _pdi_submit_after_edit(
+        #         verify_row_count_increased=False,
+        #         rows_before=None,
+        #         log_suffix="existing_open",
+        #     )
+        #     if not _sub_ok:
+        #         return False, _sub_err or "Could not save PDI."
         _pdi_rows_before_new = _eval_pdi_grid_rowcount()
         note(
             f"{log_prefix}: PDI new-row flow — Service Request list rowCount≈{_pdi_rows_before_new} "
@@ -3947,88 +4602,53 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 output_dir=_debug_dump_dir, label="pdi_plus_not_found",
                 note=note, log_prefix=log_prefix,
             )
-            return (
-                False,
-                "Could not click 'Service Request List:New' on PDI tab "
-                "(tried s_3_1_12_0_Ctrl / s_2_1_14_0_Ctrl / s_2_2_32_0 + scan; "
-                "see _siebel_click_service_request_list_new_record).",
-            )
-        _safe_page_wait(page, 300, log_label="after_sr_list_new")
+            return False, "Could not find + button in PDI tab."
+        _safe_page_wait(page, 500, log_label="after_sr_list_new_settle")
 
-        # After clicking +, focus lands on technician field. Click the adjacent pick icon.
-        # First try JS to find the focused/active input and click the siebui-icon-pick next to it.
-        _pdi_pick_js = """() => {
-            const vis = (el) => {
-                if (!el) return false;
-                const st = window.getComputedStyle(el);
-                if (st.display === 'none' || st.visibility === 'hidden') return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 0 && r.height > 0;
-            };
-            // Try to find pick icon by known ID first
-            const pickIds = ['s_2_2_32_0_icon', 's_2_2_32_0', 's_2_2_31_0_icon', 's_2_2_31_0'];
-            for (const pid of pickIds) {
-                const el = document.getElementById(pid);
-                if (el && vis(el)) {
-                    el.scrollIntoView({ block: 'center' });
-                    el.click();
-                    return { ok: true, method: 'id', id: pid };
-                }
-            }
-            // Fallback: find any visible siebui-icon-pick and click it
-            const picks = Array.from(document.querySelectorAll('.siebui-icon-pick, [class*="siebui-icon-pick"]'));
-            for (const p of picks) {
-                if (vis(p)) {
-                    p.scrollIntoView({ block: 'center' });
-                    p.click();
-                    return { ok: true, method: 'css', id: p.id || 'no-id' };
-                }
-            }
-            return { ok: false, method: 'none', id: '' };
-        }"""
-
+        # Post-+: same anchoring as existing-open — resolve mechanic td on the new row, activate,
+        # cell-scoped relaxed pick click (not global getElementById + strict bbox).
         _pdi_pick_ok = False
         _pdi_pick_used = ""
         for _proot in _roots():
             try:
-                _pick_result = _proot.evaluate(_pdi_pick_js)
+                _pick_result = _proot.evaluate(_pdi_post_new_focus_pick_js)
                 if isinstance(_pick_result, dict) and _pick_result.get("ok"):
                     _pdi_pick_ok = True
-                    _pdi_pick_used = f"{_pick_result.get('method')}:{_pick_result.get('id')}"
+                    _pdi_pick_used = str(_pick_result.get("via") or "post_new_js")
                     note(
-                        f"{log_prefix}: PDI pick icon clicked via JS "
-                        f"(method={_pick_result.get('method')!r}, id={_pick_result.get('id')!r})."
+                        f"{log_prefix}: PDI technician pick opened after List:New (anchored JS "
+                        f"via={_pdi_pick_used!r}, rowHint={_pick_result.get('rowHint')!r})."
                     )
                     break
             except Exception:
                 continue
 
-        # Fallback to original approach if JS didn't work
-        if not _pdi_pick_ok:
-            for _pdi_pick_try in range(6):
-                if _pdi_pick_try > 0:
-                    try:
-                        page.keyboard.press("Tab")
-                        _safe_page_wait(page, 300, log_label=f"pdi_tab_before_pick_try_{_pdi_pick_try}")
-                    except Exception:
-                        pass
-                _pdi_pick_ok, _pdi_pick_used = _click_pdi_pick_icon("pdi_after_new")
-                if _pdi_pick_ok:
-                    if _pdi_pick_try > 0:
-                        note(
-                            f"{log_prefix}: PDI pick icon succeeded after {_pdi_pick_try} extra Tab(s)."
-                        )
-                    note(
-                        f"{log_prefix}: PDI pick icon clicked "
-                        f"(id={_pdi_pick_used!r}, tabs_before={_pdi_pick_try})."
-                    )
-                    break
-        if not _pdi_pick_ok:
-            note(
-                f"{log_prefix}: PDI pick icon not found after JS + id + CSS fallback (with Tab retries) — "
-                "continuing after Service Request List:New only."
-            )
-            _pdi_log_picklist_miss_diag()
+        # Fallback (disabled): Tab + global pick-id retries / miss diagnostics after anchored JS fails.
+        # if not _pdi_pick_ok:
+        #     for _pdi_pick_try in range(6):
+        #         if _pdi_pick_try > 0:
+        #             try:
+        #                 page.keyboard.press("Tab")
+        #                 _safe_page_wait(page, 300, log_label=f"pdi_tab_before_pick_try_{_pdi_pick_try}")
+        #             except Exception:
+        #                 pass
+        #         _pdi_pick_ok, _pdi_pick_used = _click_pdi_pick_icon("pdi_after_new")
+        #         if _pdi_pick_ok:
+        #             if _pdi_pick_try > 0:
+        #                 note(
+        #                     f"{log_prefix}: PDI pick icon succeeded after {_pdi_pick_try} extra Tab(s)."
+        #                 )
+        #             note(
+        #                 f"{log_prefix}: PDI pick icon clicked "
+        #                 f"(id={_pdi_pick_used!r}, tabs_before={_pdi_pick_try})."
+        #             )
+        #             break
+        # if not _pdi_pick_ok:
+        #     note(
+        #         f"{log_prefix}: PDI pick icon not found after JS + id scan + Tab retries "
+        #         "(Playwright id fallback) — continuing after Service Request List:New only."
+        #     )
+        #     _pdi_log_picklist_miss_diag()
 
         _siebel_lov_pick_first_row_ok_pdi_style(
             page,
@@ -4037,241 +4657,31 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             note=note,
             log_prefix=log_prefix,
             stage_label="PDI",
+            ctrl_s_after_close=True,
         )
 
-        _pdi_submit_done = False
-        for root in _roots():
-            for sub_css in (
-                "button:has-text('Submit')",
-                "a:has-text('Submit')",
-                "input[type='button'][value='Submit' i]",
-                "button[aria-label*='Submit' i]",
-                "a[aria-label*='Submit' i]",
-                "button[title*='Submit' i]",
-                "a[title*='Submit' i]",
-            ):
-                try:
-                    sub_loc = root.locator(sub_css).first
-                    if sub_loc.count() > 0 and sub_loc.is_visible(timeout=300):
-                        try:
-                            sub_loc.click(timeout=_tmo)
-                        except Exception:
-                            sub_loc.click(timeout=_tmo, force=True)
-                        _pdi_submit_done = True
-                        note(f"{log_prefix}: clicked Submit on PDI form.")
-                        _safe_page_wait(page, 300, log_label="after_pdi_submit")
-                        break
-                except Exception:
-                    continue
-            if _pdi_submit_done:
-                break
-        if not _pdi_submit_done:
-            return False, "Could not click Submit button on PDI form."
-
-        _pdi_submit_err = _detect_siebel_error_popup(page, content_frame_selector)
-        if _pdi_submit_err:
-            note(f"{log_prefix}: Siebel error after PDI Submit → {_pdi_submit_err!r:.300}")
-            return False, f"Siebel error after PDI Submit: {_pdi_submit_err[:200]}"
-
-        _safe_page_wait(page, 300, log_label="pdi_post_submit_row_verify")
-        _pdi_submit_err_late = _detect_siebel_error_popup(page, content_frame_selector)
-        if _pdi_submit_err_late:
-            note(f"{log_prefix}: Siebel error after PDI Submit (delayed) → {_pdi_submit_err_late!r:.300}")
-            return False, f"Siebel error after PDI Submit: {_pdi_submit_err_late[:200]}"
-
-        _pdi_rows_after_submit = _eval_pdi_grid_rowcount()
-        if _pdi_rows_after_submit <= _pdi_rows_before_new:
-            _safe_page_wait(page, 300, log_label="pdi_rowcount_recheck")
-            _pdi_rows_after_submit = _eval_pdi_grid_rowcount()
-        if _pdi_rows_after_submit <= _pdi_rows_before_new:
-            return (
-                False,
-                "PDI Submit did not increase the Service Request list row count "
-                f"(before={_pdi_rows_before_new}, after={_pdi_rows_after_submit}).",
-            )
-        note(
-            f"{log_prefix}: PDI list row count increased after Submit "
-            f"({_pdi_rows_before_new} → {_pdi_rows_after_submit})."
+        _sub_ok, _sub_err = _pdi_submit_after_edit(
+            verify_row_count_increased=False,
+            rows_before=None,
+            log_suffix="new_row",
+            verify_closed_future_expiry=True,
         )
+        if not _sub_ok:
+            return False, _sub_err or "Could not save PDI."
     else:
-        # Valid PDI row exists — check if technician is filled; if not, fill it.
-        _tech_check_js = """() => {
-            const vis = (el) => {
-                if (!el) return false;
-                const st = window.getComputedStyle(el);
-                if (st.display === 'none' || st.visibility === 'hidden') return false;
-                const r = el.getBoundingClientRect();
-                return r.width > 0 && r.height > 0;
-            };
-            const isLeftSearchPane = (el) => {
-                let n = el;
-                for (let d = 0; d < 22 && n; d++) {
-                    const pid = String(n.id || '').toLowerCase();
-                    if (pid.includes('s_1001_l') || pid.includes('gview_s_1001') || pid === 'gbox_s_1001_l') {
-                        return true;
-                    }
-                    n = n.parentElement;
-                }
-                return false;
-            };
-            const isPdiScoped = (el) => {
-                if (isLeftSearchPane(el)) return false;
-                let n = el;
-                for (let d = 0; d < 28 && n; d++) {
-                    const id = String(n.id || '').toLowerCase();
-                    const nm = String(n.getAttribute('name') || '').toLowerCase();
-                    const tit = String(n.getAttribute('title') || '').toLowerCase();
-                    const hay = id + ' ' + nm + ' ' + tit;
-                    if (hay.includes('precheck') || hay.includes('pre-check') || hay.includes('pre_check')) return false;
-                    if (id.includes('s_2_l') || id.includes('gview_s_2') || id === 'gbox_s_2_l') return true;
-                    if (id.includes('s_4_l') || id.includes('gview_s_4') || id === 'gbox_s_4_l') return true;
-                    if (id.includes('s_5_l') || id.includes('gview_s_5') || id === 'gbox_s_5_l') return true;
-                    if (hay.includes('pdi') && (hay.includes('list') || hay.includes('applet') || hay.includes('service'))) {
-                        return true;
-                    }
-                    n = n.parentElement;
-                }
-                return false;
-            };
-            const tables = Array.from(document.querySelectorAll('table.ui-jqgrid-btable')).filter(
-                (tb) => vis(tb) && isPdiScoped(tb)
-            );
-            for (const tb of tables) {
-                const headers = Array.from(tb.closest('.ui-jqgrid-view')?.querySelectorAll('th') || []);
-                let techColIdx = -1;
-                for (let i = 0; i < headers.length; i++) {
-                    const hText = (headers[i].textContent || '').toLowerCase();
-                    if (hText.includes('technician') || hText.includes('mechanic') || hText.includes('hhml')) {
-                        techColIdx = i;
-                        break;
-                    }
-                }
-                const tr = tb.querySelector('tbody tr.jqgrow');
-                if (!tr || !vis(tr)) continue;
-                const tds = tr.querySelectorAll('td');
-                if (techColIdx >= 0 && techColIdx < tds.length) {
-                    const techVal = (tds[techColIdx].textContent || '').trim();
-                    // Click on the row to select it
-                    if (tds[0]) tds[0].click();
-                    return { found: true, techValue: techVal, techEmpty: !techVal, colIdx: techColIdx };
-                }
-                // Fallback: check last few columns for empty values that might be technician
-                if (tds.length >= 3) {
-                    if (tds[0]) tds[0].click();
-                    const lastVal = (tds[tds.length - 1].textContent || '').trim();
-                    return { found: true, techValue: lastVal, techEmpty: !lastVal, colIdx: tds.length - 1 };
-                }
-            }
-            return { found: false, techValue: '', techEmpty: true, colIdx: -1 };
-        }"""
+        # Siebel: Closed row implies technician populated; gate = Closed + parsable future PDI Expiry (IST grace).
+        note(
+            f"{log_prefix}: PDI list already has a Closed row with future PDI Expiry (after IST grace) — "
+            "no further Service Request edits in this pass."
+        )
 
-        _tech_filled = True
-        for _proot in _roots():
-            try:
-                _tech_result = _proot.evaluate(_tech_check_js)
-                if isinstance(_tech_result, dict) and _tech_result.get("found"):
-                    _tech_filled = not _tech_result.get("techEmpty", True)
-                    _tech_val = _tech_result.get("techValue", "")
-                    note(
-                        f"{log_prefix}: PDI existing row technician check: "
-                        f"value={_tech_val!r:.60}, filled={_tech_filled}"
-                    )
-                    break
-            except Exception:
-                continue
-
-        if not _tech_filled:
-            note(f"{log_prefix}: PDI existing row has empty technician — filling it now.")
-            _safe_page_wait(page, 300, log_label="pdi_existing_row_before_tech_pick")
-
-            # Use same JS approach as new row to click pick icon
-            _pdi_existing_pick_js = """() => {
-                const vis = (el) => {
-                    if (!el) return false;
-                    const st = window.getComputedStyle(el);
-                    if (st.display === 'none' || st.visibility === 'hidden') return false;
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                };
-                // Try to find pick icon by known ID first
-                const pickIds = ['s_2_2_32_0_icon', 's_2_2_32_0', 's_2_2_31_0_icon', 's_2_2_31_0'];
-                for (const pid of pickIds) {
-                    const el = document.getElementById(pid);
-                    if (el && vis(el)) {
-                        el.scrollIntoView({ block: 'center' });
-                        el.click();
-                        return { ok: true, method: 'id', id: pid };
-                    }
-                }
-                // Fallback: find any visible siebui-icon-pick and click it
-                const picks = Array.from(document.querySelectorAll('.siebui-icon-pick, [class*="siebui-icon-pick"]'));
-                for (const p of picks) {
-                    if (vis(p)) {
-                        p.scrollIntoView({ block: 'center' });
-                        p.click();
-                        return { ok: true, method: 'css', id: p.id || 'no-id' };
-                    }
-                }
-                return { ok: false, method: 'none', id: '' };
-            }"""
-
-            _pdi_tech_pick_ok = False
-            _pdi_tech_pick_used = ""
-            for _proot in _roots():
-                try:
-                    _pick_result = _proot.evaluate(_pdi_existing_pick_js)
-                    if isinstance(_pick_result, dict) and _pick_result.get("ok"):
-                        _pdi_tech_pick_ok = True
-                        _pdi_tech_pick_used = f"{_pick_result.get('method')}:{_pick_result.get('id')}"
-                        note(
-                            f"{log_prefix}: PDI existing row pick icon clicked via JS "
-                            f"(method={_pick_result.get('method')!r}, id={_pick_result.get('id')!r})."
-                        )
-                        break
-                except Exception:
-                    continue
-
-            # Fallback to original approach if JS didn't work
-            if not _pdi_tech_pick_ok:
-                for _pdi_tech_try in range(4):
-                    if _pdi_tech_try > 0:
-                        try:
-                            page.keyboard.press("Tab")
-                            _safe_page_wait(page, 300, log_label=f"pdi_existing_tab_to_tech_{_pdi_tech_try}")
-                        except Exception:
-                            pass
-                    _pdi_tech_pick_ok, _pdi_tech_pick_used = _click_pdi_pick_icon("pdi_existing_technician")
-                    if _pdi_tech_pick_ok:
-                        note(
-                            f"{log_prefix}: PDI existing row technician pick icon clicked "
-                            f"(id={_pdi_tech_pick_used!r}, tabs={_pdi_tech_try})."
-                        )
-                        break
-
-            if _pdi_tech_pick_ok:
-                _siebel_lov_pick_first_row_ok_pdi_style(
-                    page,
-                    roots=_roots,
-                    action_timeout_ms=action_timeout_ms,
-                    note=note,
-                    log_prefix=log_prefix,
-                    stage_label="PDI Existing Technician",
-                )
-                note(f"{log_prefix}: PDI existing row technician LOV completed.")
-            else:
-                note(
-                    f"{log_prefix}: PDI existing row technician pick icon not found — "
-                    "technician may remain empty."
-                )
-        else:
-            note(f"{log_prefix}: PDI existing row already has technician filled — no action needed.")
 
     note(f"{log_prefix}: PDI completed successfully.")
     if callable(form_trace):
         form_trace(
             "vehicle_serial_precheck_pdi",
             "Vehicle serial detail",
-            "pdi_submit_done" if _pdi_need_new_row else "pdi_valid_existing_skipped_new_row",
+            "pdi_submit_done" if _pdi_need_new_row else "pdi_siebel_complete_skip_new_row",
             log_prefix=log_prefix,
         )
     _siebel_note_frame_focus_snapshot(
@@ -5644,7 +6054,7 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
         nav_timeout_ms=nav_timeout_ms,
     )
     if not _serial_pc_ok:
-        return _serial_pc_err or "Pre-check / PDI failed after Serial Number drilldown (prepare_vehicle)."
+        return _serial_pc_err or "Could not complete Pre-check or PDI."
 
     if not _siebel_try_click_features_and_image_tab(
         page, action_timeout_ms=action_timeout_ms, note=note
@@ -6080,8 +6490,7 @@ def prepare_vehicle(
         if not _siebel_poll_left_search_title_matches(page, frame_p, note=note):
             return (
                 False,
-                "Siebel: left Search Results pane did not show the expected VIN after Find→Vehicles "
-                f"(polled left-pane gview Title links for '{frame_p}').",
+                "Vehicle not found. Please check VIN/Engine numbers",
                 {},
                 False,
                 [],
