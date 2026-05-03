@@ -45,6 +45,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | 16 | View vehicles added. Many bugs fixed | `checkpoint/view-vehicles-added-many-bugs-fixed` | `0e94dceb1bb0bf71709b1ed122ee52071327a19d` | 2026-04-10T12:03:08+05:30 | 1) PDI still fragile; 2) Create Order to be tested again; 3) Insurance upload docs not working yet |
 | 17 | Vahan completed. OCR Streghtened | `checkpoint/vahan-completed-ocr-strengthened` | `2a4adabd8b8512a887af791303bcc79410db94d7` | 2026-04-13T14:43:47+05:30 | 1) Test OCR; 2) Test clean runs; 3) Move to AWS |
 | 18 | v0.5.00 | `v0.5.00` | `f1eb9c5e861a5a65cfb175c97be69d35377ffed2` | 2026-04-17T08:39:19+05:30 | 1) Strengthened Consolidated Input file; 2) End to end run successful; 3) GO for Beta! |
+| 19 | v0.7.00 — Fixed PDI issues. After Beta | `v0.7.00` | `c44e604da2f8d3751a19ef81dca1233c292b9925` | 2026-05-03T20:07:47+05:30 | 1) Fixed PDI issues (see snapshot commit); 2) Post-beta soak — regression on vehicle / challan / overlay paths; 3) Optional narrative — **`Documentation/checkpoint-v0-7-00.md`** |
 
 ## Rollback / Restore
 
