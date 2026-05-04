@@ -2,7 +2,7 @@
 
 ## Local dev (with this repo’s API)
 
-The Vite dev server **proxies** `/settings`, `/dealers`, `/fill-forms`, etc. to **`http://127.0.0.1:8000`**. **`vite.config.ts`** disables Node’s default **5‑minute** `requestTimeout` on the dev HTTP server (otherwise the browser connection can drop while uvicorn is still busy), raises **`proxyTimeout`**, and clears proxy socket timeouts for **`/fill-forms`**, **`/uploads`**, and **`/subdealer-challan`**. **Restart `npm run dev`** after changing it. Leave **`VITE_API_URL`** unset locally so requests use this proxy (direct `:8000` calls skip the proxy but still need long client timeouts in **`fillForms.ts`**). If the backend is not running, the terminal shows `http proxy error` / **`ECONNREFUSED 127.0.0.1:8000`**.
+The Vite dev server **proxies** `/settings`, `/system`, `/dealers`, `/fill-forms`, etc. to **`http://127.0.0.1:8000`**. **`vite.config.ts`** disables Node’s default **5‑minute** `requestTimeout` on the dev HTTP server (otherwise the browser connection can drop while uvicorn is still busy), raises **`proxyTimeout`**, and clears proxy socket timeouts for **`/fill-forms`**, **`/uploads`**, and **`/subdealer-challan`**. **Restart `npm run dev`** after changing it. Leave **`VITE_API_URL`** unset locally so requests use this proxy (direct `:8000` calls skip the proxy but still need long client timeouts in **`fillForms.ts`**). If the backend is not running, the terminal shows `http proxy error` / **`ECONNREFUSED 127.0.0.1:8000`**.
 
 1. In one terminal, from the **`backend`** folder (with venv activated):  
    `python -m uvicorn app.main:app --reload --port 8000`
@@ -10,6 +10,8 @@ The Vite dev server **proxies** `/settings`, `/dealers`, `/fill-forms`, etc. to 
    `npm run dev`
 
 Or use **`daily_startup.bat`** at the project root to start both.
+
+**Browser-only dev + DMS / Playwright:** automation runs inside the uvicorn process on a **single** worker thread. If you close the Edge/DMS window mid-run, **Retry** can stay queued until that thread unwinds. **Release Browsers** clears ports and cache; if the API still reports a stuck worker (`playwright_disconnect_ok: false`) or Retry never returns, **restart uvicorn** (Ctrl+C, start again), refresh the SPA, then Retry. Use the packaged **Electron** app when you want the stronger sidecar “release” path.
 
 ---
 

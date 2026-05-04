@@ -100,6 +100,8 @@ export default defineConfig(({ command }) => ({
       '/textract': 'http://127.0.0.1:8000',
       '/qr-decode': 'http://127.0.0.1:8000',
       '/health': 'http://127.0.0.1:8000',
+      /** Playwright teardown (tab close, Release Browsers, challan retry prep) — same host as uvicorn. */
+      '/system': 'http://127.0.0.1:8000',
       '/auth': 'http://127.0.0.1:8000',
       '/settings': 'http://127.0.0.1:8000',
       '/customer-search': 'http://127.0.0.1:8000',

@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("electronAPI", {
   sidecar: {
     runJob: (payload: unknown) => ipcRenderer.invoke("sidecar:runJob", payload),
+    releaseBrowsers: () => ipcRenderer.invoke("sidecar:releaseBrowsers"),
   },
   dealerSign: {
     overlaySalePdfs: (payload: { dealerId: number; subfolder: string }) =>

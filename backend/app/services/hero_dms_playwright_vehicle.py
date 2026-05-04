@@ -4316,7 +4316,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         # return { ok: false, reason: 'no_pick_control', createdRaw: pick.createdRaw };
     # }"""
 #
-    _pdi_post_new_focus_pick_js = """() => {
+    _pdi_post_new_focus_pick_js = """async () => {
         const relaxedVis = (el) => {
             if (!el) return false;
             const st = window.getComputedStyle(el);
@@ -4428,12 +4428,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
         const { tr, mechTd } = pick;
         try { tr.scrollIntoView({ block: 'center' }); } catch (e0) {}
-        const tds = tr.querySelectorAll('td');
-        if (tds.length && tdVis(tds[0])) {
-            try { tds[0].click(); } catch (e1) {}
-        } else {
-            try { tr.click(); } catch (e2) {}
-        }
+        // Row activation step 2 (first data cell or tr click) — disabled; keep scroll + mechanic cell only.
+        // const tds = tr.querySelectorAll('td');
+        // if (tds.length && tdVis(tds[0])) {
+        //     try { tds[0].click(); } catch (e1) {}
+        // } else {
+        //     try { tr.click(); } catch (e2) {}
+        // }
         try { mechTd.click(); } catch (e2b) {}
         let inp = mechTd.querySelector('input[name="HHML_Mechanic_Full_Name"]');
         if (!inp) {
@@ -4456,6 +4457,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             try { inp.focus(); } catch (e3) {}
             try { inp.click(); } catch (e4) {}
         }
+
+        await new Promise((r) => setTimeout(r, 300));
 
         const spanPick = mechTd.querySelector('span.siebui-icon-pick');
         if (spanPick && relaxedVis(spanPick)) {
@@ -4603,7 +4606,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 note=note, log_prefix=log_prefix,
             )
             return False, "Could not find + button in PDI tab."
-        _safe_page_wait(page, 500, log_label="after_sr_list_new_settle")
+        _safe_page_wait(page, 1000, log_label="after_sr_list_new_settle")
 
         # Post-+: same anchoring as existing-open — resolve mechanic td on the new row, activate,
         # cell-scoped relaxed pick click (not global getElementById + strict bbox).

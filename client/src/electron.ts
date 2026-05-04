@@ -13,6 +13,8 @@ export interface SidecarJobResult {
 export interface ElectronAPI {
   sidecar: {
     runJob: (payload: Record<string, unknown>) => Promise<SidecarJobResult>;
+    /** Kill wedged sidecar work, unblock the job queue, teardown Playwright (Electron). */
+    releaseBrowsers: () => Promise<SidecarJobResult>;
   };
   dealerSign?: {
     overlaySalePdfs: (payload: {

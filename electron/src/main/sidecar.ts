@@ -24,12 +24,30 @@ export interface SidecarJobResult {
   error?: string;
 }
 
+class SidecarDaemonReadAbortedError extends Error {
+  constructor() {
+    super("Sidecar daemon read aborted");
+    this.name = "SidecarDaemonReadAbortedError";
+  }
+}
+
 const activePids = new Set<number>();
+
+/**
+ * While a job holds the sidecar worker, this resolves the promise the *next* ``runSidecarJob``
+ * awaits (the FIFO slot). If the worker wedged after the browser was killed, callers would
+ * otherwise queue forever — including ``teardown_local_browsers``. ``releaseBrowsersHardReset``
+ * kills processes and invokes this so the queue can move again.
+ */
+let blockingQueueRelease: (() => void) | null = null;
 
 /** Long-lived sidecar: one JSON line in (stdin), one JSON line out (stdout) per job. */
 let daemonProc: ChildProcessWithoutNullStreams | null = null;
 let daemonRl: ReturnType<typeof createInterface> | null = null;
 let sidecarRunChain: Promise<void> = Promise.resolve();
+
+/** Set while ``readDaemonResponseLine`` is waiting — cleared when a line arrives, times out, or aborts. */
+let pendingDaemonReadAbort: (() => void) | null = null;
 
 function resetSidecarDaemon(): void {
   if (daemonRl) {
@@ -56,6 +74,9 @@ function defaultTimeoutMs(payload: SidecarJobPayload): number {
     payload.type === "fill_subdealer_challan"
   ) {
     return 900_000;
+  }
+  if (payload.type === "mirror_challan_parse_artifacts") {
+    return 60_000;
   }
   if (payload.type === "teardown_local_browsers") {
     return 15_000;
@@ -85,6 +106,11 @@ function killProcessTree(pid: number): void {
 }
 
 export function killAllSidecarJobs(): void {
+  if (pendingDaemonReadAbort) {
+    const abort = pendingDaemonReadAbort;
+    pendingDaemonReadAbort = null;
+    abort();
+  }
   resetSidecarDaemon();
   for (const pid of [...activePids]) {
     killProcessTree(pid);
@@ -159,17 +185,33 @@ async function readDaemonResponseLine(timeoutMs: number): Promise<string> {
     throw new Error("Sidecar daemon readline not ready");
   }
   return await new Promise<string>((resolve, reject) => {
+    let settled = false;
     const onLine = (line: string): void => {
+      if (settled) return;
+      settled = true;
+      pendingDaemonReadAbort = null;
       clearTimeout(t);
+      rl.removeListener("line", onLine);
       resolve(line);
     };
     const t = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      pendingDaemonReadAbort = null;
       rl.removeListener("line", onLine);
       logError(`sidecar daemon: read timeout after ${timeoutMs}ms`);
       resetSidecarDaemon();
       reject(new Error("Sidecar daemon response timeout"));
     }, timeoutMs);
     rl.once("line", onLine);
+    pendingDaemonReadAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      pendingDaemonReadAbort = null;
+      clearTimeout(t);
+      rl.removeListener("line", onLine);
+      reject(new SidecarDaemonReadAbortedError());
+    };
   });
 }
 
@@ -325,6 +367,15 @@ async function runSidecarJobDaemon(payload: SidecarJobPayload): Promise<SidecarJ
     line = await readDaemonResponseLine(timeoutMs);
   } catch (e) {
     logError("sidecar daemon read failed", e);
+    if (e instanceof SidecarDaemonReadAbortedError) {
+      return {
+        success: false,
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        error: e.message,
+      };
+    }
     return runSidecarJobOneshot(payload);
   }
 
@@ -356,9 +407,27 @@ export async function runSidecarJob(payload: SidecarJobPayload): Promise<Sidecar
     release = r;
   });
   await prev;
+  blockingQueueRelease = release;
   try {
     return await runSidecarJobDaemon(payload);
   } finally {
+    if (blockingQueueRelease === release) {
+      blockingQueueRelease = null;
+    }
     release();
   }
+}
+
+/**
+ * Kill sidecar processes, unblock any waiter stuck behind a wedged job, then run teardown in a
+ * **fresh** one-shot Python process (does not use the daemon or the serialized ``runSidecarJob`` chain).
+ */
+export async function releaseBrowsersHardReset(): Promise<SidecarJobResult> {
+  killAllSidecarJobs();
+  const rel = blockingQueueRelease;
+  if (rel) {
+    blockingQueueRelease = null;
+    rel();
+  }
+  return await runSidecarJobOneshot({ type: "teardown_local_browsers" });
 }

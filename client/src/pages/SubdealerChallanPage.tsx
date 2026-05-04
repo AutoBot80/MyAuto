@@ -500,7 +500,7 @@ export function SubdealerChallanPage({
         (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError");
       setProcessedError(
         aborted
-          ? "Request timed out or was cancelled. If you closed the automation browser during a run, restart the API (uvicorn) and try Retry again."
+          ? "Request timed out or was cancelled. In browser-only dev, if you closed the DMS window mid-run, stop and restart uvicorn (Ctrl+C in the API terminal, then start again), refresh the app, then Retry — Release Browsers alone cannot always free a stuck Playwright worker thread."
           : err instanceof Error
             ? err.message
             : String(err),
@@ -530,7 +530,7 @@ export function SubdealerChallanPage({
         (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError");
       setProcessedError(
         aborted
-          ? "Request timed out or was cancelled. If you closed the automation browser during a run, restart the API (uvicorn) and try Retry again."
+          ? "Request timed out or was cancelled. In browser-only dev, if you closed the DMS window mid-run, stop and restart uvicorn (Ctrl+C in the API terminal, then start again), refresh the app, then Retry — Release Browsers alone cannot always free a stuck Playwright worker thread."
           : err instanceof Error
             ? err.message
             : String(err),

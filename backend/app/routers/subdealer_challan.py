@@ -317,10 +317,15 @@ def retry_order_endpoint(
 @router.post("/parse-scan")
 async def parse_scan(
     file: UploadFile = File(..., description="Challan scan (JPEG/PNG/PDF, max 500 KB)"),
+    mirror_bodies: bool = Query(
+        False,
+        description="When true, include raw_ocr_text / ocr_json_text / local_artifact_leaf for dealer PC mirror.",
+    ),
 ) -> dict:
     """
     Run Textract FORMS+TABLES, parse challan no / date / engine-chassis rows,
-    write Raw_OCR.txt and OCR_To_be_Used.json under CHALLANS_DIR.
+    write Raw_OCR.txt and OCR_To_be_Used.json under CHALLANS_DIR (server).
+    With ``mirror_bodies=true``, also return file bodies for Electron to write under ocr_output/{dealer_id}/.
     """
     try:
         raw = await read_upload_capped(file, UPLOAD_MAX_FILE_BYTES)
@@ -332,7 +337,9 @@ async def parse_scan(
         validate_magic_jpeg_png_or_pdf(raw, label="Challan scan")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    result = parse_subdealer_challan(raw, write_artifacts=True)
+    result = parse_subdealer_challan(
+        raw, write_artifacts=True, include_artifact_bodies=bool(mirror_bodies)
+    )
     if result.get("error"):
         raise HTTPException(status_code=502, detail=result["error"])
     return result

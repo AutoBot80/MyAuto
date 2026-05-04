@@ -775,6 +775,43 @@ _SUBDEALER_MAX_PREP_ROUNDS = 3
 _SUBDEALER_RETRY_WAIT_SEC = 3.0
 
 
+def _safe_challan_artifact_leaf(leaf: str | None) -> str:
+    """Single path segment under ocr_output/{dealer_id}/ (no traversal)."""
+    t = (leaf or "").strip().replace("\\", "/").split("/")[-1]
+    if not t or ".." in t:
+        return "unknown_challan"
+    return t
+
+
+def _mirror_challan_parse_artifacts_impl(params: dict) -> dict:
+    """Write parse-scan OCR files under local ``CHALLANS_DIR/<leaf>/`` (same layout as EC2 / server)."""
+    from app.config import CHALLANS_DIR
+    from app.services.subdealer_challan_ocr_service import OCR_JSON_STEM
+
+    raw_leaf = str(params.get("artifact_leaf") or "").strip()
+    if not raw_leaf:
+        return {"ok": False, "error": "artifact_leaf required"}
+    leaf = _safe_challan_artifact_leaf(raw_leaf)
+    raw_t = params.get("raw_ocr_text")
+    js_t = params.get("ocr_json_text")
+    if not (isinstance(raw_t, str) and raw_t.strip()) and not (isinstance(js_t, str) and js_t.strip()):
+        return {"ok": False, "error": "raw_ocr_text or ocr_json_text required"}
+    try:
+        CHALLANS_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    base = CHALLANS_DIR / leaf
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        if isinstance(raw_t, str) and raw_t.strip():
+            (base / "Raw_OCR.txt").write_text(raw_t, encoding="utf-8")
+        if isinstance(js_t, str) and js_t.strip():
+            (base / f"{OCR_JSON_STEM}.json").write_text(js_t, encoding="utf-8")
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "local_dir": str(base.resolve())}
+
+
 def _fill_subdealer_challan_impl(params: dict) -> dict:
     api_url, jwt = _require_api_credentials(params)
 
@@ -805,6 +842,10 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             "vehicle": {},
         }
 
+    from app.services.subdealer_challan_ocr_service import challan_artifact_leaf_name
+
+    initial_leaf = challan_artifact_leaf_name(ctx.get("challan_book_num"), ctx.get("challan_date"))
+
     from app.config import (
         CHALLANS_DIR,
         DMS_REAL_URL_CONTACT,
@@ -826,7 +867,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     )
     from app.services.handle_browser_opening import get_or_open_site_page
     from app.services.hero_dms_playwright_vehicle import prepare_vehicle
-    from app.services.hero_dms_shared_utilities import SiebelDmsUrls
+    from app.services.hero_dms_shared_utilities import SiebelDmsUrls, _ts_ist_iso
 
     if not dms_automation_is_real_siebel():
         return {
@@ -849,6 +890,14 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     )
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
 
+    prep_leaf = _safe_challan_artifact_leaf(initial_leaf)
+    # Match server layout: ``CHALLANS_DIR/<book>_<ddmmyyyy>/`` (see ``app.config`` when ``SAATHI_BASE_DIR`` is set).
+    try:
+        CHALLANS_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    challan_session_base = CHALLANS_DIR / prep_leaf
+
     page, open_error = get_or_open_site_page(dms_base_url, "DMS", require_login_on_open=True)
     if page is None:
         return {
@@ -865,6 +914,40 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     def _pv_note(msg: str) -> None:
         if msg and ("pdi_scrape_" in msg or ": pdi_decision " in msg):
             logging.info("subdealer_challan prepare: %s", msg)
+
+    form_trace_pv = lambda *_a, **_k: None
+    if not phase_is_order_only:
+        challan_session_base.mkdir(parents=True, exist_ok=True)
+        challan_prepare_log = challan_session_base / "playwright_challan.txt"
+
+        def _form_trace_prepare(siebel_step: str, form_name: str, action: str, **fields: object) -> None:
+            segments = [f"siebel_step={siebel_step}", f"form={form_name}", f"action={action}"]
+            for key in sorted(fields.keys()):
+                val = fields[key]
+                if val is None:
+                    continue
+                v = str(val).replace("\n", " ").strip()
+                if v == "":
+                    continue
+                if len(v) > 500:
+                    v = v[:497] + "..."
+                segments.append(f"{key}={v!r}")
+            line = f"{_ts_ist_iso()} [FORM] " + " | ".join(segments) + "\n"
+            try:
+                with challan_prepare_log.open("a", encoding="utf-8") as fp:
+                    fp.write(line)
+            except OSError:
+                pass
+
+        with challan_prepare_log.open("w", encoding="utf-8") as fp:
+            fp.write(f"=== subdealer challan (local) batch={challan_batch_id} ===\n")
+            fp.write(f"{_ts_ist_iso()} [NOTE] challan_trace_dir={challan_session_base!s}\n")
+            fp.write(
+                f"{_ts_ist_iso()} [NOTE] challan_book_num={ctx.get('challan_book_num')!r} "
+                f"challan_date={ctx.get('challan_date')!r}\n"
+            )
+            fp.write(f"{_ts_ist_iso()} [NOTE] --- prepare_vehicle phase ---\n")
+        form_trace_pv = _form_trace_prepare
 
     if not phase_is_order_only:
         try:
@@ -917,7 +1000,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
                     action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
                     content_frame_selector=frame_sel,
                     note=_pv_note,
-                    form_trace=lambda *_a, **_k: None,
+                    form_trace=form_trace_pv,
                     ms_done=lambda _l: None,
                     step=lambda _m: None,
                 )
@@ -1014,10 +1097,13 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             "vehicle": {},
         }
 
-    leaf = (pkg.get("artifact_leaf") or "").strip()
+    leaf = _safe_challan_artifact_leaf((pkg.get("artifact_leaf") or "").strip() or initial_leaf)
     log_path = (CHALLANS_DIR / leaf / "playwright_challan.txt").resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text("", encoding="utf-8")
+    if phase_is_order_only:
+        log_path.write_text("", encoding="utf-8")
+    elif not log_path.exists():
+        log_path.write_text("", encoding="utf-8")
 
     dms_values = dict(pkg.get("dms_values") or {})
     dms_values["challan_vin_frame_dump_dir"] = str(log_path.parent.resolve())
@@ -1109,6 +1195,9 @@ def dispatch(payload: dict) -> dict:
     if job_type == "fill_subdealer_challan":
         data = _run_sidecar_playwright_job(lambda: _fill_subdealer_challan_impl(params))
         return {"success": True, "data": data}
+    if job_type == "mirror_challan_parse_artifacts":
+        data = _mirror_challan_parse_artifacts_impl(params)
+        return {"success": bool(data.get("ok")), "data": data, "error": data.get("error")}
     return {"success": False, "error": f"Unknown job type: {job_type}"}
 
 

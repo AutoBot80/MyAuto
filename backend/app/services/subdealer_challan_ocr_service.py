@@ -247,11 +247,16 @@ def challan_artifact_leaf_name(challan_book_num: str | None, challan_date_stored
     return _challan_folder_name(challan_book_num, ddmmyyyy)
 
 
+# Cap JSON + Raw_OCR returned for Electron local mirror (parse-scan ?mirror_bodies=true).
+_MAX_CHALLAN_MIRROR_COMBINED_BYTES = 2_000_000
+
+
 def parse_subdealer_challan(
     document_bytes: bytes,
     *,
     challans_base: Path | None = None,
     write_artifacts: bool = True,
+    include_artifact_bodies: bool = False,
 ) -> dict[str, Any]:
     """
     Textract + parse Daily Delivery Report. Optionally writes CHALLANS_DIR/<challan>_<ddmmyyyy>/.
@@ -261,6 +266,8 @@ def parse_subdealer_challan(
       lines: [{engine_no, chassis_no, status}],
       artifact_dir, raw_ocr_path, ocr_json_path (if written),
       warnings, error
+      When ``include_artifact_bodies`` is True: local_artifact_leaf, raw_ocr_text, ocr_json_text
+      (for dealer PC mirror under ocr_output/{dealer_id}/…) if under size cap.
     """
     base = Path(challans_base) if challans_base is not None else CHALLANS_DIR
     out: dict[str, Any] = {
@@ -324,22 +331,30 @@ def parse_subdealer_challan(
         "lines": lines,
     }
 
+    leaf_name = _challan_folder_name(challan_no, ddmmyyyy)
+    raw_file_body = _build_raw_ocr_text(full_text, kvp, tables)
+    json_file_body = json.dumps(payload, indent=2, ensure_ascii=False)
+
+    if include_artifact_bodies:
+        combined = len(raw_file_body) + len(json_file_body)
+        if combined > _MAX_CHALLAN_MIRROR_COMBINED_BYTES:
+            out["warnings"].append(
+                "OCR mirror bodies omitted (combined text exceeds cap for dealer PC sync)."
+            )
+        else:
+            out["local_artifact_leaf"] = leaf_name
+            out["raw_ocr_text"] = raw_file_body
+            out["ocr_json_text"] = json_file_body
+
     if write_artifacts:
         try:
             base.mkdir(parents=True, exist_ok=True)
-            leaf = _challan_folder_name(challan_no, ddmmyyyy)
-            dest = (base / leaf).resolve()
+            dest = (base / leaf_name).resolve()
             dest.mkdir(parents=True, exist_ok=True)
             raw_path = dest / "Raw_OCR.txt"
             json_path = dest / f"{OCR_JSON_STEM}.json"
-            raw_path.write_text(
-                _build_raw_ocr_text(full_text, kvp, tables),
-                encoding="utf-8",
-            )
-            json_path.write_text(
-                json.dumps(payload, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            raw_path.write_text(raw_file_body, encoding="utf-8")
+            json_path.write_text(json_file_body, encoding="utf-8")
             out["artifact_dir"] = str(dest)
             out["raw_ocr_path"] = str(raw_path)
             out["ocr_json_path"] = str(json_path)

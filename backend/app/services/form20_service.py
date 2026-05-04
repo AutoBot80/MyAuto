@@ -221,7 +221,8 @@ def _build_form20_data(
 
     # Footer: Dealer Saathi© Vehicle ID <vehicle_id> (left, 10pt)
     vid = vehicle_id if vehicle_id else v.get("vehicle_id")
-    data["footer_text"] = f"Dealer Saathi\u00a9 Vehicle ID {vid if vid else '\u2014'}"
+    _em_dash = "\u2014"
+    data["footer_text"] = f"Dealer Saathi\u00a9 Vehicle ID {vid if vid else _em_dash}"
 
     return data
 

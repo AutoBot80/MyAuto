@@ -5316,6 +5316,10 @@ DEFAULT_HERO_DMS_RUN_REPORT_NAMES: tuple[str, ...] = (
     "Form 20",
 )
 
+# Run Report: per-report attempts when ``continue_on_report_error`` is True — one full pass, then up
+# to two more passes that only retry reports still failing (each pass runs after the full batch) → 3 tries total.
+_RUN_REPORT_ATTEMPTS_PER_INDEX = 3
+
 
 def print_hero_dms_forms(
     page: Page,
@@ -5350,7 +5354,12 @@ def print_hero_dms_forms(
     ``run_hero_dms_reports`` section listing downloads directory and per-report outcomes.
 
     By default ``continue_on_report_error`` is True: failures for one report do not stop the rest; the fourth
-    return value lists each report with ``ok``, ``error``, and ``path``. Set False to stop on first failure.
+    return value lists each report with ``ok``, ``error``, and ``path``. Set False to stop on first failure
+    (single pass, no retries). When True, after each full pass through ``report_names``, still-failing
+    reports are retried up to two more times (three download attempts per report, in order).
+
+    After **Submit**, the wait for a download event is capped at **120 seconds** (scaled from
+    ``action_timeout_ms`` with the same floor as before, ``min(120, max(90, …))``).
 
     Stray Siebel downloads (e.g. UUID filenames) are **cancelled** when a better PDF candidate exists; the
     browser tray may still briefly list them depending on timing.
@@ -5359,10 +5368,9 @@ def print_hero_dms_forms(
     # Keep click/type timeouts bounded so Siebel UI steps fail fast; do not use this for PDF download waits.
     _tmo = min(int(action_timeout_ms or 3000), 8000)
     # After Run Report **Submit**, Siebel often needs well over 45–50s to emit the download (especially for
-    # **Form22**, the 2nd report after GST Retail Invoice). Previously we used ``min(180, max(45, _tmo*6/1000))``
-    # with ``_tmo`` capped at 8s → ~48s max — too short on many tenants. Scale from full ``action_timeout_ms``.
+    # **Form22**, the 2nd report after GST Retail Invoice). Scale from full ``action_timeout_ms``; cap at 2 minutes.
     _raw_action_ms = max(int(action_timeout_ms or 3000), 3000)
-    _download_wait_sec = float(min(300, max(90, (int(_raw_action_ms / 1000)) * 3)))
+    _download_wait_sec = float(min(120, max(90, (int(_raw_action_ms / 1000)) * 3)))
 
     def _unique_dest(path: Path) -> Path:
         if not path.exists():
@@ -5694,46 +5702,79 @@ def print_hero_dms_forms(
         except Exception as _ex:
             return False, f"download/save failed: {_ex!s}", None
 
-    saved_paths: list[str] = []
-    report_details: list[dict[str, Any]] = []
-    for _i, _rn in enumerate(_names):
-        if _i > 0:
-            _safe_page_wait(
-                page,
-                max(0, int(between_reports_wait_ms)),
-                log_label=f"between_run_reports_{_i}",
+    _n_reports = len(_names)
+    report_details: list[dict[str, Any]] = [
+        {"report": _names[i], "ok": False, "error": None, "path": None}
+        for i in range(_n_reports)
+    ]
+    _bw = max(0, int(between_reports_wait_ms))
+    _max_passes = _RUN_REPORT_ATTEMPTS_PER_INDEX if continue_on_report_error else 1
+
+    for _attempt in range(_max_passes):
+        _indices = (
+            list(range(_n_reports))
+            if _attempt == 0
+            else [i for i in range(_n_reports) if not report_details[i].get("ok")]
+        )
+        if not _indices:
+            break
+        if _attempt > 0:
+            _note(
+                f"print_hero_dms_forms: Run Report retry pass {_attempt} "
+                f"({len(_indices)} report(s) still failing)."
             )
-        ok_one, err_one, path_one = _download_one_run_report(_rn)
-        report_details.append(
-            {
+        for _j, _idx in enumerate(_indices):
+            if _j > 0:
+                _safe_page_wait(
+                    page,
+                    _bw,
+                    log_label=f"between_run_reports_a{_attempt}_j{_j}",
+                )
+            elif _attempt > 0:
+                _safe_page_wait(
+                    page,
+                    _bw,
+                    log_label=f"before_run_report_retry_pass_{_attempt}",
+                )
+            _rn = _names[_idx]
+            ok_one, err_one, path_one = _download_one_run_report(_rn)
+            report_details[_idx] = {
                 "report": _rn,
                 "ok": ok_one,
                 "error": err_one,
                 "path": str(path_one) if path_one is not None else None,
             }
-        )
-        if ok_one and path_one is not None:
-            saved_paths.append(str(path_one))
-        if not ok_one:
-            if not continue_on_report_error:
-                _summary_partial = err_one or "download failed"
-                _append_run_hero_dms_reports_to_playwright_log(
-                    execution_log_path,
-                    downloads_dir=dest_root,
-                    mobile=mobile,
-                    report_names=_names,
-                    report_details=report_details,
-                    saved_paths=saved_paths,
-                    summary=_summary_partial,
-                    all_ok=False,
-                    abort_message=f"stopped on first failure (report: {_rn!r})",
-                )
-                return (
-                    False,
-                    f"print_hero_dms_forms: {err_one or 'download failed'} (report: {_rn!r})",
-                    saved_paths,
-                    report_details,
-                )
+            if not ok_one:
+                if not continue_on_report_error:
+                    _partial = report_details[: _idx + 1]
+                    _paths_partial = [
+                        str(r["path"])
+                        for r in _partial
+                        if r.get("ok") and r.get("path")
+                    ]
+                    _summary_partial = err_one or "download failed"
+                    _append_run_hero_dms_reports_to_playwright_log(
+                        execution_log_path,
+                        downloads_dir=dest_root,
+                        mobile=mobile,
+                        report_names=_names,
+                        report_details=_partial,
+                        saved_paths=_paths_partial,
+                        summary=_summary_partial,
+                        all_ok=False,
+                        abort_message=f"stopped on first failure (report: {_rn!r})",
+                    )
+                    return (
+                        False,
+                        f"print_hero_dms_forms: {err_one or 'download failed'} (report: {_rn!r})",
+                        _paths_partial,
+                        _partial,
+                    )
+    saved_paths = [
+        str(report_details[i]["path"])
+        for i in range(_n_reports)
+        if report_details[i].get("ok") and report_details[i].get("path")
+    ]
     _all_ok = all(r.get("ok") for r in report_details)
     _summary: str | None = None
     if not _all_ok:

@@ -5,7 +5,7 @@ import { logError, logInfo } from "./logger";
 import { getSiteUrlsFromEnv } from "./paths";
 import * as printer from "./printer";
 import { runDealerSignOverlayHeadless } from "./dealer-sign-overlay";
-import { runSidecarJob, type SidecarJobPayload } from "./sidecar";
+import { releaseBrowsersHardReset, runSidecarJob, type SidecarJobPayload } from "./sidecar";
 import { checkForUpdatesManual, quitAndInstall, setupAutoUpdater } from "./updater";
 
 export function registerIpc(mainWindow: BrowserWindow): void {
@@ -18,6 +18,21 @@ export function registerIpc(mainWindow: BrowserWindow): void {
       return await runSidecarJob(payload);
     } catch (e) {
       logError("sidecar:runJob", e);
+      return {
+        success: false,
+        stdout: "",
+        stderr: String(e),
+        exitCode: null,
+        error: String(e),
+      };
+    }
+  });
+
+  ipcMain.handle("sidecar:releaseBrowsers", async () => {
+    try {
+      return await releaseBrowsersHardReset();
+    } catch (e) {
+      logError("sidecar:releaseBrowsers", e);
       return {
         success: false,
         stdout: "",

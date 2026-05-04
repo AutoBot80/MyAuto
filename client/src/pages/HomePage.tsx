@@ -1,4 +1,6 @@
+import { useCallback, useRef, useState } from "react";
 import type { HomeTileFlags } from "../api/auth";
+import { releaseAutomationBrowsers } from "../api/releaseBrowsers";
 import { HomePageWatermark } from "../components/HomePageWatermark";
 import "./HomePage.css";
 
@@ -22,9 +24,36 @@ export function HomePage({
   onSelectDealer,
   onSelectAdmin,
 }: HomePageProps) {
+  const [releaseBusy, setReleaseBusy] = useState(false);
+  const [releaseHint, setReleaseHint] = useState<string | null>(null);
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const anyMainTile =
     tiles.tile_pos || tiles.tile_rto || tiles.tile_service || tiles.tile_dealer;
   const anyTile = anyMainTile || showAdmin;
+
+  const onReleaseBrowsers = useCallback(async () => {
+    if (hintTimerRef.current) {
+      clearTimeout(hintTimerRef.current);
+      hintTimerRef.current = null;
+    }
+    setReleaseBusy(true);
+    setReleaseHint(null);
+    try {
+      const { ok, detail } = await releaseAutomationBrowsers();
+      setReleaseHint(
+        detail ? detail : ok ? "Automation browsers released." : "Release failed.",
+      );
+    } catch (e) {
+      setReleaseHint(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReleaseBusy(false);
+      hintTimerRef.current = setTimeout(() => {
+        setReleaseHint(null);
+        hintTimerRef.current = null;
+      }, 14000);
+    }
+  }, []);
 
   return (
     <div className="home-page">
@@ -100,6 +129,22 @@ export function HomePage({
             ) : null}
           </div>
         )}
+      </div>
+      <div className="home-release-browsers-wrap">
+        <button
+          type="button"
+          className="app-button app-button--small home-release-browsers-btn"
+          disabled={releaseBusy}
+          onClick={() => void onReleaseBrowsers()}
+          title="Use if you closed the automation browser during a run and Retry or other actions stay stuck."
+        >
+          {releaseBusy ? "Releasing…" : "Release Browsers"}
+        </button>
+        {releaseHint ? (
+          <span className="home-release-browsers-hint" role="status">
+            {releaseHint}
+          </span>
+        ) : null}
       </div>
     </div>
   );

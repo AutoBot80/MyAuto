@@ -315,10 +315,12 @@ def teardown_local_automation_browsers() -> dict[str, object]:
     port = int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333)
     _kill_os_processes_listening_on_tcp_port(port)
     force_invalidate_cdp_cache()
+    playwright_disconnect_ok = False
     try:
         get_playwright_executor().submit(
             _disconnect_all_playwright_browsers_on_worker_thread
         ).result(timeout=_TEARDOWN_PLAYWRIGHT_DISCONNECT_TIMEOUT_SEC)
+        playwright_disconnect_ok = True
     except concurrent.futures.TimeoutError:
         logger.warning(
             "handle_browser_opening: Playwright disconnect timed out after %.1fs (executor busy); "
@@ -328,7 +330,14 @@ def teardown_local_automation_browsers() -> dict[str, object]:
         )
     except Exception as exc:
         logger.warning("handle_browser_opening: Playwright disconnect failed: %s", exc)
-    return {"teardown": True, "managed_debug_port": port}
+    return {
+        "teardown": True,
+        "managed_debug_port": port,
+        # False when another request still holds the single Playwright worker (e.g. operator closed
+        # Edge mid-run). SPA should tell dev to restart uvicorn — new HTTP work cannot queue behind
+        # the stuck callable until the process exits.
+        "playwright_disconnect_ok": playwright_disconnect_ok,
+    }
 
 
 def _evict_unreachable_cached_cdp_browsers() -> None:
@@ -798,7 +807,7 @@ def _try_auto_login_if_prefilled(page) -> bool:
     prefilled = None
     for _attempt in range(3):
         if _attempt > 0:
-            time.sleep(0.25)
+            time.sleep(0.5)
         try:
             prefilled = page.evaluate(_detect_js)
         except Exception:

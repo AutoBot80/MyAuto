@@ -105,6 +105,34 @@
   outline-offset: 2px;
 }
 
+.home-release-browsers-wrap {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+  max-width: min(360px, calc(100vw - 2rem));
+  pointer-events: auto;
+}
+
+.home-release-browsers-btn {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.home-release-browsers-hint {
+  font-size: 12px;
+  line-height: 1.35;
+  color: #333;
+  text-align: right;
+  background: rgba(255, 255, 255, 0.96);
+  padding: 0.35rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid #c5d9ed;
+}
+
 .home-tile-title {
   font-size: 18px;
   font-weight: 600;

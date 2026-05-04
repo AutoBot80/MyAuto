@@ -24,9 +24,110 @@ export type ParseSubdealerChallanResponse = {
   artifact_dir: string | null;
   raw_ocr_path: string | null;
   ocr_json_path: string | null;
+  /** Present when ``?mirror_bodies=true`` (Electron): folder leaf under ``ocr_output/{dealer_id}/`` on dealer PC. */
+  local_artifact_leaf?: string | null;
+  raw_ocr_text?: string | null;
+  ocr_json_text?: string | null;
   warnings: string[];
   error: string | null;
 };
+
+function _pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+/**
+ * Folder leaf under ``ocr_output/{dealer_id}/`` — matches backend ``challan_artifact_leaf_name`` / ``_challan_folder_name``.
+ */
+export function computeLocalChallanArtifactLeaf(r: ParseSubdealerChallanResponse): string {
+  let ddmmyyyy = (r.challan_ddmmyyyy || "").trim();
+  const iso = (r.challan_date_iso || "").trim();
+  if (!ddmmyyyy && iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+    if (m) {
+      const d = parseInt(m[3], 10);
+      const mo = parseInt(m[2], 10);
+      const y = parseInt(m[1], 10);
+      ddmmyyyy = `${_pad2(d)}${_pad2(mo)}${y}`;
+    }
+  }
+  if (!ddmmyyyy) {
+    const raw = (r.challan_date_raw || "").trim();
+    const sm = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(raw);
+    if (sm) {
+      const d = parseInt(sm[1], 10);
+      const mo = parseInt(sm[2], 10);
+      let y = parseInt(sm[3], 10);
+      if (sm[3].length === 2) y = y <= 69 ? 2000 + y : 1900 + y;
+      ddmmyyyy = `${_pad2(d)}${_pad2(mo)}${y}`;
+    }
+  }
+  if (!ddmmyyyy) {
+    const now = new Date();
+    ddmmyyyy = `${_pad2(now.getUTCDate())}${_pad2(now.getUTCMonth() + 1)}${now.getUTCFullYear()}`;
+  }
+  const bad = '<>:"/\\|?*';
+  let cn = (r.challan_no || "")
+    .trim()
+    .split("")
+    .filter((c) => !bad.includes(c))
+    .join("")
+    .trim()
+    .slice(0, 80);
+  if (!cn) cn = "unknown";
+  if (cn === "unknown") {
+    const ts = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 15);
+    return `unknown_${ts}`;
+  }
+  return `${cn}_${ddmmyyyy}`;
+}
+
+async function mirrorChallanParseArtifactsToDealerPc(
+  merged: ParseSubdealerChallanResponse,
+  pages: ParseSubdealerChallanResponse[],
+  pageNames: string[]
+): Promise<void> {
+  if (!isElectron() || !window.electronAPI?.sidecar?.runJob) return;
+  const hasBodies = pages.some((p) => (p.raw_ocr_text || "").length > 0 || (p.ocr_json_text || "").length > 0);
+  if (!hasBodies) return;
+  const leaf = computeLocalChallanArtifactLeaf(merged);
+  const rawCombined = pages
+    .map((pg, i) => {
+      const body = (pg.raw_ocr_text || "").trim();
+      if (!body) return "";
+      const label = pageNames[i] || `page ${i + 1}`;
+      return `=== ${label} ===\n${body}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  const jsonText = JSON.stringify(
+    {
+      challan_no: merged.challan_no,
+      challan_date_raw: merged.challan_date_raw,
+      challan_date_iso: merged.challan_date_iso,
+      challan_ddmmyyyy: merged.challan_ddmmyyyy,
+      lines: merged.lines,
+    },
+    null,
+    2
+  );
+  try {
+    await window.electronAPI.sidecar.runJob({
+      type: "mirror_challan_parse_artifacts",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: {
+        dealer_id: DEALER_ID,
+        artifact_leaf: leaf,
+        raw_ocr_text: rawCombined,
+        ocr_json_text: jsonText,
+      },
+      timeoutMs: 60_000,
+    });
+  } catch {
+    /* non-fatal: OCR parse already succeeded */
+  }
+}
 
 /**
  * POST /subdealer-challan/parse-scan — multipart image/PDF (one file per request).
@@ -36,7 +137,8 @@ export async function parseSubdealerChallanScan(
 ): Promise<ParseSubdealerChallanResponse> {
   const body = new FormData();
   body.append("file", file);
-  return apiFetch<ParseSubdealerChallanResponse>("/subdealer-challan/parse-scan", {
+  const q = isElectron() ? "?mirror_bodies=true" : "";
+  return apiFetch<ParseSubdealerChallanResponse>(`/subdealer-challan/parse-scan${q}`, {
     method: "POST",
     body,
   });
@@ -190,7 +292,11 @@ export async function parseSubdealerChallanScans(
       throw new Error(`OCR failed on "${f.name}": ${msg}`);
     }
   }
-  return mergeSubdealerChallanParseResults(results, names);
+  const merged = mergeSubdealerChallanParseResults(results, names);
+  if (isElectron() && !(merged.error || "").trim()) {
+    await mirrorChallanParseArtifactsToDealerPc(merged, results, names);
+  }
+  return merged;
 }
 
 export type CreateChallanStagingBody = {

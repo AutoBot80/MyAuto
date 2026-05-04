@@ -25,5 +25,8 @@ def teardown_local_browsers_endpoint(
     Idempotent and safe to call repeatedly. The OS-level port kill is issued first, so even a
     wedged Playwright executor cannot prevent cleanup. On a server with no managed Chromium
     running (e.g. cloud EC2), this is effectively a no-op aside from clearing in-memory caches.
+
+    Response includes ``playwright_disconnect_ok`` (bool). When false, a long-running request may
+    still occupy the single-thread Playwright pool (browser-only dev); restart the API process.
     """
     return teardown_local_automation_browsers()
