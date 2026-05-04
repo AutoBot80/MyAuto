@@ -382,6 +382,8 @@ $remoteLines = @(
     'set -e'
     'cd /opt/saathi'
     'git fetch origin main'
+    # Runtime OCR/logs under Challans/ must not block pull when main tracks or drops the same paths.
+    'git clean -fd -- Challans 2>/dev/null || true'
     'git pull origin main'
     'source backend/venv/bin/activate'
     'pip install -q -r backend/requirements.txt'

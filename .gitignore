@@ -59,6 +59,9 @@ htmlcov/
 # Scanner / local assets (not versioned)
 Scanner/
 
+# Subdealer challan runs: OCR, logs, frame dumps (runtime on EC2 / dev; not versioned)
+Challans/
+
 # Hero MISP: persisted KYC insurer strategy (per portal host)
 backend/app/data/kyc_insurer_strategy_cache.json
 
