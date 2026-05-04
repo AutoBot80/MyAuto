@@ -188,6 +188,8 @@ If your app `.env` is the **monolithic** Secret in `app_dotenv_secret_arn`, that
 
 After `git pull` (or rsync) updates `/opt/saathi`:
 
+> **Challans folder:** Runtime subdealer-challan output lives under `Challans/` and is not in git. If a manual `git pull` fails with *untracked files would be overwritten* under `Challans/`, run `git clean -fd -- Challans` from `/opt/saathi`, then pull again. The workstation script [Update-Prod-App-Backend.ps1](../../Update-Prod-App-Backend.ps1) runs that clean automatically before `git pull`.
+
 ```bash
 cd /opt/saathi
 chmod +x deploy/ec2/run-gunicorn.sh
