@@ -1,5 +1,9 @@
 import { useState } from "react";
 import { uploadScans, uploadScansV2, uploadScansV2ConsolidatedStream } from "../api/uploads";
+import {
+  mirrorConsolidatedUploadFilesToLocalDisk,
+  mirrorUploadScansV2FilesToLocalDisk,
+} from "../utils/electronUploadScanMirror";
 import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
 import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
 import type { ExtractedDetailsResponse, ManualFallbackPayload } from "../types";
@@ -113,6 +117,14 @@ export function useUploadScans(
       if (details && controlled?.onExtractionComplete) {
         controlled.onExtractionComplete(details, { savedTo: savedToFolder });
       }
+      void mirrorUploadScansV2FilesToLocalDisk({
+        dealerId,
+        subfolder: savedToFolder,
+        aadharScan,
+        aadharBackScan,
+        salesDetail,
+        insuranceSheet,
+      });
       controlled?.onUploadSuccess?.(savedToFolder);
       // Extraction already ran on the server inside upload (save_and_queue_v2). No AI reader queue / process-all.
     } catch (err) {
@@ -166,6 +178,13 @@ export function useUploadScans(
       }
       if (data.saved_to) {
         setSavedTo(data.saved_to);
+      }
+      if (data.saved_to && consolidatedFiles.length > 0) {
+        void mirrorConsolidatedUploadFilesToLocalDisk({
+          dealerId,
+          subfolder: data.saved_to,
+          files: consolidatedFiles,
+        });
       }
       let msg = data.saved_to
         ? `Uploaded consolidated scan to ${data.saved_to}.`

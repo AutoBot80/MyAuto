@@ -149,6 +149,50 @@ def form20_pencil_overlay_and_dispatch(sale_dir: Path, mobile_10: str) -> None:
     dispatch_local_pdf(out)
 
 
+def prepare_details_pencil_and_form20_overlay(sale_dir: Path) -> dict[str, object]:
+    """
+    **Electron / dealer PC (local sale folder):** crop the chassis pencil mark from the Details sheet
+    (same logic as upload-time :func:`app.services.pre_ocr_service.try_write_pencil_mark_for_sale_folder`)
+    into ``pencil_mark.jpeg``, then composite it onto **page 1 top-right** of the Form 20 PDF
+    (writes ``{{Form20 stem}}_with_pencil_mark.pdf``). Run **after** dealer signature overlay so the
+    stamped Form 20 on disk is the input to the composite.
+
+    Non-fatal: missing Details/Form 20 yields empty ``form20_stamped_path`` without raising.
+    """
+    import re
+
+    out: dict[str, object] = {
+        "ok": True,
+        "pencil_crop_written": False,
+        "form20_stamped_path": None,
+        "note": None,
+    }
+    if not sale_dir.is_dir():
+        out["ok"] = False
+        out["note"] = "sale_dir_missing"
+        return out
+    try:
+        from app.services.pre_ocr_service import try_write_pencil_mark_for_sale_folder
+    except Exception as exc:  # pragma: no cover - import guard
+        logger.warning("prepare_details_pencil_and_form20_overlay: import pre_ocr_service: %s", exc)
+        out["ok"] = False
+        out["note"] = f"import_failed: {exc}"
+        return out
+
+    if try_write_pencil_mark_for_sale_folder(sale_dir):
+        out["pencil_crop_written"] = True
+
+    m = re.match(r"^(\d{10})", sale_dir.name.strip())
+    mob10 = m.group(1) if m else ""
+    if len(mob10) != 10:
+        out["note"] = "no_mobile_in_folder_name"
+        return out
+
+    stamped = form20_pencil_overlay_write_only(sale_dir, mob10)
+    out["form20_stamped_path"] = str(stamped) if stamped else None
+    return out
+
+
 def form20_pencil_overlay_write_only(sale_dir: Path, mobile_10: str) -> Path | None:
     """
     Same as :func:`form20_pencil_overlay_and_dispatch` but does not print/open; returns the stamped PDF path if written.

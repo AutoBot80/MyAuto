@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     exists: (p: string) => ipcRenderer.invoke("file:exists", p),
     openFolder: (p: string) => ipcRenderer.invoke("file:openFolder", p),
     selectFolder: () => ipcRenderer.invoke("file:selectFolder"),
+    copyUploadScanArtifacts: (payload: {
+      dealerId: number;
+      subfolder: string;
+      items: { sourcePath: string; destFileName: string }[];
+    }) => ipcRenderer.invoke("file:copyUploadScanArtifacts", payload),
   },
   config: {
     getSiteUrls: () => ipcRenderer.invoke("config:siteUrls"),

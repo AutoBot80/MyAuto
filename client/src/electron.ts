@@ -39,6 +39,14 @@ export interface ElectronAPI {
     exists: (p: string) => Promise<boolean>;
     openFolder: (p: string) => Promise<void>;
     selectFolder: () => Promise<string | null>;
+    copyUploadScanArtifacts: (payload: {
+      dealerId: number;
+      subfolder: string;
+      items: { sourcePath: string; destFileName: string }[];
+    }) => Promise<
+      | { ok: true; copied: string[]; destDir: string }
+      | { ok: false; message: string }
+    >;
   };
   config: {
     getSiteUrls: () => Promise<{

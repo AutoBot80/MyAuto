@@ -3,6 +3,10 @@ Headless overlay: stamp dealer signature on Form 20 (page 1 only), GST Retail In
 Sale Certificate PDFs in a sale folder (GST / Sale: all pages).
 
 Used from Electron before ``print-gate-pass``; failures are non-fatal for printing.
+
+With ``--after-sign-pencil-form20`` (Electron): after signature stamps, crop the chassis pencil mark
+from the Details sheet (see :func:`app.services.pre_ocr_service.try_write_pencil_mark_for_sale_folder`)
+and composite it onto **Form 20 page 1 top-right** via :func:`app.services.form20_pencil_overlay.form20_pencil_overlay_write_only`.
 """
 
 from __future__ import annotations
@@ -397,6 +401,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--sale-dir", required=True, help="Absolute path to Uploaded scans/{dealer_id}/{subfolder}/")
     p.add_argument("--dealer-id", required=True, type=int)
     p.add_argument("--signature", default="", help="Optional absolute path to signature JPEG/PNG")
+    p.add_argument(
+        "--after-sign-pencil-form20",
+        action="store_true",
+        help=(
+            "After signature stamps: extract chassis pencil mark from Details sheet into pencil_mark.jpeg "
+            "and composite onto Form 20 page 1 top-right (*_with_pencil_mark.pdf)."
+        ),
+    )
     p.add_argument("--json", action="store_true", help="Print JSON result on stdout")
     args = p.parse_args(argv)
 
@@ -413,6 +425,15 @@ def main(argv: list[str] | None = None) -> int:
         sig_path if sig_path and sig_path.is_file() else None,
         candidate_dirs_for_signature=explicit if explicit else None,
     )
+
+    if getattr(args, "after_sign_pencil_form20", False):
+        try:
+            from app.services.form20_pencil_overlay import prepare_details_pencil_and_form20_overlay
+
+            result["pencil_form20"] = prepare_details_pencil_and_form20_overlay(sale_dir)
+        except Exception as exc:
+            logger.warning("dealer_sign_overlay: pencil Form 20 prep failed (non-fatal): %s", exc)
+            result["pencil_form20"] = {"ok": False, "note": str(exc)}
 
     if args.json:
         print(json.dumps(result, default=str))

@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import * as fileOps from "./file-ops";
+import { copyUploadScanArtifacts } from "./upload-scan-copies";
 import { logError, logInfo } from "./logger";
 import { getSiteUrlsFromEnv } from "./paths";
 import * as printer from "./printer";
@@ -65,6 +66,21 @@ export function registerIpc(mainWindow: BrowserWindow): void {
   ipcMain.handle("file:exists", (_evt: IpcMainInvokeEvent, p: string) => fileOps.fileExists(p));
   ipcMain.handle("file:openFolder", (_evt: IpcMainInvokeEvent, p: string) => fileOps.openFolder(p));
   ipcMain.handle("file:selectFolder", async () => fileOps.selectFolder());
+
+  ipcMain.handle(
+    "file:copyUploadScanArtifacts",
+    async (
+      _evt: IpcMainInvokeEvent,
+      payload: { dealerId: number; subfolder: string; items: { sourcePath: string; destFileName: string }[] }
+    ) => {
+      try {
+        return await copyUploadScanArtifacts(payload);
+      } catch (e) {
+        logError("file:copyUploadScanArtifacts", e);
+        return { ok: false as const, message: String(e) };
+      }
+    }
+  );
 
   ipcMain.handle("config:siteUrls", () => getSiteUrlsFromEnv());
 
