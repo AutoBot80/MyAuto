@@ -65,8 +65,11 @@ function openBlobInNewTab(blob: Blob): void {
 }
 
 /**
- * After Create Invoice succeeds, open DMS PDFs from the uploaded-scans subfolder in new tabs
- * (same files the backend may print/open on the server — the browser needs its own copy).
+ * Open DMS sale-folder PDFs in new browser tabs (fetches via ``/documents/...``).
+ *
+ * **Add Sales** does not call this after Create Invoice — multiple tabs and popup blockers
+ * were disruptive; PDFs remain under Uploaded scans and **Print Forms & Queue RTO** handles printing.
+ * Keep this helper for a future explicit “Open PDFs” action or other pages if needed.
  */
 export async function openCreateInvoicePdfsInBrowser(
   subfolder: string,

@@ -398,10 +398,8 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         _dms_response_warning_and_mode,
         _has_scraped_vehicle,
         _invoice_dispatch_pdf_paths,
-        _mobile_for_invoice_dispatch,
         _normalize_automation_error,
     )
-    from app.services.upload_scans_invoice_print import collect_invoice_print_jobs_electron_local
 
     api_url, jwt = _require_api_credentials(params)
     _client_api_log = (params.get("client_api_base_url") or "").strip() or None
@@ -515,9 +513,6 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         logging.warning("fill_dms sidecar commit: %s", exc)
         result["error"] = (result.get("error") or "") + f"; Commit: {exc!s}"
 
-    raw_customer = params.get("customer")
-    customer_dict = raw_customer if isinstance(raw_customer, dict) else {}
-
     warn, dms_mode = _dms_response_warning_and_mode(result)
     cc = result.get("committed_customer_id")
     vv = result.get("committed_vehicle_id")
@@ -526,14 +521,10 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
     if vv is None:
         vv = result.get("vehicle_id") or params.get("vehicle_id")
 
+    # Match ``fill_forms_router.fill_dms``: keep ``print_jobs`` empty after Create Invoice. Non-empty jobs
+    # would make the client call ``dispatchPrintJobsFromApi`` → Electron opens PDF windows and
+    # ``webContents.print({ silent: false })`` (system print dialog) for GST / Sale Certificate / Form 20.
     print_jobs: list = []
-    if result.get("error") is None and subfolder:
-        print_jobs = collect_invoice_print_jobs_electron_local(
-            dealer_id,
-            subfolder,
-            _mobile_for_invoice_dispatch(staging_payload, customer_dict),
-            _invoice_dispatch_pdf_paths(result),
-        )
 
     if subfolder:
         try:

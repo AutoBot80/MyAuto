@@ -42,8 +42,6 @@ import {
   parseCareOfFromCombined,
 } from "../utils/section2CustomerFormat";
 import { isPlaceholderCustomerMobileDigits } from "../utils/customerMobile";
-import { openCreateInvoicePdfsInBrowser } from "../utils/openCreateInvoicePdfs";
-
 /** Shown under Upload documents while upload or OCR polling runs; counts down toward 00m:00s. */
 const ADD_SALES_OCR_COUNTDOWN_START_SEC = 40;
 
@@ -1084,25 +1082,11 @@ export function AddSalesPage({
       if (dmsRes.success) {
         setCreateInvoiceCompleted(true);
         dispatchPrintJobsFromApi(dmsRes.print_jobs);
-        if (savedTo && dealerId > 0) {
-          void openCreateInvoicePdfsInBrowser(savedTo, dealerId, dmsRes.pdfs_saved ?? []).then((r) => {
-            if (r.candidateCount > 0) {
-              setDmsPdfsDownloaded(true);
-            }
-            if (r.opened > 0) {
-              setFillDmsStatus((prev) => {
-                const base = (prev ?? "").trim();
-                const extra = `Opened ${r.opened} PDF(s) in new browser tab(s).`;
-                return base ? `${base} ${extra}` : extra;
-              });
-            } else if (r.candidateCount > 0 && r.hint) {
-              setFillDmsStatus((prev) => {
-                const base = (prev ?? "").trim();
-                const extra = `PDFs are in the sale folder but did not open (${r.hint}).`;
-                return base ? `${base} ${extra}` : extra;
-              });
-            }
-          });
+        // Do not open sale-folder PDFs in new browser tabs after Create Invoice (no tab popups /
+        // focus steal). ``pdfs_saved`` already includes Run Report paths from the API or sidecar;
+        // operators open files from Uploaded scans or use **Print Forms & Queue RTO**.
+        if ((dmsRes.pdfs_saved ?? []).length > 0) {
+          setDmsPdfsDownloaded(true);
         }
       }
     } catch (err) {
