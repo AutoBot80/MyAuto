@@ -1,15 +1,34 @@
 """
-Shared Playwright browser lifecycle: CDP attach to existing Edge/Chrome, or launch managed browser,
-tab matching by site base URL, optional auto-login when credentials are pre-filled.
+Shared Playwright browser lifecycle: CDP attach to existing Edge/Chrome, optional **native**
+Playwright Chromium (``launch_persistent_context``), or launch managed Edge/Chrome; tab matching by
+site base URL; optional auto-login when credentials are pre-filled.
 
 Used by Fill DMS, Vahan, and Insurance — independent of Siebel/DMS business logic.
 
-**Browser persistence policy:** The browser is launched as an independent OS process with a *stable*
-user-data-dir (``<project>/.browser-profile``) and ``--remote-debugging-port``.  It survives backend
-restarts, retries, and frontend reloads.  On next startup the CDP reconnection logic in
-``_refresh_cdp_browsers`` re-attaches to the same process (session cookies, Vahan login,
-captcha/OTP state all survive).  Normal flows do not call ``Browser.close()``; Electron quit sends a
-``teardown_local_browsers`` sidecar job that disconnects CDP and terminates the managed debug-port process.
+**Native Playwright Chromium (default):** When ``USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS`` is true,
+``site_label="DMS"``, ``site_label="Insurance"``, and ``site_label="Vahan"`` each use Playwright-bundled
+Chromium with ``launch_persistent_context`` — DMS under ``browser-profile-playwright-chromium``,
+Insurance under ``browser-profile-playwright-chromium-insurance``, Vahan under
+``browser-profile-playwright-chromium-vahan`` (siblings of the Edge/Chrome profile dir). No CDP
+attach for those paths. Set the env var to ``false`` to restore CDP + managed Edge/Chrome for DMS,
+Insurance, and Vahan.
+The DMS profile is **not** Edge's saved-password vault: Windows Hello / PIN prompts when picking
+stored passwords in Edge do not apply; automation uses ``DMS_LOGIN_USER`` / ``DMS_LOGIN_PASSWORD``
+or ``operator_dms_login.json`` (written after a successful programmatic or snapshotted login).
+Siebel login: ``get_or_open_site_page`` may fill those creds (non-demo),
+reuse the JSON cache under that profile after a successful manual login, poll for **browser autofill**
+(Chrome saved password) up to ``DMS_BROWSER_AUTOFILL_LOGIN_MAX_MS`` (default 14s) and click **Login** when
+both fields are populated, and wait up to ``DMS_LOGIN_MANUAL_WAIT_MS`` for the operator to finish typing before failing.
+
+**Browser persistence policy (CDP / managed Edge):** When native Chromium is off for a portal, the
+browser is launched as an independent OS process with a *stable* user-data-dir
+(``<project>/.browser-profile``) and ``--remote-debugging-port``. It survives backend restarts,
+retries, and frontend reloads. On next startup the CDP reconnection logic in ``_refresh_cdp_browsers``
+re-attaches to the same process (session cookies, Vahan login, captcha/OTP state all survive). When
+native Chromium is on, Vahan uses ``browser-profile-playwright-chromium-vahan`` the same way as DMS
+and Insurance. Normal flows do not call ``Browser.close()``; Electron quit sends a
+``teardown_local_browsers`` sidecar job that disconnects CDP / closes native context and terminates
+the managed debug-port process when applicable.
 
 **No new tabs:** For single-session portals like Vahan, a second tab to the same host would
 invalidate the running session.  ``get_or_open_site_page`` never opens an extra tab — it
@@ -20,6 +39,7 @@ from __future__ import annotations
 
 import atexit
 import concurrent.futures
+import json
 import logging
 import os
 import shutil
@@ -32,14 +52,304 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
-from app.config import DMS_PLAYWRIGHT_HEADED, PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT
+from app.config import (
+    DMS_BROWSER_AUTOFILL_LOGIN_MAX_MS,
+    DMS_LOGIN_MANUAL_WAIT_MS,
+    DMS_PLAYWRIGHT_HEADED,
+    PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
+    USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS,
+)
+from app.services.hero_dms_shared_utilities import _is_browser_disconnected_error, _ts_ist_iso
 from app.services.playwright_executor import get_playwright_executor, run_playwright_callable_sync
 
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+# ``page`` id → (context, on_dialog, page, on_popup) for Siebel login capture (removed after login gate).
+# Dialogs use **context** so ``alert``/``confirm`` on ``window.open`` login helpers are not missed.
+_DMS_LOGIN_CAPTURE_HANDLERS: dict[int, tuple[object, object, object, object]] = {}
+
+
+def _append_playwright_dms_capture_line(
+    log_path: Path | str | None, prefix: str, msg: str, *, also_logger: bool = False
+) -> None:
+    """Append one IST line to ``Playwright_DMS_*.txt`` under ``ocr_output`` (same format as main DMS trace)."""
+    if not log_path or not (msg or "").strip():
+        return
+    p = Path(str(log_path))
+    line = f"{_ts_ist_iso()} [{prefix}] {(msg or '').replace(chr(10), ' ').replace(chr(13), ' ')[:14000]}\n"
+    if also_logger:
+        logger.warning("%s", line.strip())
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as fp:
+            fp.write(line)
+            fp.flush()
+    except OSError as exc:
+        logger.debug("handle_browser_opening: Playwright DMS log append failed: %s", exc)
+
+
+def _install_dms_login_window_capture(page, log_path: Path) -> None:
+    """
+    During Siebel **login**: log ``alert``/``confirm``/``prompt`` (Playwright ``dialog`` on **any** page
+    in the context — including short-lived ``window.open`` shells), new **popup** pages from this tab
+    (URL, body text excerpt, PNG), for review in ``Playwright_DMS_*.txt`` next to other OCR artifacts.
+    """
+    pid = id(page)
+    if pid in _DMS_LOGIN_CAPTURE_HANDLERS:
+        return
+    log_path = Path(log_path)
+
+    def on_dialog(dialog) -> None:
+        try:
+            pg = getattr(dialog, "page", None)
+            purl = ""
+            try:
+                if pg is not None:
+                    purl = (pg.url or "")[:240]
+            except Exception:
+                pass
+            _append_playwright_dms_capture_line(
+                log_path,
+                "LOGIN_JS_DIALOG",
+                f"type={dialog.type} page_url={purl!r} message={dialog.message}",
+                also_logger=True,
+            )
+        except Exception:
+            pass
+        try:
+            dialog.accept()
+        except Exception as exc:
+            logger.debug("handle_browser_opening: login dialog accept skipped: %s", exc)
+
+    def on_popup(popup) -> None:
+        try:
+            _append_playwright_dms_capture_line(
+                log_path,
+                "LOGIN_POPUP_OPEN",
+                f"url={(popup.url or '')[:900]}",
+            )
+        except Exception:
+            pass
+        try:
+            popup.wait_for_load_state("domcontentloaded", timeout=8000)
+        except Exception as exc:
+            _append_playwright_dms_capture_line(log_path, "LOGIN_POPUP_LOAD", f"(timeout/early) {exc!s}")
+        try:
+            body = popup.evaluate(
+                """() => {
+                  try {
+                    const b = document.body;
+                    return (b && (b.innerText || b.textContent) || '').replace(/\\s+/g, ' ').trim().slice(0, 10000);
+                  } catch (e) { return ''; }
+                }"""
+            )
+            if isinstance(body, str) and body.strip():
+                _append_playwright_dms_capture_line(log_path, "LOGIN_POPUP_BODY", body)
+        except Exception as exc:
+            _append_playwright_dms_capture_line(log_path, "LOGIN_POPUP_BODY_ERR", str(exc))
+        try:
+            shot = log_path.parent / f"Playwright_DMS_login_capture_{int(time.time() * 1000) % 10_000_000}.png"
+            popup.screenshot(path=str(shot), timeout=8000)
+            _append_playwright_dms_capture_line(log_path, "LOGIN_POPUP_SCREENSHOT", str(shot))
+        except Exception as exc:
+            _append_playwright_dms_capture_line(log_path, "LOGIN_POPUP_SCREENSHOT_ERR", str(exc))
+
+    try:
+        ctx = page.context
+        ctx.on("dialog", on_dialog)
+        page.on("popup", on_popup)
+        _DMS_LOGIN_CAPTURE_HANDLERS[pid] = (ctx, on_dialog, page, on_popup)
+        _append_playwright_dms_capture_line(
+            log_path,
+            "LOGIN_CAPTURE",
+            "Installed BrowserContext dialog + main page popup listeners for Siebel login phase.",
+        )
+    except Exception as exc:
+        logger.warning("handle_browser_opening: could not install login capture listeners: %s", exc)
+
+
+def _remove_dms_login_window_capture(page) -> None:
+    tup = _DMS_LOGIN_CAPTURE_HANDLERS.pop(id(page), None)
+    if not tup:
+        return
+    ctx, on_dialog, pg, on_popup = tup
+    try:
+        ctx.remove_listener("dialog", on_dialog)
+    except Exception:
+        pass
+    try:
+        pg.remove_listener("popup", on_popup)
+    except Exception:
+        pass
+
+
+def _capture_login_main_page_snapshot(page, log_path: Path | str | None, tag: str) -> None:
+    """Screenshot main tab + ``#statusBar`` text after login submit (flash errors)."""
+    if not log_path:
+        return
+    lp = Path(str(log_path))
+    bar = _read_siebel_login_status_bar_any_frame(page)
+    if bar:
+        _append_playwright_dms_capture_line(lp, f"LOGIN_STATUSBAR_{tag}", bar, also_logger=True)
+    try:
+        shot = lp.parent / f"Playwright_DMS_login_main_{tag}_{int(time.time() * 1000) % 10_000_000}.png"
+        page.screenshot(path=str(shot), full_page=True, timeout=12_000)
+        _append_playwright_dms_capture_line(lp, f"LOGIN_MAIN_SCREENSHOT_{tag}", str(shot))
+    except Exception as exc:
+        _append_playwright_dms_capture_line(lp, f"LOGIN_MAIN_SCREENSHOT_{tag}_ERR", str(exc))
+
+# Poll Siebel login for Chrome / password-manager autofill before env/json fill (clamped 3s–10m).
+_DMS_BROWSER_AUTOFILL_LOGIN_MAX_SEC = max(
+    3.0, min(600.0, float(int(DMS_BROWSER_AUTOFILL_LOGIN_MAX_MS)) / 1000.0)
+)
+_DMS_BROWSER_AUTOFILL_POLL_MS = 400
+
+# Hero Connect / Open UI: Login is ``<a id="s_swepi_22" onclick="SWEExecuteLogin(document.SWEEntryForm,...)">``
+# — not a native submit control; ``form.requestSubmit()`` does not run that handler.
+_SIEBEL_HERO_SWEENTRY_LOGIN_SUBMIT_JS = """() => {
+      const frm = document.forms["SWEEntryForm"] || document.forms.SWEEntryForm || document.SWEEntryForm;
+      if (!frm) return false;
+      const u = frm.querySelector('input[name="SWEUserName"]');
+      const p = frm.querySelector('input[name="SWEPassword"], input[type="password"]');
+      if (!u || !p) return false;
+      if ((u.value || "").trim().length < 2) return false;
+      let passOk = ((p.value || "").trim().length > 0);
+      if (!passOk) {
+        try { passOk = !!p.matches(":autofill"); } catch (e) {}
+      }
+      if (!passOk) return false;
+      const anchor = document.getElementById("s_swepi_22");
+      let path = "";
+      try {
+        const raw = (frm.getAttribute("action") || "").trim() || (frm.action || "").trim();
+        if (raw) {
+          if (raw.startsWith("http://") || raw.startsWith("https://")) {
+            const url = new URL(raw);
+            path = url.pathname + (url.search || "");
+          } else {
+            path = raw;
+          }
+        } else {
+          path = window.location.pathname + (window.location.search || "");
+        }
+      } catch (e) {
+        path = "/siebel/app/edealerHMCL/enu/";
+      }
+      if (typeof SWEExecuteLogin === "function") {
+        try {
+          SWEExecuteLogin(frm, path, "");
+          return true;
+        } catch (e) {}
+      }
+      if (anchor) {
+        try {
+          anchor.click();
+          return true;
+        } catch (e) {}
+      }
+      return false;
+    }"""
+
+_SIEBEL_PREFILL_DETECT_JS = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      const userSels = ['input[name="SWEUserName"]', 'input[type="text"][name*="user" i]',
+                        'input[type="text"][name*="login" i]', 'input[type="email"]',
+                        'input[name="username"]', 'input[id*="userName" i]', 'input[id*="username" i]',
+                        'input[placeholder*="User Name" i]', 'input[placeholder*="User name" i]',
+                        'input[aria-label*="User Name" i]', 'input[aria-label*="User name" i]',
+                        'input[type="text"]:not([name=""])'];
+      const passSels = ['input[name="SWEPassword"]', 'input[type="password"]',
+                        'input[name="password"]', 'input[placeholder*="Password" i]'];
+      let userEl = null, passEl = null, userFound = false, passFound = false;
+      for (const s of userSels) {
+        const el = document.querySelector(s);
+        if (el && vis(el)) { userFound = true; if ((el.value || '').trim().length > 0) { userEl = el; break; } }
+      }
+      for (const s of passSels) {
+        const el = document.querySelector(s);
+        if (el && vis(el)) {
+          passFound = true;
+          if (!passEl) passEl = el;
+          if ((el.value || '').trim().length > 0) { passEl = el; break; }
+        }
+      }
+      let passOk = false;
+      if (passEl) {
+        if ((passEl.value || '').trim().length > 0) passOk = true;
+        else { try { passOk = !!passEl.matches(':autofill'); } catch (e) {} }
+      }
+      if (!userFound && !passFound) return {status: 'no_form'};
+      if (!userEl || !passFound || !passEl) return {status: 'not_prefilled', userFound, passFound,
+        userValue: userEl ? userEl.value.trim().substring(0,40) : '',
+        passHasValue: passOk};
+      if (!passOk) return {status: 'not_prefilled', userFound, passFound,
+        userValue: userEl ? userEl.value.trim().substring(0,40) : '', passHasValue: false};
+      return {status: 'prefilled', user: userEl.value.trim().substring(0, 40), hasPass: true};
+    }"""
+
+_SIEBEL_TRY_LOGIN_SUBMIT_FALLBACK_JS = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      const u = document.querySelector('input[name="SWEUserName"]');
+      const p = document.querySelector('input[name="SWEPassword"], input[type="password"]');
+      if (!u || !vis(u) || (u.value || '').trim().length < 2) return false;
+      if (!p || !vis(p)) return false;
+      if ((p.value || '').trim().length > 0) return true;
+      try { return !!p.matches(':autofill'); } catch (e) { return false; }
+    }"""
+
+# ``SWECM=S`` login screen: Chrome may mask password from JS — still try **Login** if user field is set.
+_SIEBEL_TRY_LOGIN_SUBMIT_AGGRESSIVE_JS = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      const u = document.querySelector('input[name="SWEUserName"]');
+      const p = document.querySelector('input[name="SWEPassword"], input[type="password"]');
+      if (!u || !vis(u) || (u.value || '').trim().length < 2) return false;
+      return !!(p && vis(p));
+    }"""
+
+_SIEBEL_THIRD_LEVEL_BAR_WIDE_JS = """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      const bar = document.getElementById('s_vctrl_div');
+      if (!bar || !vis(bar)) return false;
+      const r = bar.getBoundingClientRect();
+      return r.width >= 100 && r.height >= 12;
+    }"""
+
+_SIEBEL_LOGIN_AUTOFILL_NUDGE_JS = """() => {
+      const u = document.querySelector('input[name="SWEUserName"]');
+      const p = document.querySelector('input[name="SWEPassword"], input[type="password"]');
+      try { if (u) { u.focus(); u.click(); } } catch (e) {}
+      try { if (p) { p.focus(); } } catch (e) {}
+      return !!(u || p);
+    }"""
 
 
 def _path_is_under_onedrive(p: Path) -> bool:
@@ -117,14 +427,527 @@ _LAST_CDP_REFRESH_MONO: float = 0.0
 _CDP_REFRESH_TTL_SEC = 2.0
 _CDP_PROBE_TIMEOUT_SEC = 0.35
 
+# Playwright-bundled Chromium persistent contexts (no CDP attach to Edge/Chrome).
+_DMS_NATIVE_PERSISTENT_CONTEXT: object | None = None
+_INSURANCE_NATIVE_PERSISTENT_CONTEXT: object | None = None
+_VAHAN_NATIVE_PERSISTENT_CONTEXT: object | None = None
+
+
+def _playwright_chromium_profile_dir() -> Path:
+    """Sibling profile dir for Playwright Chromium (do not share user-data-dir with Edge/Chrome)."""
+    return _browser_profile_dir().resolve().parent / "browser-profile-playwright-chromium"
+
+
+def _playwright_chromium_insurance_profile_dir() -> Path:
+    """Separate user-data-dir from DMS so MISP cookies/session do not mix with Siebel."""
+    return _browser_profile_dir().resolve().parent / "browser-profile-playwright-chromium-insurance"
+
+
+def _playwright_chromium_vahan_profile_dir() -> Path:
+    """Separate user-data-dir for Vahan (parivahan) so dealer session/cookies do not mix with DMS/Insurance."""
+    return _browser_profile_dir().resolve().parent / "browser-profile-playwright-chromium-vahan"
+
+
+_OPERATOR_DMS_LOGIN_JSON = "operator_dms_login.json"
+
+
+def _dms_operator_login_store_path() -> Path:
+    return _playwright_chromium_profile_dir() / _OPERATOR_DMS_LOGIN_JSON
+
+
+def _load_stored_dms_operator_login() -> tuple[str, str] | None:
+    p = _dms_operator_login_store_path()
+    try:
+        if not p.is_file():
+            return None
+        data = json.loads(p.read_text(encoding="utf-8"))
+        u = (data.get("user") or "").strip()
+        pw = data.get("password") if isinstance(data.get("password"), str) else ""
+        if len(u) >= 2 and len(pw) >= 1:
+            return u, pw
+    except Exception:
+        return None
+    return None
+
+
+def _save_stored_dms_operator_login(user: str, password: str) -> None:
+    u = (user or "").strip()
+    p = password if isinstance(password, str) else ""
+    if len(u) < 2 or len(p) < 1:
+        return
+    try:
+        path = _dms_operator_login_store_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"user": u, "password": p}), encoding="utf-8")
+        tmp.replace(path)
+        logger.info("handle_browser_opening: saved DMS operator login cache to %s", path)
+    except Exception as exc:
+        logger.debug("handle_browser_opening: could not save DMS login cache: %s", exc)
+
+
+def _effective_dms_login_creds(login_user: str | None, login_password: str | None) -> tuple[str | None, str | None]:
+    """Non-demo credentials from caller kwargs, else Siebel operator JSON next to the Chromium profile."""
+    u = (login_user or "").strip()
+    p = (login_password or "").strip()
+    if u and p and not (u.lower() == "demo" and p == "demo"):
+        return u, p
+    got = _load_stored_dms_operator_login()
+    if got:
+        lu, lp = got
+        if len((lu or "").strip()) >= 2 and len(lp or "") >= 1:
+            return lu.strip(), lp
+    return None, None
+
+
+def _maybe_snapshot_stored_credentials_from_login_page(page) -> None:
+    """While the operator types on Siebel login, persist u/p for the next headless-ish automation open."""
+    _snap_js = """() => {
+      const u = document.querySelector('input[name="SWEUserName"]');
+      const p = document.querySelector('input[name="SWEPassword"], input[type="password"]');
+      if (!u || !p) return null;
+      const user = (u.value || '').trim();
+      const pass = (p.value || '');
+      if (user.length < 2 || pass.length < 3) return null;
+      if (user.toLowerCase() === 'demo' && pass === 'demo') return null;
+      return {user, pass};
+    }"""
+    try:
+        data = page.evaluate(_snap_js)
+        if data and data.get("user"):
+            _save_stored_dms_operator_login(str(data["user"]), str(data.get("pass") or ""))
+    except Exception:
+        pass
+
+
+def _ordered_unique_playwright_frames(page):
+    """Main frame first, then child frames (deduped) — Siebel login fields often live in an iframe."""
+    out = []
+    seen: set[int] = set()
+    for fr in _iter_page_frames(page):
+        k = id(fr)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(fr)
+    return out
+
+
+def _read_siebel_login_status_bar_any_frame(page) -> str:
+    """Trimmed ``#statusBar`` text from any frame (Hero Siebel login surfaces validation errors there briefly)."""
+    for fr in _ordered_unique_playwright_frames(page):
+        try:
+            t = fr.evaluate(
+                """() => {
+                  const bar = document.getElementById("statusBar");
+                  if (!bar) return "";
+                  const txt = (bar.innerText || bar.textContent || "").replace(/\\s+/g, " ").trim();
+                  return txt.slice(0, 800);
+                }"""
+            )
+            if isinstance(t, str) and t.strip():
+                return t.strip()
+        except Exception:
+            continue
+    return ""
+
+
+def _click_siebel_login_submit(page) -> bool:
+    """Click Siebel / generic Login after username+password are already set in the DOM."""
+    _sels = (
+        'form[name="SWEEntryForm"] a#s_swepi_22',
+        'form[name="SWEEntryForm"] #s_swepi_22',
+        'a#s_swepi_22[role="button"]',
+        '.siebui-login-btn a#s_swepi_22',
+        '#s_swepi_22',
+        'input[id="s_swepi_22"]',
+        'button[id="s_swepi_22"]',
+        'input[type="submit"][value*="Login" i]',
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'input[name="s_swepi_22"]',
+        'a[href*="Login" i]',
+        'button:has-text("Login")',
+        'button:has-text("Sign In")',
+        'input[type="button"][value*="Login" i]',
+    )
+    _legacy_submit_js = """() => {
+        const vis = (el) => {
+          if (!el) return false;
+          const st = window.getComputedStyle(el);
+          if (st.display === 'none' || st.visibility === 'hidden') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 2 && r.height > 2;
+        };
+        const pwd = document.querySelector('input[name="SWEPassword"], input[type="password"]');
+        const frm = (pwd && pwd.form) ? pwd.form : document.querySelector('form');
+        if (frm) { try { frm.requestSubmit ? frm.requestSubmit() : frm.submit(); return true; } catch (e) {} }
+        const btn = document.querySelector('input[type="submit"], button[type="submit"], input[name="s_swepi_22"]');
+        if (btn && vis(btn)) { try { btn.click(); return true; } catch (e) {} }
+        return false;
+    }"""
+    for fr in _ordered_unique_playwright_frames(page):
+        try:
+            if bool(fr.evaluate(_SIEBEL_HERO_SWEENTRY_LOGIN_SUBMIT_JS)):
+                return True
+        except Exception:
+            pass
+        for sel in _sels:
+            try:
+                loc = fr.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=400):
+                    loc.click(timeout=3000)
+                    return True
+            except Exception:
+                continue
+    try:
+        page.keyboard.press("Enter")
+        return True
+    except Exception:
+        pass
+    for fr in _ordered_unique_playwright_frames(page):
+        try:
+            if bool(fr.evaluate(_legacy_submit_js)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _siebel_still_on_pre_auth_login_surface(page) -> bool:
+    """True while we should keep waiting — MISP / generic / Siebel ``SWECM=S`` form (not eDealer ``SWEPL=1`` portal)."""
+    try:
+        u = (page.url or "").lower()
+    except Exception:
+        return True
+    if "misp-partner-login" in u:
+        return True
+    if u.rstrip("/").endswith("/login") and "siebel" not in u:
+        return True
+    if "swecmd=login" not in u:
+        return False
+    if "swepl=1" in u and "swecm=s" not in u:
+        return False
+    return True
+
+
+def _wait_after_siebel_login_submit(page, log_path: Path | str | None = None) -> bool:
+    """Return True once Siebel leaves the **pre-auth** login surface (``SWECM=S``), including portal ``SWEPL=1`` URLs."""
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+    except Exception:
+        pass
+
+    _logged_login_status: set[str] = set()
+    # Phase 1: short interval so brief ``#statusBar`` validation lines (and similar) are not missed between polls.
+    for i in range(50):
+        _bar = _read_siebel_login_status_bar_any_frame(page)
+        if _bar and _bar not in _logged_login_status:
+            _logged_login_status.add(_bar)
+            logger.warning(
+                "handle_browser_opening: Siebel login #statusBar while waiting for redirect (dense pass %s): %s",
+                i,
+                _bar,
+            )
+            _append_playwright_dms_capture_line(
+                log_path,
+                "LOGIN_STATUSBAR_FLASH",
+                f"pass={i} text={_bar}",
+                also_logger=True,
+            )
+        if not _siebel_still_on_pre_auth_login_surface(page):
+            logger.info("handle_browser_opening: login submit settled; page URL now: %s", (page.url or "")[:120])
+            return True
+        try:
+            page.wait_for_timeout(80)
+        except Exception:
+            time.sleep(0.08)
+    # Phase 2: legacy coarser tail (~6s) for slow redirects.
+    for j in range(24):
+        _bar = _read_siebel_login_status_bar_any_frame(page)
+        if _bar and _bar not in _logged_login_status:
+            _logged_login_status.add(_bar)
+            logger.warning(
+                "handle_browser_opening: Siebel login #statusBar while waiting for redirect (pass %s): %s",
+                j + 50,
+                _bar,
+            )
+            _append_playwright_dms_capture_line(
+                log_path,
+                "LOGIN_STATUSBAR_WAIT",
+                f"pass={j + 50} text={_bar}",
+            )
+        if not _siebel_still_on_pre_auth_login_surface(page):
+            logger.info("handle_browser_opening: login submit settled; page URL now: %s", (page.url or "")[:120])
+            return True
+        try:
+            page.wait_for_timeout(250)
+        except Exception:
+            time.sleep(0.25)
+    logger.warning(
+        "handle_browser_opening: login submit still on pre-auth login surface after wait: %s",
+        (page.url or "")[:120],
+    )
+    return False
+
+
+def _wait_after_siebel_login_submit_with_optional_second_click(
+    page, log_path: Path | str | None = None
+) -> bool:
+    """
+    After **Login**, Siebel sometimes shows a very short ``alert`` / ``#statusBar`` message and only
+    succeeds on a **second** Login — mirror that with one automated retry when still on the login surface.
+    """
+    ok = _wait_after_siebel_login_submit(page, log_path=log_path)
+    if ok:
+        return True
+    if not _siebel_still_on_pre_auth_login_surface(page):
+        return False
+    if not _login_form_visible_any_frame(page):
+        return False
+    _append_playwright_dms_capture_line(
+        log_path,
+        "LOGIN_SUBMIT_RETRY",
+        "Still on login surface after first submit — clicking Login once more (Siebel transient dialog pattern).",
+        also_logger=True,
+    )
+    if not _click_siebel_login_submit(page):
+        return False
+    _capture_login_main_page_snapshot(page, log_path, "after_retry_submit")
+    return _wait_after_siebel_login_submit(page, log_path=log_path)
+
+
+def _try_fill_siebel_login_and_submit(
+    page, user: str, password: str, log_path: Path | str | None = None
+) -> bool:
+    """Fill Siebel SWEUserName/SWEPassword (or close equivalents) and submit — used for env / cached creds."""
+    u = (user or "").strip()
+    p = password if isinstance(password, str) else ""
+    if len(u) < 2 or len(p) < 1:
+        return False
+    _form_deadline = time.monotonic() + 12.0
+    while time.monotonic() < _form_deadline:
+        if _login_form_visible_any_frame(page):
+            break
+        try:
+            page.wait_for_timeout(400)
+        except Exception:
+            time.sleep(0.4)
+    _user_sels = (
+        'input[name="SWEUserName"]',
+        'input[type="text"][name*="user" i]',
+        'input[type="text"][name*="login" i]',
+        'input[type="email"]',
+        'input[name="username"]',
+    )
+    _pass_sels = ('input[name="SWEPassword"]', 'input[type="password"]', 'input[name="password"]')
+    user_filled = False
+    user_fr = None
+    for fr in _ordered_unique_playwright_frames(page):
+        for sel in _user_sels:
+            try:
+                loc = fr.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=1200):
+                    loc.click(timeout=2000)
+                    loc.fill(u, timeout=5000)
+                    user_filled = True
+                    user_fr = fr
+                    break
+            except Exception:
+                continue
+        if user_filled:
+            break
+    if not user_filled:
+        return False
+    pass_filled = False
+    _uid = id(user_fr) if user_fr is not None else None
+    _pass_frames = []
+    if user_fr is not None:
+        _pass_frames.append(user_fr)
+    for fr in _ordered_unique_playwright_frames(page):
+        if _uid is not None and id(fr) == _uid:
+            continue
+        _pass_frames.append(fr)
+    for fr in _pass_frames:
+        for sel in _pass_sels:
+            try:
+                loc = fr.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=1200):
+                    loc.click(timeout=2000)
+                    loc.fill(p, timeout=5000)
+                    pass_filled = True
+                    break
+            except Exception:
+                continue
+        if pass_filled:
+            break
+    if not pass_filled:
+        return False
+    if not _click_siebel_login_submit(page):
+        return False
+    _capture_login_main_page_snapshot(page, log_path, "after_env_fill_submit")
+    ok = _wait_after_siebel_login_submit_with_optional_second_click(page, log_path=log_path)
+    if ok:
+        _save_stored_dms_operator_login(u, p)
+    return ok
+
+
+def _use_native_pw_chromium_for_site(site_label: str) -> bool:
+    """True when native Playwright Chromium is enabled for this portal (DMS, Insurance, and/or Vahan)."""
+    if not bool(USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS):
+        return False
+    sl = (site_label or "").strip()
+    return sl in ("DMS", "Insurance", "Vahan")
+
+
+def _clear_native_dms_persistent_context(reason: str = "") -> None:
+    """Forget the native DMS Chromium context so the next open launches or attaches cleanly."""
+    global _DMS_NATIVE_PERSISTENT_CONTEXT
+    if _DMS_NATIVE_PERSISTENT_CONTEXT is None:
+        return
+    _DMS_NATIVE_PERSISTENT_CONTEXT = None
+    if reason:
+        logger.warning("handle_browser_opening: cleared native DMS persistent context (%s).", reason)
+
+
+def _clear_native_insurance_persistent_context(reason: str = "") -> None:
+    global _INSURANCE_NATIVE_PERSISTENT_CONTEXT
+    if _INSURANCE_NATIVE_PERSISTENT_CONTEXT is None:
+        return
+    _INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+    if reason:
+        logger.warning(
+            "handle_browser_opening: cleared native Insurance persistent context (%s).", reason
+        )
+
+
+def _clear_native_vahan_persistent_context(reason: str = "") -> None:
+    global _VAHAN_NATIVE_PERSISTENT_CONTEXT
+    if _VAHAN_NATIVE_PERSISTENT_CONTEXT is None:
+        return
+    _VAHAN_NATIVE_PERSISTENT_CONTEXT = None
+    if reason:
+        logger.warning(
+            "handle_browser_opening: cleared native Vahan persistent context (%s).", reason
+        )
+
+
+def _clear_native_persistent_context_for_site(site_label: str, reason: str = "") -> None:
+    sl = (site_label or "").strip()
+    if sl == "DMS":
+        _clear_native_dms_persistent_context(reason)
+    elif sl == "Insurance":
+        _clear_native_insurance_persistent_context(reason)
+    elif sl == "Vahan":
+        _clear_native_vahan_persistent_context(reason)
+
+
+def _refresh_native_dms_context_liveness() -> None:
+    """If the persistent Chromium process is gone, drop the stale Playwright context reference."""
+    global _DMS_NATIVE_PERSISTENT_CONTEXT
+    ctx = _DMS_NATIVE_PERSISTENT_CONTEXT
+    if ctx is None:
+        return
+    try:
+        list(ctx.pages)
+    except Exception as exc:
+        logger.warning(
+            "handle_browser_opening: native DMS context no longer valid (%s) — clearing reference.",
+            exc,
+        )
+        _DMS_NATIVE_PERSISTENT_CONTEXT = None
+
+
+def _refresh_native_insurance_context_liveness() -> None:
+    global _INSURANCE_NATIVE_PERSISTENT_CONTEXT
+    ctx = _INSURANCE_NATIVE_PERSISTENT_CONTEXT
+    if ctx is None:
+        return
+    try:
+        list(ctx.pages)
+    except Exception as exc:
+        logger.warning(
+            "handle_browser_opening: native Insurance context no longer valid (%s) — clearing reference.",
+            exc,
+        )
+        _INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+
+
+def _refresh_native_vahan_context_liveness() -> None:
+    global _VAHAN_NATIVE_PERSISTENT_CONTEXT
+    ctx = _VAHAN_NATIVE_PERSISTENT_CONTEXT
+    if ctx is None:
+        return
+    try:
+        list(ctx.pages)
+    except Exception as exc:
+        logger.warning(
+            "handle_browser_opening: native Vahan context no longer valid (%s) — clearing reference.",
+            exc,
+        )
+        _VAHAN_NATIVE_PERSISTENT_CONTEXT = None
+
+
+def _refresh_native_context_liveness_for_site(site_label: str) -> None:
+    sl = (site_label or "").strip()
+    if sl == "DMS":
+        _refresh_native_dms_context_liveness()
+    elif sl == "Insurance":
+        _refresh_native_insurance_context_liveness()
+    elif sl == "Vahan":
+        _refresh_native_vahan_context_liveness()
+
+
+def _dms_browser_closed_operator_message(site_label: str) -> str:
+    sl = (site_label or "").strip()
+    if sl == "Insurance":
+        retry = "Press Generate Insurance again to open a new browser window."
+    elif sl == "Vahan":
+        retry = (
+            "Press Warm Vahan or retry the RTO action to open a new browser window "
+            "(same flow as after login: open the site, then press the button again)."
+        )
+    else:
+        retry = "Press Create Invoice again to open a new browser window."
+    return (
+        f"{site_label}: the automation browser was closed while waiting for login or session setup. "
+        f"{retry} "
+        "If you already logged in, leave that window open until the run finishes."
+    )
+
+
+def _page_matches_site_for_dms_loose(page_url: str, site_base_url: str) -> bool:
+    """Match any Siebel / Hero tab on the same host as ``DMS_BASE_URL`` (operator pre-login path drift)."""
+    pu = (page_url or "").strip()
+    bu = (site_base_url or "").strip()
+    if not pu or not bu:
+        return False
+    low = pu.lower()
+    if "blank" in low or low.startswith("chrome://") or low.startswith("edge://") or low.startswith("about:"):
+        return False
+    ph, bh = _hostname_for_site_match(pu), _hostname_for_site_match(bu)
+    if not ph or not bh or ph != bh:
+        return False
+    return ("siebel" in low) or ("heroconnect" in low) or ("edealer" in low) or ("swecmd=" in low)
+
 
 def _retain_browsers_without_closing() -> None:
+    global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
     for b in list(_KEEP_OPEN_BROWSERS):
         _RETAINED_BROWSERS_NO_CLOSE.append(b)
     _KEEP_OPEN_BROWSERS.clear()
     for b in list(_CDP_BROWSERS_BY_URL.values()):
         _RETAINED_BROWSERS_NO_CLOSE.append(b)
     _CDP_BROWSERS_BY_URL.clear()
+    if _DMS_NATIVE_PERSISTENT_CONTEXT is not None:
+        _RETAINED_BROWSERS_NO_CLOSE.append(_DMS_NATIVE_PERSISTENT_CONTEXT)
+        _DMS_NATIVE_PERSISTENT_CONTEXT = None
+    if _INSURANCE_NATIVE_PERSISTENT_CONTEXT is not None:
+        _RETAINED_BROWSERS_NO_CLOSE.append(_INSURANCE_NATIVE_PERSISTENT_CONTEXT)
+        _INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+    if _VAHAN_NATIVE_PERSISTENT_CONTEXT is not None:
+        _RETAINED_BROWSERS_NO_CLOSE.append(_VAHAN_NATIVE_PERSISTENT_CONTEXT)
+        _VAHAN_NATIVE_PERSISTENT_CONTEXT = None
 
 
 def _get_playwright():
@@ -207,6 +1030,16 @@ def _close_playwright_browser_handle(browser: object) -> None:
 
 def _disconnect_all_playwright_browsers_on_worker_thread() -> None:
     """Must run on the Playwright sync worker thread (via ``run_playwright_callable_sync``)."""
+    global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
+    if _DMS_NATIVE_PERSISTENT_CONTEXT is not None:
+        _close_playwright_browser_handle(_DMS_NATIVE_PERSISTENT_CONTEXT)
+        _DMS_NATIVE_PERSISTENT_CONTEXT = None
+    if _INSURANCE_NATIVE_PERSISTENT_CONTEXT is not None:
+        _close_playwright_browser_handle(_INSURANCE_NATIVE_PERSISTENT_CONTEXT)
+        _INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+    if _VAHAN_NATIVE_PERSISTENT_CONTEXT is not None:
+        _close_playwright_browser_handle(_VAHAN_NATIVE_PERSISTENT_CONTEXT)
+        _VAHAN_NATIVE_PERSISTENT_CONTEXT = None
     for b in list(_KEEP_OPEN_BROWSERS):
         _close_playwright_browser_handle(b)
     _KEEP_OPEN_BROWSERS.clear()
@@ -436,7 +1269,7 @@ def launch_site_background_detached(base_url: str) -> bool:
     if not exe:
         return False
     try:
-        cmd = [exe, "--new-window", "--start-minimized", target]
+        cmd = [exe, "--new-window", "--start-maximized", target]
         creation_flags = 0
         if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
             creation_flags |= subprocess.CREATE_NEW_PROCESS_GROUP
@@ -446,7 +1279,8 @@ def launch_site_background_detached(base_url: str) -> bool:
         if os.name == "nt":
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+            # SW_SHOWNOACTIVATE (4): show maximized (see --start-maximized) without activating/focus steal.
+            startupinfo.wShowWindow = 4  # SW_SHOWNOACTIVATE
         subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -469,6 +1303,29 @@ def _url_looks_like_dms_siebel_tab(url: str) -> bool:
         or "heroconnect" in u
         or "edealerhmcl" in u
     )
+
+
+def _try_cdp_maximize_browser_window(page: object) -> None:
+    """Maximize the OS browser window via CDP (``Browser.setWindowBounds``).
+
+    ``--start-maximized`` plus ``SW_SHOWNOACTIVATE`` often leaves Chromium at default size; this
+    applies a true maximized state so taskbar restore fills the work area.
+    """
+    if page is None:
+        return
+    try:
+        ctx = page.context
+        session = ctx.new_cdp_session(page)
+        win = session.send("Browser.getWindowForTarget", {})
+        wid = win.get("windowId")
+        if wid is None:
+            return
+        session.send(
+            "Browser.setWindowBounds",
+            {"windowId": wid, "bounds": {"windowState": "maximized"}},
+        )
+    except Exception as exc:
+        logger.debug("handle_browser_opening: CDP maximize skipped: %s", exc)
 
 
 def _launch_managed_browser_for_site(
@@ -496,9 +1353,9 @@ def _launch_managed_browser_for_site(
             ]
             if headless:
                 cmd.append("--headless=new")
-            if launch_background:
-                # Stronger hint for Chromium to keep startup non-intrusive.
-                cmd.append("--start-minimized")
+            else:
+                # CDP maximize after attach still required when warm launch uses SW_SHOWNOACTIVATE.
+                cmd.append("--start-maximized")
             cmd.append(base_url)
             creation_flags = 0
             if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
@@ -506,13 +1363,13 @@ def _launch_managed_browser_for_site(
             if hasattr(subprocess, "DETACHED_PROCESS"):
                 creation_flags |= subprocess.DETACHED_PROCESS
             startupinfo = None
-            # Warm-browser: start minimized-no-activate on Windows so the Electron SPA keeps focus.
-            # SW_SHOWMINNOACTIVE (7) avoids the grey/unresponsive window that SW_MINIMIZE (6) can cause
+            # Warm-browser: show maximized without activating so the Electron SPA keeps focus.
+            # SW_SHOWNOACTIVATE (4) avoids SW_MINIMIZE (6), which can leave a grey/unresponsive shell
             # when combined with DETACHED_PROCESS and CDP attachment.
             if launch_background and os.name == "nt":
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = 7  # SW_SHOWMINNOACTIVE
+                startupinfo.wShowWindow = 4  # SW_SHOWNOACTIVATE
             subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
@@ -551,6 +1408,8 @@ def _launch_managed_browser_for_site(
                             channel,
                             cdp_url,
                         )
+                        if not headless:
+                            _try_cdp_maximize_browser_window(matched)
                         return matched, channel
                     # Edge was started with `base_url` on the CLI — often one tab whose URL is still
                     # blank while CDP attaches. Do not open a second tab (previous behavior).
@@ -579,6 +1438,8 @@ def _launch_managed_browser_for_site(
                                 ctx0 = browser.contexts[0] if browser.contexts else browser.new_context()
                                 pg_new = ctx0.new_page()
                                 pg_new.goto(base_url, wait_until="domcontentloaded", timeout=20_000)
+                                if not headless:
+                                    _try_cdp_maximize_browser_window(pg_new)
                                 return pg_new, channel
                             except Exception as exc:
                                 logger.warning(
@@ -590,6 +1451,8 @@ def _launch_managed_browser_for_site(
                             "handle_browser_opening: reusing single tab from independent %s launch (avoid duplicate insurance/DMS tab).",
                             channel,
                         )
+                        if not headless:
+                            _try_cdp_maximize_browser_window(pg0)
                         return pg0, channel
                     if len(existing) > 1:
                         want_host = _hostname_for_site_match(base_url)
@@ -604,12 +1467,16 @@ def _launch_managed_browser_for_site(
                             except Exception:
                                 u = ""
                             if u and _page_matches_site_for_reuse(u, base_url, site_label):
+                                if not headless:
+                                    _try_cdp_maximize_browser_window(page)
                                 return page, channel
                         if want_host:
                             for page in existing:
                                 try:
                                     u = (page.url or "").strip()
                                     if u and _hostname_for_site_match(u) == want_host:
+                                        if not headless:
+                                            _try_cdp_maximize_browser_window(page)
                                         return page, channel
                                 except Exception:
                                     continue
@@ -629,6 +1496,8 @@ def _launch_managed_browser_for_site(
                             channel,
                             cdp_url,
                         )
+                        if not headless:
+                            _try_cdp_maximize_browser_window(page)
                         return page, channel
                     except Exception:
                         continue
@@ -680,6 +1549,8 @@ def _launch_managed_browser_for_site(
                 "handle_browser_opening: fell back to Playwright-managed %s launch (browser may close on errors)",
                 ch,
             )
+            if not headless:
+                _try_cdp_maximize_browser_window(page)
             return page, ch
         except Exception as exc:
             logger.warning("handle_browser_opening: failed to launch %s browser: %s", ch, exc)
@@ -749,149 +1620,151 @@ def _playwright_page_url_matches_site_base(page_url: str, site_base_url: str) ->
         return pu.startswith(t) or t in pu
 
 
-def _try_auto_login_if_prefilled(page) -> bool:
-    def _is_login_url() -> bool:
+def _siebel_prefill_status_any_frame(page) -> tuple[str, dict | None]:
+    """``prefilled`` | ``not_prefilled`` | ``no_form`` — scans main + child frames for SWE* login fields."""
+    any_incomplete = False
+    for fr in _ordered_unique_playwright_frames(page):
         try:
-            u = (page.url or "").lower()
-            return (
-                ("swecmd=login" in u)
-                or u.rstrip("/").endswith("/login")
-                or ("misp-partner-login" in u)
-            )
-        except Exception:
-            return False
-
-    _detect_js = """() => {
-      const vis = (el) => {
-        if (!el) return false;
-        const st = window.getComputedStyle(el);
-        if (st.display === 'none' || st.visibility === 'hidden') return false;
-        const r = el.getBoundingClientRect();
-        return r.width > 2 && r.height > 2;
-      };
-      const userSels = ['input[name="SWEUserName"]', 'input[type="text"][name*="user" i]',
-                        'input[type="text"][name*="login" i]', 'input[type="email"]',
-                        'input[name="username"]', 'input[id*="userName" i]', 'input[id*="username" i]',
-                        'input[placeholder*="User Name" i]', 'input[placeholder*="User name" i]',
-                        'input[aria-label*="User Name" i]', 'input[aria-label*="User name" i]',
-                        'input[type="text"]:not([name=""])'];
-      const passSels = ['input[name="SWEPassword"]', 'input[type="password"]',
-                        'input[name="password"]', 'input[placeholder*="Password" i]'];
-      let userEl = null, passEl = null, userFound = false, passFound = false;
-      for (const s of userSels) {
-        const el = document.querySelector(s);
-        if (el && vis(el)) { userFound = true; if ((el.value || '').trim().length > 0) { userEl = el; break; } }
-      }
-      for (const s of passSels) {
-        const el = document.querySelector(s);
-        if (el && vis(el)) { passFound = true; if ((el.value || '').trim().length > 0) { passEl = el; break; } }
-      }
-      if (!userFound && !passFound) return {status: 'no_form'};
-      if (!userEl || !passEl) return {status: 'not_prefilled', userFound, passFound,
-        userValue: userEl ? userEl.value.trim().substring(0,40) : '',
-        passHasValue: passEl ? (passEl.value||'').length > 0 : false};
-      return {status: 'prefilled', user: userEl.value.trim().substring(0, 40), hasPass: true};
-    }"""
-
-    def _is_login_url() -> bool:
-        try:
-            u = (page.url or "").lower()
-            return (
-                ("swecmd=login" in u)
-                or u.rstrip("/").endswith("/login")
-                or ("misp-partner-login" in u)
-            )
-        except Exception:
-            return False
-
-    prefilled = None
-    for _attempt in range(3):
-        if _attempt > 0:
-            time.sleep(0.5)
-        try:
-            prefilled = page.evaluate(_detect_js)
-        except Exception:
-            prefilled = None
-        if prefilled and prefilled.get("status") == "prefilled":
-            break
-        if prefilled and prefilled.get("status") == "no_form":
-            break
-
-    if prefilled and prefilled.get("status") == "no_form" and not _is_login_url():
-        logger.info("handle_browser_opening: no login form detected; continuing with existing logged-in session.")
-        return True
-
-    if not prefilled or prefilled.get("status") != "prefilled":
-        return False
-    logger.info(
-        "handle_browser_opening: login form has pre-filled credentials (user=%s) — clicking Login",
-        prefilled.get("user", "?"),
-    )
-    login_clicked = False
-    for sel in (
-        '#s_swepi_22',
-        'input[id="s_swepi_22"]',
-        'button[id="s_swepi_22"]',
-        'input[type="submit"][value*="Login" i]',
-        'button[type="submit"]',
-        'input[type="submit"]',
-        'input[name="s_swepi_22"]',
-        'a[href*="Login" i]',
-        'button:has-text("Login")',
-        'button:has-text("Sign In")',
-        'input[type="button"][value*="Login" i]',
-    ):
-        try:
-            loc = page.locator(sel).first
-            if loc.count() > 0 and loc.is_visible(timeout=200):
-                loc.click(timeout=3000)
-                login_clicked = True
-                break
+            d = fr.evaluate(_SIEBEL_PREFILL_DETECT_JS)
         except Exception:
             continue
-    if not login_clicked:
+        if not isinstance(d, dict):
+            continue
+        st = d.get("status")
+        if st == "prefilled":
+            return "prefilled", d
+        if st == "not_prefilled":
+            any_incomplete = True
+    if any_incomplete:
+        return "not_prefilled", None
+    return "no_form", None
+
+
+def _nudge_siebel_login_fields_for_autofill(page) -> None:
+    """Focus username/password in each frame so Chrome password manager can inject values."""
+    for fr in _ordered_unique_playwright_frames(page):
         try:
-            page.keyboard.press("Enter")
-            login_clicked = True
+            fr.evaluate(_SIEBEL_LOGIN_AUTOFILL_NUDGE_JS)
         except Exception:
-            pass
-    if not login_clicked:
+            continue
+
+
+def _siebel_try_login_submit_fallback_any_frame(page) -> bool:
+    """True when username has text and password field looks filled (DOM value or Chrome ``:autofill``)."""
+    for fr in _ordered_unique_playwright_frames(page):
         try:
-            login_clicked = bool(
-                page.evaluate(
-                    """() => {
-                        const vis = (el) => {
-                          if (!el) return false;
-                          const st = window.getComputedStyle(el);
-                          if (st.display === 'none' || st.visibility === 'hidden') return false;
-                          const r = el.getBoundingClientRect();
-                          return r.width > 2 && r.height > 2;
-                        };
-                        const pwd = document.querySelector('input[name="SWEPassword"], input[type="password"]');
-                        const frm = (pwd && pwd.form) ? pwd.form : document.querySelector('form');
-                        if (frm) { try { frm.requestSubmit ? frm.requestSubmit() : frm.submit(); return true; } catch (e) {} }
-                        const btn = document.querySelector('input[type="submit"], button[type="submit"], input[name="s_swepi_22"]');
-                        if (btn && vis(btn)) { try { btn.click(); return true; } catch (e) {} }
-                        return false;
-                    }"""
-                )
+            if bool(fr.evaluate(_SIEBEL_TRY_LOGIN_SUBMIT_FALLBACK_JS)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _siebel_try_login_submit_aggressive_any_frame(page) -> bool:
+    """True on ``SWECM=S`` shell when username is set and password field is visible (value may be hidden from JS)."""
+    for fr in _ordered_unique_playwright_frames(page):
+        try:
+            if bool(fr.evaluate(_SIEBEL_TRY_LOGIN_SUBMIT_AGGRESSIVE_JS)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _siebel_login_screen_swecm_s(page) -> bool:
+    try:
+        return "swecm=s" in (page.url or "").lower()
+    except Exception:
+        return False
+
+
+def _siebel_portal_logged_in_url(page) -> bool:
+    """Siebel keeps ``SWECmd=Login`` on eDealer home — ``SWEPL=1`` without ``SWECM=S`` means past the login form."""
+    try:
+        ul = (page.url or "").lower()
+    except Exception:
+        return False
+    return "swecmd=login" in ul and "swepl=1" in ul and "swecm=s" not in ul
+
+
+def _try_auto_login_if_prefilled(page, log_path: Path | str | None = None) -> bool:
+    """If Siebel fields are filled (browser autofill or prior typing), click **Login** and wait for redirect."""
+
+    def _is_login_url() -> bool:
+        try:
+            u = (page.url or "").lower()
+            return (
+                ("swecmd=login" in u)
+                or u.rstrip("/").endswith("/login")
+                or ("misp-partner-login" in u)
             )
         except Exception:
-            pass
-    if login_clicked:
-        try:
-            page.wait_for_load_state("domcontentloaded", timeout=15000)
-        except Exception:
-            pass
-        for _ in range(16):
-            if not _is_login_url():
-                logger.info("handle_browser_opening: auto-login submitted; page URL now: %s", (page.url or "")[:120])
-                return True
-            time.sleep(0.25)
-        logger.warning(
-            "handle_browser_opening: login submit attempted but still on login URL: %s", (page.url or "")[:120]
-        )
+            return False
+
+    if not _is_login_url():
+        st0, _d0 = _siebel_prefill_status_any_frame(page)
+        if st0 == "no_form":
+            logger.info("handle_browser_opening: no login form detected; continuing with existing logged-in session.")
+            return True
         return False
+
+    logger.info(
+        "handle_browser_opening: waiting up to %.1fs for browser autofill on Siebel login (all frames), then Login.",
+        _DMS_BROWSER_AUTOFILL_LOGIN_MAX_SEC,
+    )
+    deadline = time.monotonic() + _DMS_BROWSER_AUTOFILL_LOGIN_MAX_SEC
+    poll = int(_DMS_BROWSER_AUTOFILL_POLL_MS)
+    iteration = 0
+    while time.monotonic() < deadline:
+        iteration += 1
+        if iteration in (2, 8, 16):
+            _nudge_siebel_login_fields_for_autofill(page)
+        st, data = _siebel_prefill_status_any_frame(page)
+        if st == "no_form" and not _is_login_url():
+            logger.info("handle_browser_opening: left login URL while polling autofill — continuing.")
+            return True
+        if st == "prefilled" and isinstance(data, dict):
+            logger.info(
+                "handle_browser_opening: login form has credentials in DOM (user=%s) — clicking Login",
+                data.get("user", "?"),
+            )
+            if not _click_siebel_login_submit(page):
+                return False
+            _capture_login_main_page_snapshot(page, log_path, "after_autofill_submit")
+            return _wait_after_siebel_login_submit_with_optional_second_click(page, log_path=log_path)
+        try:
+            page.wait_for_timeout(poll)
+        except Exception:
+            time.sleep(poll / 1000.0)
+
+    st_last, data_last = _siebel_prefill_status_any_frame(page)
+    if st_last == "prefilled" and isinstance(data_last, dict):
+        logger.info(
+            "handle_browser_opening: login form prefilled at end of autofill window (user=%s) — clicking Login",
+            data_last.get("user", "?"),
+        )
+        if not _click_siebel_login_submit(page):
+            return False
+        _capture_login_main_page_snapshot(page, log_path, "after_autofill_window_submit")
+        return _wait_after_siebel_login_submit_with_optional_second_click(page, log_path=log_path)
+    if _is_login_url():
+        _try_submit = False
+        _reason = ""
+        if _siebel_login_screen_swecm_s(page) and _siebel_try_login_submit_aggressive_any_frame(page):
+            _try_submit = True
+            _reason = "SWECM=S shell, username set, password field visible (Chrome may hide password value from JS)"
+        elif _siebel_try_login_submit_fallback_any_frame(page):
+            _try_submit = True
+            _reason = "username set and password has value or :autofill"
+        if _try_submit:
+            logger.info(
+                "handle_browser_opening: autofill window ended — attempting Login once (%s).",
+                _reason,
+            )
+            if not _click_siebel_login_submit(page):
+                return False
+            _capture_login_main_page_snapshot(page, log_path, "after_aggressive_submit")
+            return _wait_after_siebel_login_submit_with_optional_second_click(page, log_path=log_path)
     return False
 
 
@@ -916,31 +1789,288 @@ def _login_form_visible_eval_js() -> str:
     }"""
 
 
+def _iter_page_frames(pg):
+    """Main document first, then other frames (Siebel login often lives in an iframe)."""
+    yield pg.main_frame
+    seen: set[int] = {id(pg.main_frame)}
+    try:
+        for fr in pg.frames:
+            if id(fr) in seen:
+                continue
+            seen.add(id(fr))
+            yield fr
+    except Exception:
+        pass
+
+
+def _login_form_visible_any_frame(pg) -> bool:
+    for fr in _iter_page_frames(pg):
+        try:
+            if bool(fr.evaluate(_login_form_visible_eval_js())):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _dms_siebel_post_login_shell_any_frame(pg) -> bool:
+    """Open UI chrome present (third-level / banner) — strong signal the operator passed login."""
+    _js = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 4 && r.height > 4;
+        };
+        const el = document.querySelector('#s_vctrl_div, .siebui-banner-btn, #_sweview');
+        return !!(el && vis(el));
+    }"""
+    for fr in _iter_page_frames(pg):
+        try:
+            if bool(fr.evaluate(_js)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _dms_siebel_third_level_bar_wide_any_frame(pg) -> bool:
+    """Hero Third Level View Bar painted wide — logged-in shell even if top URL still contains ``SWECmd=Login``."""
+    for fr in _iter_page_frames(pg):
+        try:
+            if bool(fr.evaluate(_SIEBEL_THIRD_LEVEL_BAR_WIDE_JS)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _is_ready_after_login_page(pg) -> bool:
+    """True when automation can continue: not on a login surface, or login controls are gone (any frame)."""
     try:
         u = (pg.url or "").lower()
+        on_misp = "misp-partner-login" in u
+        on_path_login = u.rstrip("/").endswith("/login") and "siebel" not in u
         on_siebel_login = "swecmd=login" in u
-        on_misp_login = "misp-partner-login" in u
-        on_path_login = u.rstrip("/").endswith("/login")
-        if not on_siebel_login and not on_misp_login and not on_path_login:
+        dms_like = "siebel" in u or "heroconnect" in u or "edealer" in u
+
+        form = _login_form_visible_any_frame(pg)
+
+        if on_misp or on_path_login:
+            return not form
+
+        if dms_like and not on_siebel_login:
             return True
-        return not bool(pg.evaluate(_login_form_visible_eval_js()))
+
+        if dms_like and on_siebel_login:
+            # eDealer home / portal: URL stays ``SWECmd=Login`` but gains ``SWEPL=1`` and drops ``SWECM=S``.
+            if _siebel_portal_logged_in_url(pg):
+                return True
+            # Siebel may keep ``SWECmd=Login`` while Open UI (e.g. wide ``#s_vctrl_div``) is ready on detail views.
+            if _dms_siebel_post_login_shell_any_frame(pg) and not form:
+                return True
+            if _dms_siebel_third_level_bar_wide_any_frame(pg) and not form:
+                return True
+            return False
+
+        if not on_siebel_login and not on_misp and not on_path_login:
+            return True
+        return not form
     except Exception:
         return False
 
 
-def _wait_login_or_prompt_after_open(page, site_label: str):
+def _dms_manual_login_complete_browser_js() -> str:
+    """Predicate for ``wait_for_function`` — mirrors :func:`_is_ready_after_login_page` via ``window.frames``."""
+    return """() => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+      };
+      const loginFormInDoc = (doc) => {
+        if (!doc) return false;
+        const u1 = doc.querySelector('input[name="SWEUserName"]');
+        const p1 = doc.querySelector('input[name="SWEPassword"], input[type="password"]');
+        const u2 = doc.querySelector(
+          'input[name="username"], input[placeholder*="User Name" i], input[aria-label*="User Name" i]'
+        );
+        const p2 = doc.querySelector('input[type="password"]');
+        const siebel = (u1 && vis(u1)) || (p1 && vis(p1));
+        const generic = (u2 && vis(u2)) && (p2 && vis(p2));
+        return siebel || generic;
+      };
+      const shellInDoc = (doc) => {
+        if (!doc) return false;
+        const el = doc.querySelector('#s_vctrl_div, .siebui-banner-btn, #_sweview');
+        return !!(el && vis(el));
+      };
+      const stripInDoc = (doc) => {
+        if (!doc) return false;
+        const bar = doc.getElementById('s_vctrl_div');
+        if (!bar || !vis(bar)) return false;
+        const r = bar.getBoundingClientRect();
+        return r.width >= 100 && r.height >= 12;
+      };
+      const scan = (w) => {
+        try {
+          const d = w.document;
+          return { form: loginFormInDoc(d), shell: shellInDoc(d), strip: stripInDoc(d) };
+        } catch (e) {
+          return { form: false, shell: false, strip: false };
+        }
+      };
+      let anyForm = false, anyShell = false, anyStrip = false;
+      try {
+        const t = scan(window);
+        anyForm = t.form;
+        anyShell = t.shell;
+        anyStrip = t.strip;
+      } catch (e) {}
+      try {
+        for (let i = 0; i < window.frames.length; i++) {
+          try {
+            const r = scan(window.frames[i]);
+            if (r.form) anyForm = true;
+            if (r.shell) anyShell = true;
+            if (r.strip) anyStrip = true;
+          } catch (e) {}
+        }
+      } catch (e) {}
+      const u = (location.href || '').toLowerCase();
+      if (u.includes('misp-partner-login')) return !anyForm;
+      if (!u.includes('swecmd=login')) {
+        if (u.includes('siebel') || u.includes('heroconnect') || u.includes('edealer')) return true;
+        if (u.endsWith('/login') && !u.includes('siebel')) return !anyForm;
+        return true;
+      }
+      // Still on Siebel SWECmd=Login — eDealer portal uses SWEPL=1 without SWECM=S after successful login.
+      if (u.includes('swepl=1') && !u.includes('swecm=s')) return true;
+      return !!((anyShell || anyStrip) && !anyForm);
+    }"""
+
+
+def _wait_login_or_prompt_after_open(
+    page, site_label: str, log_path: Path | str | None = None
+):
     """
-    After opening or reusing a tab, wait briefly for session/login to clear.
+    After opening or reusing a tab, wait for session/login to clear.
+
+    **DMS** waits up to ``DMS_LOGIN_MANUAL_WAIT_MS`` while polling (login form is detected in **any**
+    frame, and post-login shell markers on Hero Open UI). After that, a final ``wait_for_function``
+    window (120s) catches a manual **Login** click so the same Create Invoice run can continue without
+    a second app click. Operator credentials may be snapshotted to ``operator_dms_login.json``.
+
+    Other sites keep a short ~1.5s probe for backwards compatibility.
+
     Returns ``(page, None)`` when ready, or ``(None, operator_message)`` when login is still required.
     """
-    for _ in range(3):
-        if _is_ready_after_login_page(page):
-            logger.info("handle_browser_opening: login/session became ready in same request.")
-            return page, None
-        time.sleep(0.5)
+    sl = (site_label or "").strip()
+    max_wait_ms = DMS_LOGIN_MANUAL_WAIT_MS if sl == "DMS" else 1500
+    deadline = time.monotonic() + max(0.25, max_wait_ms / 1000.0)
+    poll_ms = 450
+    last_snap = 0.0
+    _last_bar_log = 0.0
 
     try:
+        if page.is_closed():
+            _clear_native_persistent_context_for_site(sl, "page closed before login wait")
+            return None, _dms_browser_closed_operator_message(sl)
+    except Exception:
+        pass
+
+    while time.monotonic() < deadline:
+        try:
+            if page.is_closed():
+                _clear_native_persistent_context_for_site(sl, "page closed during login wait")
+                return None, _dms_browser_closed_operator_message(sl)
+        except Exception:
+            pass
+        try:
+            if _is_ready_after_login_page(page):
+                logger.info("handle_browser_opening: login/session became ready in same request.")
+                return page, None
+        except Exception as e:
+            if _is_browser_disconnected_error(e):
+                _clear_native_persistent_context_for_site(sl, "disconnect while probing login readiness")
+                return None, _dms_browser_closed_operator_message(sl)
+            raise
+        if sl == "DMS":
+            now = time.monotonic()
+            if now - last_snap >= 2.0:
+                try:
+                    _maybe_snapshot_stored_credentials_from_login_page(page)
+                except Exception:
+                    pass
+                last_snap = now
+            if log_path and now - _last_bar_log >= 1.1:
+                _last_bar_log = now
+                try:
+                    bar = _read_siebel_login_status_bar_any_frame(page)
+                    if bar:
+                        _append_playwright_dms_capture_line(
+                            log_path, "LOGIN_STATUSBAR_MANUAL_WAIT", bar, also_logger=True
+                        )
+                except Exception:
+                    pass
+        try:
+            page.wait_for_timeout(poll_ms)
+        except Exception as e:
+            if _is_browser_disconnected_error(e):
+                try:
+                    if page.is_closed():
+                        _clear_native_persistent_context_for_site(
+                            sl, "disconnect during login wait_for_timeout"
+                        )
+                except Exception:
+                    _clear_native_persistent_context_for_site(
+                        sl, "disconnect during login wait_for_timeout"
+                    )
+                return None, _dms_browser_closed_operator_message(sl)
+            time.sleep(poll_ms / 1000.0)
+
+    if sl == "DMS":
+        try:
+            if page.is_closed():
+                _clear_native_persistent_context_for_site(sl, "page closed before wait_for_function gate")
+                return None, _dms_browser_closed_operator_message(sl)
+        except Exception:
+            pass
+        try:
+            page.wait_for_function(_dms_manual_login_complete_browser_js(), timeout=120_000)
+        except PlaywrightTimeout:
+            pass
+        except Exception as e:
+            if _is_browser_disconnected_error(e):
+                _clear_native_persistent_context_for_site(sl, "disconnect during login wait_for_function")
+                return None, _dms_browser_closed_operator_message(sl)
+        try:
+            if page.is_closed():
+                _clear_native_persistent_context_for_site(sl, "page closed after wait_for_function gate")
+                return None, _dms_browser_closed_operator_message(sl)
+        except Exception:
+            pass
+        try:
+            if _is_ready_after_login_page(page):
+                logger.info(
+                    "handle_browser_opening: DMS login/session ready after manual login (wait_for_function gate)."
+                )
+                return page, None
+        except Exception as e:
+            if _is_browser_disconnected_error(e):
+                _clear_native_persistent_context_for_site(sl, "disconnect after wait_for_function gate")
+                return None, _dms_browser_closed_operator_message(sl)
+            raise
+
+    try:
+        if _siebel_portal_logged_in_url(page):
+            logger.info(
+                "handle_browser_opening: Siebel portal URL (SWEPL=1, no SWECM=S) — continuing (final fallback)."
+            )
+            return page, None
         ul = (page.url or "").lower()
         if (
             "swecmd=login" not in ul
@@ -955,6 +2085,298 @@ def _wait_login_or_prompt_after_open(page, site_label: str):
     return None, f"{site_label} Opened. Please login. And then press button again"
 
 
+def _find_matching_page_on_native_dms_context(base_url: str, site_label: str) -> object | None:
+    """Backward-compatible name; delegates to native-site finder."""
+    return _find_matching_page_on_native_site_context(base_url, site_label)
+
+
+def _find_matching_page_on_native_site_context(base_url: str, site_label: str) -> object | None:
+    sl = (site_label or "").strip()
+    if sl == "DMS":
+        ctx = _DMS_NATIVE_PERSISTENT_CONTEXT
+        clear_ctx = _clear_native_dms_persistent_context
+    elif sl == "Insurance":
+        ctx = _INSURANCE_NATIVE_PERSISTENT_CONTEXT
+        clear_ctx = _clear_native_insurance_persistent_context
+    elif sl == "Vahan":
+        ctx = _VAHAN_NATIVE_PERSISTENT_CONTEXT
+        clear_ctx = _clear_native_vahan_persistent_context
+    else:
+        return None
+    if ctx is None:
+        return None
+    try:
+        pages = list(ctx.pages)
+    except Exception:
+        clear_ctx("list pages failed during native tab match")
+        return None
+    for pg in pages:
+        try:
+            if pg.is_closed():
+                continue
+            url = (pg.url or "").strip()
+        except Exception:
+            continue
+        if url and _page_matches_site_for_reuse(url, base_url, site_label):
+            return pg
+    if sl == "DMS":
+        for pg in pages:
+            try:
+                if pg.is_closed():
+                    continue
+                url = (pg.url or "").strip()
+            except Exception:
+                continue
+            if url and _page_matches_site_for_dms_loose(url, base_url):
+                logger.info(
+                    "handle_browser_opening: reusing native DMS tab via loose Siebel/host match url=%r",
+                    url[:140],
+                )
+                return pg
+    return None
+
+
+def _navigate_native_site_persistent_to(target_url: str, site_label: str) -> object | None:
+    """Navigate within a native persistent Chromium context (DMS, Insurance, or Vahan)."""
+    sl = (site_label or "").strip()
+    if sl == "DMS":
+        _refresh_native_dms_context_liveness()
+        ctx = _DMS_NATIVE_PERSISTENT_CONTEXT
+        clear_on_disc = lambda r: _clear_native_dms_persistent_context(r)
+    elif sl == "Insurance":
+        _refresh_native_insurance_context_liveness()
+        ctx = _INSURANCE_NATIVE_PERSISTENT_CONTEXT
+        clear_on_disc = lambda r: _clear_native_insurance_persistent_context(r)
+    elif sl == "Vahan":
+        _refresh_native_vahan_context_liveness()
+        ctx = _VAHAN_NATIVE_PERSISTENT_CONTEXT
+        clear_on_disc = lambda r: _clear_native_vahan_persistent_context(r)
+    else:
+        return None
+    if ctx is None:
+        return None
+    t = (target_url or "").strip()
+    if not t:
+        return None
+    try:
+        pages = list(ctx.pages)
+        target_page = None
+        for p in pages:
+            try:
+                if p.is_closed():
+                    continue
+                u = (p.url or "").strip()
+            except Exception:
+                u = ""
+            if u and _page_matches_site_for_reuse(u, t, site_label):
+                target_page = p
+                break
+        if target_page is None and sl == "DMS":
+            for p in pages:
+                try:
+                    if p.is_closed():
+                        continue
+                    u = (p.url or "").strip()
+                except Exception:
+                    u = ""
+                if u and _page_matches_site_for_dms_loose(u, t):
+                    target_page = p
+                    break
+        if target_page is None:
+            for p in pages:
+                try:
+                    if not p.is_closed():
+                        target_page = p
+                        break
+                except Exception:
+                    continue
+        pg = target_page or ctx.new_page()
+        pg.goto(t, wait_until="domcontentloaded", timeout=20_000)
+        logger.info(
+            "handle_browser_opening: navigated native %s Chromium tab to target.", sl or "site"
+        )
+        return pg
+    except Exception as exc:
+        if _is_browser_disconnected_error(exc):
+            clear_on_disc(f"native {sl} navigate lost browser")
+        logger.warning("handle_browser_opening: native %s navigate failed: %s", sl, exc)
+        return None
+
+
+def _navigate_native_dms_persistent_to(target_url: str) -> object | None:
+    """Navigate within the DMS native persistent Chromium context (no CDP / Edge reuse)."""
+    return _navigate_native_site_persistent_to(target_url, "DMS")
+
+
+def _native_persistent_launch_common_args(*, launch_background: bool) -> list[str]:
+    _ = launch_background  # API stable; CDP maximize after attach handles warm vs foreground sizing.
+    args = [
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    if os.name == "nt":
+        args.append("--start-maximized")
+    return args + [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-infobars",
+    ]
+
+
+def _launch_native_site_persistent_context(
+    open_target: str,
+    *,
+    launch_background: bool,
+    site_label: str,
+    profile_dir: Path,
+) -> tuple[object | None, str]:
+    """Launch or reuse Playwright Chromium ``launch_persistent_context`` for DMS, Insurance, or Vahan."""
+    global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
+    sl = (site_label or "").strip()
+    _refresh_native_context_liveness_for_site(sl)
+    pw = _get_playwright()
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    ot = (open_target or "").strip()
+    if not ot:
+        return None, ""
+    args = _native_persistent_launch_common_args(launch_background=launch_background)
+    try:
+        if sl == "DMS":
+            ctx_ref = _DMS_NATIVE_PERSISTENT_CONTEXT
+        elif sl == "Insurance":
+            ctx_ref = _INSURANCE_NATIVE_PERSISTENT_CONTEXT
+        elif sl == "Vahan":
+            ctx_ref = _VAHAN_NATIVE_PERSISTENT_CONTEXT
+        else:
+            return None, ""
+
+        if ctx_ref is not None:
+            try:
+                _ = ctx_ref.pages
+            except Exception:
+                if sl == "DMS":
+                    _DMS_NATIVE_PERSISTENT_CONTEXT = None
+                elif sl == "Insurance":
+                    _INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+                elif sl == "Vahan":
+                    _VAHAN_NATIVE_PERSISTENT_CONTEXT = None
+                ctx_ref = None
+
+        if sl == "DMS" and _DMS_NATIVE_PERSISTENT_CONTEXT is None:
+            _DMS_NATIVE_PERSISTENT_CONTEXT = pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=False,
+                args=args,
+                ignore_default_args=["--enable-automation"],
+            )
+            logger.info(
+                "handle_browser_opening: launched Playwright Chromium (persistent) profile=%s",
+                profile_dir,
+            )
+        elif sl == "Insurance" and _INSURANCE_NATIVE_PERSISTENT_CONTEXT is None:
+            _INSURANCE_NATIVE_PERSISTENT_CONTEXT = pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=False,
+                args=args,
+                ignore_default_args=["--enable-automation"],
+            )
+            logger.info(
+                "handle_browser_opening: launched Playwright Chromium Insurance profile=%s",
+                profile_dir,
+            )
+        elif sl == "Vahan" and _VAHAN_NATIVE_PERSISTENT_CONTEXT is None:
+            _VAHAN_NATIVE_PERSISTENT_CONTEXT = pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=False,
+                args=args,
+                ignore_default_args=["--enable-automation"],
+            )
+            logger.info(
+                "handle_browser_opening: launched Playwright Chromium Vahan profile=%s",
+                profile_dir,
+            )
+
+        if sl == "DMS":
+            ctx = _DMS_NATIVE_PERSISTENT_CONTEXT
+        elif sl == "Insurance":
+            ctx = _INSURANCE_NATIVE_PERSISTENT_CONTEXT
+        elif sl == "Vahan":
+            ctx = _VAHAN_NATIVE_PERSISTENT_CONTEXT
+        else:
+            return None, ""
+        matched = None
+        for p in list(ctx.pages):
+            try:
+                u = (p.url or "").strip()
+            except Exception:
+                u = ""
+            if u and _page_matches_site_for_reuse(u, ot, site_label):
+                matched = p
+                break
+        if matched is not None:
+            _try_cdp_maximize_browser_window(matched)
+            return matched, "playwright-chromium"
+        if ctx.pages:
+            pg0 = ctx.pages[0]
+        else:
+            pg0 = ctx.new_page()
+        if not launch_background:
+            try:
+                pg0.goto(ot, wait_until="domcontentloaded", timeout=30_000)
+            except Exception as exc:
+                logger.warning("handle_browser_opening: native %s goto failed: %s", sl, exc)
+        else:
+            try:
+                pg0.goto(ot, wait_until="commit", timeout=30_000)
+            except Exception:
+                try:
+                    pg0.goto(ot, wait_until="domcontentloaded", timeout=15_000)
+                except Exception as exc2:
+                    logger.debug("handle_browser_opening: native %s warm goto: %s", sl, exc2)
+        _try_cdp_maximize_browser_window(pg0)
+        return pg0, "playwright-chromium"
+    except Exception as exc:
+        logger.warning(
+            "handle_browser_opening: native %s persistent launch failed: %s", sl, exc
+        )
+        return None, ""
+
+
+def _launch_native_dms_persistent_context(
+    open_target: str, *, launch_background: bool
+) -> tuple[object | None, str]:
+    """Launch or reuse Playwright-bundled Chromium with ``launch_persistent_context`` (DMS)."""
+    return _launch_native_site_persistent_context(
+        open_target,
+        launch_background=launch_background,
+        site_label="DMS",
+        profile_dir=_playwright_chromium_profile_dir(),
+    )
+
+
+def _launch_native_insurance_persistent_context(
+    open_target: str, *, launch_background: bool
+) -> tuple[object | None, str]:
+    """Launch or reuse Playwright-bundled Chromium for MISP (Insurance), separate profile from DMS."""
+    return _launch_native_site_persistent_context(
+        open_target,
+        launch_background=launch_background,
+        site_label="Insurance",
+        profile_dir=_playwright_chromium_insurance_profile_dir(),
+    )
+
+
+def _launch_native_vahan_persistent_context(
+    open_target: str, *, launch_background: bool
+) -> tuple[object | None, str]:
+    """Launch or reuse Playwright-bundled Chromium for Vahan, separate profile from DMS and Insurance."""
+    return _launch_native_site_persistent_context(
+        open_target,
+        launch_background=launch_background,
+        site_label="Vahan",
+        profile_dir=_playwright_chromium_vahan_profile_dir(),
+    )
+
+
 def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
     """Navigate an existing tab in a connected CDP browser to ``target_url``.
 
@@ -966,6 +2388,11 @@ def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
 
     Returns the ``Page`` or ``None`` if no CDP browser / tab is available.
     """
+    if _use_native_pw_chromium_for_site(site_label):
+        nav_native = _navigate_native_site_persistent_to(target_url, site_label)
+        if nav_native is not None:
+            return nav_native
+        return None
     _refresh_cdp_browsers()
     browsers = list(_CDP_BROWSERS_BY_URL.values()) + list(_KEEP_OPEN_BROWSERS)
     want_insurance = (site_label or "").strip() == "Insurance"
@@ -1035,6 +2462,77 @@ def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
     return None
 
 
+def _login_gate_after_open(
+    page,
+    site_label: str,
+    *,
+    require_login_on_open: bool,
+    login_user: str | None,
+    login_password: str | None,
+    playwright_dms_execution_log_path: Path | str | None = None,
+):
+    """Prefilled click, else DMS env/cache fill+submit, else wait for manual login (long for DMS)."""
+    if not require_login_on_open:
+        return page, None
+    _logp: Path | None = None
+    if playwright_dms_execution_log_path and (site_label or "").strip() == "DMS":
+        try:
+            _logp = Path(str(playwright_dms_execution_log_path))
+            _install_dms_login_window_capture(page, _logp)
+        except Exception as exc:
+            logger.debug("handle_browser_opening: login capture install skipped: %s", exc)
+            _logp = Path(str(playwright_dms_execution_log_path))
+    try:
+        try:
+            if page.is_closed():
+                _clear_native_persistent_context_for_site(
+                    (site_label or "").strip(), "page already closed at login gate"
+                )
+                return None, _dms_browser_closed_operator_message(site_label)
+        except Exception:
+            pass
+        if (site_label or "").strip() == "DMS":
+            try:
+                if _is_ready_after_login_page(page):
+                    logger.info(
+                        "handle_browser_opening: DMS already past login — continuing automation on this tab."
+                    )
+                    return page, None
+            except Exception as e:
+                if _is_browser_disconnected_error(e):
+                    _clear_native_persistent_context_for_site(
+                        (site_label or "").strip(), "disconnect while checking DMS already-logged-in"
+                    )
+                    return None, _dms_browser_closed_operator_message(site_label)
+                raise
+        if _try_auto_login_if_prefilled(page, log_path=_logp):
+            return page, None
+        if (site_label or "").strip() == "DMS":
+            eu, ep = _effective_dms_login_creds(login_user, login_password)
+            if eu and ep:
+                if _try_fill_siebel_login_and_submit(page, eu, ep, log_path=_logp):
+                    return page, None
+                logger.warning(
+                    "handle_browser_opening: DMS automatic login did not complete (fields not found or "
+                    "submit did not leave the login URL). Set DMS_LOGIN_USER and DMS_LOGIN_PASSWORD in the "
+                    "sidecar .env, or log in once manually so credentials can be saved to operator_dms_login.json "
+                    "next to the Playwright Chromium profile. Native Chromium does not read Edge's "
+                    "password-manager / Windows Hello flow."
+                )
+            else:
+                logger.info(
+                    "handle_browser_opening: no DMS_LOGIN_USER/PASSWORD and no operator_dms_login.json — "
+                    "waiting for manual Siebel login (up to DMS_LOGIN_MANUAL_WAIT_MS)."
+                )
+        return _wait_login_or_prompt_after_open(page, site_label, log_path=_logp)
+    finally:
+        if _logp is not None:
+            try:
+                _remove_dms_login_window_capture(page)
+            except Exception:
+                pass
+
+
 def get_or_open_site_page(
     base_url: str,
     site_label: str,
@@ -1042,6 +2540,9 @@ def get_or_open_site_page(
     require_login_on_open: bool = True,
     launch_url: str | None = None,
     launch_background: bool = False,
+    login_user: str | None = None,
+    login_password: str | None = None,
+    playwright_dms_execution_log_path: Path | str | None = None,
 ):
     """
     Try finding an already-open site tab (``base_url`` is used for host/path matching).
@@ -1057,44 +2558,91 @@ def get_or_open_site_page(
     No step ever opens a **second tab** to the same site; single-session portals
     like Vahan would invalidate the running session.
 
-    ``launch_background`` (Windows): start the independently launched edge/chrome **minimized** so the
-    operator SPA is less likely to lose focus (DMS/Insurance **warm-browser**). When true, the
+    ``launch_background`` (Windows): start edge/chrome or native Chromium **maximized** without
+    activating the window so the operator SPA keeps focus (DMS/Insurance **warm-browser**). When true, the
     **navigate** step (``_navigate_existing_tab_to_site``) is **skipped** because ``page.goto`` on a
-    connected CDP browser often steals focus; warm-browser may then open a second minimized process
+    connected CDP browser often steals focus; warm-browser may then open a second warm process
     in edge cases (acceptable trade for silent warm). Vahan and other flows use the default
     ``launch_background=False`` and keep the navigate step.
+
+    ``login_user`` / ``login_password`` (Siebel DMS): passed through to the login gate for
+    ``site_label="DMS"`` — non-``demo`` values fill and submit; otherwise a profile JSON cache
+    (written after a successful automated login or periodically while waiting on the login form)
+    is used.
+
+    ``playwright_dms_execution_log_path``: when set (Fill DMS), **login-phase** JS dialogs, popup pages,
+    ``#statusBar`` text, and PNG screenshots are appended under the same ``ocr_output/.../Playwright_DMS_*.txt``
+    tree as the main automation trace.
     """
+    if _use_native_pw_chromium_for_site(site_label):
+        _refresh_native_context_liveness_for_site(site_label)
     page = find_open_site_page(base_url, site_label=site_label)
     if page is not None:
-        if not require_login_on_open:
-            return page, None
-        auto_login_ok = _try_auto_login_if_prefilled(page)
-        if auto_login_ok:
-            return page, None
-        return _wait_login_or_prompt_after_open(page, site_label)
+        return _login_gate_after_open(
+            page,
+            site_label,
+            require_login_on_open=require_login_on_open,
+            login_user=login_user,
+            login_password=login_password,
+            playwright_dms_execution_log_path=playwright_dms_execution_log_path,
+        )
 
     open_target = (launch_url or base_url or "").strip()
 
     if not launch_background:
         nav_page = _navigate_existing_tab_to_site(open_target, site_label)
         if nav_page is not None:
-            if not require_login_on_open:
-                return nav_page, None
-            auto_login_ok = _try_auto_login_if_prefilled(nav_page)
-            if auto_login_ok:
-                return nav_page, None
-            return _wait_login_or_prompt_after_open(nav_page, site_label)
+            return _login_gate_after_open(
+                nav_page,
+                site_label,
+                require_login_on_open=require_login_on_open,
+                login_user=login_user,
+                login_password=login_password,
+                playwright_dms_execution_log_path=playwright_dms_execution_log_path,
+            )
+
+    if _use_native_pw_chromium_for_site(site_label):
+        sl_open = (site_label or "").strip()
+        if sl_open == "Insurance":
+            opened_page, channel = _launch_native_insurance_persistent_context(
+                open_target, launch_background=launch_background
+            )
+        elif sl_open == "Vahan":
+            opened_page, channel = _launch_native_vahan_persistent_context(
+                open_target, launch_background=launch_background
+            )
+        elif sl_open == "DMS":
+            opened_page, channel = _launch_native_dms_persistent_context(
+                open_target, launch_background=launch_background
+            )
+        else:
+            opened_page, channel = None, ""
+        if opened_page is not None:
+            return _login_gate_after_open(
+                opened_page,
+                site_label,
+                require_login_on_open=require_login_on_open,
+                login_user=login_user,
+                login_password=login_password,
+                playwright_dms_execution_log_path=playwright_dms_execution_log_path,
+            )
+        return None, (
+            f"{site_label} site could not be opened in Playwright Chromium. "
+            "Check disk space, run ``playwright install chromium`` from the backend venv, and retry."
+        )
 
     opened_page, channel = _launch_managed_browser_for_site(
         open_target, launch_background=launch_background, site_label=site_label
     )
     if opened_page is not None:
-        if not require_login_on_open:
-            return opened_page, None
-        auto_login_ok = _try_auto_login_if_prefilled(opened_page)
-        if auto_login_ok:
-            return opened_page, None
-        return _wait_login_or_prompt_after_open(opened_page, site_label)
+        return _login_gate_after_open(
+            opened_page,
+            site_label,
+            require_login_on_open=require_login_on_open,
+            login_user=login_user,
+            login_password=login_password,
+            playwright_dms_execution_log_path=playwright_dms_execution_log_path,
+        )
 
     return None, (
         f"{site_label} site not open. Please open {site_label} site and keep it logged in. "
@@ -1106,6 +2654,16 @@ def get_or_open_site_page(
 def find_open_site_page(base_url: str, site_label: str = ""):
     """Find an already-open tab for the given site base URL (CDP or same-process Playwright launch)."""
     if not (base_url or "").strip():
+        return None
+    if _use_native_pw_chromium_for_site(site_label):
+        pg = _find_matching_page_on_native_site_context(base_url, site_label)
+        if pg is not None:
+            logger.info(
+                "handle_browser_opening: reusing native Chromium tab for %s base_url=%r",
+                (site_label or "").strip() or "site",
+                (base_url or "")[:120],
+            )
+            return pg
         return None
     _refresh_cdp_browsers()
     browsers_to_scan = list(_KEEP_OPEN_BROWSERS) + list(_CDP_BROWSERS_BY_URL.values())

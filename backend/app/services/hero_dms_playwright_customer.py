@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
+from playwright.sync_api import Frame, Locator, Page, TimeoutError as PlaywrightTimeout
 
 from app.config import (
     DEALER_ID,
@@ -83,6 +83,510 @@ logger = logging.getLogger(__name__)
 # Cap Playwright click/fill/select timeouts in branch (2) contact → Address helpers so multi-root
 # scans abandon dead-end matches quickly (was capped at 6000 ms per attempt).
 _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS = 500
+
+# Branch (2) Address / postal: most-specific locators for visibility-first waits (before full scoped sweep).
+_BRANCH2_POSTAL_QUICK_SELECTORS: tuple[str, ...] = (
+    "td#1_s_1_l_Postal_Code",
+    '[id="1_s_1_l_Postal_Code"]',
+    "td#1_s_1_l_Postal_Code input",
+    'input[name="Postal_Code"]',
+    '[id="1_Postal_Code"]',
+    'input[id="1_Postal_Code"]',
+)
+# Branch (2) Personal Addresses jqGrid: direct Chromium locators + scroll; **≤2s** budget each (city / pin).
+_BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS = 2000
+# Scoped / union **fill** budgets (separate from jqgrid idle wait): keep failure path short — many
+# scopes×selectors×roots otherwise stack multi‑minute waits.
+_BRANCH2_ADDRESS_SCOPED_FILL_CAP_MS = 300
+_BRANCH2_ADDRESS_UNION_FILL_BUDGET_MS = 300
+_BRANCH2_CITY_DIRECT_SELECTORS: tuple[str, ...] = (
+    "#S_A1 input#1_City",
+    '#S_A1 input[id="1_City"]',
+    "#gbox_s_1_l input#1_City",
+    "div#S_A1 #gbox_s_1_l input#1_City",
+    "div#S_A1 td#1_s_1_l_City input",
+    "td#1_s_1_l_City input",
+    'input[aria-labelledby*="s_1_l_City" i]',
+    'input[name="City"][id="1_City"]',
+    "input#1_City",
+    # Display mode: Village/Town/City is a jqGrid **td** (LOV / altpick) — no ``input`` until the cell is activated.
+    "td#1_s_1_l_City",
+    'td[id="1_s_1_l_City"]',
+)
+_BRANCH2_POSTAL_DIRECT_SELECTORS: tuple[str, ...] = (
+    "#S_A1 td#1_s_1_l_Postal_Code",
+    "div#S_A1 td#1_s_1_l_Postal_Code",
+    "#gbox_s_1_l td#1_s_1_l_Postal_Code",
+    "td#1_s_1_l_Postal_Code",
+    "td#1_s_1_l_Postal_Code input",
+    '[id="1_s_1_l_Postal_Code"] input',
+    # Scoped last — bare ``name=`` can match another applet's field before the grid td wins in some trees.
+    "#gbox_s_1_l input[name=\"Postal_Code\"]",
+    'table#s_1_l input[name="Postal_Code"]',
+    "input#1_Postal_Code",
+    'input[id="1_Postal_Code"]',
+)
+_BRANCH2_EMAIL_WAIT_SELECTORS: tuple[str, ...] = (
+    'input[name="s_4_1_225_0"][aria-labelledby="EmailAddress_Label_4"]',
+    'input[name="s_4_1_225_0"]',
+    'input[aria-label="Email" i]',
+    '[aria-label="Email"]',
+)
+_BRANCH2_THIRD_LEVEL_OR_ADDRESS_SELECTORS: tuple[str, ...] = (
+    "select#j_s_vctrl_div_tabScreen",
+    '[aria-label="Third Level View Bar"]',
+    '#s_vctrl_div a.ui-tabs-anchor:has-text("Address")',
+)
+
+# v0.7.06: Personal Addresses jqGrid lives under **SWEApplet1** / **gview** wrappers — scope-before-root
+# matches production Hero Connect better than unscoped ``#gbox_s_1_l`` alone.
+_BRANCH2_ADDRESS_GRID_SCOPES: tuple[str, ...] = (
+    "#SWEApplet1 #gview_s_1_l",
+    "#SWEApplet1 .gview_1_l",
+    "#SWEApplet1 .gview_s_1_l",
+    'form[name="SWE_Form1_0"]',
+    "#SWEApplet1",
+    "div#S_A1",
+    "#S_A1",
+    "#gbox_s_1_l",
+    "#gview_s_1_l",
+    ".gview_1_l",
+    "",
+)
+# v0.7.06 City selectors (popup / textbox) + jqGrid **td** when no input yet.
+_BRANCH2_CITY_SCOPED_SELECTORS: tuple[str, ...] = (
+    "input#1_City",
+    '[id="1_City"]',
+    'input[id="1_City"]',
+    'input[name="City"]',
+    'input.siebui-input-popup[id="1_City"]',
+    'input[role="textbox"][name="City"]',
+    'input[aria-labelledby*="s_1_l_City" i]',
+    "td#1_s_1_l_City",
+    'td[id="1_s_1_l_City"]',
+)
+# v0.7.06 Postal selectors + fuzzy Postal name + scoped-friendly td order.
+_BRANCH2_POSTAL_SCOPED_SELECTORS: tuple[str, ...] = (
+    "td#1_s_1_l_Postal_Code",
+    '[id="1_s_1_l_Postal_Code"]',
+    "td#1_s_1_l_Postal_Code input",
+    '[id="1_s_1_l_Postal_Code"] input',
+    "input#1_Postal_Code",
+    'input[id="1_Postal_Code"]',
+    'input[name="Postal_Code"]',
+    'input[name*="Postal" i]',
+)
+
+# jqGrid Personal Addresses list: ``lui_s_1_l`` blocks clicks until load finishes.
+_BRANCH2_ADDRESS_JQGRID_STATE_JS = """
+() => {
+  const anchor = document.getElementById("s_1_l") || document.getElementById("gbox_s_1_l");
+  if (!anchor) {
+    return 0;
+  }
+  const overlayBlocking = (id) => {
+    const el = document.getElementById(id);
+    if (!el) {
+      return false;
+    }
+    const s = window.getComputedStyle(el);
+    if (s.display === "none" || s.visibility === "hidden") {
+      return false;
+    }
+    if (parseFloat(s.opacity || "1") <= 0.01) {
+      return false;
+    }
+    // jqGrid often leaves ``#lui_*`` in the DOM with ``pointer-events: none`` when idle — do not treat as busy.
+    if ((s.pointerEvents || "").toLowerCase() === "none") {
+      return false;
+    }
+    const r = el.getBoundingClientRect();
+    return r.width > 2 && r.height > 2;
+  };
+  if (overlayBlocking("lui_s_1_l") || overlayBlocking("lui_1_l")) {
+    return 2;
+  }
+  const load = document.getElementById("load_s_1_l");
+  if (load) {
+    const s = window.getComputedStyle(load);
+    if (s.display !== "none" && /loading/i.test((load.textContent || "").trim())) {
+      return 2;
+    }
+  }
+  return 1;
+}
+"""
+
+# Personal Addresses jqGrid: cells (City / Pincode) often sit **outside** the clipped ``.ui-jqgrid-bdiv`` /
+# ``#s_1_l_scroll`` viewport until ancestors' ``scrollLeft`` / ``scrollTop`` are adjusted. Also scroll the
+# main window so the grid is not below the fold.
+_BRANCH2_JQGRID_SURFACE_CELL_IN_VIEW_JS = """
+(el) => {
+  if (!el || !el.getBoundingClientRect) {
+    return false;
+  }
+  const nudgeScrollParents = (node) => {
+    let cur = node;
+    for (let depth = 0; depth < 30; depth++) {
+      cur = cur.parentElement;
+      if (!cur || cur === document.documentElement || cur === document.body) {
+        break;
+      }
+      const cs = window.getComputedStyle(cur);
+      const ox = cs.overflowX;
+      const oy = cs.overflowY;
+      const r = node.getBoundingClientRect();
+      if ((ox === "auto" || ox === "scroll") && cur.scrollWidth > cur.clientWidth + 2) {
+        const cr = cur.getBoundingClientRect();
+        if (r.right > cr.right - 1) {
+          const need = Math.min(
+            r.right - cr.right + 18,
+            Math.max(0, cur.scrollWidth - cur.clientWidth - cur.scrollLeft + 1)
+          );
+          cur.scrollLeft += need;
+        } else if (r.left < cr.left + 1) {
+          const need = Math.min(
+            cr.left - r.left + 18,
+            Math.max(0, cur.scrollLeft)
+          );
+          cur.scrollLeft -= need;
+        }
+      }
+      if ((oy === "auto" || oy === "scroll") && cur.scrollHeight > cur.clientHeight + 2) {
+        const cr = cur.getBoundingClientRect();
+        if (r.bottom > cr.bottom - 1) {
+          const need = Math.min(
+            r.bottom - cr.bottom + 18,
+            Math.max(0, cur.scrollHeight - cur.clientHeight - cur.scrollTop + 1)
+          );
+          cur.scrollTop += need;
+        } else if (r.top < cr.top + 1) {
+          const need = Math.min(
+            cr.top - r.top + 18,
+            Math.max(0, cur.scrollTop)
+          );
+          cur.scrollTop -= need;
+        }
+      }
+    }
+  };
+  const center = () => {
+    try {
+      el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    } catch (e) {
+      try {
+        el.scrollIntoView(true);
+      } catch (e2) {}
+    }
+  };
+  center();
+  nudgeScrollParents(el);
+  center();
+  nudgeScrollParents(el);
+  return true;
+}
+"""
+
+
+def _branch2_locator_union_first(root, parts: tuple[str, ...]):
+    """OR-chain locators under the same ``root`` (Page / Frame / Locator)."""
+    if not parts:
+        raise ValueError("parts")
+    u = root.locator(parts[0]).first
+    for p in parts[1:]:
+        u = u.or_(root.locator(p).first)
+    return u.first
+
+
+def _branch2_wait_union_visible_in_root(root, parts: tuple[str, ...], *, timeout_ms: int) -> bool:
+    try:
+        _branch2_locator_union_first(root, parts).wait_for(state="visible", timeout=max(80, int(timeout_ms)))
+        return True
+    except PlaywrightTimeout:
+        return False
+    except Exception:
+        return False
+
+
+def _branch2_wait_union_visible_across_roots(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    parts: tuple[str, ...],
+    timeout_ms: int,
+) -> bool:
+    """Spend ``timeout_ms`` across Siebel search roots waiting for any of ``parts`` to become visible."""
+    deadline = time.monotonic() + max(0.08, timeout_ms / 1000.0)
+    roots = list(_siebel_all_search_roots(page, content_frame_selector))
+    if not roots:
+        roots = [page]
+    for root in roots:
+        rem_ms = int(max(100, (deadline - time.monotonic()) * 1000))
+        if rem_ms < 100:
+            break
+        if _branch2_wait_union_visible_in_root(root, parts, timeout_ms=rem_ms):
+            return True
+    return False
+
+
+def _branch2_iframe_s_a1_exists_anywhere(
+    page: Page, *, content_frame_selector: str | None
+) -> bool:
+    """True when a matching **iframe** S_A1 exists (some builds use ``div#S_A1`` only — skip iframe waits)."""
+    try:
+        if page.locator('iframe#S_A1, iframe[id="S_A1"]').count() > 0:
+            return True
+    except Exception:
+        pass
+    try:
+        for parent in _iter_frame_locator_roots(page, content_frame_selector):
+            try:
+                if parent.locator('iframe#S_A1, iframe[id="S_A1"]').count() > 0:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    try:
+        for frame in _ordered_frames(page):
+            try:
+                if frame.locator('iframe#S_A1, iframe[id="S_A1"]').count() > 0:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+def _branch2_poll_address_jqgrid_ready(page: Page, *, timeout_ms: int) -> bool:
+    """
+    After **Address** tab: Personal Addresses jqGrid often shows ``#lui_s_1_l`` / ``#load_s_1_l`` until
+    rows are ready. Poll all frames until some grid reports idle (1) and **no** frame reports busy (2),
+    or until timeout (caller still runs postal surface wait).
+    """
+    cap = max(120, min(2000, int(timeout_ms)))
+    deadline = time.monotonic() + cap / 1000.0
+    # Avoid burning the full cap when no ``s_1_l`` / ``gbox_s_1_l`` exists in any frame (wrong tab / timing).
+    no_grid_deadline = time.monotonic() + 0.95
+    while time.monotonic() < deadline:
+        any_busy = False
+        saw_ready = False
+        saw_nonzero = False
+        for fr in _ordered_frames(page):
+            try:
+                code = fr.evaluate(_BRANCH2_ADDRESS_JQGRID_STATE_JS)
+            except Exception:
+                continue
+            if code != 0:
+                saw_nonzero = True
+            if code == 2:
+                any_busy = True
+            elif code == 1:
+                saw_ready = True
+        if any_busy:
+            time.sleep(0.028)
+            continue
+        if saw_ready:
+            return True
+        if not saw_nonzero and time.monotonic() >= no_grid_deadline:
+            return False
+        time.sleep(0.028)
+    return False
+
+
+def _branch2_wait_postal_quick_surface(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    timeout_ms: int,
+) -> bool:
+    """Wait for Address postal controls — jqGrid idle, then ``div#S_A1`` / ``iframe#S_A1``, then roots union."""
+    tm = min(_BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS, max(250, int(timeout_ms)))
+    _branch2_poll_address_jqgrid_ready(page, timeout_ms=tm)
+
+    deadline = time.monotonic() + tm / 1000.0
+    _iframe_cap = 420 if not _branch2_iframe_s_a1_exists_anywhere(page, content_frame_selector=content_frame_selector) else None
+
+    def _iframe_wait_budget(rem: int) -> int:
+        if _iframe_cap is None:
+            return rem
+        return min(rem, _iframe_cap)
+
+    # Inline **div** ``#S_A1`` (no iframe) — common on Hero Connect; try before ``frame_locator`` paths.
+    for root in (page, *_siebel_all_search_roots(page, content_frame_selector)):
+        rem_ms = int(max(120, (deadline - time.monotonic()) * 1000))
+        if rem_ms < 120:
+            break
+        try:
+            shell = root.locator('[id="S_A1"]').first
+            if shell.count() == 0:
+                continue
+            _branch2_locator_union_first(shell, _BRANCH2_POSTAL_QUICK_SELECTORS).wait_for(
+                state="visible", timeout=min(rem_ms, 700)
+            )
+            return True
+        except Exception:
+            continue
+
+    for iframe_sel in ("iframe#S_A1", 'iframe[id="S_A1"]'):
+        rem_ms = int(max(150, (deadline - time.monotonic()) * 1000))
+        if rem_ms < 150:
+            break
+        try:
+            fl = page.frame_locator(iframe_sel)
+            _branch2_locator_union_first(fl, _BRANCH2_POSTAL_QUICK_SELECTORS).wait_for(
+                state="visible", timeout=_iframe_wait_budget(rem_ms)
+            )
+            return True
+        except Exception:
+            continue
+    try:
+        for parent in _iter_frame_locator_roots(page, content_frame_selector):
+            rem_ms = int(max(150, (deadline - time.monotonic()) * 1000))
+            if rem_ms < 150:
+                break
+            for iframe_sel in ("iframe#S_A1", 'iframe[id="S_A1"]'):
+                try:
+                    fl = parent.frame_locator(iframe_sel)
+                    _branch2_locator_union_first(fl, _BRANCH2_POSTAL_QUICK_SELECTORS).wait_for(
+                        state="visible", timeout=_iframe_wait_budget(rem_ms)
+                    )
+                    return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    try:
+        for frame in _ordered_frames(page):
+            rem_ms = int(max(150, (deadline - time.monotonic()) * 1000))
+            if rem_ms < 150:
+                break
+            for iframe_sel in ("iframe#S_A1", 'iframe[id="S_A1"]'):
+                try:
+                    fl = frame.frame_locator(iframe_sel)
+                    _branch2_locator_union_first(fl, _BRANCH2_POSTAL_QUICK_SELECTORS).wait_for(
+                        state="visible", timeout=_iframe_wait_budget(rem_ms)
+                    )
+                    return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    rem = int(max(100, (deadline - time.monotonic()) * 1000))
+    rem = min(rem, _BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS)
+    return _branch2_wait_union_visible_across_roots(
+        page,
+        content_frame_selector=content_frame_selector,
+        parts=_BRANCH2_POSTAL_QUICK_SELECTORS,
+        timeout_ms=rem,
+    )
+
+
+def _branch2_try_fill_union_direct_scroll(
+    root,
+    selectors: tuple[str, ...],
+    value: str,
+    *,
+    note: Callable[..., None],
+    log_label: str,
+    allow_fill_fallback: bool,
+    budget_ms: int | None = None,
+    root_inner_fallback: tuple[str, ...] | None = None,
+) -> bool:
+    """
+    Fill via **OR-chained** Siebel/jqGrid locators: ``wait_for`` (attached) → ``scroll_into_view_if_needed``
+    (fields may be below the fold) → click → fill / inner input / ``press_sequentially``.
+
+    jqGrid **td** cells (City LOV, Postal) often need ``scrollLeft`` on ``#s_1_l_scroll`` / ``.ui-jqgrid-bdiv``
+    (handled via :data:`_BRANCH2_JQGRID_SURFACE_CELL_IN_VIEW_JS`) and a **double-click** before an
+    ``input`` appears.
+
+    Total wall time per call is bounded by ``budget_ms`` (default :data:`_BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS`).
+    """
+    cap = int(budget_ms if budget_ms is not None else _BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS)
+    cap = max(250, min(_BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS, cap))
+    v = (value or "").strip()
+    if not v:
+        return False
+    end = time.monotonic() + cap / 1000.0
+
+    def _rem_ms() -> int:
+        return max(80, int((end - time.monotonic()) * 1000))
+
+    def _try_fill_inner_chain(target: Locator | None = None) -> bool:
+        """Try inner input under ``loc``, then optional ``root`` union fallback (Siebel moves focus)."""
+        base = target if target is not None else loc
+        try:
+            inner = base.locator("input, textarea").first
+            if inner.count() > 0:
+                inner.scroll_into_view_if_needed(timeout=_rem_ms())
+                inner.fill(v, timeout=_rem_ms())
+                return True
+        except Exception:
+            pass
+        if root_inner_fallback:
+            try:
+                fb = _branch2_locator_union_first(root, root_inner_fallback)
+                if fb.count() > 0:
+                    fb.wait_for(state="attached", timeout=min(_rem_ms(), 400))
+                    fb.scroll_into_view_if_needed(timeout=_rem_ms())
+                    fb.fill(v, timeout=_rem_ms())
+                    return True
+            except Exception:
+                pass
+        return False
+
+    loc = _branch2_locator_union_first(root, selectors)
+    try:
+        if loc.count() == 0:
+            return False
+        loc.wait_for(state="attached", timeout=_rem_ms())
+        try:
+            loc.evaluate(_BRANCH2_JQGRID_SURFACE_CELL_IN_VIEW_JS)
+        except Exception:
+            pass
+        loc.scroll_into_view_if_needed(timeout=_rem_ms())
+        try:
+            loc.wait_for(state="visible", timeout=min(_rem_ms(), 600))
+        except PlaywrightTimeout:
+            pass
+        loc.click(timeout=_rem_ms())
+        try:
+            loc.fill(v, timeout=_rem_ms())
+        except Exception:
+            if not allow_fill_fallback:
+                return False
+            try:
+                if _try_fill_inner_chain():
+                    note(
+                        f"Branch (2): filled {log_label} (inner / fallback after click, budget={cap}ms) "
+                        f"→ {v[:48]!r}."
+                    )
+                    return True
+                loc.press_sequentially(v, delay=10)
+            except Exception:
+                try:
+                    # jqGrid / Siebel: view-only **td** until double-click opens the editor or LOV anchor.
+                    try:
+                        loc.evaluate(_BRANCH2_JQGRID_SURFACE_CELL_IN_VIEW_JS)
+                    except Exception:
+                        pass
+                    loc.dblclick(timeout=_rem_ms())
+                    time.sleep(0.14)
+                    if _try_fill_inner_chain():
+                        note(
+                            f"Branch (2): filled {log_label} (dblclick + inner / fallback, budget={cap}ms) "
+                            f"→ {v[:48]!r}."
+                        )
+                        return True
+                    loc.press_sequentially(v, delay=10)
+                except Exception:
+                    return False
+        note(f"Branch (2): filled {log_label} (direct locator + scroll, budget={cap}ms) → {v[:48]!r}.")
+        return True
+    except Exception:
+        return False
 
 
 def _try_fill_mobile_dom_scan(page: Page, value: str) -> bool:
@@ -3133,23 +3637,32 @@ def _branch2_fill_scoped_in_root(
     note,
     log_label: str,
     allow_fill_fallback: bool = False,
+    max_round_ms: int = 4500,
 ) -> bool:
     """Fill the first visible control matching *selectors* under *scopes* (empty scope = root).
 
     When *allow_fill_fallback* is True, a failed ``fill()`` (jqGrid **td**, Siebel LOV / popup input)
     triggers inner ``input``/``textarea`` or ``press_sequentially``.
+
+    ``max_round_ms`` caps total time spent in scope×selector attempts so deep multi-scope scans
+    abandon quickly before the caller tries the next root.
     """
     v = (value or "").strip()
     if not v:
         return False
     t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
+    _round_deadline = time.monotonic() + max(0.12, max_round_ms / 1000.0)
 
     def _fill_locator(loc, sc: str, css: str) -> bool:
         try:
             if loc.count() == 0:
                 return False
-            if not loc.is_visible(timeout=500):
+            if not loc.is_visible(timeout=200):
                 return False
+            try:
+                loc.scroll_into_view_if_needed(timeout=min(900, max(320, int(min(2000, t) * 2))))
+            except Exception:
+                pass
             loc.click(timeout=min(2000, t))
             try:
                 loc.fill(v, timeout=t)
@@ -3158,28 +3671,51 @@ def _branch2_fill_scoped_in_root(
                     raise
                 try:
                     inner = loc.locator("input, textarea").first
-                    if inner.count() > 0 and inner.is_visible(timeout=650):
+                    if inner.count() > 0 and inner.is_visible(timeout=320):
                         inner.fill(v, timeout=t)
                     else:
                         loc.press_sequentially(v, delay=12)
                 except Exception:
                     try:
-                        loc.press_sequentially(v, delay=12)
+                        # jqGrid / Siebel: **td** is read-only until double-click (v0.7.06 used click+fill only).
+                        try:
+                            loc.evaluate(_BRANCH2_JQGRID_SURFACE_CELL_IN_VIEW_JS)
+                        except Exception:
+                            pass
+                        loc.dblclick(timeout=min(2000, t))
+                        time.sleep(0.13)
+                        inner2 = loc.locator("input, textarea").first
+                        if inner2.count() > 0 and inner2.is_visible(timeout=280):
+                            inner2.fill(v, timeout=t)
+                        else:
+                            loc.press_sequentially(v, delay=12)
                     except Exception:
-                        return False
+                        try:
+                            loc.press_sequentially(v, delay=12)
+                        except Exception:
+                            return False
             note(f"Branch (2): filled {log_label} in {sc} via {css!r} → {v[:48]!r}.")
             return True
         except Exception:
             return False
 
     for scope in scopes:
+        if time.monotonic() >= _round_deadline:
+            break
         for css in selectors:
+            if time.monotonic() >= _round_deadline:
+                break
             try:
+                _vis_budget = int(max(120, (_round_deadline - time.monotonic()) * 1000))
+                if _vis_budget < 120:
+                    break
                 if scope:
                     container = root.locator(scope).first
                     if container.count() == 0:
                         continue
-                    if not container.is_visible(timeout=220):
+                    try:
+                        container.wait_for(state="visible", timeout=min(380, _vis_budget))
+                    except PlaywrightTimeout:
                         continue
                     loc = container.locator(css).first
                 else:
@@ -3198,18 +3734,29 @@ def _iter_branch2_s_a1_frame_roots(page: Page, content_frame_selector: str | Non
     ``[id="S_A1"]`` (some builds use a **div**/section instead of ``<iframe>``).
 
     Hero often hosts the Address **jqGrid** (e.g. ``gview_s_1_l``) and **Postal_Code** inputs here —
-    try **before** unscoped grid scans.
+    try **before** unscoped grid scans. Yields are **deduped** by object identity to avoid the same
+    frame locator being tried many times across overlapping discovery paths.
     """
+    out: list = []
+    seen: set[int] = set()
+
+    def _add(item: object) -> None:
+        oid = id(item)
+        if oid in seen:
+            return
+        seen.add(oid)
+        out.append(item)
+
     for sel in ("iframe#S_A1", 'iframe[id="S_A1"]'):
         try:
-            yield page.frame_locator(sel)
+            _add(page.frame_locator(sel))
         except Exception:
             continue
     try:
         for parent in _iter_frame_locator_roots(page, content_frame_selector):
             for sel in ("iframe#S_A1", 'iframe[id="S_A1"]'):
                 try:
-                    yield parent.frame_locator(sel)
+                    _add(parent.frame_locator(sel))
                 except Exception:
                     continue
     except Exception:
@@ -3218,20 +3765,19 @@ def _iter_branch2_s_a1_frame_roots(page: Page, content_frame_selector: str | Non
         for frame in _ordered_frames(page):
             for sel in ("iframe#S_A1", 'iframe[id="S_A1"]'):
                 try:
-                    yield frame.frame_locator(sel)
+                    _add(frame.frame_locator(sel))
                 except Exception:
                     continue
     except Exception:
         pass
-    # Non-iframe container (same id on a block element)
     try:
-        yield page.locator('[id="S_A1"]').first
+        _add(page.locator('[id="S_A1"]').first)
     except Exception:
         pass
     try:
         for parent in _iter_frame_locator_roots(page, content_frame_selector):
             try:
-                yield parent.locator('[id="S_A1"]').first
+                _add(parent.locator('[id="S_A1"]').first)
             except Exception:
                 continue
     except Exception:
@@ -3239,11 +3785,12 @@ def _iter_branch2_s_a1_frame_roots(page: Page, content_frame_selector: str | Non
     try:
         for frame in _ordered_frames(page):
             try:
-                yield frame.locator('[id="S_A1"]').first
+                _add(frame.locator('[id="S_A1"]').first)
             except Exception:
                 continue
     except Exception:
         pass
+    yield from out
 
 
 def _branch2_try_fill_contact_input(
@@ -3383,6 +3930,149 @@ def _branch2_click_address_tab_under_s_vctrl(
     return False
 
 
+_BRANCH2_FRAME_DUMP_PROBE_JS = """
+() => {
+  const q = (sel) => {
+    try {
+      return document.querySelectorAll(sel).length;
+    } catch (e) {
+      return -1;
+    }
+  };
+  return {
+    s_1_l: q("#s_1_l"),
+    gbox_s_1_l: q("#gbox_s_1_l"),
+    gview_s_1_l: q("#gview_s_1_l"),
+    postal_td: q('td[id$="_s_1_l_Postal_Code"]'),
+    city_td: q('td[id$="_s_1_l_City"]'),
+    s_a1_div: q('#S_A1'),
+    s_a1_iframe: q('iframe#S_A1'),
+    swe_applet1: q("#SWEApplet1"),
+  };
+}
+"""
+
+
+def _branch2_temp_frame_dump_for_postal_debug(
+    page: Page,
+    *,
+    reason: str,
+    playwright_dms_log_path: Path | str | None,
+    note: Callable[..., None],
+    pin_code: str = "",
+    city: str = "",
+) -> None:
+    """
+    Write ``temp_frame_dump_<ddmmyyyy>_<hhmmss>.txt`` next to ``Playwright_DMS_*.txt`` when City/Pin
+    locators fail — frame URLs, DOM probe counts, and a truncated ``body`` excerpt per frame.
+    """
+    if not playwright_dms_log_path:
+        note(f"Branch (2): temp_frame_dump skipped (no playwright_dms_log_path); reason={reason!r}.")
+        return
+    try:
+        base = Path(str(playwright_dms_log_path))
+        parent = base.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d%m%Y_%H%M%S")
+        out_path = parent / f"temp_frame_dump_{stamp}.txt"
+        lines: list[str] = [
+            f"created_ist={_ts_ist_iso()}",
+            f"reason={reason!r}",
+            f"playwright_dms_log={str(base)!r}",
+            f"pin_code_attempted={pin_code!r}",
+            f"city_attempted={city!r}",
+            f"main_page_url={page.url!r}",
+            "",
+        ]
+        frames = list(page.frames)
+        for i, fr in enumerate(frames):
+            u = ""
+            try:
+                u = (fr.url or "").strip()
+            except Exception as exc:
+                u = f"(url_error {exc!r})"
+            lines.append(f"========== frame[{i}] url={u!r} ==========")
+            try:
+                probe = fr.evaluate(_BRANCH2_FRAME_DUMP_PROBE_JS)
+                lines.append(f"dom_probe={probe!r}")
+            except Exception as exc:
+                lines.append(f"dom_probe_err={exc!r}")
+            try:
+                snippet = fr.evaluate(
+                    """() => {
+                      try {
+                        const b = document.body;
+                        if (!b) return '';
+                        return (b.innerHTML || '').slice(0, 45000);
+                      } catch (e) {
+                        return String(e);
+                      }
+                    }"""
+                )
+                lines.append(f"body_innerHTML_chars={len(snippet or '')}")
+                lines.append("--- body_innerHTML excerpt ---")
+                lines.append(snippet or "")
+            except Exception as exc:
+                lines.append(f"body_excerpt_err={exc!r}")
+            lines.append("")
+        out_path.write_text("\n".join(lines), encoding="utf-8", errors="replace")
+        note(f"Branch (2): temp_frame_dump written for City/Pin debug → {out_path}")
+    except Exception as exc:
+        logger.warning("branch2 temp_frame_dump failed: %s", exc)
+        note(f"Branch (2): temp_frame_dump failed ({exc!r}).")
+
+
+_BRANCH2_OUTER_WINDOW_SCROLL_BOTTOM_JS = """
+() => {
+  // Siebel Open UI stacks chrome; Personal Addresses jqGrid is often **below the fold** until the
+  // outer **window** scroll reaches the end (separate from jqGrid inner ``scrollLeft``).
+  try {
+    window.scrollTo({ top: 9e9, left: 0, behavior: "instant" });
+  } catch (e) {
+    try {
+      window.scrollTo(0, 9e9);
+    } catch (e2) {}
+  }
+  const sc = document.scrollingElement || document.documentElement;
+  if (sc) {
+    try {
+      sc.scrollTop = sc.scrollHeight;
+    } catch (e3) {}
+  }
+  if (document.body) {
+    try {
+      document.body.scrollTop = document.body.scrollHeight;
+    } catch (e4) {}
+  }
+  return {
+    scrollY: window.scrollY || window.pageYOffset || 0,
+    docScrollH: sc ? sc.scrollHeight : 0,
+    clientH: sc ? sc.clientHeight : 0,
+  };
+}
+"""
+
+
+def _branch2_scroll_outer_window_expose_address_jqgrid(page: Page, *, note: Callable[..., None]) -> None:
+    """Scroll outer **window** (and each open Siebel frame document) to the bottom, then ``scroll_into_view`` jqGrid."""
+    seen: set[int] = set()
+    for target in (page, *_ordered_frames(page)):
+        oid = id(target)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        try:
+            target.evaluate(_BRANCH2_OUTER_WINDOW_SCROLL_BOTTOM_JS)
+        except Exception:
+            continue
+    _safe_page_wait(page, 140, log_label="after_branch2_outer_scroll_bottom")
+    try:
+        page.locator("#gbox_s_1_l, table#s_1_l, #SWEApplet1").first.scroll_into_view_if_needed(timeout=2800)
+    except Exception:
+        pass
+    note("Branch (2): outer window scrolled to bottom so Address jqGrid / City / Pin are in viewport.")
+
+
 def _siebel_video_branch2_address_postal_and_save(
     page: Page,
     *,
@@ -3393,6 +4083,7 @@ def _siebel_video_branch2_address_postal_and_save(
     home_phone: str | None = None,
     contact_email: str | None = None,
     city: str | None = None,
+    playwright_dms_log_path: Path | str | None = None,
 ) -> bool:
     """
     Video branch **(2)** (no Open enquiry): after Relation's Name path, fill **Home Phone #** and **Email**,
@@ -3402,6 +4093,9 @@ def _siebel_video_branch2_address_postal_and_save(
 
     ``home_phone`` defaults from DMS landline / alternate phone at the caller; ``contact_email`` defaults
     to ``NA`` when the caller passes None. ``city`` from DMS (e.g. city or district).
+
+    City / Postal Code fill is **best-effort**: if controls are not found, a :func:`_branch2_temp_frame_dump_for_postal_debug`
+    file is written next to ``playwright_dms_log_path`` when that path is set; automation still attempts **Save**.
     """
     pin = (pin_code or "").strip()
     if not pin:
@@ -3426,7 +4120,14 @@ def _siebel_video_branch2_address_postal_and_save(
         note=note,
         log_label="Home Phone #",
     )
+    # v0.7.06: short settle before Email (Siebel re-renders header fields).
     _safe_page_wait(page, 280, log_label="after_branch2_home_phone")
+    _branch2_wait_union_visible_across_roots(
+        page,
+        content_frame_selector=content_frame_selector,
+        parts=_BRANCH2_EMAIL_WAIT_SELECTORS,
+        timeout_ms=2600,
+    )
     _branch2_try_fill_contact_input(
         page,
         selectors=(
@@ -3442,6 +4143,12 @@ def _siebel_video_branch2_address_postal_and_save(
         log_label="Email",
     )
     _safe_page_wait(page, 280, log_label="after_branch2_email")
+    _branch2_wait_union_visible_across_roots(
+        page,
+        content_frame_selector=content_frame_selector,
+        parts=_BRANCH2_THIRD_LEVEL_OR_ADDRESS_SELECTORS,
+        timeout_ms=2600,
+    )
 
     if _branch2_click_address_tab_under_s_vctrl(
         page,
@@ -3449,6 +4156,12 @@ def _siebel_video_branch2_address_postal_and_save(
         content_frame_selector=content_frame_selector,
         note=note,
     ):
+        _branch2_wait_postal_quick_surface(
+            page,
+            content_frame_selector=content_frame_selector,
+            timeout_ms=_BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS,
+        )
+        # v0.7.06: jqGrid / applet layout after **Address** (third-level) before touching cells.
         _safe_page_wait(page, 700, log_label="after_address_tab_branch2")
     elif _siebel_try_click_named_in_frames(
         page,
@@ -3458,73 +4171,92 @@ def _siebel_video_branch2_address_postal_and_save(
         content_frame_selector=content_frame_selector,
     ):
         note("Branch (2): clicked Address tab (frame scan fallback).")
+        _branch2_wait_postal_quick_surface(
+            page,
+            content_frame_selector=content_frame_selector,
+            timeout_ms=_BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS,
+        )
         _safe_page_wait(page, 700, log_label="after_address_tab_branch2")
     else:
         note("Branch (2): Address tab not found — trying Postal Code field anyway.")
+        _branch2_wait_postal_quick_surface(
+            page,
+            content_frame_selector=content_frame_selector,
+            timeout_ms=_BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS,
+        )
+
+    _branch2_scroll_outer_window_expose_address_jqgrid(page, note=note)
 
     city_val = (city or "").strip()
-    # jqGrid **gview** may be class ``gview_1_l`` or ``gview_s_1_l``; cell id ``1_s_1_l_Postal_Code`` (td).
-    _scopes = (
-        "#SWEApplet1 #gview_s_1_l",
-        "#SWEApplet1 .gview_1_l",
-        "#SWEApplet1 .gview_s_1_l",
-        'form[name="SWE_Form1_0"]',
-        "#SWEApplet1",
-        "div#S_A1",
-        "#S_A1",
-        "#gview_s_1_l",
-        ".gview_1_l",
-        "",
-    )
-    _city_sels = (
-        'input#1_City',
-        '[id="1_City"]',
-        'input[id="1_City"]',
-        'input[name="City"]',
-        'input.siebui-input-popup[id="1_City"]',
-        'input[role="textbox"][name="City"]',
-        'input[aria-labelledby*="s_1_l_City" i]',
-    )
-    _postal_sels = (
-        "td#1_s_1_l_Postal_Code",
-        '[id="1_s_1_l_Postal_Code"]',
-        "td#1_s_1_l_Postal_Code input",
-        '[id="1_s_1_l_Postal_Code"] input',
-        'input[name="Postal_Code"]',
-        '[id="1_Postal_Code"]',
-        'input[id="1_Postal_Code"]',
-        'input[name*="Postal" i]',
+    _scoped_round_ms = min(
+        _BRANCH2_ADDRESS_SCOPED_FILL_CAP_MS,
+        max(480, min(int(action_timeout_ms), 6000) // 4),
     )
 
     def _fill_city_and_postal_in_root(root) -> bool:
+        ok_city = True
         if city_val:
-            _branch2_fill_scoped_in_root(
+            ok_city = _branch2_fill_scoped_in_root(
                 root,
-                scopes=_scopes,
-                selectors=_city_sels,
+                scopes=_BRANCH2_ADDRESS_GRID_SCOPES,
+                selectors=_BRANCH2_CITY_SCOPED_SELECTORS,
                 value=city_val,
                 action_timeout_ms=action_timeout_ms,
                 note=note,
-                log_label="City (1_City)",
+                log_label="City (scoped, v0.7.06)",
                 allow_fill_fallback=True,
+                max_round_ms=_scoped_round_ms,
+            ) or _branch2_try_fill_union_direct_scroll(
+                root,
+                _BRANCH2_CITY_DIRECT_SELECTORS,
+                city_val,
+                note=note,
+                log_label="City (jqGrid / union fallback)",
+                allow_fill_fallback=True,
+                budget_ms=_BRANCH2_ADDRESS_UNION_FILL_BUDGET_MS,
+                root_inner_fallback=(
+                    "input#1_City",
+                    'input[id="1_City"]',
+                    'input[name="City"]',
+                ),
             )
-        return _branch2_fill_scoped_in_root(
+        ok_postal = _branch2_fill_scoped_in_root(
             root,
-            scopes=_scopes,
-            selectors=_postal_sels,
+            scopes=_BRANCH2_ADDRESS_GRID_SCOPES,
+            selectors=_BRANCH2_POSTAL_SCOPED_SELECTORS,
             value=pin,
             action_timeout_ms=action_timeout_ms,
             note=note,
-            log_label="Postal Code",
+            log_label="Postal Code (scoped, v0.7.06)",
             allow_fill_fallback=True,
+            max_round_ms=_scoped_round_ms,
+        ) or _branch2_try_fill_union_direct_scroll(
+            root,
+            _BRANCH2_POSTAL_DIRECT_SELECTORS,
+            pin,
+            note=note,
+            log_label="Postal Code (jqGrid / union fallback)",
+            allow_fill_fallback=True,
+            budget_ms=_BRANCH2_ADDRESS_UNION_FILL_BUDGET_MS,
+            root_inner_fallback=(
+                "input#1_Postal_Code",
+                'input[id="1_Postal_Code"]',
+                'input[name="Postal_Code"]',
+            ),
         )
+        return ok_postal and (ok_city if city_val else True)
 
     _filled = False
-    for s_a1_root in _iter_branch2_s_a1_frame_roots(page, content_frame_selector):
-        if _fill_city_and_postal_in_root(s_a1_root):
-            note("Branch (2): City / Postal Code filled inside S_A1 scope (iframe or id=S_A1).")
-            _filled = True
-            break
+    # Main document first — Hero often hosts Address jqGrid without ``iframe#S_A1`` (see temp_frame_dump).
+    if _fill_city_and_postal_in_root(page):
+        note("Branch (2): City / Postal Code filled on main page document.")
+        _filled = True
+    if not _filled:
+        for s_a1_root in _iter_branch2_s_a1_frame_roots(page, content_frame_selector):
+            if _fill_city_and_postal_in_root(s_a1_root):
+                note("Branch (2): City / Postal Code filled inside S_A1 scope (iframe or id=S_A1).")
+                _filled = True
+                break
     if not _filled:
         for fl in _iter_frame_locator_roots(page, content_frame_selector):
             if _fill_city_and_postal_in_root(fl):
@@ -3532,11 +4264,11 @@ def _siebel_video_branch2_address_postal_and_save(
                 break
     if not _filled:
         for frame in _ordered_frames(page):
+            if frame is page.main_frame:
+                continue
             if _fill_city_and_postal_in_root(frame):
                 _filled = True
                 break
-    if not _filled and _fill_city_and_postal_in_root(page):
-        _filled = True
     if not _filled:
         for root in _siebel_all_search_roots(page, content_frame_selector):
             if _fill_city_and_postal_in_root(root):
@@ -3544,30 +4276,56 @@ def _siebel_video_branch2_address_postal_and_save(
                 break
     if not _filled:
         note(
-            "Branch (2): could not locate or fill Postal Code "
-            "(tried iframe#S_A1 → SWEApplet1 / form SWE_Form1_0 / div#S_A1 / "
-            "td#1_s_1_l_Postal_Code, inputs name=Postal_Code / id 1_Postal_Code)."
+            "Branch (2): could not locate or fill City/Postal Code (non-blocking) — "
+            "tried v0.7.06 scoped #SWEApplet1/#gview/grid + union / scroll / dblclick fallbacks; "
+            "continuing to Save."
         )
-        return False
+        _branch2_temp_frame_dump_for_postal_debug(
+            page,
+            reason="branch2_city_postal_fill_failed",
+            playwright_dms_log_path=playwright_dms_log_path,
+            note=note,
+            pin_code=pin,
+            city=city_val,
+        )
 
-    _safe_page_wait(page, 350, log_label="after_city_postal_fill_branch2")
+    if _filled:
+        _safe_page_wait(page, 350, log_label="after_city_postal_fill_branch2")
+        _branch2_wait_union_visible_across_roots(
+            page,
+            content_frame_selector=content_frame_selector,
+            parts=_BRANCH2_POSTAL_QUICK_SELECTORS,
+            timeout_ms=min(800, _BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS),
+        )
+    else:
+        _safe_page_wait(page, 220, log_label="after_branch2_city_postal_skipped")
+
     try:
         page.keyboard.press("Control+S", delay=50)
-        note("Branch (2): pressed Ctrl+S after City / Postal Code.")
+        note(
+            "Branch (2): pressed Ctrl+S after Address step"
+            + (" (City/Postal filled)." if _filled else " (City/Postal fill skipped or incomplete).")
+        )
         return True
     except Exception:
         note("Branch (2): Ctrl+S failed — trying Save control.")
     if _try_click_siebel_save(
         page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     ):
-        note("Branch (2): Save clicked after City / Postal Code.")
+        note(
+            "Branch (2): Save clicked after Address step"
+            + (" (City/Postal filled)." if _filled else " (City/Postal fill skipped or incomplete).")
+        )
         return True
     try:
         page.keyboard.press("Control+S", delay=50)
-        note("Branch (2): pressed Ctrl+S (retry) after City / Postal Code.")
+        note(
+            "Branch (2): pressed Ctrl+S (retry) after Address step"
+            + (" (City/Postal filled)." if _filled else " (City/Postal fill skipped or incomplete).")
+        )
         return True
     except Exception:
-        note("Branch (2): Save toolbar and Ctrl+S both failed after City / Postal Code.")
+        note("Branch (2): Save toolbar and Ctrl+S both failed after Address step.")
         return False
 
 

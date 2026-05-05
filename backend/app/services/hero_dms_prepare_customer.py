@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from playwright.sync_api import Page
@@ -58,10 +59,14 @@ def prepare_customer(
     ms_done: Callable[[str], None] | None,
     log_fp: Any,
     log_vehicle_snapshot: Callable[[str], None],
+    playwright_dms_log_path: Path | str | None = None,
 ) -> bool:
     """
     Contact Find → enquiry sweep / Add Enquiry → Relation's Name → payment → ``dms_customer_master_collated``.
     Returns ``False`` if ``out[\"error\"]`` was set.
+
+    ``playwright_dms_log_path``: when set (Fill DMS ``Playwright_DMS_*.txt``), branch (2) may write
+    ``temp_frame_dump_*.txt`` beside it if City/Pin controls are not found.
     """
     step(
         "Video SOP (Find Contact Enquiry): Find → Contact → mobile + first name → Go; "
@@ -365,10 +370,12 @@ def prepare_customer(
             home_phone=_b2_home,
             contact_email=_b2_email,
             city=_b2_city,
+            playwright_dms_log_path=playwright_dms_log_path,
         ):
-            step("Stopped: video branch (2) Address / Postal Code / Save failed.")
+            step("Stopped: video branch (2) Address tab Save failed (Ctrl+S / Save toolbar).")
             out["error"] = (
-                "Siebel: no open enquiry path — could not fill Address Postal Code or save."
+                "Siebel: no open enquiry path — could not save after Address step "
+                "(City/Postal fill is best-effort; see Playwright_DMS notes and temp_frame_dump_*.txt if written)."
             )
             return False
 

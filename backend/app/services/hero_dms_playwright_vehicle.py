@@ -107,6 +107,191 @@ _LEFT_SEARCH_MAX_POLLS = 10
 _CENTER_LIST_POLL_MS = 300
 _CENTER_LIST_MAX_POLLS = 15
 
+# Third Level View Bar: total wall-clock wait across frame roots (Chromium + iframe paint).
+_DMS_THIRD_LEVEL_BAR_TOTAL_WAIT_SEC = 18.0
+_DMS_THIRD_LEVEL_BAR_STABILITY_MS = 280
+
+# After PDI tab click: wait until the PDI tab **List:New** ``+`` is visible and stable (no URL heuristics).
+_DMS_PDI_POST_TAB_SETTLE_MS = 22_000
+_PDI_PLUS_VISIBLE_IN_DOC_JS = """() => {
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+    };
+    const isPdiListNew = (el) => {
+        const al = (el.getAttribute('aria-label') || '').toLowerCase();
+        const tt = (el.getAttribute('title') || '').toLowerCase();
+        const lab = al + ' ' + tt;
+        if (lab.includes('service request list: menu')) return false;
+        if (lab.includes('menu') && !lab.includes('list:new') && !lab.includes('list: new')) return false;
+        if (al.includes('pdi list:new') || tt.includes('pdi list:new')) return true;
+        if (al.includes('hhml pdi list:new') || tt.includes('hhml pdi list:new')) return true;
+        if (al.includes('service request list:new') || tt.includes('service request list:new')) return true;
+        return false;
+    };
+    for (const hid of ['s_2_1_12_0_Ctrl', 's_2_1_14_0_Ctrl', 's_3_1_12_0_Ctrl']) {
+        const el = document.getElementById(hid);
+        if (!el || !vis(el)) continue;
+        const tag = String(el.tagName).toLowerCase();
+        if (tag === 'button' && el.classList.contains('siebui-icon-newrecord')) {
+            const dd = (el.getAttribute('data-display') || '').trim();
+            if (isPdiListNew(el) || dd === 'New') return true;
+        }
+    }
+    for (const b of document.querySelectorAll('button.siebui-icon-newrecord, span.siebui-icon-newrecord')) {
+        if (vis(b) && isPdiListNew(b)) return true;
+    }
+    return false;
+}"""
+
+# After Serial Number drilldown, Siebel may still be on **Features** while the Third Level View Bar repaints.
+_DMS_FEATURES_BEFORE_PRECHECK_SETTLE_MS = 16_000
+# After Pre-check tab click: wait until Pre-check **List:New** / **Service Request List:New** ``+`` is
+# visible and stable (consecutive polls); no transient-URL gating.
+_DMS_PRECHECK_POST_TAB_SETTLE_MS = 22_000
+_DMS_SUBTAB_PLUS_STABLE_STREAK = 2
+_FEATURES_BAR_STABLE_BEFORE_PRECHECK_JS = """() => {
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
+    const href = (location.href || '').replace(/\\s/g, '+').toLowerCase();
+    const onFeatures = href.includes('vehicle+features') || href.includes('features+view');
+    if (!onFeatures) return true;
+    const bar = document.getElementById('s_vctrl_div');
+    if (!bar || !vis(bar) || bar.getBoundingClientRect().width < 80) return false;
+    const compact = (s) => String(s || '').replace(/[-\\s]+/g, '').toLowerCase();
+    const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
+        .filter(t => vis(t))
+        .map(t => compact((t.innerText || t.textContent || '').trim()))
+        .filter(t => t.length > 0 && t.length < 48);
+    const hasPrecheck = tabs.some(t => t === 'precheck' || t === 'pre-check' || t.includes('precheck'));
+    const hasPdi = tabs.some(t => t === 'pdi');
+    return hasPrecheck && hasPdi;
+}"""
+_PRECHECK_PLUS_VISIBLE_IN_DOC_JS = """() => {
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+    };
+    const isPrecheckListNew = (el) => {
+        const al = (el.getAttribute('aria-label') || '').toLowerCase();
+        const tt = (el.getAttribute('title') || '').toLowerCase();
+        const lab = al + ' ' + tt;
+        if (lab.includes('service request list: menu')) return false;
+        if (lab.includes('menu') && !lab.includes('list:new') && !lab.includes('list: new')) return false;
+        if (al.includes('service request list:new') || tt.includes('service request list:new')) return true;
+        if (al.includes('precheck list:new') || tt.includes('precheck list:new')) return true;
+        if (al.includes('pre-check list:new') || tt.includes('pre-check list:new')) return true;
+        return false;
+    };
+    const hid = document.getElementById('s_3_1_12_0_Ctrl');
+    if (hid && vis(hid) && String(hid.tagName).toLowerCase() === 'button' && hid.classList.contains('siebui-icon-newrecord')) {
+        if (isPrecheckListNew(hid)) return true;
+        const dd = (hid.getAttribute('data-display') || '').trim();
+        if (dd === 'New') return true;
+    }
+    for (const b of document.querySelectorAll('button.siebui-icon-newrecord, span.siebui-icon-newrecord')) {
+        if (vis(b) && isPrecheckListNew(b)) return true;
+    }
+    return false;
+}"""
+
+# Boolean predicate for ``wait_for_function`` (third-level strip before Pre-check / PDI clicks).
+# Requires a reasonably sized ``#s_vctrl_div``, then either the **Third Level View Bar** ``<select>``
+# options (Hero) or visible tab labels containing Pre-check / PDI.
+_THIRD_LEVEL_BAR_LOADED_BOOL_JS = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const compact = (s) => String(s || '').replace(/[-\\s]+/g, '').toLowerCase();
+        const hasPrePdi = (label) => {
+            if (!label) return false;
+            const c = compact(label);
+            return c === 'precheck' || c === 'pre-check' || c === 'pdi' || c.includes('precheck');
+        };
+        const bar = document.getElementById('s_vctrl_div');
+        if (!bar || !vis(bar)) return false;
+        const br = bar.getBoundingClientRect();
+        if (br.width < 64 || br.height < 14) return false;
+        const dd = bar.querySelector('select#j_s_vctrl_div_tabScreen')
+            || bar.querySelector('select[aria-label="Third Level View Bar"]');
+        if (dd && vis(dd)) {
+            const opts = Array.from(dd.options || []).map((o) =>
+                String(o.text || o.innerText || '').trim()).filter((t) => t.length > 0 && t.length < 80);
+            if (opts.some(hasPrePdi)) return true;
+        }
+        const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
+            .filter((t) => vis(t))
+            .map((t) => (t.innerText || t.textContent || '').trim())
+            .filter((t) => t.length > 0 && t.length < 40);
+        return tabs.some((t) => hasPrePdi(t));
+    }"""
+
+_THIRD_LEVEL_BAR_READY_DICT_JS = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const compact = (s) => String(s || '').replace(/[-\\s]+/g, '').toLowerCase();
+        const hasPrePdi = (label) => {
+            if (!label) return false;
+            const c = compact(label);
+            return c === 'precheck' || c === 'pre-check' || c === 'pdi' || c.includes('precheck');
+        };
+        const bar = document.getElementById('s_vctrl_div');
+        if (!bar || !vis(bar)) return { loaded: false, tabs: [], via: 'no_bar' };
+        const br = bar.getBoundingClientRect();
+        if (br.width < 64 || br.height < 14) return { loaded: false, tabs: [], via: 'small' };
+        const dd = bar.querySelector('select#j_s_vctrl_div_tabScreen')
+            || bar.querySelector('select[aria-label="Third Level View Bar"]');
+        if (dd && vis(dd)) {
+            const opts = Array.from(dd.options || []).map((o) =>
+                String(o.text || o.innerText || '').trim()).filter((t) => t.length > 0 && t.length < 80);
+            if (opts.some(hasPrePdi)) return { loaded: true, tabs: opts, via: 'dropdown' };
+        }
+        const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
+            .filter((t) => vis(t))
+            .map((t) => (t.innerText || t.textContent || '').trim())
+            .filter((t) => t.length > 0 && t.length < 40);
+        const hasTabs = tabs.some((t) => hasPrePdi(t));
+        return { loaded: hasTabs, tabs, via: 'strip' };
+    }"""
+
+_THIRD_LEVEL_TAB_NEEDLE_BOOL_JS = """(needle) => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const compact = (s) => s.replace(/[-\\s]+/g, '').toLowerCase();
+        const bar = document.getElementById('s_vctrl_div');
+        if (!bar || !vis(bar)) return false;
+        const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
+            .filter(t => vis(t))
+            .map(t => (t.innerText || t.textContent || '').trim())
+            .filter(t => t.length > 0 && t.length < 40);
+        return tabs.some(t => compact(t) === compact(needle));
+    }"""
+
 
 def _siebel_poll_left_search_title_matches(
     page: Page,
@@ -144,21 +329,17 @@ def _siebel_poll_left_search_title_matches(
       return false;
     }"""
 
-    for round_i in range(polls):
-        try:
-            if page.evaluate(js, vk_upper):
-                _safe_page_wait(page, interval, log_label="left_search_match_settle")
-                return True
-        except Exception:
-            pass
-        if not stale_logged and round_i == 2:
+    try:
+        page.wait_for_function(js, arg=vk_upper, timeout=max(500, polls * interval))
+        _safe_page_wait(page, interval, log_label="left_search_match_settle")
+        return True
+    except PlaywrightTimeout:
+        if not stale_logged:
             stale_logged = True
             logger.info(
-                "siebel: left Search Results pane still syncing; polling up to %d × %dms",
-                polls, interval,
+                "siebel: left Search Results pane still syncing; waited up to %dms (wait_for_function)",
+                max(500, polls * interval),
             )
-        if round_i < polls - 1:
-            _safe_page_wait(page, interval, log_label="left_search_stale_poll")
 
     try:
         diag = page.evaluate("""() => {
@@ -215,22 +396,18 @@ def _siebel_poll_center_list_matches(
       return false;
     }"""
 
-    for round_i in range(polls):
-        try:
-            if page.evaluate(js, vk_upper):
-                _safe_page_wait(page, interval, log_label="center_list_match_settle")
-                return True
-        except Exception:
-            pass
-        if not sync_logged and round_i == 2:
+    try:
+        page.wait_for_function(js, arg=vk_upper, timeout=max(500, polls * interval))
+        _safe_page_wait(page, interval, log_label="center_list_match_settle")
+        return True
+    except PlaywrightTimeout:
+        if not sync_logged:
             sync_logged = True
             logger.info(
                 "siebel: center vehicle list (#s_1_l) still updating after left drill; "
-                "polling up to %d × %dms",
-                polls, interval,
+                "waited up to %dms (wait_for_function)",
+                max(500, polls * interval),
             )
-        if round_i < polls - 1:
-            _safe_page_wait(page, interval, log_label="center_list_poll")
     return False
 
 
@@ -1465,6 +1642,117 @@ def _siebel_click_service_request_list_new_record(
     return False
 
 
+def _third_level_bar_frame_roots(page: Page) -> list:
+    """Main frame first (``#s_vctrl_div`` is usually in the top document), then other frames."""
+    seen: set[int] = set()
+    out: list = []
+    try:
+        mf = page.main_frame
+        oid = id(mf)
+        if oid not in seen:
+            seen.add(oid)
+            out.append(mf)
+    except Exception:
+        pass
+    try:
+        for fr in _ordered_frames(page):
+            oid = id(fr)
+            if oid in seen:
+                continue
+            seen.add(oid)
+            out.append(fr)
+    except Exception:
+        pass
+    if not out:
+        try:
+            return [page.main_frame]
+        except Exception:
+            return []
+    return out
+
+
+def _iter_subtab_plus_eval_roots(page: Page, content_frame_selector: str | None):
+    """Frames to evaluate Pre-check / PDI **List:New** ``+`` (bar is usually main; applets may be in content frames)."""
+    seen: set[int] = set()
+    for fr in _third_level_bar_frame_roots(page):
+        k = id(fr)
+        if k not in seen:
+            seen.add(k)
+            yield fr
+    for fr in _siebel_all_search_roots(page, content_frame_selector):
+        k = id(fr)
+        if k not in seen:
+            seen.add(k)
+            yield fr
+
+
+def _wait_precheck_subtab_plus_ready(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    timeout_ms: int,
+) -> bool:
+    """Poll until Pre-check **List:New** / **Service Request List:New** ``+`` is visible in some frame,
+    for ``_DMS_SUBTAB_PLUS_STABLE_STREAK`` consecutive polls (stability)."""
+    deadline = time.monotonic() + max(1.0, timeout_ms / 1000.0)
+    poll_ms = 350
+    streak = 0
+    need = max(1, int(_DMS_SUBTAB_PLUS_STABLE_STREAK))
+    while time.monotonic() < deadline:
+        hit = False
+        for fr in _iter_subtab_plus_eval_roots(page, content_frame_selector):
+            try:
+                if bool(fr.evaluate(_PRECHECK_PLUS_VISIBLE_IN_DOC_JS)):
+                    hit = True
+                    break
+            except Exception:
+                continue
+        if hit:
+            streak += 1
+            if streak >= need:
+                return True
+        else:
+            streak = 0
+        try:
+            page.wait_for_timeout(poll_ms)
+        except Exception:
+            time.sleep(poll_ms / 1000.0)
+    return False
+
+
+def _wait_pdi_subtab_plus_ready(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    timeout_ms: int,
+) -> bool:
+    """Poll until PDI / **Service Request List:New** ``+`` is visible and stable (same streak as Pre-check)."""
+    deadline = time.monotonic() + max(1.0, timeout_ms / 1000.0)
+    poll_ms = 350
+    streak = 0
+    need = max(1, int(_DMS_SUBTAB_PLUS_STABLE_STREAK))
+    while time.monotonic() < deadline:
+        hit = False
+        for fr in _iter_subtab_plus_eval_roots(page, content_frame_selector):
+            try:
+                if bool(fr.evaluate(_PDI_PLUS_VISIBLE_IN_DOC_JS)):
+                    hit = True
+                    break
+            except Exception:
+                continue
+        if hit:
+            streak += 1
+            if streak >= need:
+                return True
+        else:
+            streak = 0
+        try:
+            page.wait_for_timeout(poll_ms)
+        except Exception:
+            time.sleep(poll_ms / 1000.0)
+    return False
+
+
 def _click_third_level_view_bar_tab(
     page: Page,
     tab_text: str,
@@ -1473,41 +1761,20 @@ def _click_third_level_view_bar_tab(
     content_frame_selector: str | None,
     note,
     log_prefix: str,
+    bar_stability_ms: int | None = None,
 ) -> bool:
     """
     Click a tab in Siebel's Third Level View Bar (``#s_vctrl_div``).
 
-    Used for **Pre-check** and **PDI** tabs. Production-observed: ``s_vctrl_div`` is the
-    consistent container; hyphen-insensitive match (e.g. "Pre-check" ↔ "PreCheck").
-    Before clicking, polls up to **10** times (**500** ms between attempts) for a visible
-    third-level strip with Pre-check or PDI labels (same heuristic as post-tab settle poll);
-    if still not ready, attempts the click anyway.
+    Waits with ``wait_for_function`` up to ``_DMS_THIRD_LEVEL_BAR_TOTAL_WAIT_SEC`` seconds across frame
+    roots (**main frame first**). Ready = sized ``#s_vctrl_div`` plus either the Hero **Third Level
+    View Bar** ``<select>`` options or visible tab labels (Pre-check / PDI), then a stability pause
+    (``_DMS_THIRD_LEVEL_BAR_STABILITY_MS`` or ``bar_stability_ms``) before clicking so Chromium does not
+    act on a half-painted strip.
     """
     tab_norm = (tab_text or "").strip().lower()
     if not tab_norm:
         return False
-
-    _THIRD_LEVEL_BAR_READY_JS = """() => {
-        const vis = (el) => {
-            if (!el) return false;
-            const st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden') return false;
-            const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0;
-        };
-        const bar = document.getElementById('s_vctrl_div');
-        if (!bar || !vis(bar)) return { loaded: false, tabs: [] };
-        const compact = (s) => s.replace(/[-\\s]+/g, '').toLowerCase();
-        const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
-            .filter(t => vis(t))
-            .map(t => (t.innerText || t.textContent || '').trim())
-            .filter(t => t.length > 0 && t.length < 40);
-        const hasTabs = tabs.some(t => {
-            const c = compact(t);
-            return c === 'precheck' || c === 'pre-check' || c === 'pdi';
-        });
-        return { loaded: hasTabs, tabs };
-    }"""
 
     _TAB_JS = """(tabNeedle) => {
         const vis = (el) => {
@@ -1553,33 +1820,59 @@ def _click_third_level_view_bar_tab(
     }"""
 
     _ = content_frame_selector
-    _roots_tl = list(_ordered_frames(page)) + [page.main_frame]
-    _bar_ready = False
-    for _poll_i in range(10):
-        for _root in _roots_tl:
-            try:
-                _poll_res = _root.evaluate(_THIRD_LEVEL_BAR_READY_JS)
-                if isinstance(_poll_res, dict) and _poll_res.get("loaded"):
-                    _bar_ready = True
-                    note(
-                        f"{log_prefix}: third-level bar ready (#s_vctrl_div) before {tab_text} "
-                        f"click (attempt {_poll_i + 1}/10) tabs={_poll_res.get('tabs')!r}"
-                    )
-                    break
-            except Exception:
-                continue
-        if _bar_ready:
+    _roots_tl = _third_level_bar_frame_roots(page)
+    _bar_deadline = time.monotonic() + float(_DMS_THIRD_LEVEL_BAR_TOTAL_WAIT_SEC)
+    _win_root = None
+    _poll_final: dict | None = None
+
+    for _root in _roots_tl:
+        _remain_ms = int(max(450, (_bar_deadline - time.monotonic()) * 1000))
+        if _remain_ms < 500:
             break
-        if _poll_i < 9:
-            _safe_page_wait(page, 500, log_label=f"third_level_bar_poll_{tab_norm}_{_poll_i}")
-    if not _bar_ready:
+        try:
+            _root.wait_for_function(_THIRD_LEVEL_BAR_LOADED_BOOL_JS, timeout=_remain_ms)
+        except PlaywrightTimeout:
+            continue
+        except Exception:
+            continue
+        try:
+            _poll_res = _root.evaluate(_THIRD_LEVEL_BAR_READY_DICT_JS)
+        except Exception:
+            continue
+        if not (isinstance(_poll_res, dict) and _poll_res.get("loaded")):
+            continue
+        try:
+            _stab = int(bar_stability_ms) if bar_stability_ms is not None else int(_DMS_THIRD_LEVEL_BAR_STABILITY_MS)
+            _safe_page_wait(page, _stab, log_label="third_level_bar_stability")
+            _poll2 = _root.evaluate(_THIRD_LEVEL_BAR_READY_DICT_JS)
+        except Exception:
+            _poll2 = None
+        if isinstance(_poll2, dict) and _poll2.get("loaded"):
+            _win_root = _root
+            _poll_final = _poll2
+            note(
+                f"{log_prefix}: third-level bar stable (#s_vctrl_div via {_poll_final.get('via', '?')!r}) "
+                f"before {tab_text} click tabs={_poll_final.get('tabs')!r}"
+            )
+            break
+
+    if _win_root is None:
         logger.debug(
-            "third_level_bar_poll: #s_vctrl_div tab strip not ready after 10 attempts (tab=%r %s)",
+            "third_level_bar_wait: #s_vctrl_div not ready within %.1fs (tab=%r %s)",
+            _DMS_THIRD_LEVEL_BAR_TOTAL_WAIT_SEC,
             tab_text,
             log_prefix,
         )
 
-    for root in _roots_tl:
+    _click_order: list = []
+    if _win_root is not None:
+        _click_order.append(_win_root)
+    for _r in _roots_tl:
+        if _win_root is not None and id(_r) == id(_win_root):
+            continue
+        _click_order.append(_r)
+
+    for root in _click_order:
         try:
             _res = root.evaluate(_TAB_JS, tab_norm)
             if isinstance(_res, dict) and _res.get("ok"):
@@ -1775,9 +2068,6 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: feature-id scrape cubic_capacity={_cc_log!r}, vehicle_type={vt!r}."
         )
 
-    _safe_page_wait(page, 1000, log_label="before_precheck_pdi_tab_lookup_settle")
-    note(f"{log_prefix}: 1s settle before Pre-check / third-level tab lookup.")
-
     _siebel_note_frame_focus_snapshot(
         page,
         note,
@@ -1793,9 +2083,26 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             log_prefix=log_prefix,
         )
 
+    try:
+        page.main_frame.wait_for_function(
+            _FEATURES_BAR_STABLE_BEFORE_PRECHECK_JS,
+            timeout=int(_DMS_FEATURES_BEFORE_PRECHECK_SETTLE_MS),
+        )
+        note(
+            f"{log_prefix}: Features view + third-level bar (Pre-check/PDI) settled before Pre-check tab click."
+        )
+    except PlaywrightTimeout:
+        note(
+            f"{log_prefix}: Features/third-level bar settle timed out before Pre-check "
+            f"({_DMS_FEATURES_BEFORE_PRECHECK_SETTLE_MS}ms) — continuing to open Pre-check."
+        )
+    except Exception as _feat_exc:
+        note(f"{log_prefix}: Features settle before Pre-check skipped — {_feat_exc!r}")
+
     _precheck_tab_ok = _click_third_level_view_bar_tab(
         page, "Pre-check", wait_ms=1500,
         content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
+        bar_stability_ms=900,
     )
     if not _precheck_tab_ok:
         _precheck_tab_ok = _siebel_click_by_id_anywhere(
@@ -1817,7 +2124,23 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         if _is_browser_disconnected_error(e):
             raise
 
-    note(f"{log_prefix}: Pre-check tab loaded (networkidle complete).")
+    if _wait_precheck_subtab_plus_ready(
+        page,
+        content_frame_selector=content_frame_selector,
+        timeout_ms=int(_DMS_PRECHECK_POST_TAB_SETTLE_MS),
+    ):
+        note(
+            f"{log_prefix}: Pre-check post-tab ready — Service Request / Pre-check List:New (+) visible "
+            f"and stable ({_DMS_SUBTAB_PLUS_STABLE_STREAK} consecutive polls)."
+        )
+    else:
+        note(
+            f"{log_prefix}: Pre-check post-tab + ready-wait timed out after {_DMS_PRECHECK_POST_TAB_SETTLE_MS}ms "
+            "— continuing."
+        )
+    _safe_page_wait(page, 450, log_label="precheck_post_tab_stability_tail")
+
+    note(f"{log_prefix}: Pre-check tab loaded (networkidle + post-tab ready-wait complete).")
 
     _siebel_note_frame_focus_snapshot(
         page,
@@ -1827,20 +2150,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         content_frame_selector=content_frame_selector,
     )
 
-    _safe_page_wait(page, 2000, log_label="precheck_tab_post_networkidle_settle")
+    _safe_page_wait(page, 650, log_label="precheck_tab_post_networkidle_settle")
 
     _on_wrong_precheck_view = False
     try:
         _post_precheck_url = (page.url or "").replace(" ", "+")
-        _on_wrong_precheck_view = (
-            "PDIPre+Assessment" in _post_precheck_url
-            or "Precheck+List+Applet" in _post_precheck_url
-        )
+        _on_wrong_precheck_view = "PDIPre+Assessment" in _post_precheck_url or "Precheck+List+Applet" in _post_precheck_url
         if _on_wrong_precheck_view:
             note(
-                f"{log_prefix}: Pre-check tab click navigated to wrong Siebel view "
-                f"(PDIPre Assessment). URL={_post_precheck_url[:300]!r}. "
-                "Third-level tabs will not be present on this view."
+                f"{log_prefix}: Pre-check tab click may be on PDIPre / Precheck-only view "
+                f"URL={_post_precheck_url[:300]!r}. Third-level tabs may be missing."
             )
     except Exception:
         pass
@@ -1870,22 +2189,25 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         return { loaded: hasTabs, tabs };
     }"""
     if not _on_wrong_precheck_view:
-        for _settle in range(10):
-            for _root in _roots():
-                try:
-                    _settle_res = _root.evaluate(_settle_poll_js)
-                    if isinstance(_settle_res, dict) and _settle_res.get("loaded"):
-                        _precheck_third_level_tabs_loaded = True
-                        note(
-                            f"{log_prefix}: third-level tabs visible after settle poll "
-                            f"(attempt {_settle + 1}/10) tabs={_settle_res.get('tabs')!r}"
-                        )
-                        break
-                except Exception:
-                    continue
-            if _precheck_third_level_tabs_loaded:
+        _settle_deadline = time.monotonic() + 12.0
+        for _root in _roots():
+            _rem_s = int(max(200, (_settle_deadline - time.monotonic()) * 1000))
+            if _rem_s < 250:
                 break
-            _safe_page_wait(page, 300, log_label=f"precheck_tab_settle_{_settle}")
+            try:
+                _root.wait_for_function(_THIRD_LEVEL_BAR_LOADED_BOOL_JS, timeout=_rem_s)
+                _settle_res = _root.evaluate(_settle_poll_js)
+                if isinstance(_settle_res, dict) and _settle_res.get("loaded"):
+                    _precheck_third_level_tabs_loaded = True
+                    note(
+                        f"{log_prefix}: third-level tabs visible after settle wait "
+                        f"tabs={_settle_res.get('tabs')!r}"
+                    )
+                    break
+            except PlaywrightTimeout:
+                continue
+            except Exception:
+                continue
     _precheck_probe_js = """() => {
                 const vis = (el) => {
                     if (!el) return false;
@@ -2183,10 +2505,10 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         else:
             note(f"{log_prefix}: chassis/VIN recovery skipped — no scraped vehicle context.")
         if _chassis_rec:
-            _safe_page_wait(page, 1000, log_label="before_precheck_tab_after_chassis_recovery")
             _precheck_tab_ok = _click_third_level_view_bar_tab(
                 page, "Pre-check", wait_ms=1500,
                 content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
+                bar_stability_ms=900,
             )
             if not _precheck_tab_ok:
                 _precheck_tab_ok = _siebel_click_by_id_anywhere(
@@ -2205,7 +2527,21 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 except Exception as _e:
                     if _is_browser_disconnected_error(_e):
                         raise
-                note(f"{log_prefix}: Pre-check tab loaded after chassis recovery (networkidle complete).")
+                if _wait_precheck_subtab_plus_ready(
+                    page,
+                    content_frame_selector=content_frame_selector,
+                    timeout_ms=int(_DMS_PRECHECK_POST_TAB_SETTLE_MS),
+                ):
+                    note(
+                        f"{log_prefix}: Pre-check after chassis recovery — post-tab ready (+ and third-level bar)."
+                    )
+                else:
+                    note(
+                        f"{log_prefix}: Pre-check after chassis recovery — post-tab ready-wait timed out "
+                        f"({_DMS_PRECHECK_POST_TAB_SETTLE_MS}ms)."
+                    )
+                _safe_page_wait(page, 450, log_label="precheck_post_chassis_recovery_stability_tail")
+                note(f"{log_prefix}: Pre-check tab loaded after chassis recovery (networkidle + ready-wait).")
                 _siebel_note_frame_focus_snapshot(
                     page,
                     note,
@@ -2213,7 +2549,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     log_prefix=log_prefix,
                     content_frame_selector=content_frame_selector,
                 )
-                _safe_page_wait(page, 2000, log_label="precheck_tab_post_chassis_recovery_settle")
+                _safe_page_wait(page, 650, log_label="precheck_tab_post_chassis_recovery_settle")
                 try:
                     _post_chassis = (page.url or "").replace(" ", "+")
                     if (
@@ -2226,22 +2562,25 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                         )
                 except Exception:
                     pass
-                for _settle in range(3):
-                    for _root in _roots():
-                        try:
-                            _settle_res = _root.evaluate(_settle_poll_js)
-                            if isinstance(_settle_res, dict) and _settle_res.get("loaded"):
-                                _precheck_third_level_tabs_loaded = True
-                                note(
-                                    f"{log_prefix}: third-level tabs visible after chassis recovery "
-                                    f"(settle {_settle + 1}/3) tabs={_settle_res.get('tabs')!r}"
-                                )
-                                break
-                        except Exception:
-                            continue
-                    if _precheck_third_level_tabs_loaded:
+                _ch_settle_deadline = time.monotonic() + 1.5
+                for _root in _roots():
+                    _ch_rem = int(max(200, (_ch_settle_deadline - time.monotonic()) * 1000))
+                    if _ch_rem < 250:
                         break
-                    _safe_page_wait(page, 500, log_label=f"chassis_recovery_precheck_settle_{_settle}")
+                    try:
+                        _root.wait_for_function(_THIRD_LEVEL_BAR_LOADED_BOOL_JS, timeout=_ch_rem)
+                        _settle_res = _root.evaluate(_settle_poll_js)
+                        if isinstance(_settle_res, dict) and _settle_res.get("loaded"):
+                            _precheck_third_level_tabs_loaded = True
+                            note(
+                                f"{log_prefix}: third-level tabs visible after chassis recovery "
+                                f"tabs={_settle_res.get('tabs')!r}"
+                            )
+                            break
+                    except PlaywrightTimeout:
+                        continue
+                    except Exception:
+                        continue
                 _precheck_existing_rows = 0
                 _precheck_existing_signal = ""
                 for _ri2, _root2 in enumerate(_roots()):
@@ -2918,25 +3257,29 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             _precheck_third_level_tabs_loaded = False
 
     if not _precheck_third_level_tabs_loaded:
-        note(f"{log_prefix}: third-level tabs not loaded after Pre-check — polling for PDI tab in s_vctrl_div.")
-        for _tl_poll in range(20):
-            _tl_found = False
-            for _root in _roots():
-                try:
-                    _tl_res = _root.evaluate(_third_level_poll_js, "PDI")
-                    if isinstance(_tl_res, dict) and _tl_res.get("found"):
-                        _tl_found = True
-                        note(
-                            f"{log_prefix}: third_level_tab_poll found PDI (attempt {_tl_poll + 1}/20) "
-                            f"tabs={_tl_res.get('tabs')!r}"
-                        )
-                        break
-                except Exception:
-                    continue
-            if _tl_found:
+        note(f"{log_prefix}: third-level tabs not loaded after Pre-check — waiting for PDI tab in s_vctrl_div.")
+        _tl_found = False
+        _roots_here = list(_roots())
+        _pdi_poll_deadline = time.monotonic() + 10.0
+        for _root in _roots_here:
+            _per_tl = int(max(300, (_pdi_poll_deadline - time.monotonic()) * 1000))
+            if _per_tl < 350:
                 break
-            _safe_page_wait(page, 500, log_label=f"third_level_tab_poll_{_tl_poll}")
-        else:
+            try:
+                _root.wait_for_function(_THIRD_LEVEL_TAB_NEEDLE_BOOL_JS, arg="PDI", timeout=_per_tl)
+                _tl_res = _root.evaluate(_third_level_poll_js, "PDI")
+                if isinstance(_tl_res, dict) and _tl_res.get("found"):
+                    _tl_found = True
+                    _precheck_third_level_tabs_loaded = True
+                    note(
+                        f"{log_prefix}: third_level_tab_poll found PDI tabs={_tl_res.get('tabs')!r}"
+                    )
+                    break
+            except PlaywrightTimeout:
+                continue
+            except Exception:
+                continue
+        if not _tl_found:
             _last_tabs = None
             for _root in _roots():
                 try:
@@ -2950,7 +3293,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             except Exception:
                 _poll_exhaust_url = ""
             note(
-                f"{log_prefix}: third_level_tab_poll exhausted (20 × 500ms) — "
+                f"{log_prefix}: third_level_tab_poll exhausted (wait_for_function) — "
                 f"last={_last_tabs!r} url={_poll_exhaust_url!r}. "
                 "PDI tab still missing; dumping DOM. Optional chassis/VIN drilldown recovery (no GotoView URL)."
             )
@@ -2972,27 +3315,30 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     engine_partial=engine_partial,
                     nav_timeout_ms=nav_timeout_ms,
                 ):
-                    for _tl_poll2 in range(12):
-                        _tl_found2 = False
-                        for _root in _roots():
-                            try:
-                                _tl_res2 = _root.evaluate(_third_level_poll_js, "PDI")
-                                if isinstance(_tl_res2, dict) and _tl_res2.get("found"):
-                                    _tl_found2 = True
-                                    _precheck_third_level_tabs_loaded = True
-                                    note(
-                                        f"{log_prefix}: PDI tab visible after chassis recovery "
-                                        f"(post-poll attempt {_tl_poll2 + 1}/12) tabs={_tl_res2.get('tabs')!r}"
-                                    )
-                                    break
-                            except Exception:
-                                continue
-                        if _tl_found2:
+                    _tl_found2 = False
+                    _roots2 = list(_roots())
+                    _pdi2_deadline = time.monotonic() + 6.0
+                    for _root in _roots2:
+                        _per2 = int(max(300, (_pdi2_deadline - time.monotonic()) * 1000))
+                        if _per2 < 350:
                             break
-                        _safe_page_wait(page, 500, log_label=f"pdi_tab_post_chassis_poll_{_tl_poll2}")
+                        try:
+                            _root.wait_for_function(_THIRD_LEVEL_TAB_NEEDLE_BOOL_JS, arg="PDI", timeout=_per2)
+                            _tl_res2 = _root.evaluate(_third_level_poll_js, "PDI")
+                            if isinstance(_tl_res2, dict) and _tl_res2.get("found"):
+                                _tl_found2 = True
+                                _precheck_third_level_tabs_loaded = True
+                                note(
+                                    f"{log_prefix}: PDI tab visible after chassis recovery "
+                                    f"tabs={_tl_res2.get('tabs')!r}"
+                                )
+                                break
+                        except PlaywrightTimeout:
+                            continue
+                        except Exception:
+                            continue
 
-    _safe_page_wait(page, 1000, log_label="before_pdi_tab_click_settle")
-    note(f"{log_prefix}: 1s settle before PDI tab lookup.")
+    note(f"{log_prefix}: proceeding to PDI tab lookup.")
 
     _pdi_tab_clicked = _click_third_level_view_bar_tab(
         page, "PDI", wait_ms=1500,
@@ -3097,12 +3443,26 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         )
         return False, "Could not find PDI tab."
     note(f"{log_prefix}: clicked PDI tab.")
-    _safe_page_wait(page, 3000, log_label="after_pdi_tab")
     try:
         _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_pdi_tab")
     except Exception as e:
         if _is_browser_disconnected_error(e):
             raise
+
+    if _wait_pdi_subtab_plus_ready(
+        page,
+        content_frame_selector=content_frame_selector,
+        timeout_ms=int(_DMS_PDI_POST_TAB_SETTLE_MS),
+    ):
+        note(
+            f"{log_prefix}: PDI post-tab ready — PDI / Service Request List:New (+) visible and stable "
+            f"({_DMS_SUBTAB_PLUS_STABLE_STREAK} consecutive polls)."
+        )
+    else:
+        note(
+            f"{log_prefix}: PDI post-tab + ready-wait timed out after {_DMS_PDI_POST_TAB_SETTLE_MS}ms — continuing."
+        )
+    _safe_page_wait(page, 450, log_label="pdi_post_tab_stability_tail")
 
     try:
         _post_pdi_url = page.url or ""
@@ -3203,29 +3563,45 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             ready: jqRows > 0 || rcTotal > 0,
         };
     }"""
-    for _poll_i in range(15):
-        _ready_any = False
-        _poll_diag = None
-        for _proot in _roots():
-            try:
-                _pd = _proot.evaluate(_pdi_grid_ready_poll_js)
-                if isinstance(_pd, dict) and _pd.get("ready"):
-                    _ready_any = True
-                    _poll_diag = _pd
-                    break
-            except Exception:
-                continue
-        if _ready_any:
-            if _poll_diag and note:
-                note(
-                    f"{log_prefix}: pdi_grid_ready_poll ok (attempt {_poll_i + 1}/15) "
-                    f"jqRows={_poll_diag.get('jqRows')} gridId={_poll_diag.get('gridId')!r} "
-                    f"rcTotal={_poll_diag.get('rcTotal')} "
-                    f"rcText={_poll_diag.get('rcText')!r}"
-                )
+    _pdi_grid_ready_any_js = (
+        _pdi_grid_ready_poll_js.replace(
+            "        return {\n            jqRows,",
+            "        const _out = {\n            jqRows,",
+            1,
+        ).replace(
+            "            ready: jqRows > 0 || rcTotal > 0,\n        };\n    }",
+            "            ready: jqRows > 0 || rcTotal > 0,\n        };\n        return !!(_out && _out.ready);\n    }",
+            1,
+        )
+    )
+    _ready_any = False
+    _poll_diag = None
+    _roots_pg = list(_roots())
+    _grid_deadline = time.monotonic() + 12.0
+    for _proot in _roots_pg:
+        _per_grid = int(max(300, (_grid_deadline - time.monotonic()) * 1000))
+        if _per_grid < 350:
             break
-        _safe_page_wait(page, 300, log_label=f"pdi_grid_ready_poll_{_poll_i}")
-    else:
+        try:
+            _proot.wait_for_function(_pdi_grid_ready_any_js, timeout=_per_grid)
+            _pd = _proot.evaluate(_pdi_grid_ready_poll_js)
+            if isinstance(_pd, dict) and _pd.get("ready"):
+                _ready_any = True
+                _poll_diag = _pd
+                break
+        except PlaywrightTimeout:
+            continue
+        except Exception:
+            continue
+    if _ready_any:
+        if _poll_diag and note:
+            note(
+                f"{log_prefix}: pdi_grid_ready_poll ok "
+                f"jqRows={_poll_diag.get('jqRows')} gridId={_poll_diag.get('gridId')!r} "
+                f"rcTotal={_poll_diag.get('rcTotal')} "
+                f"rcText={_poll_diag.get('rcText')!r}"
+            )
+    if not _ready_any:
         _last = None
         for _proot in _roots():
             try:
@@ -5187,7 +5563,6 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
         note(
             "prepare_vehicle: Find → Vehicles not confirmed — still attempting VIN/Engine fill in find field box."
         )
-    _safe_page_wait(page, 500, log_label="prepare_vehicle_after_find_vehicles")
 
     cw = _siebel_vehicle_find_wildcard_value(fp)
     ew = _siebel_vehicle_find_wildcard_value(ep)
@@ -5206,11 +5581,9 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
     _try_expand_find_flyin(
         page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     )
-    _safe_page_wait(page, 350, log_label="prepare_vehicle_find_retry_expand")
     _try_prepare_find_vehicles_applet(
         page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
     )
-    _safe_page_wait(page, 500, log_label="prepare_vehicle_find_retry_vehicles")
     filled = _try_fill_vin_engine_in_vehicles_find_applet(
         page,
         chassis_wildcard=cw,
@@ -5253,18 +5626,19 @@ def _wait_for_vehicle_find_applet_ready(
       }
       return false;
     }"""
-    start_t = time.monotonic()
-    deadline = start_t + max(0.2, wait_ms / 1000.0)
-    poll_count = 0
-    while time.monotonic() < deadline:
-        poll_count += 1
-        for root in _siebel_locator_search_roots(page, content_frame_selector):
-            try:
-                if bool(root.evaluate(_js)):
-                    return True
-            except Exception:
-                continue
-        _safe_page_wait(page, 140, log_label="wait_vehicle_find_applet_ready")
+    _roots_find = list(_siebel_locator_search_roots(page, content_frame_selector))
+    _find_deadline = time.monotonic() + max(0.2, wait_ms / 1000.0)
+    for root in _roots_find:
+        _per_find = int(max(250, (_find_deadline - time.monotonic()) * 1000))
+        if _per_find < 280:
+            break
+        try:
+            root.wait_for_function(_js, timeout=_per_find)
+            return True
+        except PlaywrightTimeout:
+            continue
+        except Exception:
+            continue
     return False
 
 
@@ -5290,7 +5664,6 @@ def _siebel_goto_vehicle_list_and_search(
         return error_msg if em else None
 
     _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
-    _safe_page_wait(page, 500, log_label="vehicle_list_open")
     _wait_for_vehicle_find_applet_ready(
         page,
         content_frame_selector=content_frame_selector,
@@ -5353,7 +5726,6 @@ def _siebel_goto_vehicle_list_and_search(
                 f"likely {_hint}. If applet is in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR."
             )
 
-    _safe_page_wait(page, 500, log_label="vehicle_search_settle")
     try:
         _pv_networkidle(note, page, 12_000, "vehicle_search_after_find_settle")
     except Exception as e:
@@ -6489,7 +6861,6 @@ def prepare_vehicle(
             )
 
         # --- Step 2: Poll left pane until our VIN appears ---
-        _safe_page_wait(page, 400, log_label="pre_left_pane_poll")
         if not _siebel_poll_left_search_title_matches(page, frame_p, note=note):
             return (
                 False,

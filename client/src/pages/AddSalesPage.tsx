@@ -311,10 +311,6 @@ export function AddSalesPage({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
   const [fillDmsStatus, setFillDmsStatus] = useState<string | null>(null);
-  /** Milestones or narrative step lines from the last Fill DMS run (banner at top). */
-  const [dmsMilestones, setDmsMilestones] = useState<string[]>([]);
-  /** True when banner lines are Siebel `dms_step_messages` (sentence-style) vs checklist milestones. */
-  const [dmsBannerIsStepMessages, setDmsBannerIsStepMessages] = useState(false);
   const [isFillDmsLoading, setIsFillDmsLoading] = useState(false);
   const [, setDmsRunEndedWithError] = useState(false);
   const [isFillInsuranceLoading, setIsFillInsuranceLoading] = useState(false);
@@ -481,8 +477,6 @@ export function AddSalesPage({
     },
     onUploadSuccess: () => {
       setFillDmsStatus(null);
-      setDmsMilestones([]);
-      setDmsBannerIsStepMessages(false);
       setDmsRunEndedWithError(false);
       setDmsScrapedVehicle(null);
       setDmsPdfsDownloaded(false);
@@ -657,8 +651,6 @@ export function AddSalesPage({
     setDmsScrapedVehicle(null);
     setDmsPdfsDownloaded(false);
     setFillDmsStatus(null);
-    setDmsMilestones([]);
-    setDmsBannerIsStepMessages(false);
     setDmsRunEndedWithError(false);
     setFillInsuranceStatus(null);
     setPrintFormsStatus(null);
@@ -991,8 +983,6 @@ export function AddSalesPage({
     suppressPostDmsEligibilitySyncRef.current = true;
     setIsFillDmsLoading(true);
     setFillDmsStatus(null);
-    setDmsMilestones([]);
-    setDmsBannerIsStepMessages(false);
     setDmsRunEndedWithError(false);
     let dmsRes: Awaited<ReturnType<typeof fillDmsLocal>> | null = null;
     try {
@@ -1062,13 +1052,6 @@ export function AddSalesPage({
       }
       if (dmsRes.customer_id != null) setLastSubmittedCustomerId(dmsRes.customer_id);
       if (dmsRes.vehicle_id != null) setLastSubmittedVehicleId(dmsRes.vehicle_id);
-      const narrative =
-        Array.isArray(dmsRes.dms_step_messages) && dmsRes.dms_step_messages.length > 0
-          ? dmsRes.dms_step_messages
-          : [];
-      const milestones = Array.isArray(dmsRes.dms_milestones) ? dmsRes.dms_milestones : [];
-      setDmsBannerIsStepMessages(narrative.length > 0);
-      setDmsMilestones(narrative.length > 0 ? narrative : milestones);
       if (!dmsRes.success) {
         setFillDmsStatus(dmsRes.error ?? "Create Invoice (DMS) failed.");
         setDmsRunEndedWithError(true);
@@ -1503,23 +1486,6 @@ export function AddSalesPage({
   return (
     <div className="add-sales-v2">
       <main className="add-sales-v2-main">
-        {dmsMilestones.length > 0 && (
-          <div className="add-sales-v2-dms-milestones-banner" role="status" aria-label="DMS steps completed">
-            <span className="add-sales-v2-dms-milestones-title">
-              {dmsBannerIsStepMessages ? "DMS progress" : "DMS completed"}
-            </span>
-            <span className="add-sales-v2-dms-milestones-list">
-              {dmsMilestones.map((line, i) => (
-                <span key={`dms-banner-${i}`} className="add-sales-v2-dms-milestone-item">
-                  <span className="add-sales-v2-dms-milestone-check" aria-hidden>
-                    ✓
-                  </span>
-                  {line}
-                </span>
-              ))}
-            </span>
-          </div>
-        )}
         <div className="add-sales-v2-three-col">
           <section className="add-sales-v2-box add-sales-v2-box-upload">
               <div className="add-sales-v2-box-title-row">

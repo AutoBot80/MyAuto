@@ -5358,8 +5358,9 @@ def print_hero_dms_forms(
     (single pass, no retries). When True, after each full pass through ``report_names``, still-failing
     reports are retried up to two more times (three download attempts per report, in order).
 
-    After **Submit**, the wait for a download event is capped at **120 seconds** (scaled from
-    ``action_timeout_ms`` with the same floor as before, ``min(120, max(90, …))``).
+    After **Submit**, the first download is awaited with ``page.wait_for_event("download", timeout=…)``
+    (up to **120** seconds scaled from ``action_timeout_ms``), then a short grace window collects a
+    possible second Siebel download (stray blob + real PDF) before picking the best file.
 
     Stray Siebel downloads (e.g. UUID filenames) are **cancelled** when a better PDF candidate exists; the
     browser tray may still briefly list them depending on timing.
@@ -5644,32 +5645,30 @@ def print_hero_dms_forms(
         if sub_btn is None:
             return False, "Run Report Submit button not found.", None
         # Siebel may emit two download events: a stray UUID/no-extension blob, then the real PDF.
-        # ``expect_download`` only sees the first — collect all and pick the best candidate.
+        # Use ``wait_for_event("download")`` (deadline-driven) instead of blind ``wait_for_timeout`` polling.
         _collected: list = []
-
-        def _on_download(_d) -> None:
-            _collected.append(_d)
-
-        page.on("download", _on_download)
+        _first_timeout_ms = int(max(1.0, _download_wait_sec) * 1000)
         try:
+            sub_btn.click(timeout=_tmo)
+        except Exception:
+            sub_btn.click(timeout=_tmo, force=True)
+        try:
+            _collected.append(page.wait_for_event("download", timeout=_first_timeout_ms))
+        except PlaywrightTimeout:
+            pass
+        if not _collected:
             try:
-                sub_btn.click(timeout=_tmo)
-            except Exception:
-                sub_btn.click(timeout=_tmo, force=True)
-            _deadline = time.time() + _download_wait_sec
-            while time.time() < _deadline:
-                page.wait_for_timeout(120)
-                if len(_collected) >= 1:
-                    page.wait_for_timeout(850)
-                    break
-            else:
-                if not _collected:
-                    page.wait_for_timeout(2500)
-        finally:
-            try:
-                page.remove_listener("download", _on_download)
-            except Exception:
+                _collected.append(page.wait_for_event("download", timeout=2500))
+            except PlaywrightTimeout:
                 pass
+        if _collected:
+            _grace_deadline = time.time() + 0.85
+            while time.time() < _grace_deadline and len(_collected) < 12:
+                _rem_ms = int(max(40.0, (_grace_deadline - time.time()) * 1000))
+                try:
+                    _collected.append(page.wait_for_event("download", timeout=_rem_ms))
+                except PlaywrightTimeout:
+                    break
 
         if not _collected:
             return False, "no download event after Submit (timed out).", None

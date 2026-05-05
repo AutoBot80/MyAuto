@@ -102,6 +102,73 @@ def playwright_dms_execution_log_filename() -> str:
     return f"Playwright_DMS_{stamp}.txt"
 
 
+def write_playwright_dms_execution_log_initial(
+    log_path: Path,
+    dms_values: dict,
+    *,
+    execution_log_client_api_base_url: str | None = None,
+    execution_log_http_request_base_url: str | None = None,
+) -> None:
+    """
+    Create ``Playwright_DMS_*.txt`` **before** Siebel login so :mod:`handle_browser_opening` can append
+    login-phase popups/dialogs/status to the same file as the main trace.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    run_started_ist = _ts_ist_iso()
+    mobile = (dms_values.get("mobile_phone") or "").strip()
+    first = (dms_values.get("first_name") or "").strip()
+    last = (dms_values.get("last_name") or "").strip()
+    addr = (dms_values.get("address_line_1") or "").strip()
+    state = (dms_values.get("state") or "").strip()
+    pin = (dms_values.get("pin_code") or "").strip()
+    landline = (dms_values.get("landline") or "").strip()
+    care_of = (dms_values.get("care_of") or "").strip()
+    key_p = (dms_values.get("key_partial") or "").strip()
+    frame_p = (dms_values.get("frame_partial") or "").strip()
+    engine_p = (dms_values.get("engine_partial") or "").strip()
+    aadhar_uin = (dms_values.get("aadhar_id") or "").strip()
+    dms_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
+    with log_path.open("w", encoding="utf-8") as log_fp:
+        log_fp.write("Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)\n\n")
+        log_fp.write(f"git_commit={_GIT_COMMIT_SHORT!r}\n")
+        _capi = (execution_log_client_api_base_url or "").strip()
+        _hreq = (execution_log_http_request_base_url or "").strip()
+        log_fp.write(
+            "# Client API base: VITE_API_URL at build (browser/Electron); empty string = relative URLs / Vite proxy.\n"
+        )
+        log_fp.write(f"client_api_base_url={_capi[:400]!r}\n")
+        log_fp.write(
+            "# HTTP request base: FastAPI Request.base_url for this fill-forms call (which host the API saw).\n"
+        )
+        log_fp.write(f"http_request_base_url={_hreq[:400]!r}\n\n")
+        log_fp.write(f"started_ist={run_started_ist}\n")
+        log_fp.write(f"skip_contact_find={False}\n")
+        log_fp.write(f"dms_contact_path={dms_path!r}\n")
+        log_fp.write(f"mobile_phone={mobile!r}\n")
+        log_fp.write(f"first_name={first!r}\n")
+        log_fp.write(f"last_name={last!r}\n")
+        log_fp.write(f"address_line_1={addr!r}\n")
+        log_fp.write(f"state={state!r}\n")
+        log_fp.write(f"pin_code={pin!r}\n")
+        log_fp.write(f"landline={landline!r}\n")
+        log_fp.write(f"care_of={care_of!r}\n")
+        log_fp.write(f"key_partial={key_p!r}\n")
+        log_fp.write(f"frame_partial={frame_p!r}\n")
+        log_fp.write(f"engine_partial={engine_p!r}\n")
+        log_fp.write(f"aadhar_id={aadhar_uin!r}\n")
+        log_fp.write(
+            "# Siebel URLs (truncated) are written again in the automation trace section after login.\n"
+        )
+        log_fp.write(f"url_contact_truncated={(DMS_REAL_URL_CONTACT or '')[:200]!r}\n")
+        log_fp.write(f"url_enquiry_truncated={(DMS_REAL_URL_ENQUIRY or '')[:200]!r}\n")
+        log_fp.write(f"url_vehicle_truncated={(DMS_REAL_URL_VEHICLE or '')[:200]!r}\n")
+        log_fp.write("\n--- login_phase_capture ---\n")
+        log_fp.write(
+            "# Lines below (until --- automation_trace ---) are JS dialogs, popups, #statusBar, and PNG paths.\n\n"
+        )
+        log_fp.flush()
+
+
 def _dms_scrape_has_vehicle_row(scraped: dict) -> bool:
     """True when DMS scrape returned at least one key vehicle identifier (mirrors fill_dms router helper)."""
     key_num = str(scraped.get("key_num") or "").strip()
@@ -1883,6 +1950,7 @@ def _run_fill_dms_real_siebel_playwright(
     customer_id: int | None,
     vehicle_id: int | None,
     result: dict,
+    playwright_dms_log: Path,
     *,
     execution_log_client_api_base_url: str | None = None,
     execution_log_http_request_base_url: str | None = None,
@@ -1936,11 +2004,6 @@ def _run_fill_dms_real_siebel_playwright(
         dms_contact_path=dms_values.get("dms_contact_path") or "",
     )
 
-    playwright_dms_log = (
-        Path(ocr_dir).resolve()
-        / _safe_subfolder_name(effective_subfolder)
-        / playwright_dms_execution_log_filename()
-    )
     result["playwright_dms_execution_log_path"] = str(playwright_dms_log)
 
     urls = SiebelDmsUrls(
@@ -1964,6 +2027,7 @@ def _run_fill_dms_real_siebel_playwright(
         mobile_aria_hints=list(DMS_SIEBEL_MOBILE_ARIA_HINTS),
         skip_contact_find=False,
         execution_log_path=playwright_dms_log,
+        execution_log_append_after_login=True,
         customer_id=customer_id,
         vehicle_id=vehicle_id,
         execution_log_client_api_base_url=execution_log_client_api_base_url,
@@ -2132,10 +2196,25 @@ def run_fill_dms_only(
     page = None
     try:
         logger.info("fill_dms_service: run_fill_dms_only starting mode=real dms=%s", dms_base_url[:50])
+        playwright_dms_log = (
+            Path(ocr_dir).resolve()
+            / _safe_subfolder_name(effective_subfolder)
+            / playwright_dms_execution_log_filename()
+        )
+        result["playwright_dms_execution_log_path"] = str(playwright_dms_log)
+        write_playwright_dms_execution_log_initial(
+            playwright_dms_log,
+            dms_values,
+            execution_log_client_api_base_url=execution_log_client_api_base_url,
+            execution_log_http_request_base_url=execution_log_http_request_base_url,
+        )
         page, open_error = get_or_open_site_page(
             dms_base_url,
             "DMS",
             require_login_on_open=True,
+            login_user=login_user,
+            login_password=login_password,
+            playwright_dms_execution_log_path=playwright_dms_log,
         )
         if page is None:
             result["error"] = open_error
@@ -2163,6 +2242,7 @@ def run_fill_dms_only(
             customer_id,
             vehicle_id,
             result,
+            playwright_dms_log,
             execution_log_client_api_base_url=execution_log_client_api_base_url,
             execution_log_http_request_base_url=execution_log_http_request_base_url,
         )
@@ -2382,6 +2462,7 @@ def Playwright_Hero_DMS_fill(
     mobile_aria_hints: list[str],
     skip_contact_find: bool = False,
     execution_log_path: Path | None = None,
+    execution_log_append_after_login: bool = False,
     customer_id: int | None = None,
     vehicle_id: int | None = None,
     execution_log_client_api_base_url: str | None = None,
@@ -2413,6 +2494,10 @@ def Playwright_Hero_DMS_fill(
     If ``execution_log_path`` is set, writes that path (typically a unique per-run filename from
     ``playwright_dms_execution_log_filename``) with an IST (Asia/Kolkata) trace
     (values used, STEP / NOTE / MILESTONE lines, and a final END line with ``error`` if any).
+
+    When ``execution_log_append_after_login`` is True, the file already exists with a pre-login header
+    and ``--- login_phase_capture ---`` lines from :func:`write_playwright_dms_execution_log_initial`; this
+    call opens the log in **append** mode and only writes the ``--- automation_trace ---`` section.
     """
     out: dict = {
         "vehicle": {},
@@ -2446,43 +2531,47 @@ def Playwright_Hero_DMS_fill(
     if execution_log_path is not None:
         lp = Path(execution_log_path)
         lp.parent.mkdir(parents=True, exist_ok=True)
-        log_fp = open(lp, "w", encoding="utf-8")
-        log_fp.write("Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)\n\n")
-        log_fp.write(f"git_commit={_GIT_COMMIT_SHORT!r}\n")
-        _capi = (execution_log_client_api_base_url or "").strip()
-        _hreq = (execution_log_http_request_base_url or "").strip()
-        log_fp.write(
-            "# Client API base: VITE_API_URL at build (browser/Electron); empty string = relative URLs / Vite proxy.\n"
-        )
-        log_fp.write(f"client_api_base_url={_capi[:400]!r}\n")
-        log_fp.write(
-            "# HTTP request base: FastAPI Request.base_url for this fill-forms call (which host the API saw).\n"
-        )
-        log_fp.write(f"http_request_base_url={_hreq[:400]!r}\n\n")
-        log_fp.write(f"started_ist={run_started_ist}\n")
-        log_fp.write(f"skip_contact_find={skip_contact_find}\n")
-        log_fp.write(f"dms_contact_path={dms_path!r}\n")
-        log_fp.write(f"mobile_phone={mobile!r}\n")
-        log_fp.write(f"first_name={first!r}\n")
-        log_fp.write(f"last_name={last!r}\n")
-        log_fp.write(f"address_line_1={addr!r}\n")
-        log_fp.write(f"state={state!r}\n")
-        log_fp.write(f"pin_code={pin!r}\n")
-        log_fp.write(f"landline={landline!r}\n")
-        log_fp.write(f"care_of={care_of!r}\n")
-        log_fp.write(f"key_partial={key_p!r}\n")
-        log_fp.write(f"frame_partial={frame_p!r}\n")
-        log_fp.write(f"engine_partial={engine_p!r}\n")
-        log_fp.write(f"aadhar_id={aadhar_uin!r}\n")
-        log_fp.write(
-            "# Siebel: after prepare_vehicle / scrapes, a --- vehicle_master --- block lists merged keys for "
-            "traceability (grid + DMS). Masters are persisted only after Invoice# is scraped (Create Invoice).\n"
-        )
-        cu = (urls.contact or "").strip()
-        log_fp.write(f"url_contact_truncated={cu[:200]!r}\n")
-        log_fp.write(f"url_enquiry_truncated={(urls.enquiry or '')[:200]!r}\n")
-        log_fp.write(f"url_vehicle_truncated={(urls.vehicle or '')[:200]!r}\n")
-        log_fp.write("\n--- trace ---\n")
+        _append_after_login = bool(execution_log_append_after_login) and lp.is_file() and lp.stat().st_size > 20
+        log_fp = open(lp, "a" if _append_after_login else "w", encoding="utf-8")
+        if not _append_after_login:
+            log_fp.write("Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)\n\n")
+            log_fp.write(f"git_commit={_GIT_COMMIT_SHORT!r}\n")
+            _capi = (execution_log_client_api_base_url or "").strip()
+            _hreq = (execution_log_http_request_base_url or "").strip()
+            log_fp.write(
+                "# Client API base: VITE_API_URL at build (browser/Electron); empty string = relative URLs / Vite proxy.\n"
+            )
+            log_fp.write(f"client_api_base_url={_capi[:400]!r}\n")
+            log_fp.write(
+                "# HTTP request base: FastAPI Request.base_url for this fill-forms call (which host the API saw).\n"
+            )
+            log_fp.write(f"http_request_base_url={_hreq[:400]!r}\n\n")
+            log_fp.write(f"started_ist={run_started_ist}\n")
+            log_fp.write(f"skip_contact_find={skip_contact_find}\n")
+            log_fp.write(f"dms_contact_path={dms_path!r}\n")
+            log_fp.write(f"mobile_phone={mobile!r}\n")
+            log_fp.write(f"first_name={first!r}\n")
+            log_fp.write(f"last_name={last!r}\n")
+            log_fp.write(f"address_line_1={addr!r}\n")
+            log_fp.write(f"state={state!r}\n")
+            log_fp.write(f"pin_code={pin!r}\n")
+            log_fp.write(f"landline={landline!r}\n")
+            log_fp.write(f"care_of={care_of!r}\n")
+            log_fp.write(f"key_partial={key_p!r}\n")
+            log_fp.write(f"frame_partial={frame_p!r}\n")
+            log_fp.write(f"engine_partial={engine_p!r}\n")
+            log_fp.write(f"aadhar_id={aadhar_uin!r}\n")
+            log_fp.write(
+                "# Siebel: after prepare_vehicle / scrapes, a --- vehicle_master --- block lists merged keys for "
+                "traceability (grid + DMS). Masters are persisted only after Invoice# is scraped (Create Invoice).\n"
+            )
+            cu = (urls.contact or "").strip()
+            log_fp.write(f"url_contact_truncated={cu[:200]!r}\n")
+            log_fp.write(f"url_enquiry_truncated={(urls.enquiry or '')[:200]!r}\n")
+            log_fp.write(f"url_vehicle_truncated={(urls.vehicle or '')[:200]!r}\n")
+            log_fp.write("\n--- trace ---\n")
+        else:
+            log_fp.write("\n--- automation_trace ---\n")
         log_fp.write(
             "Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + "
             "Siebel form/screen + action + fields/values being applied on that form.\n\n"
@@ -2643,6 +2732,7 @@ def Playwright_Hero_DMS_fill(
             ms_done=ms_done,
             log_fp=log_fp,
             log_vehicle_snapshot=log_vehicle_snapshot,
+            playwright_dms_log_path=_exec_log_path,
         ):
             return out
         order_scraped = prepare_order(
@@ -2926,6 +3016,7 @@ def run_hero_siebel_dms_flow(
     mobile_aria_hints: list[str],
     skip_contact_find: bool = False,
     execution_log_path: Path | None = None,
+    execution_log_append_after_login: bool = False,
     customer_id: int | None = None,
     vehicle_id: int | None = None,
     execution_log_client_api_base_url: str | None = None,
@@ -2945,6 +3036,7 @@ def run_hero_siebel_dms_flow(
         mobile_aria_hints=mobile_aria_hints,
         skip_contact_find=skip_contact_find,
         execution_log_path=execution_log_path,
+        execution_log_append_after_login=execution_log_append_after_login,
         customer_id=customer_id,
         vehicle_id=vehicle_id,
         execution_log_client_api_base_url=execution_log_client_api_base_url,

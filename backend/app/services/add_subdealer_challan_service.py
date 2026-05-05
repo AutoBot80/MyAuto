@@ -15,6 +15,8 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from app.config import (
     CHALLANS_DIR,
     DMS_BASE_URL,
+    DMS_LOGIN_PASSWORD,
+    DMS_LOGIN_USER,
     DMS_REAL_URL_CONTACT,
     DMS_REAL_URL_ENQUIRY,
     DMS_REAL_URL_LINE_ITEMS,
@@ -625,6 +627,8 @@ def run_subdealer_challan_batch(
             base_url,
             "DMS",
             require_login_on_open=True,
+            login_user=DMS_LOGIN_USER,
+            login_password=DMS_LOGIN_PASSWORD,
         )
         if page is None:
             logln(f"ERROR: could not open DMS: {open_error!r}")

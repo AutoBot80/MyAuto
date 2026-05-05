@@ -8,9 +8,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from app.builtin_defaults import (
+    DMS_BROWSER_AUTOFILL_LOGIN_MAX_MS as _DEFAULT_DMS_BROWSER_AUTOFILL_LOGIN_MAX_MS,
+    DMS_LOGIN_MANUAL_WAIT_MS as _DEFAULT_DMS_LOGIN_MANUAL_WAIT_MS,
     DMS_PLAYWRIGHT_HEADED as _DEFAULT_DMS_PLAYWRIGHT_HEADED,
     OCR_UPLOAD_PARALLEL_TEXTRACT as _DEFAULT_OCR_UPLOAD_PARALLEL_TEXTRACT,
     PLAYWRIGHT_KEEP_OPEN as _DEFAULT_PLAYWRIGHT_KEEP_OPEN,
+    USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS as _DEFAULT_USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS,
 )
 from app.hero_dms_defaults import (
     HERO_DMS_BASE_URL,
@@ -108,8 +111,6 @@ ENVIRONMENT_IS_PRODUCTION = _ENV_LOWER in ("prod", "production")
 HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE = ENVIRONMENT_IS_PRODUCTION
 # When Create Invoice is not used (non-production), ``sales_master`` / staging commit uses this placeholder Invoice#.
 HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER = (os.getenv("HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER") or "DUMMY111").strip() or "DUMMY111"
-# Insurance MISP: click **Proposal Preview** / **Proposal Review** only in production; dev/test skip and succeed without it.
-HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW = ENVIRONMENT_IS_PRODUCTION
 # Video SOP: skip **Generate Booking** toolbar step in ``prepare_order`` (before ``_create_order``).
 # Default **true** in all environments (commit/deploy carries behavior). Set env
 # ``HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER=false`` to run the GB toolbar step again.
@@ -356,8 +357,25 @@ DMS_SIEBEL_CONTACT_ENQUIRY_SUBGRID_HINT_JSON = (
 ).strip()
 DMS_LOGIN_USER = os.getenv("DMS_LOGIN_USER", "demo")
 DMS_LOGIN_PASSWORD = os.getenv("DMS_LOGIN_PASSWORD", "demo")
+# Milliseconds: poll Siebel login for Chrome autofill before env/json fill (operator may review first). See ``handle_browser_opening``.
+_braw = (os.getenv("DMS_BROWSER_AUTOFILL_LOGIN_MAX_MS") or "").strip()
+DMS_BROWSER_AUTOFILL_LOGIN_MAX_MS = (
+    int(_braw) if _braw.isdigit() else _DEFAULT_DMS_BROWSER_AUTOFILL_LOGIN_MAX_MS
+)
+# Native DMS Chromium: how long ``get_or_open_site_page`` waits on the Siebel login screen for manual entry.
+_dms_login_wait_raw = (os.getenv("DMS_LOGIN_MANUAL_WAIT_MS") or "").strip()
+DMS_LOGIN_MANUAL_WAIT_MS = (
+    int(_dms_login_wait_raw)
+    if _dms_login_wait_raw.isdigit()
+    else _DEFAULT_DMS_LOGIN_MANUAL_WAIT_MS
+)
 # Run browser visible (headed) so user sees DMS page and automation. Default: ``builtin_defaults``.
 DMS_PLAYWRIGHT_HEADED = _bool_env("DMS_PLAYWRIGHT_HEADED", _DEFAULT_DMS_PLAYWRIGHT_HEADED)
+# When true (default), DMS, Insurance, and Vahan ``get_or_open_site_page`` use Playwright bundled Chromium
+# with ``launch_persistent_context`` (separate profiles) instead of CDP-attaching to Edge/Chrome.
+USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS = _bool_env(
+    "USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS", _DEFAULT_USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS
+)
 # Legacy flag (unused). ``fill_dms_service`` never calls ``Browser.close()`` / ``Playwright.stop()`` for operator sessions.
 PLAYWRIGHT_KEEP_OPEN = _bool_env("PLAYWRIGHT_KEEP_OPEN", _DEFAULT_PLAYWRIGHT_KEEP_OPEN)
 # When the backend launches Edge/Chrome (no existing CDP session), Chromium is started with

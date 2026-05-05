@@ -46,7 +46,6 @@ from app.config import (
     KYC_INSURER_FUZZY_MIN_SCORE,
     KYC_USE_KEYBOARD_EKYC_SOP,
     KYC_DEFAULT_KYC_PARTNER_LABEL,
-    HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW,
     INSURER_PREFER_FUZZY_MIN_RATIO,
     MISP_KYC_POST_UPLOAD_STABLE_MS,
     MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS,
@@ -90,14 +89,9 @@ INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 
 # When True: skip clicking **Issue Policy** only (after proposal review steps); still scrapes; one
 # ``update_insurance_master_policy_after_issue`` in ``main_process`` on that scrape.
-# **insurance_master** INSERT is before **Proposal Preview**; **Proposal Preview** / **Review** is prod-only
-# (``HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW``), not this flag.
+# **insurance_master** INSERT is before **Proposal Preview**; **Proposal Preview** / **Review** navigation
+# is separate from this flag (this flag only pauses the **Issue Policy** click after review).
 HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY = True
-
-# When True **and** ``ENVIRONMENT`` is prod/production: abort after proposal field fill (and optional
-# ``insurance_master`` insert) and **before** clicking **Proposal Preview** / **Proposal Review**.
-# Non-production envs skip the review click via ``HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW`` and return success first.
-HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW = True
 
 # Optional: regex on checkbox **label/row text** (MispPolicy proposal grid) for a **new**
 # proposal checkbox MISP added — force **unchecked** when a matching visible checkbox exists. If **empty**, this
@@ -1231,6 +1225,23 @@ def _iter_page_and_child_frames(page):
         pass
 
 
+_PARTNER_LOGIN_PASSWORD_READY_JS = """() => {
+  const vis = (el) => {
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 2 && r.height > 2;
+  };
+  const inputs = document.querySelectorAll('input[type="password"]');
+  for (const el of inputs) {
+    if (!vis(el)) continue;
+    if ((el.value || '').trim().length > 0) return true;
+  }
+  return false;
+}"""
+
+
 def _wait_for_partner_login_password_filled(page, *, timeout_ms: int) -> bool:
     """
     Wait until a visible ``input[type="password"]`` has a **non-empty** value (autofill / operator).
@@ -1238,28 +1249,19 @@ def _wait_for_partner_login_password_filled(page, *, timeout_ms: int) -> bool:
     The **Partner Login** panel on ``/misp-partner-login`` is separate from the header **Login as** control;
     do not click **Sign In** until credentials are present.
     """
-    deadline = time.monotonic() + max(1.0, timeout_ms / 1000.0)
-    while time.monotonic() < deadline:
-        try:
-            loc = page.locator('input[type="password"]')
-            n = min(loc.count(), 8)
-            for i in range(n):
-                pw = loc.nth(i)
-                try:
-                    if not pw.is_visible(timeout=800):
-                        continue
-                    val = (pw.input_value() or "").strip()
-                    if len(val) > 0:
-                        logger.info(
-                            "Hero Insurance: password field ready (value length=%s) — proceeding to Sign In.",
-                            len(val),
-                        )
-                        return True
-                except Exception:
-                    continue
-        except Exception:
-            pass
-        _t(page, 200)
+    try:
+        page.wait_for_function(
+            _PARTNER_LOGIN_PASSWORD_READY_JS,
+            timeout=max(1, int(timeout_ms)),
+        )
+        logger.info(
+            "Hero Insurance: password field ready — proceeding to Sign In (wait_for_function).",
+        )
+        return True
+    except PlaywrightTimeout:
+        pass
+    except Exception:
+        pass
     logger.warning(
         "Hero Insurance: no non-empty password field within %s ms — not clicking Sign In.",
         timeout_ms,
@@ -1709,14 +1711,40 @@ _MISP_2W_HUB_PRESENT_JS = """() => !!(
   document.querySelector('img[alt="2W Icon"]') || document.querySelector("img[alt*=\"2W\" i]")
 )"""
 
+_MISP_2W_HUB_LOCATOR = (
+    "#viewport a#ctl00_TWO, #viewport #lsec a#ctl00_TWO, "
+    "#lsec a#ctl00_TWO, #ctl00_TWO, #ctl00_w2_menu, a[href*='$TWO' i], "
+    "img[alt='2W Icon'], img[alt*='2W' i]"
+)
+
 
 def _wait_misp_2w_hub_ready(page, *, timeout_ms: int) -> bool:
     """
     ``MainIndex.aspx`` often mounts **2W** (``#ctl00_TWO`` / menu) *after* first paint; a second frame
-    can stay ``about:blank`` briefly. Poll all ``page.frames`` until hub markers exist or time out.
+    can stay ``about:blank`` briefly. Prefer ``wait_for_function`` / locator on the main document, then
+    fall back to polling every frame (portal layout varies).
     """
     t0 = time.monotonic()
     end = t0 + max(0.05, timeout_ms / 1000.0)
+    cap_main = min(4000, max(200, int(timeout_ms)))
+    try:
+        page.wait_for_function(_MISP_2W_HUB_PRESENT_JS, timeout=cap_main)
+        return True
+    except PlaywrightTimeout:
+        pass
+    except Exception:
+        pass
+
+    rem_ms = max(50, int((end - time.monotonic()) * 1000))
+    if rem_ms > 0:
+        try:
+            page.locator(_MISP_2W_HUB_LOCATOR).first.wait_for(
+                state="attached", timeout=min(2500, rem_ms)
+            )
+            return True
+        except Exception:
+            pass
+
     step_ms = 280
     while time.monotonic() < end:
         for fr in list(getattr(page, "frames", []) or []):
@@ -1731,11 +1759,7 @@ def _wait_misp_2w_hub_ready(page, *, timeout_ms: int) -> bool:
             except Exception:
                 pass
         try:
-            n = page.locator(
-                "#viewport a#ctl00_TWO, #viewport #lsec a#ctl00_TWO, "
-                "#lsec a#ctl00_TWO, #ctl00_TWO, #ctl00_w2_menu, a[href*='$TWO' i], "
-                "img[alt='2W Icon'], img[alt*='2W' i]"
-            ).count()
+            n = page.locator(_MISP_2W_HUB_LOCATOR).count()
             if n > 0:
                 return True
         except Exception:
@@ -2216,9 +2240,15 @@ def _misp_resolve_page_after_possible_new_tab(
         except Exception:
             pass
         try:
-            time.sleep(0.12)
+            if not fallback_page.is_closed():
+                fallback_page.wait_for_timeout(120)
+            else:
+                time.sleep(0.12)
         except Exception:
-            pass
+            try:
+                time.sleep(0.12)
+            except Exception:
+                pass
     try:
         if not fallback_page.is_closed():
             fu = ""
@@ -8775,28 +8805,6 @@ def _hero_misp_fill_proposal_and_review(
             )
             return f"insurance_master insert failed: {persist_exc!s}", {}
 
-    if not HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW:
-        append_playwright_insurance_line(
-            ocr_output_dir,
-            subfolder,
-            "NOTE",
-            "main_process: Proposal Preview / Proposal Review click skipped (non-production ENVIRONMENT); "
-            "completing successfully without review navigation.",
-        )
-        logger.info(
-            "Hero Insurance: non-production ENVIRONMENT — skipped Proposal Preview/Review click; returning success."
-        )
-        return None, {}
-
-    if HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW:
-        return _proposal_fail(
-            ocr_output_dir,
-            subfolder,
-            "hard_fail: stopped before Proposal Preview / Proposal Review "
-            "(HERO_MISP_HARD_FAIL_BEFORE_PROPOSAL_PREVIEW)",
-            page=page,
-        )
-
     try:
         _proposal_preview_rx = re.compile(r"Proposal\s*(Preview|Review)", re.I)
         clicked = False
@@ -8926,9 +8934,7 @@ def main_process(
     and the bottom **NIC/CPI** add-on (see module docstring). **insurance_master** INSERT runs inside proposal fill,
     before **Proposal Preview**; policy fields are updated once from the post–**Issue Policy** scrape in this function.
     **Issue Policy** click may be skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``
-    is True. **Proposal Preview** / **Proposal Review** is clicked only when ``ENVIRONMENT`` is
-    ``prod`` / ``production`` (``HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW``); otherwise the flow
-    completes successfully without that navigation.
+    is True. **Proposal Preview** / **Proposal Review** is always attempted after proposal fill.
     Reuses the open Insurance tab via ``match_base`` from ``pre_result``.
     """
     out: dict = {
@@ -9088,7 +9094,7 @@ def main_process(
             subfolder,
             "NOTE",
             "main_process: completed — insurance_master insert (pre-preview), "
-            f"proposal review navigated={HERO_MISP_CLICK_PROPOSAL_PREVIEW_REVIEW}, "
+            "proposal review navigated=yes, "
             f"single policy update from post–Issue Policy scrape (Issue Policy click skipped={HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY})",
         )
         try:
@@ -9215,39 +9221,40 @@ def _wait_for_insurance_kyc_after_login(page, insurance_base_url: str) -> str | 
             u_snip,
         )
 
-    # Poll instead of a single long wait_for_function so closing the window/tab reactivates the UI
-    # quickly (see _t: closed-page waits no longer devolve into time.sleep loops).
     kyc_js = _insurance_kyc_screen_ready_js()
-    poll_ms = 450
-    deadline = time.monotonic() + (float(INSURANCE_LOGIN_WAIT_MS) / 1000.0)
-    while time.monotonic() < deadline:
-        try:
-            if page.is_closed():
-                return (
-                    "The insurance browser window or tab was closed before the KYC screen appeared. "
-                    "Run Generate Insurance again when you are ready."
-                )
-        except Exception:
+    try:
+        if page.is_closed():
             return (
                 "The insurance browser window or tab was closed before the KYC screen appeared. "
                 "Run Generate Insurance again when you are ready."
             )
-        try:
-            if page.evaluate(kyc_js):
-                return None
-        except Exception as e:
-            msg = str(e).lower()
-            if "closed" in msg or "has been closed" in msg:
-                return (
-                    "The insurance browser window or tab was closed before the KYC screen appeared. "
-                    "Run Generate Insurance again when you are ready."
-                )
-        _t(page, poll_ms)
-    return (
-        "Insurance: timed out waiting for the KYC screen after login. "
-        "On the login page, enter User ID and Password and click Login (dummy), or complete sign-in on the real portal "
-        f"so KYC opens — then press Fill Insurance again (wait limit {INSURANCE_LOGIN_WAIT_MS // 1000}s)."
-    )
+    except Exception:
+        return (
+            "The insurance browser window or tab was closed before the KYC screen appeared. "
+            "Run Generate Insurance again when you are ready."
+        )
+    try:
+        page.wait_for_function(kyc_js, timeout=int(INSURANCE_LOGIN_WAIT_MS))
+        return None
+    except PlaywrightTimeout:
+        return (
+            "Insurance: timed out waiting for the KYC screen after login. "
+            "On the login page, enter User ID and Password and click Login (dummy), or complete sign-in on the real portal "
+            f"so KYC opens — then press Fill Insurance again (wait limit {INSURANCE_LOGIN_WAIT_MS // 1000}s)."
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "closed" in msg or "has been closed" in msg:
+            return (
+                "The insurance browser window or tab was closed before the KYC screen appeared. "
+                "Run Generate Insurance again when you are ready."
+            )
+        logger.debug("Insurance: wait_for_function KYC predicate: %s", e)
+        return (
+            "Insurance: timed out waiting for the KYC screen after login. "
+            "On the login page, enter User ID and Password and click Login (dummy), or complete sign-in on the real portal "
+            f"so KYC opens — then press Fill Insurance again (wait limit {INSURANCE_LOGIN_WAIT_MS // 1000}s)."
+        )
 def warm_insurance_browser_session(insurance_base_url: str) -> dict:
     """
     Pre-open or attach to Insurance browser without running fill automation.

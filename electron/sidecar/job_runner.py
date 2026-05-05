@@ -425,6 +425,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
     uploads_dir = get_uploads_dir(dealer_id)
     ocr_output_dir = get_ocr_output_dir(dealer_id)
 
+    from app.config import DMS_LOGIN_PASSWORD, DMS_LOGIN_USER
     from app.services.fill_hero_dms_service import dms_automation_is_real_siebel
     from app.services.handle_browser_opening import get_or_open_site_page
 
@@ -456,7 +457,13 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
     }
     page = None
     try:
-        page, open_error = get_or_open_site_page(dms_base_url, "DMS", require_login_on_open=True)
+        page, open_error = get_or_open_site_page(
+            dms_base_url,
+            "DMS",
+            require_login_on_open=True,
+            login_user=DMS_LOGIN_USER,
+            login_password=DMS_LOGIN_PASSWORD,
+        )
         if page is None:
             result["error"] = open_error
         else:
@@ -848,6 +855,8 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
 
     from app.config import (
         CHALLANS_DIR,
+        DMS_LOGIN_PASSWORD,
+        DMS_LOGIN_USER,
         DMS_REAL_URL_CONTACT,
         DMS_REAL_URL_ENQUIRY,
         DMS_REAL_URL_LINE_ITEMS,
@@ -898,7 +907,13 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
         pass
     challan_session_base = CHALLANS_DIR / prep_leaf
 
-    page, open_error = get_or_open_site_page(dms_base_url, "DMS", require_login_on_open=True)
+    page, open_error = get_or_open_site_page(
+        dms_base_url,
+        "DMS",
+        require_login_on_open=True,
+        login_user=DMS_LOGIN_USER,
+        login_password=DMS_LOGIN_PASSWORD,
+    )
     if page is None:
         return {
             "ok": False,
