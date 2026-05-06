@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import ssl
 import subprocess
 import sys
 import time
@@ -78,6 +79,40 @@ def _load_dotenv_safe(env_path: Path) -> None:
     load_dotenv(env_path, encoding="latin-1")
 
 
+# ---------------------------------------------------------------------------
+# SSL context for PyInstaller-frozen builds
+# ---------------------------------------------------------------------------
+
+_ssl_ctx_cache: ssl.SSLContext | None = None
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """
+    Return an SSL context with proper certificate verification.
+
+    PyInstaller-frozen apps often can't find the system certificate store, so we
+    explicitly load certifi's CA bundle. Falls back to default context if certifi
+    is unavailable.
+    """
+    global _ssl_ctx_cache
+    if _ssl_ctx_cache is not None:
+        return _ssl_ctx_cache
+
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+
+        ctx.load_verify_locations(certifi.where())
+        logging.info("SSL: using certifi CA bundle at %s", certifi.where())
+    except ImportError:
+        logging.warning("SSL: certifi not available, using system certificates")
+    except Exception as e:
+        logging.warning("SSL: failed to load certifi bundle: %s", e)
+
+    _ssl_ctx_cache = ctx
+    return ctx
+
+
 def _sync_scripts(api_url: str, jwt: str, saathi_base: str) -> None:
     """
     In frozen (packaged) mode, check whether the local script cache matches
@@ -105,7 +140,7 @@ def _sync_scripts(api_url: str, jwt: str, saathi_base: str) -> None:
             f"{base}/sidecar/scripts/version",
             headers={"Authorization": f"Bearer {jwt}"},
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10, context=_get_ssl_context()) as resp:
             server_commit = json.loads(resp.read().decode("utf-8")).get("git_commit", "")
     except Exception as exc:
         logging.warning("script-sync: version check failed (%s); using cache", exc)
@@ -124,7 +159,7 @@ def _sync_scripts(api_url: str, jwt: str, saathi_base: str) -> None:
             f"{base}/sidecar/scripts/bundle",
             headers={"Authorization": f"Bearer {jwt}"},
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=60, context=_get_ssl_context()) as resp:
             zip_bytes = resp.read()
     except Exception as exc:
         logging.warning("script-sync: bundle download failed (%s); using cache", exc)
@@ -312,7 +347,7 @@ def _api_post(api_url: str, jwt: str, path: str, body: dict, timeout: int = 120)
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_text = ""
@@ -387,7 +422,7 @@ def _multipart_upload_file(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
             resp.read()
     except urllib.error.HTTPError as exc:
         body_text = ""
@@ -566,6 +601,8 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         _install_playwright_js_dialog_handler,
         _run_fill_dms_real_siebel_playwright,
         _write_data_from_dms,
+        playwright_dms_execution_log_filename,
+        _safe_subfolder_name,
     )
 
     result: dict = {
@@ -575,6 +612,14 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         "dms_milestones": [],
         "dms_step_messages": [],
     }
+
+    playwright_dms_log = (
+        Path(ocr_output_dir).resolve()
+        / _safe_subfolder_name(subfolder)
+        / playwright_dms_execution_log_filename()
+    )
+    result["playwright_dms_execution_log_path"] = str(playwright_dms_log)
+
     page = None
     try:
         page, open_error = get_or_open_site_page(
@@ -596,6 +641,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
                 params.get("customer_id"),
                 params.get("vehicle_id"),
                 result,
+                playwright_dms_log,
                 execution_log_client_api_base_url=_client_api_log,
                 execution_log_http_request_base_url=_http_api_log,
             )
