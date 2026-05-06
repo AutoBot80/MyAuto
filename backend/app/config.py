@@ -111,9 +111,9 @@ ENVIRONMENT_IS_PRODUCTION = _ENV_LOWER in ("prod", "production")
 HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE = ENVIRONMENT_IS_PRODUCTION
 # When Create Invoice is not used (non-production), ``sales_master`` / staging commit uses this placeholder Invoice#.
 HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER = (os.getenv("HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER") or "DUMMY111").strip() or "DUMMY111"
-# Video SOP: skip **Generate Booking** toolbar step in ``prepare_order`` (before ``_create_order``).
-# Default **true** in all environments (commit/deploy carries behavior). Set env
-# ``HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER=false`` to run the GB toolbar step again.
+# Video SOP: skip Step A (enquiry/contact ``goto``) and **Generate Booking** toolbar in ``prepare_order``
+# (before ``_create_order``). Default **true** in all environments (commit/deploy carries behavior). Set env
+# ``HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER=false`` to run Step A + GB again.
 HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER = os.getenv(
     "HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER", "true"
 ).lower() in ("1", "true", "yes")

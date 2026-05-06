@@ -314,6 +314,21 @@ if (-not $SkipBuild) {
     Pop-Location
     if ($rc -ne 0) { Write-Fail "npm run build:electron failed (exit code $rc)." }
     Write-Ok "Electron installer built"
+
+    # --- Phase 3.5: Copy installer to Pendrive folder ---
+    Write-Step "Phase 3.5: Copy installer to Pendrive folder"
+    $distDir = Join-Path $ElectronDir "dist"
+    $pendriveDir = "C:\Users\arya_\OneDrive\Desktop\Saathi Docs\Pendrive"
+    $installerExe = Get-ChildItem -Path $distDir -Filter "*.exe" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($installerExe) {
+        if (-not (Test-Path $pendriveDir)) {
+            New-Item -ItemType Directory -Force -Path $pendriveDir | Out-Null
+        }
+        Copy-Item -Path $installerExe.FullName -Destination $pendriveDir -Force
+        Write-Ok "Copied $($installerExe.Name) to $pendriveDir"
+    } else {
+        Write-Host "WARNING: No .exe found in $distDir - skipping copy." -ForegroundColor Yellow
+    }
 } else {
     Write-Step "Phases 1-3: Skipped (-SkipBuild)"
 }

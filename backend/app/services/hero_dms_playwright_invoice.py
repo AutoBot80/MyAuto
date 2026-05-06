@@ -5817,7 +5817,9 @@ def prepare_order(
 ) -> dict:
     """
     Generate Booking + ``_create_order`` + merge scrape into ``out[\"vehicle\"]``.
-    When ``HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER`` is set, the Generate Booking toolbar step is skipped.
+    When ``HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER`` is set (default): skip Step A
+    (enquiry/contact ``goto``) and skip the Generate Booking toolbar step before ``_create_order``.
+    When unset/false: run Step A then Generate Booking (legacy video path).
     Returns ``order_scraped`` from ``_create_order`` (may be empty). On failure sets ``out[\"error\"]``.
     """
     full_chassis = (
@@ -5826,9 +5828,20 @@ def prepare_order(
         or str(dms_values.get("frame_num") or "").strip()
     )
     _enq_u = (urls.enquiry or "").strip() or (urls.contact or "").strip()
-    if _enq_u:
+    # Step A — enquiry/contact GotoView before create_order (was unconditional ``if _enq_u:`` …).
+    # Gated by the same env as Generate Booking: default skip keeps post-payment Contact until _create_order.
+    # To restore: ``HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER=false``
+    # if _enq_u:
+    #     _goto(page, _enq_u, "enquiry_for_booking_video", nav_timeout_ms=nav_timeout_ms)
+    #     _siebel_after_goto_wait(page, floor_ms=900)
+    if _enq_u and not HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER:
         _goto(page, _enq_u, "enquiry_for_booking_video", nav_timeout_ms=nav_timeout_ms)
         _siebel_after_goto_wait(page, floor_ms=900)
+    elif _enq_u and HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER:
+        note(
+            "Create Order: skipping enquiry/contact goto before create_order "
+            "(HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER)."
+        )
     if HERO_DMS_SKIP_GENERATE_BOOKING_BEFORE_CREATE_ORDER:
         note(
             "Create Order: skipping Generate Booking before create_order "
