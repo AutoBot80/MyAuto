@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -150,6 +151,75 @@ def _sync_scripts(api_url: str, jwt: str, saathi_base: str) -> None:
         logging.warning("script-sync: extract/swap failed (%s); using stale cache", exc)
 
 
+def _sidecar_playwright_chromium_ready(browsers_root: Path) -> bool:
+    """True if a Playwright-managed Chromium build exists under ``PLAYWRIGHT_BROWSERS_PATH``."""
+    if not browsers_root.is_dir():
+        return False
+    for leaf in ("chrome-win64", "chrome-win"):
+        for exe in browsers_root.glob(f"chromium-*/{leaf}/chrome.exe"):
+            if exe.is_file():
+                return True
+    return False
+
+
+def _configure_frozen_playwright_browsers(saathi_path: Path) -> None:
+    """
+    PyInstaller onefile unpacks to a temp ``_MEI*`` folder; Playwright defaults to
+    ``<driver>/.local-browsers`` there, which is empty and non-persistent.
+
+    Point browsers at ``{SAATHI}/playwright-browsers`` and run ``playwright install chromium``
+    once (via the bundled Node driver) if the binary is missing.
+    """
+    if not _is_frozen:
+        return
+    explicit = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+    if explicit:
+        browsers_dir = Path(explicit)
+    else:
+        browsers_dir = saathi_path / "playwright-browsers"
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_dir)
+    try:
+        browsers_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logging.error("playwright browsers dir not usable (%s): %s", browsers_dir, exc)
+        return
+
+    if _sidecar_playwright_chromium_ready(browsers_dir):
+        return
+
+    logging.info(
+        "playwright: installing Chromium into %s (first run; ~300MB download)",
+        browsers_dir,
+    )
+    try:
+        from playwright._impl._driver import compute_driver_executable, get_driver_env
+
+        driver_exe, driver_cli = compute_driver_executable()
+        env = get_driver_env()
+        proc = subprocess.run(
+            [driver_exe, driver_cli, "install", "chromium"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+        if proc.returncode != 0:
+            logging.error(
+                "playwright install chromium failed (code=%s): %s",
+                proc.returncode,
+                (proc.stderr or proc.stdout or "")[:2000],
+            )
+        elif not _sidecar_playwright_chromium_ready(browsers_dir):
+            logging.error(
+                "playwright install reported success but chrome.exe not found under %s",
+                browsers_dir,
+            )
+        else:
+            logging.info("playwright: Chromium install finished OK")
+    except Exception as exc:
+        logging.error("playwright install chromium raised: %s", exc)
+
+
 def _bootstrap_imports(saathi_base: str, *, api_url: str = "", jwt: str = "") -> None:
     os.environ["SAATHI_BASE_DIR"] = saathi_base
     saathi_path = Path(saathi_base)
@@ -165,12 +235,15 @@ def _bootstrap_imports(saathi_base: str, *, api_url: str = "", jwt: str = "") ->
             sys.path.insert(0, str(cache / "backend"))
             be_env = cache / "backend" / ".env"
             _load_dotenv_safe(be_env)
+            _configure_frozen_playwright_browsers(saathi_path)
             return
 
     backend = _repo_backend()
     sys.path.insert(0, str(backend))
     be_env = backend / ".env"
     _load_dotenv_safe(be_env)
+    if _is_frozen:
+        _configure_frozen_playwright_browsers(saathi_path)
 
 
 # ---------------------------------------------------------------------------
