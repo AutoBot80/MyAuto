@@ -4982,7 +4982,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 note=note, log_prefix=log_prefix,
             )
             return False, "Could not find + button in PDI tab."
-        _safe_page_wait(page, 1000, log_label="after_sr_list_new_settle")
+        _safe_page_wait(page, 1500, log_label="after_sr_list_new_settle")
 
         # Post-+: same anchoring as existing-open — resolve mechanic td on the new row, activate,
         # cell-scoped relaxed pick click (not global getElementById + strict bbox).

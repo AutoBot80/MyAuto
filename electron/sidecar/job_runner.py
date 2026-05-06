@@ -162,16 +162,16 @@ def _sidecar_playwright_chromium_ready(browsers_root: Path) -> bool:
     return False
 
 
-def _configure_frozen_playwright_browsers(saathi_path: Path) -> None:
+def _frozen_playwright_browsers_dir(saathi_path: Path) -> Path | None:
     """
-    PyInstaller onefile unpacks to a temp ``_MEI*`` folder; Playwright defaults to
-    ``<driver>/.local-browsers`` there, which is empty and non-persistent.
+    Frozen sidecar: Playwright must not use the PyInstaller ``_MEI*`` temp tree.
 
-    Point browsers at ``{SAATHI}/playwright-browsers`` and run ``playwright install chromium``
-    once (via the bundled Node driver) if the binary is missing.
+    Set ``PLAYWRIGHT_BROWSERS_PATH`` to ``{SAATHI}/playwright-browsers`` unless the env
+    already specifies a directory. Chromium itself is installed by the NSIS installer
+    (``--install-playwright-browsers``), not on first app run.
     """
     if not _is_frozen:
-        return
+        return None
     explicit = (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
     if explicit:
         browsers_dir = Path(explicit)
@@ -182,13 +182,21 @@ def _configure_frozen_playwright_browsers(saathi_path: Path) -> None:
         browsers_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         logging.error("playwright browsers dir not usable (%s): %s", browsers_dir, exc)
-        return
+        return None
+    return browsers_dir
 
+
+def _configure_frozen_playwright_browsers(saathi_path: Path) -> None:
+    """Ensure persistent browser cache path only (install is installer-time)."""
+    _frozen_playwright_browsers_dir(saathi_path)
+
+
+def _install_playwright_chromium_if_missing(browsers_dir: Path) -> bool:
+    """Download Chromium into ``browsers_dir`` via the bundled Playwright driver. ~300MB."""
     if _sidecar_playwright_chromium_ready(browsers_dir):
-        return
-
+        return True
     logging.info(
-        "playwright: installing Chromium into %s (first run; ~300MB download)",
+        "playwright: installing Chromium into %s (~300MB download)",
         browsers_dir,
     )
     try:
@@ -209,15 +217,54 @@ def _configure_frozen_playwright_browsers(saathi_path: Path) -> None:
                 proc.returncode,
                 (proc.stderr or proc.stdout or "")[:2000],
             )
-        elif not _sidecar_playwright_chromium_ready(browsers_dir):
+            return False
+        if not _sidecar_playwright_chromium_ready(browsers_dir):
             logging.error(
                 "playwright install reported success but chrome.exe not found under %s",
                 browsers_dir,
             )
-        else:
-            logging.info("playwright: Chromium install finished OK")
+            return False
+        logging.info("playwright: Chromium install finished OK")
+        return True
     except Exception as exc:
         logging.error("playwright install chromium raised: %s", exc)
+        return False
+
+
+def _cli_install_playwright_browsers_main() -> int:
+    """
+    Invoked by the NSIS installer: ``job_runner.exe --install-playwright-browsers <SAATHI_ROOT>``.
+
+    Writes under ``PLAYWRIGHT_BROWSERS_PATH`` or ``{saathi}/playwright-browsers``.
+    """
+    try:
+        idx = sys.argv.index("--install-playwright-browsers")
+    except ValueError:
+        return 2
+    saathi_arg: str | None = None
+    if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith("-"):
+        saathi_arg = sys.argv[idx + 1]
+    for a in sys.argv[idx + 1 :]:
+        if a.startswith("--saathi-base="):
+            saathi_arg = a.split("=", 1)[1]
+            break
+    saathi_base = (saathi_arg or os.environ.get("SAATHI_BASE_DIR") or r"D:\Saathi").strip()
+    saathi_path = Path(saathi_base)
+    saathi_path.mkdir(parents=True, exist_ok=True)
+    _setup_logging(saathi_path)
+    _load_dotenv_safe(saathi_path / ".env")
+    if not (os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(saathi_path / "playwright-browsers")
+    browsers_dir = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
+    try:
+        browsers_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logging.error("playwright browsers dir not usable (%s): %s", browsers_dir, exc)
+        return 1
+    if _sidecar_playwright_chromium_ready(browsers_dir):
+        logging.info("playwright Chromium already present under %s", browsers_dir)
+        return 0
+    return 0 if _install_playwright_chromium_if_missing(browsers_dir) else 1
 
 
 def _bootstrap_imports(saathi_base: str, *, api_url: str = "", jwt: str = "") -> None:
@@ -1333,6 +1380,9 @@ def main_daemon() -> None:
 
 
 def main() -> None:
+    if "--install-playwright-browsers" in sys.argv:
+        sys.exit(_cli_install_playwright_browsers_main())
+
     if "--daemon" in sys.argv:
         main_daemon()
         return

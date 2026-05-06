@@ -552,6 +552,154 @@ def _read_siebel_login_status_bar_any_frame(page) -> str:
     return ""
 
 
+def _dms_viewport_click_steal_from_omnibox(page) -> None:
+    """One real mouse hit in the page viewport (Siebel form / body center) — more reliable than repeated Escape."""
+    _pt_js = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 2 && r.height > 2;
+        };
+        const el = document.querySelector('#formContent')
+            || document.querySelector('input[name="SWEUserName"]')
+            || document.body;
+        if (!el || !vis(el)) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width * 0.5, y: r.top + Math.min(r.height * 0.4, 120) };
+    }"""
+    for fr in _ordered_unique_playwright_frames(page):
+        try:
+            pt = fr.evaluate(_pt_js)
+            if isinstance(pt, dict):
+                x = pt.get("x")
+                y = pt.get("y")
+                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                    page.mouse.click(float(x), float(y))
+                    try:
+                        page.wait_for_timeout(60)
+                    except Exception:
+                        time.sleep(0.06)
+                    return
+        except Exception:
+            continue
+
+
+def _try_playwright_siebel_login_anchor_click(page, loc) -> bool:
+    """Siebel Login is an ``<a>`` with ``javascript:`` href — try several Playwright strategies (Chromium + omnibox)."""
+    try:
+        loc.scroll_into_view_if_needed(timeout=2500)
+    except Exception:
+        pass
+    try:
+        loc.click(timeout=5000)
+        return True
+    except Exception:
+        pass
+    try:
+        loc.click(timeout=5000, force=True)
+        return True
+    except Exception:
+        pass
+    try:
+        box = loc.bounding_box()
+        if box and box.get("width", 0) > 1 and box.get("height", 0) > 1:
+            cx = float(box["x"] + box["width"] * 0.5)
+            cy = float(box["y"] + box["height"] * 0.5)
+            page.mouse.move(cx, cy)
+            page.mouse.down()
+            page.mouse.up()
+            return True
+    except Exception:
+        pass
+    try:
+        loc.focus(timeout=3000)
+        page.keyboard.press("Enter")
+        return True
+    except Exception:
+        pass
+    try:
+        loc.evaluate(
+            """(el) => {
+                try {
+                    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true }));
+                } catch (e) {}
+                try { el.click(); } catch (e2) {}
+            }"""
+        )
+        return True
+    except Exception:
+        pass
+    return False
+
+
+def _try_siebel_login_submit_via_tab_direct(page) -> bool:
+    """Tab from current focus to Login and press Enter.
+
+    Siebel login tabindex: User ID (1) -> Password (2) -> Remember (3) -> Login (4).
+    After focus steal, we may be on Password (2 tabs to Login) or User ID (3 tabs to Login).
+    Try 2 tabs first (common case: focus on Password after JS body click).
+    """
+    logger.info("handle_browser_opening: _try_siebel_login_submit_via_tab_direct STARTING")
+    try:
+        # Focus is typically on Password field after JS body/form click, so 2 Tabs reaches Login
+        for i in range(2):
+            page.keyboard.press("Tab")
+            logger.info("handle_browser_opening: Tab press %d sent", i + 1)
+            try:
+                page.wait_for_timeout(100)
+            except Exception:
+                time.sleep(0.1)
+        logger.info("handle_browser_opening: Sending Enter after 2 Tabs")
+        page.keyboard.press("Enter")
+        logger.info("handle_browser_opening: Enter sent, returning True")
+        return True
+    except Exception as exc:
+        logger.warning("handle_browser_opening: Tab direct FAILED: %s", exc)
+        return False
+
+
+def _try_siebel_login_submit_via_tab_from_user_id(page) -> bool:
+    """Activate Hero Siebel Login using tabindex: User ID (1) -> Password -> Remember -> Login (4).
+
+    Operators report that with focus in the User ID field, **three Tab** then **Enter** reaches
+    ``#s_swepi_22`` when mouse-driven clicks are ignored (native Chromium + omnibox quirks).
+    """
+    _user_sels = ('input[name="SWEUserName"]', "#s_swepi_1", "input#s_swepi_1")
+    for fr in _ordered_unique_playwright_frames(page):
+        for usel in _user_sels:
+            loc = fr.locator(usel).first
+            try:
+                if loc.count() == 0:
+                    continue
+                try:
+                    loc.scroll_into_view_if_needed(timeout=2000)
+                except Exception:
+                    pass
+                try:
+                    loc.focus(timeout=3000)
+                except Exception:
+                    try:
+                        loc.click(timeout=3000, force=True)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+            try:
+                for _ in range(3):
+                    page.keyboard.press("Tab")
+                    try:
+                        page.wait_for_timeout(90)
+                    except Exception:
+                        time.sleep(0.09)
+                page.keyboard.press("Enter")
+                return True
+            except Exception:
+                continue
+    return False
+
+
 def _click_siebel_login_submit(page) -> bool:
     """Click Siebel / generic Login after username+password are already set in the DOM."""
     _sels = (
@@ -586,21 +734,50 @@ def _click_siebel_login_submit(page) -> bool:
         if (btn && vis(btn)) { try { btn.click(); return true; } catch (e) {} }
         return false;
     }"""
+    # v0.7.00 (CDP Edge): Playwright ``locator.click`` on #s_swepi_22 *before* any in-page JS submit. On native
+    # Chromium, running ``SWEExecuteLogin`` / ``anchor.click()`` from ``evaluate`` first can report success while
+    # the UI stays on the login surface (e.g. omnibox focus / trusted-click semantics).
+    logger.info("handle_browser_opening: _click_siebel_login_submit STARTING")
+    _dms_steal_focus_from_omnibox_for_login(page)
+    # After focus steal, we should be in User ID field. Tab 3x + Enter reaches Login (tabindex 4).
+    logger.info("handle_browser_opening: Trying Tab direct approach")
+    if _try_siebel_login_submit_via_tab_direct(page):
+        logger.info("handle_browser_opening: Tab direct returned True")
+        return True
+    logger.info("handle_browser_opening: Tab direct returned False, trying Tab from User ID")
+    # Fallback: explicitly focus User ID then Tab.
+    if _try_siebel_login_submit_via_tab_from_user_id(page):
+        logger.info("handle_browser_opening: Tab from User ID returned True")
+        return True
+    logger.info("handle_browser_opening: Tab from User ID returned False, trying locator clicks")
+    for fr in _ordered_unique_playwright_frames(page):
+        for sel in _sels:
+            try:
+                loc = fr.locator(sel).first
+                if loc.count() == 0:
+                    continue
+                try:
+                    loc.wait_for(state="attached", timeout=800)
+                except Exception:
+                    continue
+                # Do not require ``is_visible`` — Chromium sometimes keeps the anchor "obscured" while the
+                # omnibox is active; ``force`` / viewport mouse still need to run.
+                if _try_playwright_siebel_login_anchor_click(page, loc):
+                    return True
+            except Exception:
+                continue
     for fr in _ordered_unique_playwright_frames(page):
         try:
             if bool(fr.evaluate(_SIEBEL_HERO_SWEENTRY_LOGIN_SUBMIT_JS)):
                 return True
         except Exception:
             pass
-        for sel in _sels:
-            try:
-                loc = fr.locator(sel).first
-                if loc.count() > 0 and loc.is_visible(timeout=400):
-                    loc.click(timeout=3000)
-                    return True
-            except Exception:
-                continue
     try:
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        _nudge_siebel_login_fields_for_autofill(page)
         page.keyboard.press("Enter")
         return True
     except Exception:
@@ -725,6 +902,7 @@ def _try_fill_siebel_login_and_submit(
     p = password if isinstance(password, str) else ""
     if len(u) < 2 or len(p) < 1:
         return False
+    _dms_steal_focus_from_omnibox_for_login(page)
     _form_deadline = time.monotonic() + 12.0
     while time.monotonic() < _form_deadline:
         if _login_form_visible_any_frame(page):
@@ -1328,6 +1506,71 @@ def _try_cdp_maximize_browser_window(page: object) -> None:
         logger.debug("handle_browser_opening: CDP maximize skipped: %s", exc)
 
 
+def _try_cdp_focus_page(page: object) -> bool:
+    """Use CDP to bring page to front and focus the document body."""
+    if page is None:
+        return False
+    try:
+        ctx = page.context
+        session = ctx.new_cdp_session(page)
+        session.send("Page.bringToFront", {})
+        # Get the document and focus the body via DOM.focus
+        try:
+            doc = session.send("DOM.getDocument", {})
+            root_id = doc.get("root", {}).get("nodeId")
+            if root_id:
+                # Find body element
+                body = session.send("DOM.querySelector", {"nodeId": root_id, "selector": "body"})
+                body_id = body.get("nodeId")
+                if body_id:
+                    session.send("DOM.focus", {"nodeId": body_id})
+                    logger.info("handle_browser_opening: CDP Page.bringToFront + DOM.focus(body) succeeded")
+                    return True
+        except Exception as inner_exc:
+            logger.debug("handle_browser_opening: CDP DOM.focus failed: %s", inner_exc)
+        logger.info("handle_browser_opening: CDP Page.bringToFront succeeded (DOM.focus skipped)")
+        return True
+    except Exception as exc:
+        logger.warning("handle_browser_opening: CDP focus page FAILED: %s", exc)
+        return False
+
+
+def _try_js_click_body_for_focus(page) -> bool:
+    """Click body via JavaScript to transfer focus from omnibox to page content."""
+    _js = """() => {
+        let result = {};
+        try {
+            result.prevActive = document.activeElement ? document.activeElement.tagName : 'none';
+            if (document.activeElement && document.activeElement.blur) {
+                document.activeElement.blur();
+            }
+        } catch (e) { result.blurErr = e.message; }
+        try {
+            document.body.click();
+        } catch (e) { result.bodyClickErr = e.message; }
+        try {
+            document.body.focus();
+        } catch (e) { result.bodyFocusErr = e.message; }
+        try {
+            const el = document.querySelector('#formContent') || document.querySelector('input[name="SWEUserName"]');
+            if (el) { 
+                el.click(); 
+                el.focus(); 
+                result.focusedEl = el.tagName + (el.name ? '#' + el.name : '');
+            }
+        } catch (e) { result.elFocusErr = e.message; }
+        result.newActive = document.activeElement ? (document.activeElement.tagName + (document.activeElement.name ? '#' + document.activeElement.name : '')) : 'none';
+        return result;
+    }"""
+    try:
+        result = page.evaluate(_js)
+        logger.info("handle_browser_opening: JS body/form focus result: %s", result)
+        return True
+    except Exception as exc:
+        logger.warning("handle_browser_opening: JS body focus FAILED: %s", exc)
+        return False
+
+
 def _launch_managed_browser_for_site(
     base_url: str, *, launch_background: bool = False, site_label: str = ""
 ):
@@ -1649,6 +1892,80 @@ def _nudge_siebel_login_fields_for_autofill(page) -> None:
             continue
 
 
+def _dms_steal_focus_from_omnibox_for_login(page) -> None:
+    """Move keyboard focus from Chromium's address bar onto the Siebel login surface.
+
+    After ``goto`` or tab reuse (for example Subdealer challan Retry after ``teardown-local-browsers``),
+    the browser sometimes leaves focus in the omnibox so **Login** clicks / ``Enter`` never reach
+    ``#formContent`` / ``SWEEntryForm`` (typing and submit appear to do nothing).
+    """
+    logger.info("handle_browser_opening: _dms_steal_focus_from_omnibox_for_login STARTING")
+    try:
+        page.bring_to_front()
+        logger.info("handle_browser_opening: page.bring_to_front() done")
+    except Exception as exc:
+        logger.warning("handle_browser_opening: bring_to_front failed: %s", exc)
+    # Use CDP to focus the page frame (moves focus away from browser chrome/omnibox).
+    _try_cdp_focus_page(page)
+    try:
+        page.wait_for_timeout(100)
+    except Exception:
+        time.sleep(0.1)
+    # JavaScript click on body/form to claim focus in page content.
+    _try_js_click_body_for_focus(page)
+    try:
+        page.wait_for_timeout(80)
+    except Exception:
+        time.sleep(0.08)
+    # F6 to toggle focus between omnibox and page (browser standard).
+    try:
+        page.keyboard.press("F6")
+    except Exception:
+        pass
+    try:
+        page.wait_for_timeout(80)
+    except Exception:
+        time.sleep(0.08)
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    try:
+        page.wait_for_timeout(40)
+    except Exception:
+        time.sleep(0.04)
+    _dms_viewport_click_steal_from_omnibox(page)
+    for fr in _ordered_unique_playwright_frames(page):
+        for sel in (
+            "#formContent.siebui-login-form",
+            "div#formContent",
+            ".siebui-login-form",
+            "#formContent",
+        ):
+            try:
+                loc = fr.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=400):
+                    try:
+                        loc.scroll_into_view_if_needed(timeout=1500)
+                    except Exception:
+                        pass
+                    try:
+                        loc.click(timeout=2000, force=True)
+                    except Exception:
+                        try:
+                            loc.click(timeout=2000)
+                        except Exception:
+                            pass
+                    try:
+                        page.wait_for_timeout(80)
+                    except Exception:
+                        time.sleep(0.08)
+                    return
+            except Exception:
+                continue
+    _nudge_siebel_login_fields_for_autofill(page)
+
+
 def _siebel_try_login_submit_fallback_any_frame(page) -> bool:
     """True when username has text and password field looks filled (DOM value or Chrome ``:autofill``)."""
     for fr in _ordered_unique_playwright_frames(page):
@@ -1856,11 +2173,21 @@ def _is_ready_after_login_page(pg) -> bool:
         dms_like = "siebel" in u or "heroconnect" in u or "edealer" in u
 
         form = _login_form_visible_any_frame(pg)
+        logger.info(
+            "handle_browser_opening: _is_ready_after_login_page: url=%s on_siebel_login=%s dms_like=%s form_visible=%s",
+            u[:150], on_siebel_login, dms_like, form
+        )
 
         if on_misp or on_path_login:
             return not form
 
+        # If login form is visible, we're NOT past login regardless of URL
+        if form:
+            logger.info("handle_browser_opening: _is_ready_after_login_page returning False (login form still visible)")
+            return False
+
         if dms_like and not on_siebel_login:
+            logger.info("handle_browser_opening: _is_ready_after_login_page returning True (dms_like, not login URL, no form)")
             return True
 
         if dms_like and on_siebel_login:
@@ -2333,6 +2660,9 @@ def _launch_native_site_persistent_context(
                 except Exception as exc2:
                     logger.debug("handle_browser_opening: native %s warm goto: %s", sl, exc2)
         _try_cdp_maximize_browser_window(pg0)
+        # Immediately after goto + maximize, focus the page to move away from omnibox.
+        _try_cdp_focus_page(pg0)
+        _try_js_click_body_for_focus(pg0)
         return pg0, "playwright-chromium"
     except Exception as exc:
         logger.warning(
@@ -2505,6 +2835,7 @@ def _login_gate_after_open(
                     )
                     return None, _dms_browser_closed_operator_message(site_label)
                 raise
+            _dms_steal_focus_from_omnibox_for_login(page)
         if _try_auto_login_if_prefilled(page, log_path=_logp):
             return page, None
         if (site_label or "").strip() == "DMS":

@@ -56,7 +56,28 @@ from app.services.subdealer_challan_ocr_service import challan_artifact_leaf_nam
 logger = logging.getLogger(__name__)
 
 RETRY_WAIT_SEC = 3.0
-MAX_PREP_ROUNDS = 3
+# Pass 1: Queued (and Failed when batch-wide retry). Pass 2: retry Failed only when requeue_all_failed.
+MAX_PREP_ROUNDS = 2
+
+
+def _detail_status_norm(row: dict) -> str:
+    return (row.get("status") or "").strip().lower()
+
+
+def _batch_all_detail_rows_ready(rows: list[dict]) -> bool:
+    return bool(rows) and all(_detail_status_norm(r) == "ready" for r in rows)
+
+
+def _pending_prepare_rows(rows: list[dict], *, requeue_all_failed: bool) -> list[dict]:
+    """Rows that should receive prepare_vehicle this round: Queued, plus Failed when batch-wide retry."""
+    pending: list[dict] = []
+    for r in rows:
+        st = _detail_status_norm(r)
+        if st == "queued":
+            pending.append(r)
+        elif st == "failed" and requeue_all_failed:
+            pending.append(r)
+    return pending
 
 
 def _note(_list: list[str], msg: str) -> None:
@@ -72,16 +93,29 @@ def _run_prepare_vehicle_loop(
     frame_sel: str | None,
     steps: list[str],
     logln: Callable[[str], None],
+    requeue_all_failed: bool,
 ) -> tuple[str | None, dict]:
-    """Run prepare_vehicle for all Queued rows. Returns (error message or None, last successful scrape)."""
+    """Run prepare_vehicle for Queued rows; second pass retries Failed when ``requeue_all_failed`` is True."""
     last_vehicle_scrape: dict = {}
     for round_n in range(MAX_PREP_ROUNDS):
         batch_rows = detail_repo.fetch_batch_rows(challan_batch_id)
-        pending = [r for r in batch_rows if (r.get("status") or "").strip() == "Queued"]
+        pending = _pending_prepare_rows(batch_rows, requeue_all_failed=requeue_all_failed)
         if not pending:
-            logln(f"prepare_vehicle round {round_n + 1}: no Queued rows left")
+            if _batch_all_detail_rows_ready(batch_rows):
+                logln(f"prepare_vehicle round {round_n + 1}: all detail rows Ready — done.")
+            else:
+                logln(
+                    f"prepare_vehicle round {round_n + 1}: no Queued"
+                    + ("/Failed" if requeue_all_failed else "")
+                    + " rows to process — stopping."
+                )
             break
-        logln(f"prepare_vehicle round {round_n + 1}/{MAX_PREP_ROUNDS}: {len(pending)} Queued row(s)")
+        n_q = sum(1 for r in pending if _detail_status_norm(r) == "queued")
+        n_f = sum(1 for r in pending if _detail_status_norm(r) == "failed")
+        logln(
+            f"prepare_vehicle round {round_n + 1}/{MAX_PREP_ROUNDS}: {len(pending)} row(s) "
+            f"(Queued={n_q}, Failed={n_f})"
+        )
 
         def note(msg: str) -> None:
             _note(steps, msg)
@@ -150,18 +184,23 @@ def _run_prepare_vehicle_loop(
                 detail_repo.update_detail_status(sid, status="Failed", last_error=es)
             master_repo.refresh_prepared_count(challan_batch_id)
 
-        still_queued = [
-            r
-            for r in detail_repo.fetch_batch_rows(challan_batch_id)
-            if (r.get("status") or "").strip() == "Queued"
-        ]
-        if not still_queued:
+        batch_rows = detail_repo.fetch_batch_rows(challan_batch_id)
+        if _batch_all_detail_rows_ready(batch_rows):
+            logln("prepare_vehicle: all detail rows Ready after this round.")
             break
-        if round_n < MAX_PREP_ROUNDS - 1:
-            wmsg = f"Waiting {RETRY_WAIT_SEC}s before retry for {len(still_queued)} queued row(s)."
+        if round_n >= MAX_PREP_ROUNDS - 1:
+            break
+        failed_remaining = sum(1 for r in batch_rows if _detail_status_norm(r) == "failed")
+        if failed_remaining and requeue_all_failed:
+            wmsg = (
+                f"Waiting {RETRY_WAIT_SEC}s before prepare retry pass "
+                f"for {failed_remaining} Failed row(s)."
+            )
             logln(wmsg)
             _note(steps, wmsg)
             time.sleep(RETRY_WAIT_SEC)
+        else:
+            break
 
     master_repo.refresh_prepared_count(challan_batch_id)
     final_rows = detail_repo.fetch_batch_rows(challan_batch_id)
@@ -654,6 +693,7 @@ def run_subdealer_challan_batch(
                 frame_sel=frame_sel,
                 steps=steps,
                 logln=logln,
+                requeue_all_failed=requeue_all_failed,
             )
             master_repo.refresh_prepared_count(challan_batch_id)
             if prep_err:

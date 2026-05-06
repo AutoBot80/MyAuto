@@ -141,5 +141,13 @@ FunctionEnd
   FileWrite $9 "VAHAN_BASE_URL=https://vahan.parivahan.gov.in/vahan/vahan/ui/login/login.xhtml$\r$\n"
   FileClose $9
 sdr_envok:
+  ; Sidecar Playwright Chromium (~300MB). Same path as job_runner frozen mode: $R5\playwright-browsers
+  IfFileExists "$INSTDIR\resources\sidecar\job_runner.exe" sdr_pw_run sdr_pw_skip
+  sdr_pw_run:
+    ExecWait '"$INSTDIR\resources\sidecar\job_runner.exe" --install-playwright-browsers "$R5"' $0
+    IntCmp $0 0 sdr_pw_skip sdr_pw_warn sdr_pw_warn
+  sdr_pw_warn:
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Playwright Chromium could not be downloaded (installer exit $0).$\r$\n$\r$\nDMS automation in the app may not work until this succeeds (network/firewall).$\r$\n$\r$\nTo retry manually, run (elevated if needed):$\r$\n$\"$INSTDIR\resources\sidecar\job_runner.exe$\" --install-playwright-browsers $\"$R5$\""
+  sdr_pw_skip:
 !macroend
 !endif
