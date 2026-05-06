@@ -5191,6 +5191,580 @@ def _apply_two_wheeler_seating_cylinders_body(out: dict) -> None:
         out["body_type"] = "Open"
 
 
+# --- In-transit receipt: Vehicles Receipt → HMCL - In Transit → invoice drilldown → VIN Find → Process Receipt
+_IN_TRANSIT_RECEIPT_MIN_CHASSIS_ALNUM = 8
+_IN_TRANSIT_RECEIPT_MAX_INVOICE_PAGES = 35
+_IN_TRANSIT_RECEIPT_INVOICE_GRID_WAIT_MS = 12_000
+_IN_TRANSIT_RECEIPT_VEHICLES_GRID_WAIT_MS = 14_000
+
+
+def _receipt_flow_search_roots(page: Page, content_frame_selector: str | None) -> list:
+    """Ordered roots for Siebel receipt / tab / jqGrid locators (dedup by identity)."""
+    out: list = []
+    seen: set[int] = set()
+    for r in list(_siebel_locator_search_roots(page, content_frame_selector)) + list(_ordered_frames(page)) + [page]:
+        k = id(r)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out
+
+
+def _click_siebel_nav_tab_in_container(
+    page: Page,
+    container_id: str,
+    tab_needle: str,
+    *,
+    note,
+    log_tag: str,
+) -> bool:
+    """Click a visible tab/link inside ``#s_sctrl_tabScreen`` or ``#s_sctrl_tabView`` (First / Second level bar)."""
+    needle = (tab_needle or "").strip().lower()
+    if not needle:
+        return False
+    js = """(args) => {
+        const containerId = args[0];
+        const tabNeedle = String(args[1] || '').trim().toLowerCase();
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const norm = (s) => String(s || '').trim().toLowerCase();
+        const compact = (s) => s.replace(/[-\\s]+/g, '');
+        const matches = (txt, needle) => {
+            if (!txt || !needle) return false;
+            if (txt === needle || txt.includes(needle)) return true;
+            const a = compact(txt); const b = compact(needle);
+            return a === b || a.includes(b) || b.includes(a);
+        };
+        const bar = document.getElementById(containerId);
+        if (!bar || !vis(bar)) return { ok: false };
+        const tabs = Array.from(bar.querySelectorAll(
+            "a.ui-tabs-anchor, a[href*='tabScreen'], a[href*='tabView'], li[role='tab'] a, [role='tab']"
+        ));
+        for (const t of tabs) {
+            if (!vis(t)) continue;
+            const raw = (t.innerText || t.textContent || t.getAttribute('aria-label') || t.getAttribute('title') || '');
+            const txt = norm(raw);
+            if (!matches(txt, tabNeedle)) continue;
+            try { t.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+            try { t.focus(); } catch (e) {}
+            try { t.click(); } catch (e) {}
+            try {
+                const opts = { bubbles: true, cancelable: true, view: window };
+                t.dispatchEvent(new MouseEvent('mousedown', opts));
+                t.dispatchEvent(new MouseEvent('mouseup', opts));
+                t.dispatchEvent(new MouseEvent('click', opts));
+            } catch (e2) {}
+            return { ok: true, hit: raw.substring(0, 80) };
+        }
+        return { ok: false };
+    }"""
+    for root in _receipt_flow_search_roots(page, content_frame_selector):
+        try:
+            res = root.evaluate(js, [container_id, needle])
+            if isinstance(res, dict) and res.get("ok"):
+                note(f"{log_tag}: clicked tab in #{container_id!r} needle={tab_needle!r} hit={res.get('hit')!r}.")
+                return True
+        except Exception:
+            continue
+    note(f"{log_tag}: tab not clicked — #{container_id!r} needle={tab_needle!r}.")
+    return False
+
+
+def _ensure_vehicles_receipt_hmcl_in_transit_tabs(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    note,
+    form_trace=None,
+    step=None,
+) -> bool:
+    """First level **Vehicles Receipt**, second level **HMCL - In Transit** (best-effort both)."""
+    if callable(form_trace):
+        form_trace(
+            "5c_in_transit_receipt_tabs",
+            "Vehicles Receipt / HMCL In Transit",
+            "click_first_second_level_nav_tabs",
+        )
+    ok1 = _click_siebel_nav_tab_in_container(
+        page, "s_sctrl_tabScreen", "vehicles receipt", note=note, log_tag="in_transit_receipt"
+    )
+    _safe_page_wait(page, 450, log_label="after_vehicles_receipt_tab")
+    ok2 = _click_siebel_nav_tab_in_container(
+        page, "s_sctrl_tabView", "hmcl - in transit", note=note, log_tag="in_transit_receipt"
+    )
+    _safe_page_wait(page, 550, log_label="after_hmcl_in_transit_tab")
+    if callable(step):
+        step(
+            "In-transit receipt: "
+            + ("Vehicles Receipt tab OK; " if ok1 else "Vehicles Receipt tab missing; ")
+            + ("HMCL - In Transit tab OK." if ok2 else "HMCL - In Transit tab missing.")
+        )
+    return ok1 or ok2
+
+
+def _chassis_for_in_transit_receipt_find(scraped: dict, dms_values: dict) -> str:
+    """Chassis/VIN string for Vehicles list Find (prefer grid/detail scrape, then DMS partial)."""
+    ch = _best_chassis_str(
+        str((scraped or {}).get("full_chassis") or "").strip(),
+        str((scraped or {}).get("frame_num") or "").strip(),
+    )
+    fp = str((dms_values or {}).get("frame_partial") or "").strip()
+    if fp:
+        ch = _best_chassis_str(ch, fp)
+    return (ch or "").strip()
+
+
+def _normalize_chassis_compare_token(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", (s or "")).upper()
+
+
+def _wait_jqgrid_with_summary_visible(
+    page: Page,
+    summary: str,
+    *,
+    content_frame_selector: str | None,
+    wait_ms: int,
+) -> bool:
+    deadline = time.monotonic() + max(0.5, wait_ms / 1000.0)
+    sel = f'table.ui-jqgrid-btable[summary="{summary}"]'
+    while time.monotonic() < deadline:
+        for root in _receipt_flow_search_roots(page, content_frame_selector):
+            try:
+                loc = root.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    return True
+            except Exception:
+                continue
+        try:
+            page.wait_for_timeout(280)
+        except Exception:
+            time.sleep(0.28)
+    return False
+
+
+def _invoice_drilldown_count(page: Page, *, content_frame_selector: str | None) -> int:
+    sel = 'table.ui-jqgrid-btable[summary="Invoices"] tbody tr[role="row"]:not(.jqgfirstrow) a.drilldown[name="Invoice Number"]'
+    best = 0
+    for root in _receipt_flow_search_roots(page, content_frame_selector):
+        try:
+            n = root.locator(sel).count()
+            if n > best:
+                best = n
+        except Exception:
+            continue
+    return best
+
+
+def _click_nth_invoice_drilldown(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    idx: int,
+) -> bool:
+    sel = 'table.ui-jqgrid-btable[summary="Invoices"] tbody tr[role="row"]:not(.jqgfirstrow) a.drilldown[name="Invoice Number"]'
+    for root in _receipt_flow_search_roots(page, content_frame_selector):
+        try:
+            loc = root.locator(sel).nth(idx)
+            if loc.count() == 0:
+                continue
+            loc.scroll_into_view_if_needed(timeout=3000)
+            loc.click(timeout=8000)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _invoices_grid_click_seek_next(page: Page, *, content_frame_selector: str | None, note) -> bool:
+    """Next page on the **Invoices** jqGrid only (ancestor of table summary=Invoices)."""
+    js_next = """() => {
+        const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        };
+        const tbl = document.querySelector('table.ui-jqgrid-btable[summary="Invoices"]');
+        if (!tbl) return { ok: false, reason: 'no_table' };
+        let p = tbl;
+        for (let d = 0; d < 12 && p; d++) {
+            const g = p.closest && p.closest('div.ui-jqgrid');
+            if (!g) { p = p.parentElement; continue; }
+            const next = g.querySelector('.ui-icon-seek-next');
+            if (next && vis(next) && !next.classList.contains('ui-state-disabled')) {
+                try { next.click(); } catch (e) {}
+                return { ok: true };
+            }
+            return { ok: false, reason: 'no_next_or_disabled' };
+        }
+        return { ok: false, reason: 'no_jqgrid_parent' };
+    }"""
+    for root in _receipt_flow_search_roots(page, content_frame_selector):
+        try:
+            res = root.evaluate(js_next)
+            if isinstance(res, dict) and res.get("ok"):
+                note("in_transit_receipt: invoices grid — clicked pager next.")
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _vehicles_grid_has_chassis_row(page: Page, *, content_frame_selector: str | None, want_norm: str) -> bool:
+    if not want_norm or len(want_norm) < 4:
+        return False
+    js = """(want) => {
+        const norm = (s) => String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        const w = norm(want);
+        if (!w) return false;
+        const tbl = document.querySelector('table.ui-jqgrid-btable[summary="Vehicles"]');
+        if (!tbl) return false;
+        const rows = Array.from(tbl.querySelectorAll('tbody tr[role="row"]:not(.jqgfirstrow)'));
+        for (const tr of rows) {
+            const cells = Array.from(tr.querySelectorAll('td[role="gridcell"]'));
+            for (const td of cells) {
+                const id = (td.id || '');
+                if (!id.includes('Serial_Num') && !id.includes('serial')) continue;
+                const t1 = norm(td.getAttribute('title') || '');
+                const t2 = norm(td.innerText || '');
+                if (t1 && (t1 === w || t1.includes(w) || w.includes(t1))) return true;
+                if (t2 && (t2 === w || t2.includes(w) || w.includes(t2))) return true;
+            }
+        }
+        return false;
+    }"""
+    for root in _receipt_flow_search_roots(page, content_frame_selector):
+        try:
+            if bool(root.evaluate(js, want_norm)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _vehicles_list_find_set_serial_column_and_query(
+    page: Page,
+    *,
+    chassis_display: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """Vehicles list applet: Find → VIN#/Serial, **Starting with** = chassis, **Go**."""
+    roots = _receipt_flow_search_roots(page, content_frame_selector)
+    want_vin_col = False
+    for root in roots:
+        try:
+            find_el = root.locator('input[aria-label="Find" i], input[title="Find" i]').first
+            if find_el.count() == 0 or not find_el.is_visible(timeout=600):
+                continue
+            find_el.click(timeout=2500)
+            _safe_page_wait(page, 220, log_label="after_find_focus_vehicles_list")
+            try:
+                page.keyboard.press("Alt+ArrowDown")
+            except Exception:
+                pass
+            _safe_page_wait(page, 200, log_label="after_find_dropdown_open")
+            for _nav in range(40):
+                try:
+                    cur = (find_el.input_value(timeout=400) or "").strip()
+                except Exception:
+                    cur = ""
+                low = cur.lower()
+                if "vin" in low or "serial" in low:
+                    want_vin_col = True
+                    try:
+                        page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+                    _safe_page_wait(page, 220, log_label="after_find_column_enter")
+                    break
+                try:
+                    page.keyboard.press("ArrowDown")
+                except Exception:
+                    break
+                _safe_page_wait(page, 70, log_label="find_dropdown_nav")
+            if not want_vin_col:
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                note("in_transit_receipt: Find column could not be set to VIN/Serial (continuing anyway).")
+            sw = root.locator("input[aria-label='Starting with' i]").first
+            if sw.count() == 0 or not sw.is_visible(timeout=800):
+                continue
+            sw.click(timeout=2000)
+            sw.fill("", timeout=800)
+            sw.fill(chassis_display.strip(), timeout=2500)
+            _safe_page_wait(page, 200, log_label="after_starting_with_fill")
+            go_hit = False
+            for r2 in roots:
+                try:
+                    go_btn = r2.locator(
+                        "button[aria-label*='Vehicles List:Go' i], "
+                        "button[aria-label*='Vehicles List:Go']"
+                    ).first
+                    if go_btn.count() > 0 and go_btn.is_visible(timeout=500):
+                        go_btn.click(timeout=3000)
+                        go_hit = True
+                        break
+                except Exception:
+                    continue
+            if not go_hit:
+                for r2 in roots:
+                    try:
+                        go_btn = r2.locator(
+                            "button.siebui-icon-find.appletButton[aria-label*='Go' i]"
+                        ).first
+                        if go_btn.count() > 0 and go_btn.is_visible(timeout=400):
+                            go_btn.click(timeout=3000)
+                            go_hit = True
+                            break
+                    except Exception:
+                        continue
+            if not go_hit:
+                note("in_transit_receipt: Vehicles List Go not found after Starting with fill.")
+                return False
+            try:
+                _pv_networkidle(note, page, min(12_000, int(action_timeout_ms) + 4000), "vehicles_list_after_go")
+            except Exception as e:
+                if _is_browser_disconnected_error(e):
+                    raise
+            _safe_page_wait(page, 900, log_label="after_vehicles_list_go_settle")
+            return True
+        except Exception:
+            continue
+    note("in_transit_receipt: could not run Vehicles list Find/Starting with/Go.")
+    return False
+
+
+def _prepare_vehicle_receipt_in_transit_via_invoices(
+    page: Page,
+    scraped: dict,
+    dms_values: dict,
+    urls: SiebelDmsUrls,
+    *,
+    vehicle_url: str,
+    frame_p: str,
+    engine_p: str,
+    nav_timeout_ms: int,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+    form_trace=None,
+    step=None,
+) -> tuple[bool, str | None]:
+    """
+    In-transit: navigate to receipt URL, open **Vehicles Receipt** / **HMCL - In Transit**, iterate
+    invoice drilldowns, Find chassis on **Vehicles** sub-grid, **Process Receipt** when matched.
+
+    Returns ``(True, None)`` on success, or ``(False, error)``. At most one full pass over paginated
+    invoices (bounded); no inner retry loop on the same invoice beyond a single Find/Go + Process Receipt.
+    """
+    recv_u = (urls.vehicles or "").strip()
+    if not recv_u:
+        return False, "Siebel: DMS_REAL_URL_VEHICLES is not set — cannot open in-transit receipt view."
+
+    chassis_raw = _chassis_for_in_transit_receipt_find(scraped, dms_values)
+    want_norm = _normalize_chassis_compare_token(chassis_raw)
+    aln = re.sub(r"[^A-Za-z0-9]", "", chassis_raw)
+    if len(aln) < _IN_TRANSIT_RECEIPT_MIN_CHASSIS_ALNUM:
+        return (
+            False,
+            "Siebel: in-transit receipt needs a longer chassis/VIN in scrape or DMS (min "
+            f"{_IN_TRANSIT_RECEIPT_MIN_CHASSIS_ALNUM} alphanumeric chars) for Vehicles list Find.",
+        )
+
+    if callable(form_trace):
+        form_trace(
+            "5c_in_transit_receipt_invoices",
+            "HMCL In Transit — invoice loop",
+            "begin_invoice_drilldown_receipt",
+            chassis_truncated=chassis_raw[:40],
+        )
+
+    _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
+    _siebel_after_goto_wait(page, floor_ms=1000)
+    _ensure_vehicles_receipt_hmcl_in_transit_tabs(
+        page,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        form_trace=form_trace,
+        step=step,
+    )
+    if not _wait_jqgrid_with_summary_visible(
+        page,
+        "Invoices",
+        content_frame_selector=content_frame_selector,
+        wait_ms=_IN_TRANSIT_RECEIPT_INVOICE_GRID_WAIT_MS,
+    ):
+        return False, "Siebel: Invoices grid (summary=Invoices) not visible after receipt navigation."
+
+    total_pages_walked = 0
+    while total_pages_walked < _IN_TRANSIT_RECEIPT_MAX_INVOICE_PAGES:
+        total_pages_walked += 1
+        if not _wait_jqgrid_with_summary_visible(
+            page,
+            "Invoices",
+            content_frame_selector=content_frame_selector,
+            wait_ms=6000,
+        ):
+            return False, "Siebel: Invoices grid disappeared during in-transit receipt pagination."
+
+        n_inv = _invoice_drilldown_count(page, content_frame_selector=content_frame_selector)
+        if n_inv <= 0:
+            note("in_transit_receipt: no invoice drilldown rows on this page.")
+        else:
+            note(f"in_transit_receipt: invoice page {total_pages_walked}, {n_inv} drilldown row(s).")
+        for inv_idx in range(max(0, n_inv)):
+            if callable(step):
+                step(f"In-transit receipt: trying invoice row {inv_idx + 1} of {n_inv} (page {total_pages_walked}).")
+            if not _click_nth_invoice_drilldown(
+                page,
+                content_frame_selector=content_frame_selector,
+                idx=inv_idx,
+            ):
+                note(f"in_transit_receipt: could not click invoice drilldown index {inv_idx}.")
+                continue
+            _safe_page_wait(page, 500, log_label="after_invoice_drilldown")
+            if not _wait_jqgrid_with_summary_visible(
+                page,
+                "Vehicles",
+                content_frame_selector=content_frame_selector,
+                wait_ms=_IN_TRANSIT_RECEIPT_VEHICLES_GRID_WAIT_MS,
+            ):
+                note("in_transit_receipt: Vehicles sub-grid not visible after invoice drilldown — next invoice.")
+                _ensure_vehicles_receipt_hmcl_in_transit_tabs(
+                    page,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    step=step,
+                )
+                continue
+
+            if not _vehicles_list_find_set_serial_column_and_query(
+                page,
+                chassis_display=chassis_raw,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            ):
+                _ensure_vehicles_receipt_hmcl_in_transit_tabs(
+                    page,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    step=step,
+                )
+                continue
+
+            if not _vehicles_grid_has_chassis_row(
+                page,
+                content_frame_selector=content_frame_selector,
+                want_norm=want_norm,
+            ):
+                note(
+                    f"in_transit_receipt: VIN not in Vehicles grid after Find "
+                    f"(want={want_norm[:20]}…) — next invoice."
+                )
+                _ensure_vehicles_receipt_hmcl_in_transit_tabs(
+                    page,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    step=step,
+                )
+                continue
+
+            if callable(form_trace):
+                form_trace(
+                    "5c_in_transit_receipt_invoices",
+                    "HMCL In Transit — Vehicles match",
+                    "process_receipt_click",
+                    invoice_row_index=inv_idx,
+                    page_index=total_pages_walked,
+                )
+
+            if not _try_click_process_receipt(
+                page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+            ):
+                note("in_transit_receipt: Process Receipt not available after VIN match — next invoice.")
+                _ensure_vehicles_receipt_hmcl_in_transit_tabs(
+                    page,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    step=step,
+                )
+                continue
+
+            _safe_page_wait(page, 800, log_label="after_process_receipt_click")
+            try:
+                _pv_networkidle(note, page, 14_000, "after_process_receipt")
+            except Exception as e:
+                if _is_browser_disconnected_error(e):
+                    raise
+            err_pop = _detect_siebel_error_popup(page, content_frame_selector)
+            if err_pop:
+                note(f"in_transit_receipt: Siebel error after Process Receipt — {err_pop[:300]!r}; next invoice.")
+                _ensure_vehicles_receipt_hmcl_in_transit_tabs(
+                    page,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    step=step,
+                )
+                continue
+
+            note("in_transit_receipt: Process Receipt completed without blocking Siebel error popup.")
+            if callable(step):
+                step("In-transit receipt: Process Receipt completed for matched invoice/VIN.")
+
+            re_list_err = _siebel_goto_vehicle_list_and_search(
+                page,
+                vehicle_url,
+                frame_p,
+                engine_p,
+                nav_timeout_ms=nav_timeout_ms,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                form_trace=form_trace,
+            )
+            if re_list_err:
+                return (
+                    False,
+                    "Siebel: Process Receipt appeared to succeed but Auto Vehicle List re-search failed: "
+                    + str(re_list_err),
+                )
+
+            if callable(form_trace):
+                form_trace(
+                    "5c_in_transit_receipt_invoices",
+                    "Auto Vehicle List",
+                    "after_receipt_vehicle_list_research_ok",
+                )
+            return True, None
+
+        if not _invoices_grid_click_seek_next(page, content_frame_selector=content_frame_selector, note=note):
+            break
+        _safe_page_wait(page, 700, log_label="after_invoices_seek_next")
+
+    return (
+        False,
+        "Siebel: in-transit receipt could not match VIN on any HMCL In Transit invoice page, "
+        "or Process Receipt did not complete without errors.",
+    )
+
+
 def _try_click_process_receipt(
     page: Page, *, timeout_ms: int, content_frame_selector: str | None
 ) -> bool:
@@ -7016,26 +7590,43 @@ def prepare_vehicle(
                     form_trace(
                         "5b_in_transit_receipt",
                         "Vehicles / In Transit — receipt view (DMS_REAL_URL_VEHICLES)",
-                        "goto_receipt_URL_then_Process_Receipt_toolbar_if_present",
+                        "goto_receipt_URL_invoice_loop_process_receipt",
                         receipt_url_truncated=recv_u[:200],
                     )
-                _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
-                _siebel_after_goto_wait(page, floor_ms=1000)
-                if _try_click_process_receipt(
-                    page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-                ):
-                    note("Clicked Process Receipt / receive control.")
+                _recv_ok, _recv_err = _prepare_vehicle_receipt_in_transit_via_invoices(
+                    page,
+                    scraped,
+                    dms_values,
+                    urls,
+                    vehicle_url=vehicle_url,
+                    frame_p=frame_p,
+                    engine_p=engine_p,
+                    nav_timeout_ms=nav_timeout_ms,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    step=step,
+                )
+                if _recv_ok:
+                    scraped["in_transit"] = False
+                    in_transit_state = False
+                    note(
+                        "prepare_vehicle: in-transit receipt flow finished — "
+                        "vehicle list re-search ran; treating as dealer-side for return flags."
+                    )
                     if callable(step):
-                        step("Vehicle received — Process Receipt was completed in DMS.")
+                        step("Vehicle received (HMCL In Transit receipt) — list search refreshed.")
+                    if callable(ms_done):
+                        ms_done("Vehicle received")
                 else:
-                    note("Process Receipt control not found; operator may complete receipt manually.")
+                    note(f"prepare_vehicle: in-transit receipt flow failed — {_recv_err!r}.")
                     if callable(step):
-                        step(
-                            "Receipt / in-transit screen opened; Process Receipt was not found — "
-                            "complete receiving manually if required."
-                        )
-                if callable(ms_done):
-                    ms_done("Vehicle received")
+                        step(_recv_err or "In-transit receipt failed.")
+                    merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+                    vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+                    _dump_branch_hits(note)
+                    return False, (_recv_err or "In-transit receipt failed."), merged, True, vm_crit, vm_info
             else:
                 note(
                     "DMS_REAL_URL_VEHICLES is not set — cannot navigate to receipt/in-transit view; "
