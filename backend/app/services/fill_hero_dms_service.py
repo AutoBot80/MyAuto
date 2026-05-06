@@ -34,13 +34,7 @@ from app.config import (
     HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER,
     DMS_PLAYWRIGHT_HEADED,
     DMS_REAL_URL_CONTACT,
-    DMS_REAL_URL_ENQUIRY,
-    DMS_REAL_URL_LINE_ITEMS,
-    DMS_REAL_URL_PDI,
-    DMS_REAL_URL_PRECHECK,
-    DMS_REAL_URL_REPORTS,
     DMS_REAL_URL_VEHICLE,
-    DMS_REAL_URL_VEHICLES,
     DMS_SIEBEL_ACTION_TIMEOUT_MS,
     DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
     DMS_SIEBEL_MOBILE_ARIA_HINTS,
@@ -160,7 +154,8 @@ def write_playwright_dms_execution_log_initial(
             "# Siebel URLs (truncated) are written again in the automation trace section after login.\n"
         )
         log_fp.write(f"url_contact_truncated={(DMS_REAL_URL_CONTACT or '')[:200]!r}\n")
-        log_fp.write(f"url_enquiry_truncated={(DMS_REAL_URL_ENQUIRY or '')[:200]!r}\n")
+        # enquiry / precheck / pdi / line_items / reports: not wired to env-backed SiebelDmsUrls slots (see run_fill_dms_only).
+        log_fp.write("url_enquiry_truncated=''\n")
         log_fp.write(f"url_vehicle_truncated={(DMS_REAL_URL_VEHICLE or '')[:200]!r}\n")
         log_fp.write("\n--- login_phase_capture ---\n")
         log_fp.write(
@@ -2008,13 +2003,19 @@ def _run_fill_dms_real_siebel_playwright(
 
     urls = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,
-        vehicles=DMS_REAL_URL_VEHICLES,
-        precheck=DMS_REAL_URL_PRECHECK,
-        pdi=DMS_REAL_URL_PDI,
+        # vehicles=DMS_REAL_URL_VEHICLES,
+        vehicles="",
+        # precheck=DMS_REAL_URL_PRECHECK,
+        precheck="",
+        # pdi=DMS_REAL_URL_PDI,
+        pdi="",
         vehicle=DMS_REAL_URL_VEHICLE,
-        enquiry=DMS_REAL_URL_ENQUIRY,
-        line_items=DMS_REAL_URL_LINE_ITEMS,
-        reports=DMS_REAL_URL_REPORTS,
+        # enquiry=DMS_REAL_URL_ENQUIRY,
+        enquiry="",
+        # line_items=DMS_REAL_URL_LINE_ITEMS,
+        line_items="",
+        # reports=DMS_REAL_URL_REPORTS,
+        reports="",
     )
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
     frag = Playwright_Hero_DMS_fill(

@@ -23,11 +23,7 @@ HERO_DMS_REAL_URL_VEHICLE = (
     "?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1"
     "&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676"
 )
-
-HERO_DMS_REAL_URL_VEHICLES = (
-    "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/"
-    "?SWECmd=Login&SWEPL=1&SRN=&SWETS=1774205157677"
-)
+# In-transit receipt: Vehicles Receipt / HMCL - In Transit first+second level view bars (no separate GotoView).
 
 HERO_DMS_REAL_URL_PDI = (
     "https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/"

@@ -23,7 +23,6 @@ from app.hero_dms_defaults import (
     HERO_DMS_REAL_URL_PDI,
     HERO_DMS_REAL_URL_REPORTS,
     HERO_DMS_REAL_URL_VEHICLE,
-    HERO_DMS_REAL_URL_VEHICLES,
     HERO_DMS_SIEBEL_INTER_ACTION_DELAY_MS,
 )
 from app.sqs_queue_defaults import (
@@ -320,8 +319,8 @@ DMS_BASE_URL = (os.getenv("DMS_BASE_URL") or HERO_DMS_BASE_URL).strip().rstrip("
 DMS_MODE = (os.getenv("DMS_MODE") or "real").strip().lower()
 # Fill DMS Stage 1 Find (always; ``skip_find`` in DB does not bypass). Defaults: ``hero_dms_defaults``.
 DMS_REAL_URL_CONTACT = (os.getenv("DMS_REAL_URL_CONTACT") or HERO_DMS_REAL_URL_CONTACT).strip()
-# In Transit branch: e.g. Vehicles Receipt / HMCL In Transit (Process Receipt). See BRD §6.1a / run_hero_siebel_dms_flow.
-DMS_REAL_URL_VEHICLES = (os.getenv("DMS_REAL_URL_VEHICLES") or HERO_DMS_REAL_URL_VEHICLES).strip()
+# Legacy name only: in-transit receipt does not use a GotoView URL (view-bar tabs). Env optional; unused in Playwright.
+DMS_REAL_URL_VEHICLES = (os.getenv("DMS_REAL_URL_VEHICLES") or "").strip()
 # Optional: separate Pre Check view; if empty, Pre Check is attempted on ``DMS_REAL_URL_PDI`` after goto.
 DMS_REAL_URL_PRECHECK = (os.getenv("DMS_REAL_URL_PRECHECK") or "").strip()
 DMS_REAL_URL_PDI = (os.getenv("DMS_REAL_URL_PDI") or HERO_DMS_REAL_URL_PDI).strip()

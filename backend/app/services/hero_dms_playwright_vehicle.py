@@ -5549,7 +5549,7 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
     page: Page,
     scraped: dict,
     dms_values: dict,
-    urls: SiebelDmsUrls,
+    _urls: SiebelDmsUrls,
     *,
     vehicle_url: str,
     frame_p: str,
@@ -5562,16 +5562,13 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
     step=None,
 ) -> tuple[bool, str | None]:
     """
-    In-transit: navigate to receipt URL, open **Vehicles Receipt** / **HMCL - In Transit**, iterate
-    invoice drilldowns, Find chassis on **Vehicles** sub-grid, **Process Receipt** when matched.
+    In-transit: from the current Siebel context after VIN scrape, open **Vehicles Receipt** /
+    **HMCL - In Transit** via first/second level view bars (no GotoView URL), then iterate invoice
+    drilldowns, Find chassis on **Vehicles** sub-grid, **Process Receipt** when matched.
 
     Returns ``(True, None)`` on success, or ``(False, error)``. At most one full pass over paginated
     invoices (bounded); no inner retry loop on the same invoice beyond a single Find/Go + Process Receipt.
     """
-    recv_u = (urls.vehicles or "").strip()
-    if not recv_u:
-        return False, "Siebel: DMS_REAL_URL_VEHICLES is not set — cannot open in-transit receipt view."
-
     chassis_raw = _chassis_for_in_transit_receipt_find(scraped, dms_values)
     want_norm = _normalize_chassis_compare_token(chassis_raw)
     aln = re.sub(r"[^A-Za-z0-9]", "", chassis_raw)
@@ -5590,8 +5587,10 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
             chassis_truncated=chassis_raw[:40],
         )
 
-    _goto(page, recv_u, "vehicles_receipt", nav_timeout_ms=nav_timeout_ms)
-    _siebel_after_goto_wait(page, floor_ms=1000)
+    note(
+        "in_transit_receipt: opening HMCL In Transit receipt via Vehicles Receipt / HMCL - In Transit "
+        "view-bar tabs (no DMS_REAL_URL_VEHICLES GotoView)."
+    )
     _ensure_vehicles_receipt_hmcl_in_transit_tabs(
         page,
         content_frame_selector=content_frame_selector,
@@ -5605,7 +5604,7 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
         content_frame_selector=content_frame_selector,
         wait_ms=_IN_TRANSIT_RECEIPT_INVOICE_GRID_WAIT_MS,
     ):
-        return False, "Siebel: Invoices grid (summary=Invoices) not visible after receipt navigation."
+        return False, "Siebel: Invoices grid (summary=Invoices) not visible after Vehicles Receipt / HMCL In Transit tabs."
 
     total_pages_walked = 0
     while total_pages_walked < _IN_TRANSIT_RECEIPT_MAX_INVOICE_PAGES:
@@ -7579,61 +7578,51 @@ def prepare_vehicle(
     
         if in_transit_state:
             note(
-                "prepare_vehicle: vehicle in-transit — opening receipt view if configured; "
+                "prepare_vehicle: vehicle in-transit — running HMCL In Transit receipt via view-bar tabs; "
                 "Pre-check/PDI skipped (not run until dealer stock)."
             )
             if callable(step):
                 step("Vehicle appears in transit — receipt path only (Pre-check/PDI skipped).")
-            recv_u = (urls.vehicles or "").strip()
-            if recv_u:
-                if callable(form_trace):
-                    form_trace(
-                        "5b_in_transit_receipt",
-                        "Vehicles / In Transit — receipt view (DMS_REAL_URL_VEHICLES)",
-                        "goto_receipt_URL_invoice_loop_process_receipt",
-                        receipt_url_truncated=recv_u[:200],
-                    )
-                _recv_ok, _recv_err = _prepare_vehicle_receipt_in_transit_via_invoices(
-                    page,
-                    scraped,
-                    dms_values,
-                    urls,
-                    vehicle_url=vehicle_url,
-                    frame_p=frame_p,
-                    engine_p=engine_p,
-                    nav_timeout_ms=nav_timeout_ms,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                    form_trace=form_trace,
-                    step=step,
+            if callable(form_trace):
+                form_trace(
+                    "5b_in_transit_receipt",
+                    "Vehicles Receipt / HMCL - In Transit (view-bar tabs, no GotoView URL)",
+                    "invoice_loop_process_receipt_then_vehicle_list_research",
                 )
-                if _recv_ok:
-                    scraped["in_transit"] = False
-                    in_transit_state = False
-                    note(
-                        "prepare_vehicle: in-transit receipt flow finished — "
-                        "vehicle list re-search ran; treating as dealer-side for return flags."
-                    )
-                    if callable(step):
-                        step("Vehicle received (HMCL In Transit receipt) — list search refreshed.")
-                    if callable(ms_done):
-                        ms_done("Vehicle received")
-                else:
-                    note(f"prepare_vehicle: in-transit receipt flow failed — {_recv_err!r}.")
-                    if callable(step):
-                        step(_recv_err or "In-transit receipt failed.")
-                    merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
-                    vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
-                    _dump_branch_hits(note)
-                    return False, (_recv_err or "In-transit receipt failed."), merged, True, vm_crit, vm_info
-            else:
+            _recv_ok, _recv_err = _prepare_vehicle_receipt_in_transit_via_invoices(
+                page,
+                scraped,
+                dms_values,
+                urls,
+                vehicle_url=vehicle_url,
+                frame_p=frame_p,
+                engine_p=engine_p,
+                nav_timeout_ms=nav_timeout_ms,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                form_trace=form_trace,
+                step=step,
+            )
+            if _recv_ok:
+                scraped["in_transit"] = False
+                in_transit_state = False
                 note(
-                    "DMS_REAL_URL_VEHICLES is not set — cannot navigate to receipt/in-transit view; "
-                    "set it to HMCL In Transit (or equivalent) GotoView URL."
+                    "prepare_vehicle: in-transit receipt flow finished — "
+                    "vehicle list re-search ran; treating as dealer-side for return flags."
                 )
                 if callable(step):
-                    step("Receipt URL (DMS_REAL_URL_VEHICLES) is not set — skipped receiving in UI.")
+                    step("Vehicle received (HMCL In Transit receipt) — list search refreshed.")
+                if callable(ms_done):
+                    ms_done("Vehicle received")
+            else:
+                note(f"prepare_vehicle: in-transit receipt flow failed — {_recv_err!r}.")
+                if callable(step):
+                    step(_recv_err or "In-transit receipt failed.")
+                merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+                vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+                _dump_branch_hits(note)
+                return False, (_recv_err or "In-transit receipt failed."), merged, True, vm_crit, vm_info
         else:
             note("prepare_vehicle: vehicle at dealer (not in-transit) — receipt branch skipped.")
             if callable(step):

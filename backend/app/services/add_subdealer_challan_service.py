@@ -18,13 +18,7 @@ from app.config import (
     DMS_LOGIN_PASSWORD,
     DMS_LOGIN_USER,
     DMS_REAL_URL_CONTACT,
-    DMS_REAL_URL_ENQUIRY,
-    DMS_REAL_URL_LINE_ITEMS,
-    DMS_REAL_URL_PDI,
-    DMS_REAL_URL_PRECHECK,
-    DMS_REAL_URL_REPORTS,
     DMS_REAL_URL_VEHICLE,
-    DMS_REAL_URL_VEHICLES,
     DMS_SIEBEL_ACTION_TIMEOUT_MS,
     DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
     DMS_SIEBEL_NAV_TIMEOUT_MS,
@@ -472,13 +466,19 @@ def sidecar_build_order_playwright_package(
 
     urls_dict = {
         "contact": DMS_REAL_URL_CONTACT,
-        "vehicles": DMS_REAL_URL_VEHICLES,
-        "precheck": DMS_REAL_URL_PRECHECK,
-        "pdi": DMS_REAL_URL_PDI,
+        # "vehicles": DMS_REAL_URL_VEHICLES,
+        "vehicles": "",
+        # "precheck": DMS_REAL_URL_PRECHECK,
+        "precheck": "",
+        # "pdi": DMS_REAL_URL_PDI,
+        "pdi": "",
         "vehicle": DMS_REAL_URL_VEHICLE,
-        "enquiry": DMS_REAL_URL_ENQUIRY,
-        "line_items": DMS_REAL_URL_LINE_ITEMS,
-        "reports": DMS_REAL_URL_REPORTS,
+        # "enquiry": DMS_REAL_URL_ENQUIRY,
+        "enquiry": "",
+        # "line_items": DMS_REAL_URL_LINE_ITEMS,
+        "line_items": "",
+        # "reports": DMS_REAL_URL_REPORTS,
+        "reports": "",
     }
     out["ok"] = True
     out["error"] = None
@@ -647,13 +647,19 @@ def run_subdealer_challan_batch(
 
     urls = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,
-        vehicles=DMS_REAL_URL_VEHICLES,
-        precheck=DMS_REAL_URL_PRECHECK,
-        pdi=DMS_REAL_URL_PDI,
+        # vehicles=DMS_REAL_URL_VEHICLES,
+        vehicles="",
+        # precheck=DMS_REAL_URL_PRECHECK,
+        precheck="",
+        # pdi=DMS_REAL_URL_PDI,
+        pdi="",
         vehicle=DMS_REAL_URL_VEHICLE,
-        enquiry=DMS_REAL_URL_ENQUIRY,
-        line_items=DMS_REAL_URL_LINE_ITEMS,
-        reports=DMS_REAL_URL_REPORTS,
+        # enquiry=DMS_REAL_URL_ENQUIRY,
+        enquiry="",
+        # line_items=DMS_REAL_URL_LINE_ITEMS,
+        line_items="",
+        # reports=DMS_REAL_URL_REPORTS,
+        reports="",
     )
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
 

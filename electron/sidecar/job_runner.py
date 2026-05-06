@@ -1024,13 +1024,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
         DMS_LOGIN_PASSWORD,
         DMS_LOGIN_USER,
         DMS_REAL_URL_CONTACT,
-        DMS_REAL_URL_ENQUIRY,
-        DMS_REAL_URL_LINE_ITEMS,
-        DMS_REAL_URL_PDI,
-        DMS_REAL_URL_PRECHECK,
-        DMS_REAL_URL_REPORTS,
         DMS_REAL_URL_VEHICLE,
-        DMS_REAL_URL_VEHICLES,
         DMS_SIEBEL_ACTION_TIMEOUT_MS,
         DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
         DMS_SIEBEL_NAV_TIMEOUT_MS,
@@ -1055,13 +1049,19 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
 
     urls_prepare = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,
-        vehicles=DMS_REAL_URL_VEHICLES,
-        precheck=DMS_REAL_URL_PRECHECK,
-        pdi=DMS_REAL_URL_PDI,
+        # vehicles=DMS_REAL_URL_VEHICLES,
+        vehicles="",
+        # precheck=DMS_REAL_URL_PRECHECK,
+        precheck="",
+        # pdi=DMS_REAL_URL_PDI,
+        pdi="",
         vehicle=DMS_REAL_URL_VEHICLE,
-        enquiry=DMS_REAL_URL_ENQUIRY,
-        line_items=DMS_REAL_URL_LINE_ITEMS,
-        reports=DMS_REAL_URL_REPORTS,
+        # enquiry=DMS_REAL_URL_ENQUIRY,
+        enquiry="",
+        # line_items=DMS_REAL_URL_LINE_ITEMS,
+        line_items="",
+        # reports=DMS_REAL_URL_REPORTS,
+        reports="",
     )
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
 
@@ -1289,7 +1289,12 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     dms_values = dict(pkg.get("dms_values") or {})
     dms_values["challan_vin_frame_dump_dir"] = str(log_path.parent.resolve())
 
-    urls_o = SiebelDmsUrls(**{k: str(v or "") for k, v in dict(pkg.get("urls") or {}).items()})
+    _urls_merged = {k: str(v or "") for k, v in dict(pkg.get("urls") or {}).items()}
+    for _z in ("enquiry", "precheck", "pdi", "line_items", "reports", "vehicles"):
+        _urls_merged[_z] = ""
+    for _req in ("contact", "vehicles", "precheck", "pdi", "vehicle", "enquiry", "line_items", "reports"):
+        _urls_merged.setdefault(_req, "")
+    urls_o = SiebelDmsUrls(**_urls_merged)
 
     frag = Playwright_Hero_DMS_fill_subdealer_challan_order_only(
         page,
