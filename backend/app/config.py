@@ -92,6 +92,7 @@ STORAGE_USE_S3 = STORAGE_BACKEND == "s3"
 S3_DATA_BUCKET = (os.getenv("S3_DATA_BUCKET") or "").strip()
 S3_UPLOADS_PREFIX = (os.getenv("S3_UPLOADS_PREFIX") or "uploaded-scans").strip().strip("/") or "uploaded-scans"
 S3_OCR_PREFIX = (os.getenv("S3_OCR_PREFIX") or "ocr-output").strip().strip("/") or "ocr-output"
+S3_CHALLANS_PREFIX = (os.getenv("S3_CHALLANS_PREFIX") or "challans").strip().strip("/") or "challans"
 try:
     S3_PRESIGNED_EXPIRES_SEC = int((os.getenv("S3_PRESIGNED_EXPIRES_SEC") or "3600").strip())
 except ValueError:

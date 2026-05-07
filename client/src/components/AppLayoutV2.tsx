@@ -13,8 +13,7 @@ const PAGE_LABELS: Record<Page, string> = {
   "dealer-dashboard": "Dealer Saathi",
   "admin-tools": "Admin Tools",
   "admin-dealers": "Dealers",
-  "admin-upload-scans": "Upload Scans",
-  "admin-run-logs": "Run Logs",
+  "admin-usage": "Usage",
   "contact-us": "Contact Us",
 };
 

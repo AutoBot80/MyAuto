@@ -1,10 +1,5 @@
-import { useEffect, useState } from "react";
-import {
-  adminFolderFileUrl,
-  listAdminFolderContents,
-  type AdminFolderEntry,
-  type AdminFolderRootApi,
-} from "../api/admin";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchAdminFolderFileBlobUrl, listAdminFolderContents, type AdminFolderEntry, type AdminFolderRootApi } from "../api/admin";
 import { getAdminDealerNames, type AdminDealerNameRow } from "../api/adminDealers";
 import "./AdminDataFolderPage.css";
 
@@ -31,8 +26,12 @@ function persistDealerId(id: number) {
 
 export interface AdminDataFolderPageProps {
   dealerId: number;
-  kind: "upload-scans" | "run-logs";
+  kind: "upload-scans" | "run-logs" | "challans";
+  /** When ``hidden``, use ``dealerId`` only (no dealer dropdown). Challans always hides the picker. */
+  dealerPicker?: "full" | "hidden";
 }
+
+type AdminFolderViewerFile = { url: string; name: string; type: "image" | "pdf"; revoke: () => void };
 
 function joinRel(parent: string, name: string): string {
   if (!parent) return name;
@@ -47,7 +46,9 @@ function parentRel(rel: string): string {
 }
 
 function kindToRoot(kind: AdminDataFolderPageProps["kind"]): AdminFolderRootApi {
-  return kind === "upload-scans" ? "upload_scans" : "ocr_output";
+  if (kind === "upload-scans") return "upload_scans";
+  if (kind === "run-logs") return "ocr_output";
+  return "challans";
 }
 
 function formatModified(iso: string): string {
@@ -103,10 +104,13 @@ function fileKindIcon(name: string) {
   return <FileIcon />;
 }
 
-export function AdminDataFolderPage({ dealerId, kind }: AdminDataFolderPageProps) {
+export function AdminDataFolderPage({ dealerId, kind, dealerPicker = "full" }: AdminDataFolderPageProps) {
   const root = kindToRoot(kind);
-  const pageTitle = kind === "upload-scans" ? "Upload Scans" : "Run Logs";
-  const selectId = kind === "upload-scans" ? "admin-folder-dealer-uploads" : "admin-folder-dealer-ocr";
+  const isChallans = kind === "challans";
+  const hideDealerPicker = isChallans || dealerPicker === "hidden";
+  const pageTitle = kind === "upload-scans" ? "Upload Scans" : kind === "run-logs" ? "Run Logs" : "Challans";
+  const selectId =
+    kind === "upload-scans" ? "admin-folder-dealer-uploads" : kind === "run-logs" ? "admin-folder-dealer-ocr" : "admin-folder-challans";
 
   const [dealerRows, setDealerRows] = useState<AdminDealerNameRow[]>([]);
   const [dealersLoading, setDealersLoading] = useState(true);
@@ -118,9 +122,18 @@ export function AdminDataFolderPage({ dealerId, kind }: AdminDataFolderPageProps
   const [currentAbs, setCurrentAbs] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [viewerFile, setViewerFile] = useState<{ url: string; name: string; type: "image" | "pdf" } | null>(null);
+  const [viewerFile, setViewerFile] = useState<AdminFolderViewerFile | null>(null);
+  const [fileOpening, setFileOpening] = useState<string | null>(null);
+  const viewerRef = useRef<AdminFolderViewerFile | null>(null);
 
   useEffect(() => {
+    if (hideDealerPicker) {
+      setDealersLoading(false);
+      setDealersError(null);
+      if (isChallans) setDealerRows([]);
+      setSelectedDealerId(dealerId);
+      return;
+    }
     setDealersLoading(true);
     setDealersError(null);
     getAdminDealerNames()
@@ -144,7 +157,7 @@ export function AdminDataFolderPage({ dealerId, kind }: AdminDataFolderPageProps
         setDealerRows([]);
       })
       .finally(() => setDealersLoading(false));
-  }, [dealerId]);
+  }, [dealerId, hideDealerPicker, isChallans]);
 
   function onDealerChange(id: number) {
     setSelectedDealerId(id);
@@ -152,9 +165,27 @@ export function AdminDataFolderPage({ dealerId, kind }: AdminDataFolderPageProps
     setRelPath("");
   }
 
+  const closeViewer = useCallback(() => {
+    setViewerFile((prev) => {
+      if (prev?.revoke) prev.revoke();
+      return null;
+    });
+  }, []);
+
+  useEffect(() => {
+    viewerRef.current = viewerFile;
+  }, [viewerFile]);
+
+  useEffect(() => {
+    return () => {
+      viewerRef.current?.revoke();
+      viewerRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setViewerFile(null);
+      if (e.key === "Escape") closeViewer();
     };
     if (viewerFile) {
       document.addEventListener("keydown", onKeyDown);
@@ -164,7 +195,7 @@ export function AdminDataFolderPage({ dealerId, kind }: AdminDataFolderPageProps
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = "";
     };
-  }, [viewerFile]);
+  }, [viewerFile, closeViewer]);
 
   useEffect(() => {
     let cancelled = false;
@@ -190,23 +221,36 @@ export function AdminDataFolderPage({ dealerId, kind }: AdminDataFolderPageProps
     };
   }, [selectedDealerId, root, relPath]);
 
-  const fileUrl = (relativePath: string) => adminFolderFileUrl(selectedDealerId, root, relativePath);
-
   const ext = (name: string) => name.split(".").pop()?.toLowerCase() ?? "";
   const isPdf = (n: string) => ext(n) === "pdf";
   const isImage = (n: string) => ["jpg", "jpeg", "png", "gif", "webp"].includes(ext(n));
   const isViewableInBrowser = (n: string) => isPdf(n) || isImage(n);
 
-  const handleFileClick = (relativePath: string, name: string) => {
-    const url = fileUrl(relativePath);
-    if (isPdf(name)) {
-      setViewerFile({ url, name, type: "pdf" });
-    } else if (isImage(name)) {
-      setViewerFile({ url, name, type: "image" });
-    } else {
-      window.open(url, "_blank", "noopener,noreferrer");
+  async function handleFileOpen(relFile: string, name: string) {
+    setFileOpening(name);
+    try {
+      const { blobUrl, revoke, external } = await fetchAdminFolderFileBlobUrl(selectedDealerId, root, relFile);
+      if (isPdf(name) || isImage(name)) {
+        setViewerFile((prev) => {
+          if (prev?.revoke) prev.revoke();
+          return { url: blobUrl, name, type: isPdf(name) ? "pdf" : "image", revoke };
+        });
+      } else if (external) {
+        window.open(blobUrl, "_blank", "noopener,noreferrer");
+      } else {
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = name;
+        a.rel = "noopener";
+        a.click();
+        window.setTimeout(() => revoke(), 2_000);
+      }
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Could not open file.");
+    } finally {
+      setFileOpening(null);
     }
-  };
+  }
 
   async function copyCurrentPath() {
     if (!currentAbs) return;
@@ -222,31 +266,35 @@ export function AdminDataFolderPage({ dealerId, kind }: AdminDataFolderPageProps
 
   return (
     <div className="admin-data-folder-page">
-      <section className="view-vehicles-search admin-data-folder-page__dealer-bar" aria-label="Choose dealer">
-        <div className="view-vehicles-search-field">
-          <label htmlFor={selectId}>Dealer</label>
-          <select
-            id={selectId}
-            value={selectedDealerId}
-            onChange={(e) => onDealerChange(Number(e.target.value))}
-            disabled={dealersLoading || dealerRows.length === 0}
-            aria-label="Select dealer for this folder"
-          >
-            {dealersLoading && dealerRows.length === 0 ? (
-              <option value={selectedDealerId}>Loading dealers…</option>
-            ) : null}
-            {!dealersLoading && dealerRows.length === 0 ? (
-              <option value={selectedDealerId}>No dealers in database</option>
-            ) : null}
-            {dealerRows.map((r) => (
-              <option key={r.dealer_id} value={r.dealer_id}>
-                {r.dealer_name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </section>
-      {dealersError ? <p className="view-vehicles-error admin-data-folder-page__dealers-err">{dealersError}</p> : null}
+      {!hideDealerPicker ? (
+        <section className="view-vehicles-search admin-data-folder-page__dealer-bar" aria-label="Choose dealer">
+          <div className="view-vehicles-search-field">
+            <label htmlFor={selectId}>Dealer</label>
+            <select
+              id={selectId}
+              value={selectedDealerId}
+              onChange={(e) => onDealerChange(Number(e.target.value))}
+              disabled={dealersLoading || dealerRows.length === 0}
+              aria-label="Select dealer for this folder"
+            >
+              {dealersLoading && dealerRows.length === 0 ? (
+                <option value={selectedDealerId}>Loading dealers…</option>
+              ) : null}
+              {!dealersLoading && dealerRows.length === 0 ? (
+                <option value={selectedDealerId}>No dealers in database</option>
+              ) : null}
+              {dealerRows.map((r) => (
+                <option key={r.dealer_id} value={r.dealer_id}>
+                  {r.dealer_name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </section>
+      ) : null}
+      {!hideDealerPicker && dealersError ? (
+        <p className="view-vehicles-error admin-data-folder-page__dealers-err">{dealersError}</p>
+      ) : null}
 
       <div className="bulk-folder-view">
         <div className="bulk-folder-view-header admin-data-folder-page__header">
@@ -320,30 +368,21 @@ export function AdminDataFolderPage({ dealerId, kind }: AdminDataFolderPageProps
                     return (
                       <tr key={`f-${entry.name}`}>
                         <td className="admin-data-folder-list__name-cell">
-                          {isViewableInBrowser(entry.name) ? (
-                            <button
-                              type="button"
-                              className="admin-data-folder-list__name-btn"
-                              onClick={() => handleFileClick(relFile, entry.name)}
-                            >
-                              <span className="admin-data-folder-list__mini-icon" aria-hidden>
-                                {fileKindIcon(entry.name)}
-                              </span>
-                              <span className="admin-data-folder-list__name-text">{entry.name}</span>
-                            </button>
-                          ) : (
-                            <a
-                              href={fileUrl(relFile)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="admin-data-folder-list__name-link"
-                            >
-                              <span className="admin-data-folder-list__mini-icon" aria-hidden>
-                                {fileKindIcon(entry.name)}
-                              </span>
-                              <span className="admin-data-folder-list__name-text">{entry.name}</span>
-                            </a>
-                          )}
+                          <button
+                            type="button"
+                            className="admin-data-folder-list__name-btn"
+                            disabled={fileOpening === entry.name}
+                            onClick={() => handleFileOpen(relFile, entry.name)}
+                            title={isViewableInBrowser(entry.name) ? "View" : "Download"}
+                          >
+                            <span className="admin-data-folder-list__mini-icon" aria-hidden>
+                              {fileKindIcon(entry.name)}
+                            </span>
+                            <span className="admin-data-folder-list__name-text">
+                              {entry.name}
+                              {fileOpening === entry.name ? " …" : ""}
+                            </span>
+                          </button>
                         </td>
                         <td>File</td>
                         <td>{entry.size != null ? `${(entry.size / 1024).toFixed(1)} KB` : "—"}</td>
@@ -370,13 +409,13 @@ export function AdminDataFolderPage({ dealerId, kind }: AdminDataFolderPageProps
           role="dialog"
           aria-modal="true"
           aria-label={`View ${viewerFile.name}`}
-          onClick={() => setViewerFile(null)}
+          onClick={() => closeViewer()}
         >
           <div className="bulk-folder-viewer-content" onClick={(e) => e.stopPropagation()}>
             <button
               type="button"
               className="bulk-folder-viewer-close"
-              onClick={() => setViewerFile(null)}
+              onClick={() => closeViewer()}
               aria-label="Close"
             >
               ×

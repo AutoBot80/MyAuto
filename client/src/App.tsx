@@ -7,8 +7,8 @@ import { AppLayoutV2 } from "./components/AppLayoutV2";
 import { VersionBadge } from "./components/VersionBadge";
 import { AddSalesPage } from "./pages/AddSalesPage";
 import { AdminPage } from "./pages/AdminPage";
-import { AdminDataFolderPage } from "./pages/AdminDataFolderPage";
 import { AdminDealersPage } from "./pages/AdminDealersPage";
+import { AdminUsagePage } from "./pages/AdminUsagePage";
 import { HomePage } from "./pages/HomePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ViewCustomerPage } from "./pages/ViewCustomerPage";
@@ -74,7 +74,7 @@ const RTO_PAGES: Page[] = ["rto-status", "contact-us"];
 
 const DEALER_PAGES: Page[] = ["dealer-dashboard", "customer-details", "view-vehicles", "contact-us"];
 
-const ADMIN_PAGES: Page[] = ["admin-dealers", "admin-upload-scans", "admin-run-logs", "admin-tools"];
+const ADMIN_PAGES: Page[] = ["admin-dealers", "admin-usage", "admin-tools"];
 
 function initialLoginNameFromEnv(): string | null {
   const v = import.meta.env.VITE_LOGIN_NAME;
@@ -314,12 +314,10 @@ function App() {
         return <PlaceholderPage title="Dealer Saathi" message="RTO details, Sub-dealer sales etc. – Coming soon." />;
       case "admin-tools":
         return <AdminPage />;
-      case "admin-upload-scans":
-        return <AdminDataFolderPage dealerId={dealerId} kind="upload-scans" />;
-      case "admin-run-logs":
-        return <AdminDataFolderPage dealerId={dealerId} kind="run-logs" />;
       case "admin-dealers":
         return <AdminDealersPage />;
+      case "admin-usage":
+        return <AdminUsagePage dealerId={dealerId} />;
       case "contact-us":
         return <PlaceholderPage title="Contact Us" />;
       default:

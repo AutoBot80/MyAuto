@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -49,14 +50,15 @@ def commit_challan_masters(
             else:
                 total_disc_f = float(total_disc or 0)
 
+            created = datetime.now(timezone.utc)
             cur.execute(
                 """
                 INSERT INTO challan_master (
                     challan_date, challan_book_num, dealer_from, dealer_to,
                     num_vehicles, order_number, invoice_number,
-                    total_ex_showroom_price, total_discount
+                    total_ex_showroom_price, total_discount, created_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING challan_id
                 """,
                 (
@@ -69,6 +71,7 @@ def commit_challan_masters(
                     (invoice_number or "").strip() or None,
                     total_ex_f,
                     total_disc_f,
+                    created,
                 ),
             )
             cid_row = cur.fetchone()

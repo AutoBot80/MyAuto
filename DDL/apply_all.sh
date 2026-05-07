@@ -153,6 +153,7 @@ run alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql
 
 # challan / inventory alters
 run alter/18a_challan_master_add_order_invoice_totals.sql
+run alter/20b_challan_master_created_at.sql
 run alter/18b_vehicle_inventory_master_add_discount.sql
 run alter/19a_challan_staging_batch_status.sql
 run alter/19b_challan_staging_created_at.sql

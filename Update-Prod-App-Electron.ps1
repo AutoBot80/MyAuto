@@ -316,10 +316,27 @@ if (-not $SkipBuild) {
     Write-Ok "Electron installer built"
 
     # --- Phase 3.5: Copy installer to Pendrive folder ---
+    # Local builds use scripts/run-electron-builder-win.js which outputs to
+    # electron/release-<timestamp>/ (not electron/dist — that folder is TS compile output).
     Write-Step "Phase 3.5: Copy installer to Pendrive folder"
-    $distDir = Join-Path $ElectronDir "dist"
     $pendriveDir = "C:\Users\arya_\OneDrive\Desktop\Saathi Docs\Pendrive"
-    $installerExe = Get-ChildItem -Path $distDir -Filter "*.exe" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $releaseRoot = Get-ChildItem -Path $ElectronDir -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "release-*" } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    $installerExe = $null
+    if ($releaseRoot) {
+        # NSIS installer lives at the output root; win-unpacked contains the app .exe only.
+        $installerExe = Get-ChildItem -Path $releaseRoot.FullName -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+    }
+    if (-not $installerExe) {
+        $distDir = Join-Path $ElectronDir "dist"
+        $installerExe = Get-ChildItem -Path $distDir -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+    }
     if ($installerExe) {
         if (-not (Test-Path $pendriveDir)) {
             New-Item -ItemType Directory -Force -Path $pendriveDir | Out-Null
@@ -327,7 +344,7 @@ if (-not $SkipBuild) {
         Copy-Item -Path $installerExe.FullName -Destination $pendriveDir -Force
         Write-Ok "Copied $($installerExe.Name) to $pendriveDir"
     } else {
-        Write-Host "WARNING: No .exe found in $distDir - skipping copy." -ForegroundColor Yellow
+        Write-Host "WARNING: No installer .exe found under electron\release-* or electron\dist - skipping copy." -ForegroundColor Yellow
     }
 } else {
     Write-Step "Phases 1-3: Skipped (-SkipBuild)"

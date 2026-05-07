@@ -14,9 +14,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from playwright.sync_api import Frame, Locator, Page, TimeoutError as PlaywrightTimeout
 
@@ -62,7 +60,6 @@ from app.services.hero_dms_shared_utilities import (
     _try_dismiss_siebel_error_dialog,
     _try_expand_find_flyin,
     _try_fill_field,
-    _ts_ist_iso,
     _fill_in_frame,
     _fill_with_frame_locator,
     select_siebel_dropdown_value,
@@ -93,26 +90,14 @@ _BRANCH2_POSTAL_QUICK_SELECTORS: tuple[str, ...] = (
     '[id="1_Postal_Code"]',
     'input[id="1_Postal_Code"]',
 )
-# Branch (2) Personal Addresses jqGrid: direct Chromium locators + scroll; **≤2s** budget each (city / pin).
+# Branch (2) Personal Addresses jqGrid: direct Chromium locators + scroll; **≤2s** budget each (postal).
 _BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS = 2000
 # Scoped / union **fill** budgets (separate from jqgrid idle wait): keep failure path short — many
 # scopes×selectors×roots otherwise stack multi‑minute waits.
 _BRANCH2_ADDRESS_SCOPED_FILL_CAP_MS = 300
+# Postal-only: jqGrid cell activation (wait_for + click + dblclick) needs more than generic 300ms cap.
+_BRANCH2_POSTAL_SCOPED_FILL_CAP_MS = 720
 _BRANCH2_ADDRESS_UNION_FILL_BUDGET_MS = 300
-_BRANCH2_CITY_DIRECT_SELECTORS: tuple[str, ...] = (
-    "#S_A1 input#1_City",
-    '#S_A1 input[id="1_City"]',
-    "#gbox_s_1_l input#1_City",
-    "div#S_A1 #gbox_s_1_l input#1_City",
-    "div#S_A1 td#1_s_1_l_City input",
-    "td#1_s_1_l_City input",
-    'input[aria-labelledby*="s_1_l_City" i]',
-    'input[name="City"][id="1_City"]',
-    "input#1_City",
-    # Display mode: Village/Town/City is a jqGrid **td** (LOV / altpick) — no ``input`` until the cell is activated.
-    "td#1_s_1_l_City",
-    'td[id="1_s_1_l_City"]',
-)
 _BRANCH2_POSTAL_DIRECT_SELECTORS: tuple[str, ...] = (
     "#S_A1 td#1_s_1_l_Postal_Code",
     "div#S_A1 td#1_s_1_l_Postal_Code",
@@ -153,18 +138,6 @@ _BRANCH2_ADDRESS_GRID_SCOPES: tuple[str, ...] = (
     ".gview_1_l",
     "",
 )
-# v0.7.06 City selectors (popup / textbox) + jqGrid **td** when no input yet.
-_BRANCH2_CITY_SCOPED_SELECTORS: tuple[str, ...] = (
-    "input#1_City",
-    '[id="1_City"]',
-    'input[id="1_City"]',
-    'input[name="City"]',
-    'input.siebui-input-popup[id="1_City"]',
-    'input[role="textbox"][name="City"]',
-    'input[aria-labelledby*="s_1_l_City" i]',
-    "td#1_s_1_l_City",
-    'td[id="1_s_1_l_City"]',
-)
 # v0.7.06 Postal selectors + fuzzy Postal name + scoped-friendly td order.
 _BRANCH2_POSTAL_SCOPED_SELECTORS: tuple[str, ...] = (
     "td#1_s_1_l_Postal_Code",
@@ -175,6 +148,20 @@ _BRANCH2_POSTAL_SCOPED_SELECTORS: tuple[str, ...] = (
     'input[id="1_Postal_Code"]',
     'input[name="Postal_Code"]',
     'input[name*="Postal" i]',
+)
+# Personal Addresses "City" column uses Tehsil/Taluka list-combo. After ``fill(city)``, **Enter** commits the
+# Siebel list-ctrl; then **three** ``Tab`` presses move through Address Line 1/2 to Pincode. (Tab without
+# Enter often leaves focus stuck in Tehsil.)
+_BRANCH2_CITY_AS_TEHSIL_COMBO_SELECTORS: tuple[str, ...] = (
+    "input#1_HHML_Tehsil_Taluka",
+    'input[name="HHML_Tehsil_Taluka"]',
+    'input#1_HHML_Tehsil_Taluka[role="combobox"]',
+    'input.siebui-input-popup[name="HHML_Tehsil_Taluka"]',
+)
+_BRANCH2_TABS_AFTER_CITY_COMBO_TO_POSTAL = 3
+_BRANCH2_POSTAL_VALUE_CHECK_SELECTORS: tuple[str, ...] = (
+    "input#1_Postal_Code",
+    'input[name="Postal_Code"]',
 )
 
 # jqGrid Personal Addresses list: ``lui_s_1_l`` blocks clicks until load finishes.
@@ -3930,98 +3917,6 @@ def _branch2_click_address_tab_under_s_vctrl(
     return False
 
 
-_BRANCH2_FRAME_DUMP_PROBE_JS = """
-() => {
-  const q = (sel) => {
-    try {
-      return document.querySelectorAll(sel).length;
-    } catch (e) {
-      return -1;
-    }
-  };
-  return {
-    s_1_l: q("#s_1_l"),
-    gbox_s_1_l: q("#gbox_s_1_l"),
-    gview_s_1_l: q("#gview_s_1_l"),
-    postal_td: q('td[id$="_s_1_l_Postal_Code"]'),
-    city_td: q('td[id$="_s_1_l_City"]'),
-    s_a1_div: q('#S_A1'),
-    s_a1_iframe: q('iframe#S_A1'),
-    swe_applet1: q("#SWEApplet1"),
-  };
-}
-"""
-
-
-def _branch2_temp_frame_dump_for_postal_debug(
-    page: Page,
-    *,
-    reason: str,
-    playwright_dms_log_path: Path | str | None,
-    note: Callable[..., None],
-    pin_code: str = "",
-    city: str = "",
-) -> None:
-    """
-    Write ``temp_frame_dump_<ddmmyyyy>_<hhmmss>.txt`` next to ``Playwright_DMS_*.txt`` when City/Pin
-    locators fail — frame URLs, DOM probe counts, and a truncated ``body`` excerpt per frame.
-    """
-    if not playwright_dms_log_path:
-        note(f"Branch (2): temp_frame_dump skipped (no playwright_dms_log_path); reason={reason!r}.")
-        return
-    try:
-        base = Path(str(playwright_dms_log_path))
-        parent = base.parent
-        parent.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%d%m%Y_%H%M%S")
-        out_path = parent / f"temp_frame_dump_{stamp}.txt"
-        lines: list[str] = [
-            f"created_ist={_ts_ist_iso()}",
-            f"reason={reason!r}",
-            f"playwright_dms_log={str(base)!r}",
-            f"pin_code_attempted={pin_code!r}",
-            f"city_attempted={city!r}",
-            f"main_page_url={page.url!r}",
-            "",
-        ]
-        frames = list(page.frames)
-        for i, fr in enumerate(frames):
-            u = ""
-            try:
-                u = (fr.url or "").strip()
-            except Exception as exc:
-                u = f"(url_error {exc!r})"
-            lines.append(f"========== frame[{i}] url={u!r} ==========")
-            try:
-                probe = fr.evaluate(_BRANCH2_FRAME_DUMP_PROBE_JS)
-                lines.append(f"dom_probe={probe!r}")
-            except Exception as exc:
-                lines.append(f"dom_probe_err={exc!r}")
-            try:
-                snippet = fr.evaluate(
-                    """() => {
-                      try {
-                        const b = document.body;
-                        if (!b) return '';
-                        return (b.innerHTML || '').slice(0, 45000);
-                      } catch (e) {
-                        return String(e);
-                      }
-                    }"""
-                )
-                lines.append(f"body_innerHTML_chars={len(snippet or '')}")
-                lines.append("--- body_innerHTML excerpt ---")
-                lines.append(snippet or "")
-            except Exception as exc:
-                lines.append(f"body_excerpt_err={exc!r}")
-            lines.append("")
-        out_path.write_text("\n".join(lines), encoding="utf-8", errors="replace")
-        note(f"Branch (2): temp_frame_dump written for City/Pin debug → {out_path}")
-    except Exception as exc:
-        logger.warning("branch2 temp_frame_dump failed: %s", exc)
-        note(f"Branch (2): temp_frame_dump failed ({exc!r}).")
-
-
 _BRANCH2_OUTER_WINDOW_SCROLL_BOTTOM_JS = """
 () => {
   // Siebel Open UI stacks chrome; Personal Addresses jqGrid is often **below the fold** until the
@@ -4070,7 +3965,171 @@ def _branch2_scroll_outer_window_expose_address_jqgrid(page: Page, *, note: Call
         page.locator("#gbox_s_1_l, table#s_1_l, #SWEApplet1").first.scroll_into_view_if_needed(timeout=2800)
     except Exception:
         pass
-    note("Branch (2): outer window scrolled to bottom so Address jqGrid / City / Pin are in viewport.")
+    note("Branch (2): outer window scrolled to bottom so Address jqGrid / Postal are in viewport.")
+
+
+def _branch2_try_click_address_grid_first_jqgrow(root, *, note: Callable[..., None]) -> None:
+    """
+    Best-effort: select the first Personal Addresses jqGrid data row so Postal Code ``td`` can enter
+    edit mode (Hero FINS list often needs row focus before cell activation).
+    """
+    row_css = (
+        "#gbox_s_1_l table.ui-jqgrid-btable tbody tr.jqgrow",
+        "#gbox_s_1_l table#s_1_l tbody tr.jqgrow",
+        "table#s_1_l tbody tr.jqgrow",
+    )
+    for css in row_css:
+        try:
+            row = root.locator(css).first
+            if row.count() == 0:
+                continue
+            row.scroll_into_view_if_needed(timeout=900)
+            row.click(timeout=800)
+            note(f"Branch (2): clicked first jqGrid address row ({css!r}) before Postal Code fill.")
+            return
+        except Exception:
+            continue
+
+
+def _branch2_try_fill_tehsil_combo_tabs_then_postal(
+    page: Page,
+    root,
+    *,
+    city: str,
+    pin: str,
+    action_timeout_ms: int,
+    note: Callable[..., None],
+) -> bool:
+    """
+    Fill Tehsil/Taluka (``HHML_Tehsil_Taluka``), **Enter** to commit the Siebel list-combo (Tab alone often
+    stays in-cell), then **Tab** ``_BRANCH2_TABS_AFTER_CITY_COMBO_TO_POSTAL`` times to Address Line 1/2 and
+    Pincode, type the pin, and verify. If that fails: **Escape** + same tabs; then **click** the Postal ``td``.
+    """
+    city = (city or "").strip()
+    pin = (pin or "").strip()
+    if not city or not pin:
+        return False
+    t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
+    try:
+        loc = _branch2_locator_union_first(root, _BRANCH2_CITY_AS_TEHSIL_COMBO_SELECTORS)
+    except ValueError:
+        return False
+
+    def _postal_input_has_pin() -> bool:
+        try:
+            chk = _branch2_locator_union_first(root, _BRANCH2_POSTAL_VALUE_CHECK_SELECTORS)
+            if chk.count() == 0:
+                return False
+            got = (chk.input_value() or "").strip()
+            if not got:
+                return False
+            if pin in got or got == pin:
+                return True
+            digits_pin = "".join(c for c in pin if c.isdigit())
+            digits_got = "".join(c for c in got if c.isdigit())
+            return bool(digits_pin and digits_pin in digits_got)
+        except Exception:
+            return False
+
+    def _tabs_then_type_pin() -> None:
+        for _ in range(_BRANCH2_TABS_AFTER_CITY_COMBO_TO_POSTAL):
+            page.keyboard.press("Tab")
+            time.sleep(0.12)
+        page.keyboard.press("Control+A")
+        time.sleep(0.05)
+        page.keyboard.type(pin, delay=15)
+
+    def _try_postal_td_click_fill() -> bool:
+        try:
+            pcell = _branch2_locator_union_first(
+                root, ("td#1_s_1_l_Postal_Code", '[id="1_s_1_l_Postal_Code"]')
+            )
+            if pcell.count() == 0:
+                return False
+            pcell.scroll_into_view_if_needed(timeout=min(2000, t * 4))
+            pcell.click(timeout=t)
+            time.sleep(0.1)
+            try:
+                pcell.dblclick(timeout=t)
+            except Exception:
+                pass
+            time.sleep(0.14)
+            inner = pcell.locator("input").first
+            if inner.count() > 0:
+                try:
+                    if inner.is_visible(timeout=400):
+                        inner.fill(pin, timeout=t)
+                    else:
+                        inner.click(timeout=t)
+                        inner.fill(pin, timeout=t)
+                except Exception:
+                    try:
+                        pcell.press_sequentially(pin, delay=12)
+                    except Exception:
+                        return False
+            else:
+                try:
+                    pcell.press_sequentially(pin, delay=12)
+                except Exception:
+                    return False
+            time.sleep(0.2)
+            return _postal_input_has_pin()
+        except Exception:
+            return False
+
+    try:
+        if loc.count() == 0:
+            return False
+        loc.wait_for(state="visible", timeout=min(2500, max(t, 800)))
+        loc.scroll_into_view_if_needed(timeout=min(2000, max(t * 4, 800)))
+        loc.click(timeout=t)
+        loc.fill(city, timeout=t)
+        try:
+            loc.focus(timeout=min(500, max(t, 300)))
+        except Exception:
+            pass
+        time.sleep(0.1)
+        # Enter commits the combobox; without it Tab often never leaves Tehsil (Siebel Open UI).
+        try:
+            loc.press("Enter", timeout=t)
+        except Exception:
+            try:
+                page.keyboard.press("Enter")
+            except Exception:
+                pass
+        time.sleep(0.2)
+        _tabs_then_type_pin()
+        time.sleep(0.22)
+        if _postal_input_has_pin():
+            note(
+                "Branch (2): Tehsil combo + Enter + "
+                f"{_BRANCH2_TABS_AFTER_CITY_COMBO_TO_POSTAL}×Tab + pin "
+                f"(city={city[:40]!r})."
+            )
+            return True
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        time.sleep(0.12)
+        _tabs_then_type_pin()
+        time.sleep(0.22)
+        if _postal_input_has_pin():
+            note(
+                "Branch (2): Tehsil + Enter + Esc + "
+                f"{_BRANCH2_TABS_AFTER_CITY_COMBO_TO_POSTAL}×Tab + pin "
+                f"(city={city[:40]!r})."
+            )
+            return True
+        if _try_postal_td_click_fill():
+            note(
+                f"Branch (2): Tehsil filled ({city[:40]!r}); Postal via jqGrid td click after tab path stalled."
+            )
+            return True
+        return False
+    except Exception as exc:
+        logger.debug("branch2 tehsil/tab/postal path failed: %s", exc)
+        return False
 
 
 def _siebel_video_branch2_address_postal_and_save(
@@ -4083,19 +4142,20 @@ def _siebel_video_branch2_address_postal_and_save(
     home_phone: str | None = None,
     contact_email: str | None = None,
     city: str | None = None,
-    playwright_dms_log_path: Path | str | None = None,
 ) -> bool:
     """
     Video branch **(2)** (no Open enquiry): after Relation's Name path, fill **Home Phone #** and **Email**,
-    open **Address**, set **City** (``name=City``, ``id=1_City``, Sieb LOV classes) then **Postal Code**
-    (jqGrid ``1_s_1_l_Postal_Code`` / ``name=Postal_Code`` / ``1_Postal_Code``),
-    preferring **iframe#S_A1** then **#SWEApplet1** / **form SWE_Form1_0** / **div#S_A1**, then **Ctrl+S** (Save toolbar fallback).
+    open **Address**, then **Postal Code** (jqGrid ``1_s_1_l_Postal_Code`` / ``name=Postal_Code`` /
+    ``1_Postal_Code``). When ``city`` is set, fill Tehsil/Taluka (``HHML_Tehsil_Taluka``), **Enter** to commit
+    the combo, **Tab** three times to Pincode, then type the pin (with Esc + retry and jqGrid ``td`` click
+    fallbacks if focus stalls); otherwise use scoped / union postal fills only.
+    Prefer **main document** / **div#S_A1** (Hero often has no ``iframe#S_A1``), then **iframe#S_A1**,
+    **#SWEApplet1** / **form SWE_Form1_0**, then **Ctrl+S** (Save toolbar fallback).
 
     ``home_phone`` defaults from DMS landline / alternate phone at the caller; ``contact_email`` defaults
     to ``NA`` when the caller passes None. ``city`` from DMS (e.g. city or district).
 
-    City / Postal Code fill is **best-effort**: if controls are not found, a :func:`_branch2_temp_frame_dump_for_postal_debug`
-    file is written next to ``playwright_dms_log_path`` when that path is set; automation still attempts **Save**.
+    Postal Code fill is **best-effort**; automation still attempts **Save** even when the pin field is not filled.
     """
     pin = (pin_code or "").strip()
     if not pin:
@@ -4188,38 +4248,22 @@ def _siebel_video_branch2_address_postal_and_save(
     _branch2_scroll_outer_window_expose_address_jqgrid(page, note=note)
 
     city_val = (city or "").strip()
-    _scoped_round_ms = min(
-        _BRANCH2_ADDRESS_SCOPED_FILL_CAP_MS,
+    _postal_scoped_round_ms = min(
+        _BRANCH2_POSTAL_SCOPED_FILL_CAP_MS,
         max(480, min(int(action_timeout_ms), 6000) // 4),
     )
 
-    def _fill_city_and_postal_in_root(root) -> bool:
-        ok_city = True
-        if city_val:
-            ok_city = _branch2_fill_scoped_in_root(
-                root,
-                scopes=_BRANCH2_ADDRESS_GRID_SCOPES,
-                selectors=_BRANCH2_CITY_SCOPED_SELECTORS,
-                value=city_val,
-                action_timeout_ms=action_timeout_ms,
-                note=note,
-                log_label="City (scoped, v0.7.06)",
-                allow_fill_fallback=True,
-                max_round_ms=_scoped_round_ms,
-            ) or _branch2_try_fill_union_direct_scroll(
-                root,
-                _BRANCH2_CITY_DIRECT_SELECTORS,
-                city_val,
-                note=note,
-                log_label="City (jqGrid / union fallback)",
-                allow_fill_fallback=True,
-                budget_ms=_BRANCH2_ADDRESS_UNION_FILL_BUDGET_MS,
-                root_inner_fallback=(
-                    "input#1_City",
-                    'input[id="1_City"]',
-                    'input[name="City"]',
-                ),
-            )
+    def _fill_postal_in_root(root) -> bool:
+        _branch2_try_click_address_grid_first_jqgrow(root, note=note)
+        if city_val and _branch2_try_fill_tehsil_combo_tabs_then_postal(
+            page,
+            root,
+            city=city_val,
+            pin=pin,
+            action_timeout_ms=action_timeout_ms,
+            note=note,
+        ):
+            return True
         ok_postal = _branch2_fill_scoped_in_root(
             root,
             scopes=_BRANCH2_ADDRESS_GRID_SCOPES,
@@ -4229,7 +4273,7 @@ def _siebel_video_branch2_address_postal_and_save(
             note=note,
             log_label="Postal Code (scoped, v0.7.06)",
             allow_fill_fallback=True,
-            max_round_ms=_scoped_round_ms,
+            max_round_ms=_postal_scoped_round_ms,
         ) or _branch2_try_fill_union_direct_scroll(
             root,
             _BRANCH2_POSTAL_DIRECT_SELECTORS,
@@ -4244,53 +4288,45 @@ def _siebel_video_branch2_address_postal_and_save(
                 'input[name="Postal_Code"]',
             ),
         )
-        return ok_postal and (ok_city if city_val else True)
+        return bool(ok_postal)
 
     _filled = False
-    # Main document first — Hero often hosts Address jqGrid without ``iframe#S_A1`` (see temp_frame_dump).
-    if _fill_city_and_postal_in_root(page):
-        note("Branch (2): City / Postal Code filled on main page document.")
+    # Main document first — Hero often hosts Address jqGrid without ``iframe#S_A1``.
+    if _fill_postal_in_root(page):
+        note("Branch (2): Address grid filled on main page document (Tehsil/tab path and/or Postal).")
         _filled = True
     if not _filled:
         for s_a1_root in _iter_branch2_s_a1_frame_roots(page, content_frame_selector):
-            if _fill_city_and_postal_in_root(s_a1_root):
-                note("Branch (2): City / Postal Code filled inside S_A1 scope (iframe or id=S_A1).")
+            if _fill_postal_in_root(s_a1_root):
+                note("Branch (2): Address grid filled inside S_A1 scope (iframe or id=S_A1).")
                 _filled = True
                 break
     if not _filled:
         for fl in _iter_frame_locator_roots(page, content_frame_selector):
-            if _fill_city_and_postal_in_root(fl):
+            if _fill_postal_in_root(fl):
                 _filled = True
                 break
     if not _filled:
         for frame in _ordered_frames(page):
             if frame is page.main_frame:
                 continue
-            if _fill_city_and_postal_in_root(frame):
+            if _fill_postal_in_root(frame):
                 _filled = True
                 break
     if not _filled:
         for root in _siebel_all_search_roots(page, content_frame_selector):
-            if _fill_city_and_postal_in_root(root):
+            if _fill_postal_in_root(root):
                 _filled = True
                 break
     if not _filled:
         note(
-            "Branch (2): could not locate or fill City/Postal Code (non-blocking) — "
-            "tried v0.7.06 scoped #SWEApplet1/#gview/grid + union / scroll / dblclick fallbacks; "
-            "continuing to Save."
-        )
-        _branch2_temp_frame_dump_for_postal_debug(
-            page,
-            reason="branch2_city_postal_fill_failed",
-            playwright_dms_log_path=playwright_dms_log_path,
-            note=note,
-            pin_code=pin,
-            city=city_val,
+            "Branch (2): could not locate or fill Postal Code (non-blocking) — "
+            "tried Tehsil/tab path when city set, jqGrid row, scoped #SWEApplet1/#gview/grid + "
+            "union / scroll / dblclick fallbacks; continuing to Save."
         )
 
     if _filled:
-        _safe_page_wait(page, 350, log_label="after_city_postal_fill_branch2")
+        _safe_page_wait(page, 350, log_label="after_postal_fill_branch2")
         _branch2_wait_union_visible_across_roots(
             page,
             content_frame_selector=content_frame_selector,
@@ -4298,13 +4334,13 @@ def _siebel_video_branch2_address_postal_and_save(
             timeout_ms=min(800, _BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS),
         )
     else:
-        _safe_page_wait(page, 220, log_label="after_branch2_city_postal_skipped")
+        _safe_page_wait(page, 220, log_label="after_branch2_postal_skipped")
 
     try:
         page.keyboard.press("Control+S", delay=50)
         note(
             "Branch (2): pressed Ctrl+S after Address step"
-            + (" (City/Postal filled)." if _filled else " (City/Postal fill skipped or incomplete).")
+            + (" (Address: pin filled.)" if _filled else " (Address: pin fill skipped or incomplete).")
         )
         return True
     except Exception:
@@ -4314,14 +4350,14 @@ def _siebel_video_branch2_address_postal_and_save(
     ):
         note(
             "Branch (2): Save clicked after Address step"
-            + (" (City/Postal filled)." if _filled else " (City/Postal fill skipped or incomplete).")
+            + (" (Address: pin filled.)" if _filled else " (Address: pin fill skipped or incomplete).")
         )
         return True
     try:
         page.keyboard.press("Control+S", delay=50)
         note(
             "Branch (2): pressed Ctrl+S (retry) after Address step"
-            + (" (City/Postal filled)." if _filled else " (City/Postal fill skipped or incomplete).")
+            + (" (Address: pin filled.)" if _filled else " (Address: pin fill skipped or incomplete).")
         )
         return True
     except Exception:

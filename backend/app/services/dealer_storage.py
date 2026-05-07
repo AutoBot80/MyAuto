@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import (
+    S3_CHALLANS_PREFIX,
     S3_DATA_BUCKET,
     S3_OCR_PREFIX,
     S3_UPLOADS_PREFIX,
@@ -153,6 +154,22 @@ def presigned_uploads_get_by_rel_path(dealer_id: int, rel_path: str) -> str | No
     return s3_storage.generate_presigned_get_url(key)
 
 
+def presigned_challans_get_by_rel_path(rel_path: str) -> str | None:
+    """``rel_path`` relative to global challans root (no dealer segment)."""
+    if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
+        return None
+    rel = (rel_path or "").strip().replace("\\", "/").lstrip("/")
+    if not rel or ".." in rel:
+        return None
+    parts = [p for p in rel.split("/") if p and p != "."]
+    if not parts:
+        return None
+    key = f"{S3_CHALLANS_PREFIX}/" + "/".join(parts)
+    if not s3_storage.object_exists(key):
+        return None
+    return s3_storage.generate_presigned_get_url(key)
+
+
 def presigned_ocr_get_by_rel_path(dealer_id: int, rel_path: str) -> str | None:
     if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
         return None
@@ -192,8 +209,12 @@ def list_admin_folder_s3(root: str, dealer_id: int, rel_path: str) -> tuple[str,
     rel_parts = [p for p in rel.split("/") if p and p != "."]
     if root == "upload_scans":
         prefix_base = f"{S3_UPLOADS_PREFIX}/{int(dealer_id)}/"
-    else:
+    elif root == "ocr_output":
         prefix_base = f"{S3_OCR_PREFIX}/{int(dealer_id)}/"
+    elif root == "challans":
+        prefix_base = f"{S3_CHALLANS_PREFIX}/"
+    else:
+        raise ValueError(f"Unknown admin S3 folder root: {root!r}")
     prefix = prefix_base + ("/".join(rel_parts) + "/" if rel_parts else "")
     dirs, files = s3_storage.list_one_level_prefix(prefix)
     display = f"s3://{S3_DATA_BUCKET}/{prefix}"

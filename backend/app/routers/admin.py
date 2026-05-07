@@ -1,4 +1,5 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -8,8 +9,13 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
 
-from app.config import STORAGE_USE_S3, get_ocr_output_dir, get_uploads_dir
-from app.services.dealer_storage import list_admin_folder_s3, presigned_ocr_get_by_rel_path, presigned_uploads_get_by_rel_path
+from app.config import CHALLANS_DIR, STORAGE_USE_S3, get_ocr_output_dir, get_uploads_dir
+from app.services.dealer_storage import (
+    list_admin_folder_s3,
+    presigned_challans_get_by_rel_path,
+    presigned_ocr_get_by_rel_path,
+    presigned_uploads_get_by_rel_path,
+)
 from app.db import get_connection
 from app.security.deps import get_principal, require_admin, resolve_dealer_id
 from app.security.principal import Principal
@@ -71,8 +77,13 @@ class ResetAllDataRequest(BaseModel):
 
 class DataFoldersResponse(BaseModel):
     dealer_id: int
+    storage_backend: Literal["local", "s3"] = Field(
+        ...,
+        description="local = API host disk (dev: typically My Auto.AI project tree); s3 = production object store",
+    )
     upload_scans_path: str
     ocr_output_path: str
+    challans_path: str
 
 
 @router.get("/data-folders", response_model=DataFoldersResponse)
@@ -80,32 +91,192 @@ def get_data_folders(
     principal: Principal = Depends(get_principal),
     dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
 ) -> DataFoldersResponse:
-    """Resolved absolute paths for dealer-scoped Upload Scans and ocr_output folders."""
-    from app.config import S3_DATA_BUCKET, S3_OCR_PREFIX, S3_UPLOADS_PREFIX
+    """Resolved folder locations: S3 prefixes in production, absolute local paths in development."""
+    from app.config import S3_CHALLANS_PREFIX, S3_DATA_BUCKET, S3_OCR_PREFIX, S3_UPLOADS_PREFIX
 
     did = resolve_dealer_id(principal, dealer_id)
     if STORAGE_USE_S3:
         return DataFoldersResponse(
             dealer_id=did,
+            storage_backend="s3",
             upload_scans_path=f"s3://{S3_DATA_BUCKET}/{S3_UPLOADS_PREFIX}/{did}/",
             ocr_output_path=f"s3://{S3_DATA_BUCKET}/{S3_OCR_PREFIX}/{did}/",
+            challans_path=f"s3://{S3_DATA_BUCKET}/{S3_CHALLANS_PREFIX}/",
         )
     uploads = get_uploads_dir(did).resolve()
     ocr = get_ocr_output_dir(did).resolve()
     return DataFoldersResponse(
         dealer_id=did,
+        storage_backend="local",
         upload_scans_path=str(uploads),
         ocr_output_path=str(ocr),
+        challans_path=str(CHALLANS_DIR.resolve()),
     )
 
 
-AdminFolderRoot = Literal["upload_scans", "ocr_output"]
+class UsageDealerMatrixRow(BaseModel):
+    dealer_id: int = Field(..., description="``-1`` when ``sales_master.dealer_id`` was null")
+    dealer_name: str
+    counts: list[int] = Field(..., description="Seven integers aligned with ``days`` (IST), oldest first")
+
+
+class UsageDealerMatrixResponse(BaseModel):
+    timezone_label: str = Field(default="Asia/Kolkata (IST)")
+    days: list[str] = Field(..., description="Seven ``YYYY-MM-DD`` IST calendar dates, oldest → newest (today last)")
+    sales: list[UsageDealerMatrixRow]
+    challans: list[UsageDealerMatrixRow]
+
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+_SALES_MATRIX_SQL = """
+SELECT COALESCE(sm.dealer_id, -1) AS dealer_id,
+       COALESCE(dr.dealer_name, '(no dealer)') AS dealer_name,
+       (sm.billing_date AT TIME ZONE 'Asia/Kolkata')::date AS bucket,
+       COUNT(*)::int AS cnt
+FROM sales_master sm
+LEFT JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+WHERE (sm.billing_date AT TIME ZONE 'Asia/Kolkata')::date >= %s::date
+  AND (sm.billing_date AT TIME ZONE 'Asia/Kolkata')::date <= %s::date
+GROUP BY COALESCE(sm.dealer_id, -1), COALESCE(dr.dealer_name, '(no dealer)'),
+         (sm.billing_date AT TIME ZONE 'Asia/Kolkata')::date
+ORDER BY dealer_name, bucket
+"""
+
+_CHALLAN_BUCKET_DATE_ONLY = """
+CASE
+    WHEN trim(BOTH FROM coalesce(cm.challan_date, '')) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$'
+        THEN to_date(trim(BOTH FROM cm.challan_date), 'DD/MM/YYYY')
+    WHEN trim(BOTH FROM coalesce(cm.challan_date, '')) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$'
+        THEN to_date(trim(BOTH FROM cm.challan_date), 'DD/MM/YY')
+    ELSE NULL
+END
+"""
+
+_CHALLAN_BUCKET_WITH_CREATED = """
+COALESCE(
+    (cm.created_at AT TIME ZONE 'Asia/Kolkata')::date,
+    CASE
+        WHEN trim(BOTH FROM coalesce(cm.challan_date, '')) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$'
+            THEN to_date(trim(BOTH FROM cm.challan_date), 'DD/MM/YYYY')
+        WHEN trim(BOTH FROM coalesce(cm.challan_date, '')) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{2}$'
+            THEN to_date(trim(BOTH FROM cm.challan_date), 'DD/MM/YY')
+        ELSE NULL
+    END
+)
+"""
+
+
+def _challan_matrix_sql(cur) -> str:
+    """Prefer ``created_at`` IST day when the column exists (avoids 500 on DBs before ``20b`` alter)."""
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'challan_master' AND column_name = 'created_at'
+        ) AS has_created_at
+        """
+    )
+    row = cur.fetchone()
+    has_created = bool(row["has_created_at"]) if row else False
+    bucket_expr = _CHALLAN_BUCKET_WITH_CREATED if has_created else _CHALLAN_BUCKET_DATE_ONLY
+    return f"""
+SELECT x.dealer_from AS dealer_id,
+       COALESCE(dr.dealer_name, '(unknown)') AS dealer_name,
+       x.bucket AS bucket,
+       COUNT(*)::int AS cnt
+FROM (
+    SELECT cm.dealer_from,
+           ({bucket_expr}) AS bucket
+    FROM challan_master cm
+) x
+LEFT JOIN dealer_ref dr ON dr.dealer_id = x.dealer_from
+WHERE x.bucket IS NOT NULL
+  AND x.bucket >= %s::date
+  AND x.bucket <= %s::date
+GROUP BY x.dealer_from, COALESCE(dr.dealer_name, '(unknown)'), x.bucket
+ORDER BY dealer_name, bucket
+"""
+
+
+def _ist_last_7_days() -> tuple[list[date], str, str]:
+    """Return (seven dates oldest→newest), start_iso, end_iso for SQL."""
+    today = datetime.now(_IST).date()
+    start = today - timedelta(days=6)
+    days = [start + timedelta(days=i) for i in range(7)]
+    return days, start.isoformat(), today.isoformat()
+
+
+def _as_date(val) -> date:
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    return date.fromisoformat(str(val)[:10])
+
+
+def _pivot_dealer_day_counts(raw_rows: list, day_sequence: list[date]) -> list[UsageDealerMatrixRow]:
+    day_index = {d: i for i, d in enumerate(day_sequence)}
+    by_dealer: dict[int, dict[str, object]] = {}
+    for r in raw_rows or []:
+        did = int(r["dealer_id"])
+        name = str(r["dealer_name"])
+        b = _as_date(r["bucket"])
+        cnt = int(r["cnt"])
+        if did not in by_dealer:
+            by_dealer[did] = {"name": name, "counts": [0] * 7}
+        di = day_index.get(b)
+        if di is None:
+            continue
+        row = by_dealer[did]
+        counts: list[int] = row["counts"]  # type: ignore[assignment]
+        counts[di] += cnt
+    out: list[UsageDealerMatrixRow] = []
+    for did, info in by_dealer.items():
+        out.append(
+            UsageDealerMatrixRow(
+                dealer_id=did,
+                dealer_name=str(info["name"]),
+                counts=list(info["counts"]),  # type: ignore[arg-type]
+            )
+        )
+    out.sort(key=lambda x: x.dealer_name.casefold())
+    return out
+
+
+@router.get("/usage-dealer-matrix", response_model=UsageDealerMatrixResponse)
+def get_usage_dealer_matrix(
+    _principal: Principal = Depends(get_principal),
+) -> UsageDealerMatrixResponse:
+    """Past 7 IST calendar days: ``sales_master`` / ``challan_master`` counts per dealer × day."""
+    days, start_s, end_s = _ist_last_7_days()
+    day_strs = [d.isoformat() for d in days]
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(_SALES_MATRIX_SQL, (start_s, end_s))
+            sales_raw = cur.fetchall() or []
+            cur.execute(_challan_matrix_sql(cur), (start_s, end_s))
+            chall_raw = cur.fetchall() or []
+    finally:
+        conn.close()
+    return UsageDealerMatrixResponse(
+        timezone_label="Asia/Kolkata (IST)",
+        days=day_strs,
+        sales=_pivot_dealer_day_counts(list(sales_raw), days),
+        challans=_pivot_dealer_day_counts(list(chall_raw), days),
+    )
+
+
+AdminFolderRoot = Literal["upload_scans", "ocr_output", "challans"]
 
 
 def _admin_folder_base(root: AdminFolderRoot, did: int) -> Path:
     if root == "upload_scans":
         return get_uploads_dir(did)
-    return get_ocr_output_dir(did)
+    if root == "ocr_output":
+        return get_ocr_output_dir(did)
+    return CHALLANS_DIR.resolve()
 
 
 def _resolve_under_dealer_root(base: Path, rel: str) -> Path:
@@ -145,15 +316,15 @@ class FolderListResponse(BaseModel):
 @router.get("/folder-contents", response_model=FolderListResponse)
 def list_admin_folder_contents(
     principal: Principal = Depends(get_principal),
-    root: AdminFolderRoot = Query(..., description="upload_scans or ocr_output"),
+    root: AdminFolderRoot = Query(..., description="upload_scans, ocr_output, or challans"),
     rel_path: str = Query("", description="Path under the dealer folder, / separators"),
     dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
 ) -> FolderListResponse:
-    """List files and subfolders under the dealer Upload Scans or ocr_output tree."""
+    """List files and subfolders under Upload Scans, ocr_output (dealer-scoped), or challans (global tree)."""
     did = resolve_dealer_id(principal, dealer_id)
     rel_norm = rel_path.strip().replace("\\", "/")
     if STORAGE_USE_S3:
-        display_abs, raw_items = list_admin_folder_s3(root, did, rel_norm)
+        display_abs, raw_items = list_admin_folder_s3(str(root), did, rel_norm)
         items = [
             FolderEntry(
                 name=x["name"],
@@ -219,8 +390,12 @@ def get_admin_folder_file(
             raise HTTPException(status_code=400, detail="Invalid path") from e
         if root == "upload_scans":
             url = presigned_uploads_get_by_rel_path(did, rel)
-        else:
+        elif root == "ocr_output":
             url = presigned_ocr_get_by_rel_path(did, rel)
+        elif root == "challans":
+            url = presigned_challans_get_by_rel_path(rel)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid folder root")
         if not url:
             raise HTTPException(status_code=404, detail="File not found")
         return RedirectResponse(url=url, status_code=307)

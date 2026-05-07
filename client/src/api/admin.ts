@@ -1,9 +1,13 @@
+import { getAccessToken } from "../auth/token";
 import { apiFetch } from "./client";
 
 export interface AdminDataFoldersResponse {
   dealer_id: number;
+  /** `local` = on-disk (dev: under My Auto.AI by default); `s3` = production bucket */
+  storage_backend: "local" | "s3";
   upload_scans_path: string;
   ocr_output_path: string;
+  challans_path: string;
 }
 
 export function getAdminDataFolders(dealerId: number) {
@@ -11,7 +15,7 @@ export function getAdminDataFolders(dealerId: number) {
   return apiFetch<AdminDataFoldersResponse>(`/admin/data-folders?${q.toString()}`);
 }
 
-export type AdminFolderRootApi = "upload_scans" | "ocr_output";
+export type AdminFolderRootApi = "upload_scans" | "ocr_output" | "challans";
 
 export interface AdminFolderEntry {
   name: string;
@@ -47,6 +51,53 @@ export function adminFolderFileUrl(dealerId: number, root: AdminFolderRootApi, r
   return `${base}/admin/folder-file?${q.toString()}`;
 }
 
+export type AdminFolderFileOpenResult = {
+  blobUrl: string;
+  revoke: () => void;
+  /** Presigned URL after API 307 — use in iframe/img; downloads open a new tab. */
+  external: boolean;
+};
+
+/**
+ * Load admin folder file: send JWT on the API request; if the response is 307 (e.g. S3 presigned),
+ * return ``Location`` so the viewer can load the file without a cross-origin blob read.
+ */
+export async function fetchAdminFolderFileBlobUrl(
+  dealerId: number,
+  root: AdminFolderRootApi,
+  relativePath: string,
+): Promise<AdminFolderFileOpenResult> {
+  const base = import.meta.env.VITE_API_URL ?? "";
+  const q = new URLSearchParams({
+    dealer_id: String(dealerId),
+    root,
+    path: relativePath,
+  });
+  const headers = new Headers();
+  const token = getAccessToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const url = `${base}/admin/folder-file?${q.toString()}`;
+  const res = await fetch(url, { headers, redirect: "manual" });
+  if (res.status === 307 || res.status === 302) {
+    const loc = res.headers.get("Location");
+    if (!loc) {
+      throw new Error("Server redirect did not include a file location.");
+    }
+    return { blobUrl: loc, revoke: () => {}, external: true };
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `Could not open file (HTTP ${res.status})`);
+  }
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  return {
+    blobUrl,
+    revoke: () => URL.revokeObjectURL(blobUrl),
+    external: false,
+  };
+}
+
 export interface ResetAllDataResponse {
   ok: boolean;
   message: string;
@@ -61,4 +112,23 @@ export function resetAllData() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ confirmation: "DELETE ALL DATA" }),
   });
+}
+
+export interface AdminUsageDealerMatrixRow {
+  dealer_id: number;
+  dealer_name: string;
+  /** Seven counts aligned with ``days`` (oldest → newest, IST). */
+  counts: number[];
+}
+
+export interface AdminUsageDealerMatrixResponse {
+  timezone_label: string;
+  /** Seven ``YYYY-MM-DD`` IST dates, oldest first. */
+  days: string[];
+  sales: AdminUsageDealerMatrixRow[];
+  challans: AdminUsageDealerMatrixRow[];
+}
+
+export function getAdminUsageDealerMatrix() {
+  return apiFetch<AdminUsageDealerMatrixResponse>("/admin/usage-dealer-matrix");
 }

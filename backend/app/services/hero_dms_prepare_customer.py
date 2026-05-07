@@ -361,6 +361,7 @@ def prepare_customer(
         )
         _b2_email = (dms_values.get("branch2_contact_email") or "NA").strip()
         _b2_city = (dms_values.get("city") or dms_values.get("district") or "").strip()
+        # Branch (2): Tehsil + Enter + Tab×3 to pin; Esc retry + td click; fallback jqGrid postal fill.
         if not _siebel_video_branch2_address_postal_and_save(
             page,
             pin_code=pin,
@@ -369,13 +370,12 @@ def prepare_customer(
             note=note,
             home_phone=_b2_home,
             contact_email=_b2_email,
-            city=_b2_city,
-            playwright_dms_log_path=playwright_dms_log_path,
+            city=_b2_city or None,
         ):
             step("Stopped: video branch (2) Address tab Save failed (Ctrl+S / Save toolbar).")
             out["error"] = (
                 "Siebel: no open enquiry path — could not save after Address step "
-                "(City/Postal fill is best-effort; see Playwright_DMS notes and temp_frame_dump_*.txt if written)."
+                "(Postal fill is best-effort; see Playwright_DMS notes)."
             )
             return False
 
