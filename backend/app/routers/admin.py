@@ -7,7 +7,7 @@ from typing import Literal
 from psycopg2 import sql, IntegrityError
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import CHALLANS_DIR, STORAGE_USE_S3, get_ocr_output_dir, get_uploads_dir
 from app.services.dealer_storage import (
@@ -378,8 +378,12 @@ def get_admin_folder_file(
     root: AdminFolderRoot = Query(...),
     path: str = Query(..., description="File path relative to dealer upload/ocr root"),
     dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
-) -> FileResponse:
-    """Serve a file from under the dealer Upload Scans or ocr_output tree (read-only)."""
+) -> FileResponse | JSONResponse:
+    """Serve bytes from disk, or on S3 return JSON ``{"url": "<presigned GET>"}`` (not an HTTP redirect).
+
+    Cross-origin ``fetch`` with ``redirect="manual"`` turns redirects into an opaque response
+    (status 0, no ``Location``), so the browser cannot read the presigned URL from a 307.
+    """
     did = resolve_dealer_id(principal, dealer_id)
     base = _admin_folder_base(root, did)
     file_path = _resolve_under_dealer_root(base, path)
@@ -398,7 +402,7 @@ def get_admin_folder_file(
             raise HTTPException(status_code=400, detail="Invalid folder root")
         if not url:
             raise HTTPException(status_code=404, detail="File not found")
-        return RedirectResponse(url=url, status_code=307)
+        return JSONResponse({"url": url})
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=file_path.name, content_disposition_type="inline")

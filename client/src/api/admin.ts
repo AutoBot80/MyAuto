@@ -59,8 +59,8 @@ export type AdminFolderFileOpenResult = {
 };
 
 /**
- * Load admin folder file: send JWT on the API request; if the response is 307 (e.g. S3 presigned),
- * return ``Location`` so the viewer can load the file without a cross-origin blob read.
+ * Load admin folder file with JWT. On S3 the API returns JSON ``{ url }`` (not HTTP redirect),
+ * because cross-origin ``fetch(..., redirect: "manual")`` hides redirect targets (HTTP 0).
  */
 export async function fetchAdminFolderFileBlobUrl(
   dealerId: number,
@@ -77,17 +77,18 @@ export async function fetchAdminFolderFileBlobUrl(
   const token = getAccessToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const url = `${base}/admin/folder-file?${q.toString()}`;
-  const res = await fetch(url, { headers, redirect: "manual" });
-  if (res.status === 307 || res.status === 302) {
-    const loc = res.headers.get("Location");
-    if (!loc) {
-      throw new Error("Server redirect did not include a file location.");
-    }
-    return { blobUrl: loc, revoke: () => {}, external: true };
-  }
+  const res = await fetch(url, { headers });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(text || `Could not open file (HTTP ${res.status})`);
+  }
+  const ct = res.headers.get("content-type") ?? "";
+  if (ct.includes("application/json")) {
+    const j = (await res.json()) as { url?: unknown };
+    if (typeof j.url !== "string" || !j.url) {
+      throw new Error("Server did not return a file URL.");
+    }
+    return { blobUrl: j.url, revoke: () => {}, external: true };
   }
   const blob = await res.blob();
   const blobUrl = URL.createObjectURL(blob);
