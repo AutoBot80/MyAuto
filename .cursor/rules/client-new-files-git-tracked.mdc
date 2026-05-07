@@ -1,0 +1,15 @@
+---
+description: New client source (pages, components, hooks, api) must be committed so CI/GitHub Actions can resolve imports
+globs: client/src/**/*
+alwaysApply: false
+---
+
+# Client new files — keep them in git
+
+GitHub Actions (and any clean clone) only sees **tracked** files. If `App.tsx` or another module imports `./pages/SomeNewPage` but `SomeNewPage.tsx` was never `git add`’d, CI fails with **TS2307 Cannot find module**.
+
+## Required agent behavior
+
+1. When adding or wiring **new** files under `client/src/` (especially `pages/`, `components/`, `api/`, `hooks/`), **`git add`** those paths in the **same change set** as the import, unless the user explicitly defers committing.
+2. After adding files, run **`npm run build`** in `client/` (or the repo’s CI-equivalent) before considering the task done.
+3. There is **no** separate “inclusion list” in this repo for client sources: the fix is always **stage and commit** new `.ts`/`.tsx`/`.css` that are imported. Electron packaging pulls from `client/dist` after build; it does not whitelist individual page paths.

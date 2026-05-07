@@ -1,0 +1,103 @@
+.admin-usage-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.admin-usage-subtabs {
+  display: flex;
+  gap: 0.5rem;
+  border-bottom: 1px solid rgba(30, 90, 158, 0.2);
+  padding-bottom: 0.25rem;
+}
+
+.admin-usage-subtabs button {
+  padding: 0.45rem 1rem;
+  border: none;
+  background: transparent;
+  color: #1e5a9e;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 6px 6px 0 0;
+}
+
+.admin-usage-subtabs button:hover {
+  background: rgba(30, 90, 158, 0.08);
+}
+
+.admin-usage-subtabs button.active {
+  background: rgba(30, 90, 158, 0.12);
+  box-shadow: inset 0 -2px 0 #1e5a9e;
+}
+
+.admin-usage-table-wrap {
+  padding: 0.35rem 0 0.75rem;
+}
+
+.admin-usage-section-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #222;
+}
+
+.admin-usage-matrix-wrap {
+  max-width: 100%;
+}
+
+.admin-usage-matrix-table .admin-usage-matrix-day,
+.admin-usage-matrix-table .admin-usage-matrix-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.admin-usage-matrix-dealer-col {
+  text-align: left;
+}
+
+.admin-usage-matrix-dealer {
+  text-align: left;
+  font-weight: 600;
+  max-width: 14rem;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.admin-usage-folder-embed {
+  margin-top: 1rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  padding-top: 0.75rem;
+}
+
+.admin-usage-folder-embed h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.admin-usage-sales-folder-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+/* Scrollable file lists inside Usage embeds (nested folder browsers) */
+.admin-usage-folder-embed .bulk-folder-view-body,
+.admin-usage-sales-folder-grid .bulk-folder-view-body {
+  max-height: min(55vh, 28rem);
+  overflow-y: auto;
+}
+
+@media (max-width: 900px) {
+  .admin-usage-sales-folder-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.admin-usage-sales-folder-cell h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #1e5a9e;
+}
