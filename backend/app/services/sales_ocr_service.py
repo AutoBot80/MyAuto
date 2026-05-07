@@ -18,6 +18,7 @@ from app.services.utility_functions import (
     default_profession_if_empty,
     fuzzy_best_master_ref_value,
     fuzzy_best_option_label,
+    normalize_address_dedupe_repetition,
     normalize_for_fuzzy_match,
     normalize_nominee_relationship_value,
     sanitize_details_sheet_insurer_value,
@@ -25,6 +26,7 @@ from app.services.utility_functions import (
 from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
     normalize_address_freeform,
+    strip_junk_between_last_indian_state_and_pin,
 )
 from app.services.ocr_extraction_log import append_ocr_extraction_log
 from app.placeholder_mobile import is_placeholder_indian_mobile
@@ -260,6 +262,26 @@ def _normalize_aadhar_back_address_chunk(chunk: str) -> str:
     return chunk
 
 
+def _dedupe_adjacent_same_pin_tokens(s: str) -> str:
+    """Collapse ``321602 321602`` or ``321602, 321602`` to a single PIN (repeat until stable)."""
+    t = s
+    for _ in range(16):
+        n = re.sub(r"(?<!\d)(\d{6})(?!\d)(?:\s*,\s*|\s+)\1(?!\d)", r"\1", t)
+        if n == t:
+            break
+        t = n
+    return t
+
+
+def _pre_normalize_ocr_address_colons_and_pins(addr: str) -> str:
+    """OCR noise: treat ``:`` as a clause break; dedupe repeated C/O markers and adjacent PINs."""
+    t = normalize_address_dedupe_repetition(addr)
+    t = re.sub(r"\s*:\s*", ", ", t)
+    t = _dedupe_adjacent_same_pin_tokens(t)
+    t = re.sub(r",\s*,+", ", ", t)
+    return re.sub(r"\s+", " ", t).strip(" ,")
+
+
 def _clean_aadhar_back_cross_column_noise(addr: str) -> str:
     """
     Remove common Aadhaar-back OCR bleed where Hindi-side glyph noise gets merged into
@@ -267,6 +289,8 @@ def _clean_aadhar_back_cross_column_noise(addr: str) -> str:
     """
     if not addr:
         return addr
+
+    addr = _pre_normalize_ocr_address_colons_and_pins(addr)
 
     parts = [p.strip(" ,.-") for p in re.split(r"\s*,\s*", addr) if p and p.strip(" ,.-")]
     cleaned: list[str] = []
@@ -315,6 +339,9 @@ def _clean_aadhar_back_cross_column_noise(addr: str) -> str:
         r"\1, \2",
         out,
     )
+    out = re.sub(r"\s+", " ", out).strip(" ,")
+    out = _dedupe_adjacent_same_pin_tokens(out)
+    out = strip_junk_between_last_indian_state_and_pin(out)
     return re.sub(r"\s+", " ", out).strip(" ,")
 
 
@@ -1163,15 +1190,16 @@ def _merge_aadhar_textract_fallback_dict(customer: dict[str, str], hints: dict[s
         if cur is None or not str(cur).strip():
             out[k] = str(hv).strip()
     ha = (hints.get("address") or "").strip()
+    ha_clean = _clean_aadhar_back_cross_column_noise(ha) if ha else ""
     ca = (out.get("address") or "").strip()
-    if ha:
+    if ha_clean:
         if not ca:
-            out["address"] = ha
-        elif len(ha) > len(ca) + 12:
-            out["address"] = ha
+            out["address"] = ha_clean
+        elif len(ha_clean) > len(ca) + 12:
+            out["address"] = ha_clean
     _rebuild_aadhar_address_from_parts(out, preserve_existing_address=True)
-    if ha and (not out.get("address") or not str(out["address"]).strip()):
-        out["address"] = ha
+    if ha_clean and (not out.get("address") or not str(out["address"]).strip()):
+        out["address"] = ha_clean
     if hints.get("pin_code") and not (out.get("pin_code") and str(out["pin_code"]).strip()):
         out["pin_code"] = str(hints["pin_code"]).strip()
     if hints.get("care_of") and not (out.get("care_of") and str(out["care_of"]).strip()):

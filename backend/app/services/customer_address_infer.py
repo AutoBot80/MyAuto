@@ -54,6 +54,37 @@ _REGION_ALT = "|".join(re.escape(r) for r in _INDIA_REGIONS)
 _REGION_RE = re.compile(rf"(?i)\b({_REGION_ALT})\b")
 
 
+def strip_junk_between_last_indian_state_and_pin(text: str) -> str:
+    """
+    UIDAI English backs often read as ``..., State, <OCR noise>, PIN`` at the tail.
+    Keep text through the **last** known Indian state/UT token and the **final** 6-digit PIN,
+    dropping the span in between when the PIN ends the line (only trailing separators after PIN).
+
+    Does nothing when no PIN, no state before the last PIN, or there is substantive text after the PIN.
+    """
+    s = (text or "").strip()
+    if not s:
+        return s
+    pin_iter = list(re.finditer(r"(?<!\d)(\d{6})(?!\d)", s))
+    if not pin_iter:
+        return s
+    last_pin_m = pin_iter[-1]
+    rest = s[last_pin_m.end() :].strip()
+    if rest and not re.fullmatch(r"[\s,.;:\-–—]+", rest):
+        return s
+    pin = last_pin_m.group(1)
+    head = s[: last_pin_m.start()]
+    matches = list(_REGION_RE.finditer(head))
+    if not matches:
+        return s
+    st_m = matches[-1]
+    prefix = s[: st_m.end()].rstrip(" ,.;:-–—")
+    out = f"{prefix}, {pin}"
+    out = re.sub(r"\s+", " ", out)
+    out = re.sub(r",\s*,+", ", ", out)
+    return out.strip(" ,")
+
+
 def _indian_state_field_trustworthy(state_val: str) -> bool:
     """Reject long OCR/Hindi noise in ``state`` when a real UT/state name was expected."""
     s = (state_val or "").strip()
