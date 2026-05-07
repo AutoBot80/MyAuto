@@ -188,7 +188,28 @@ If your app `.env` is the **monolithic** Secret in `app_dotenv_secret_arn`, that
 
 After `git pull` (or rsync) updates `/opt/saathi`:
 
-> **Challans folder:** Runtime subdealer-challan output lives under `Challans/` and is not in git. If a manual `git pull` fails with *untracked files would be overwritten* under `Challans/`, run `git clean -fd -- Challans` from `/opt/saathi`, then pull again. The workstation script [Update-Prod-App-Backend.ps1](../../Update-Prod-App-Backend.ps1) runs that clean automatically before `git pull`.
+### Git and `/opt/saathi` ownership (avoid “dubious ownership”)
+
+The clone is often **owned by `root`** (launch template `user_data`). Session Manager may attach you as **`ssm-user`** or **`ec2-user`**. Then plain `git fetch` / `git pull` fails immediately with:
+
+`fatal: detected dubious ownership in repository at '/opt/saathi'`
+
+**Recommended (no global config):** always run git via `sudo` so the process matches typical repo ownership:
+
+```bash
+sudo git -C /opt/saathi fetch origin main
+sudo git -C /opt/saathi pull origin main
+```
+
+**Optional (per user account on the box):** allow Git to trust this path once:
+
+```bash
+git config --global --add safe.directory /opt/saathi
+```
+
+After that, `cd /opt/saathi && git pull` works from that account. The workstation script [Update-Prod-App-Backend.ps1](../../Update-Prod-App-Backend.ps1) uses **`sudo git -C /opt/saathi`** for fetch / clean / pull so deploy does not depend on which user SSM uses.
+
+> **Challans folder:** Runtime subdealer-challan output lives under `Challans/` and is not in git. If a manual `git pull` fails with *untracked files would be overwritten* under `Challans/`, run `sudo git -C /opt/saathi clean -fd -- Challans`, then pull again. [Update-Prod-App-Backend.ps1](../../Update-Prod-App-Backend.ps1) runs that clean automatically before `git pull`.
 
 ```bash
 cd /opt/saathi

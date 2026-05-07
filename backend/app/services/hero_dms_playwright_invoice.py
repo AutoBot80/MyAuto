@@ -3167,6 +3167,22 @@ def _challan_read_pin_code_field(
     return ""
 
 
+def _challan_institution_siebel_wildcard_query(raw: str) -> str:
+    """
+    Siebel Account / institution MVG-style match: multi-word names type as ``Word1*Word2*``
+    so partial / spaced spellings in master data still resolve (e.g. ``Arora automobiles`` → ``Arora*automobiles*``).
+    Multiple spaces between words collapse to a single ``*`` (``re.split(r'\\s+', ...)``).
+    Caller-supplied strings that already contain ``*`` are returned unchanged.
+    """
+    s = (raw or "").strip()
+    if not s or "*" in s:
+        return s
+    tokens = [t for t in re.split(r"\s+", s) if t]
+    if len(tokens) < 2:
+        return s
+    return "*".join(tokens) + "*"
+
+
 def _fill_challan_account_institution_name_verify_pin(
     page: Page,
     *,
@@ -3180,10 +3196,14 @@ def _fill_challan_account_institution_name_verify_pin(
     Subdealer challan: dismiss any open MVG applet (Escape), focus the **input** without using the
     pick icon (``focus()`` first; far-left click only as last resort), type the name, then Tab out.
     Success when Pin Code shows a value (Siebel autopopulate after institution match).
+    Multi-word institution names are typed as Siebel wildcard queries (``_challan_institution_siebel_wildcard_query``).
     """
-    nm = (institution_name or "").strip()
-    if not nm:
+    _raw_inst = (institution_name or "").strip()
+    if not _raw_inst:
         return False, "Account/Institution Name value is empty."
+    nm = _challan_institution_siebel_wildcard_query(_raw_inst)
+    if nm != _raw_inst:
+        note(f"Account/Institution Name: wildcard query {_raw_inst!r} → {nm!r}")
 
     roots: list = []
     try:
@@ -3349,7 +3369,7 @@ def _fill_challan_account_institution_name_verify_pin(
         # 1) Select "Account Name" (2nd option) from dropdown using keyboard
         # Focus dropdown, Home to first option, ArrowDown to second option
         _dropdown_ok = False
-        
+
         # Find and click the dropdown to focus it
         try:
             # Use JavaScript to find and click the visible select element
@@ -3379,10 +3399,8 @@ def _fill_challan_account_institution_name_verify_pin(
         try:
             page.keyboard.press("ArrowDown")
             _safe_page_wait(page, 150, log_label="pick_account_dropdown_down1")
-            page.keyboard.press("ArrowDown")
-            _safe_page_wait(page, 150, log_label="pick_account_dropdown_down2")
             _dropdown_ok = True
-            note("Pick Account MVG: selected 'Account Name' via 2x ArrowDown.")
+            note("Pick Account MVG: selected 'Account Name' via 1x ArrowDown.")
         except Exception as e:
             note(f"Pick Account MVG: keyboard navigation failed: {e!r}")
 

@@ -4,7 +4,7 @@ Instances run **Amazon Linux 2023**. The launch template **user_data** now **sel
 
 **AWS prod / beta (alarms, ASG scaling, CloudWatch agent, Gunicorn defaults, RDS, §7 as-built):** [Production cloud design](../../Documentation/Production_cloud_design.md)
 
-**Ongoing deploys:** follow **[DEPLOY.md](./DEPLOY.md)** (git pull → pip → restart).
+**Ongoing deploys:** follow **[DEPLOY.md](./DEPLOY.md)** (git pull → pip → restart). On the instance use **`sudo git -C /opt/saathi …`** (or `git config --global --add safe.directory /opt/saathi`) if Git reports **dubious ownership** — see DEPLOY.md Step 4.
 
 ## Layout on the server
 

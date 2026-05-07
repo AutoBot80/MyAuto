@@ -19,6 +19,7 @@
   - AWS CLI v2 installed and configured (default profile or AWS_PROFILE)
   - IAM permissions: ec2:DescribeInstances, ssm:SendCommand, ssm:GetCommandInvocation
   - EC2: SSM Agent, IAM role with AmazonSSMManagedInstanceCore, app at /opt/saathi
+  - Remote git uses: sudo git -C /opt/saathi (repo often root-owned; avoids dubious-ownership failures)
 
   See also: deploy/ec2/DEPLOY.md
 
@@ -375,16 +376,17 @@ if ($ids.Count -gt 1) {
 Write-Ok "InstanceId=$InstanceId"
 
 # --- Phase 3: SSM deploy ---
-Write-Step "Phase 3: SSM remote deploy (git pull, pip, restart saathi-api)"
+Write-Step "Phase 3: SSM remote deploy (sudo git pull, pip, restart saathi-api)"
 
 # One logical script on the instance (bash). SSM AWS-RunShellScript expects "commands" as an array of lines.
 $remoteLines = @(
     'set -e'
-    'cd /opt/saathi'
-    'git fetch origin main'
+    # Repo is often root-owned (Terraform); SSM may run as ssm-user/ec2-user — plain git fails with "dubious ownership".
+    'sudo git -C /opt/saathi fetch origin main'
     # Runtime OCR/logs under Challans/ must not block pull when main tracks or drops the same paths.
-    'git clean -fd -- Challans 2>/dev/null || true'
-    'git pull origin main'
+    'sudo git -C /opt/saathi clean -fd -- Challans 2>/dev/null || true'
+    'sudo git -C /opt/saathi pull origin main'
+    'cd /opt/saathi'
     'source backend/venv/bin/activate'
     'pip install -q -r backend/requirements.txt'
     'sudo systemctl restart saathi-api'
