@@ -372,13 +372,13 @@ def list_admin_folder_contents(
     )
 
 
-@router.get("/folder-file")
+@router.get("/folder-file", response_model=None)
 def get_admin_folder_file(
     principal: Principal = Depends(get_principal),
     root: AdminFolderRoot = Query(...),
     path: str = Query(..., description="File path relative to dealer upload/ocr root"),
     dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
-) -> FileResponse | JSONResponse:
+):
     """Serve bytes from disk, or on S3 return JSON ``{"url": "<presigned GET>"}`` (not an HTTP redirect).
 
     Cross-origin ``fetch`` with ``redirect="manual"`` turns redirects into an opaque response
