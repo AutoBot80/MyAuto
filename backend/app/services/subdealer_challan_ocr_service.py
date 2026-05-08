@@ -9,9 +9,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 from app.config import CHALLANS_DIR  # default artifact root when challans_base is omitted
 from app.services.subdealer_challan_textract import extract_challan_textract
@@ -107,6 +110,25 @@ def _extract_challan_no(full_text: str, key_value_pairs: list[dict[str, str]]) -
     return None
 
 
+def _header_cell_is_chassis_column(low: str) -> bool:
+    """Chassis / VIN column: Chassis No, Frame No, VIN, etc."""
+    if "chassis" in low:
+        return True
+    if re.search(r"\bframe\b", low):
+        return True
+    if re.search(r"\bvin\b", low):
+        return True
+    return False
+
+
+def _joined_row_has_chassis_signal(joined_lower: str) -> bool:
+    return (
+        "chassis" in joined_lower
+        or bool(re.search(r"\bframe\b", joined_lower))
+        or bool(re.search(r"\bvin\b", joined_lower))
+    )
+
+
 def _header_row_engine_chassis_indices(header_row: list[str]) -> tuple[int, int] | None:
     eng_i: int | None = None
     cha_i: int | None = None
@@ -114,7 +136,7 @@ def _header_row_engine_chassis_indices(header_row: list[str]) -> tuple[int, int]
         low = (cell or "").lower()
         if "engine" in low and "chassis" not in low:
             eng_i = i
-        if "chassis" in low:
+        if _header_cell_is_chassis_column(low):
             cha_i = i
     if eng_i is not None and cha_i is not None:
         return eng_i, cha_i
@@ -124,16 +146,53 @@ def _header_row_engine_chassis_indices(header_row: list[str]) -> tuple[int, int]
 def _find_engine_chassis_table(
     tables: list[list[list[str]]],
 ) -> tuple[list[list[str]], int] | None:
-    """Return (table grid, header_row_index) for the grid that has Engine + Chassis headers."""
+    """Return (table grid, header_row_index) for the grid that has Engine + Chassis/Frame/VIN headers."""
     for table in tables:
         for hi, row in enumerate(table):
             if not row:
                 continue
             joined = " ".join(row).lower()
-            if "engine" in joined and "chassis" in joined:
+            if "engine" in joined and _joined_row_has_chassis_signal(joined):
                 if _header_row_engine_chassis_indices(row):
                     return table, hi
     return None
+
+
+def _invoice_column_index(header_row: list[str]) -> int | None:
+    """Excise Invoice, Tax Invoice, or standalone Invoice column (narrow)."""
+    for i, cell in enumerate(header_row):
+        low = (cell or "").lower()
+        if "excise" in low and "invoice" in low:
+            return i
+    for i, cell in enumerate(header_row):
+        low = (cell or "").lower()
+        if re.search(r"\binvoice\b", low) and "excise" not in low:
+            return i
+    return None
+
+
+def _challan_no_from_repeated_invoice(table: list[list[str]], header_row_index: int) -> str | None:
+    """
+    If every non-empty body cell in the invoice column sanitizes to the same value, return it.
+    """
+    header = table[header_row_index]
+    inv_i = _invoice_column_index(header)
+    if inv_i is None:
+        return None
+    seen: set[str] = set()
+    for row in table[header_row_index + 1 :]:
+        if inv_i >= len(row):
+            continue
+        v = sanitize_challan_line_field(row[inv_i] or "")
+        if v:
+            seen.add(v)
+    if len(seen) == 1:
+        return next(iter(seen))
+    return None
+
+
+def _ist_now() -> datetime:
+    return datetime.now(_IST)
 
 
 def _rows_from_table(table: list[list[str]], header_row_index: int) -> list[dict[str, str]]:
@@ -226,7 +285,7 @@ def _build_raw_ocr_text(
 def _challan_folder_name(challan_no: str | None, ddmmyyyy: str | None) -> str:
     cn = _safe_folder_segment(challan_no or "")
     if cn == "unknown" or not ddmmyyyy:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        ts = _ist_now().strftime("%Y%m%d_%H%M%S")
         return f"unknown_{ts}"
     return f"{cn}_{ddmmyyyy}"
 
@@ -243,7 +302,7 @@ def challan_artifact_leaf_name(challan_book_num: str | None, challan_date_stored
     else:
         _, ddmmyyyy = parse_challan_date_to_iso(raw if raw else None)
     if not ddmmyyyy:
-        d = datetime.now(timezone.utc)
+        d = _ist_now().date()
         ddmmyyyy = f"{d.day:02d}{d.month:02d}{d.year}"
     return _challan_folder_name(challan_book_num, ddmmyyyy)
 
@@ -295,6 +354,7 @@ def parse_subdealer_challan(
 
     challan_no = _extract_challan_no(full_text, kvp)
     date_raw = _extract_date_raw_from_text(full_text)
+    ocr_date_missing = not date_raw
     iso, ddmmyyyy = parse_challan_date_to_iso(date_raw)
 
     lines: list[dict[str, str]] = []
@@ -307,17 +367,26 @@ def parse_subdealer_challan(
             out["warnings"].append(
                 f"Removed {dup_n} duplicate row(s) with the same engine and chassis numbers."
             )
+        if not challan_no:
+            challan_no = _challan_no_from_repeated_invoice(grid, hi)
     else:
-        out["warnings"].append("No table with Engine and Chassis headers found; lines empty.")
+        out["warnings"].append(
+            "No table with Engine and Chassis/Frame/VIN headers found; lines empty."
+        )
 
     if not challan_no:
         out["warnings"].append("Challan number not detected.")
-    if not date_raw:
-        out["warnings"].append("Challan date not detected; using today for folder name if needed.")
+    if ocr_date_missing:
+        out["warnings"].append(
+            "Challan date not detected on scan; using today (IST) for folder name and pre-fill."
+        )
+        d_ist = _ist_now().date()
+        date_raw = f"{d_ist.day:02d}/{d_ist.month:02d}/{d_ist.year}"
+        iso, ddmmyyyy = parse_challan_date_to_iso(date_raw)
 
     if not ddmmyyyy:
-        d = datetime.now(timezone.utc)
-        ddmmyyyy = f"{d.day:02d}{d.month:02d}{d.year}"
+        d_fb = _ist_now().date()
+        ddmmyyyy = f"{d_fb.day:02d}{d_fb.month:02d}{d_fb.year}"
 
     out["challan_no"] = challan_no
     out["challan_date_raw"] = date_raw

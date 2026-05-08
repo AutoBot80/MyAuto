@@ -136,6 +136,8 @@ FunctionEnd
   FileOpen $9 "$R5\.env" w
   FileWrite $9 "# Dealer Saathi — created by installer (local Playwright / IPC fallback).$\r$\n"
   FileWrite $9 "# API-first site URLs use the cloud; edit here only if needed.$\r$\n"
+  FileWrite $9 "# Production DMS gates (Create Invoice auto-click, etc.); see backend app.config ENVIRONMENT_IS_PRODUCTION.$\r$\n"
+  FileWrite $9 "ENVIRONMENT=PROD$\r$\n"
   FileWrite $9 "DMS_MODE=real$\r$\n"
   FileWrite $9 "DMS_BASE_URL=https://connect.heromotocorp.biz/edealerHMCL_enu?SWECmd=Start$\r$\n"
   FileWrite $9 "INSURANCE_BASE_URL=https://heroinsurance.com/misp-partner-login$\r$\n"

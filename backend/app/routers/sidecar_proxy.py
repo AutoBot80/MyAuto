@@ -807,11 +807,26 @@ async def subdealer_challan_finalize_order(
     except ValueError as e:
         raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
 
-    out = sidecar_finalize_order_playwright_result(
-        challan_batch_id=bid,
-        dealer_id=int(did),
-        playwright_result=dict(req.playwright_result or {}),
-    )
+    try:
+        out = sidecar_finalize_order_playwright_result(
+            challan_batch_id=bid,
+            dealer_id=int(did),
+            playwright_result=dict(req.playwright_result or {}),
+        )
+    except Exception:
+        logger.exception(
+            "subdealer_challan finalize-order: unhandled exception batch=%s dealer_id=%s",
+            bid,
+            int(did),
+        )
+        return SubdealerChallanFinalizeOrderResponse(
+            ok=False,
+            error="Server error while saving challan to the database. Check API logs.",
+            challan_id=None,
+            vehicle={},
+            dms_step_messages=[],
+        )
+
     err = out.get("error")
     return SubdealerChallanFinalizeOrderResponse(
         ok=bool(out.get("ok")),

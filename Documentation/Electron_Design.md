@@ -121,6 +121,7 @@ The web client continues to work in the browser unchanged; Electron is detected 
 |----------|---------|
 | `VITE_API_URL` | Set when **building** the React app; API base for production. |
 | `SAATHI_BASE_DIR` | Optional; defaults to `D:\Saathi`. Sets `backend` paths when running automation (see `backend/app/config.py` `SAATHI_BASE_DIR`). |
+| `ENVIRONMENT` | In **`{SAATHI_BASE_DIR}/.env`** (loaded by `electron/sidecar/job_runner.py` before `app.config`). Use **`prod`** or **`production`** (any casing, e.g. **`PROD`**) so `ENVIRONMENT_IS_PRODUCTION` is true in `backend/app/config.py` — enables dealer-side production-only DMS automation such as **auto-click Create Invoice** after order attach (`HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE`). **New installs:** NSIS seeds **`ENVIRONMENT=PROD`** when it creates the initial `.env` (`electron/build/installer.nsh` `customInstall`; mirror in `electron/resources/build/installer.nsh`). **Existing dealers:** add the same line if missing. |
 | `SAATHI_SIDECAR_EXE` | Optional override path to `job_runner.exe`. |
 | `SAATHI_PYTHON` | Dev only: Python executable for `job_runner.py`. |
 
@@ -187,7 +188,7 @@ See `electron/src/preload/index.ts` and `client/src/electron.ts` for the typed s
 - **Input:** one JSON object on stdin.
 - **Output:** one JSON object on stdout; stderr used for logging.
 - **Job types:** `ping` (no backend import); `fill_dms` → `run_fill_dms` from `app.services.fill_hero_dms_service`.
-- **Env:** `SAATHI_BASE_DIR` must be set before importing `app.config` (handled in runner). Dealer secrets: `D:\Saathi\.env` and/or `backend/.env` via `python-dotenv`.
+- **Env:** `SAATHI_BASE_DIR` must be set before importing `app.config` (handled in runner). Dealer secrets: `D:\Saathi\.env` and/or `backend/.env` via `python-dotenv`. Include **`ENVIRONMENT=PROD`** (or `production`) in the Saathi `.env` so production-only Playwright gates (e.g. Create Invoice) match real dealer usage; installer seed should add it for new installs (see §3.4).
 
 ### 4.5 PyInstaller (`electron/sidecar/build_sidecar.py`)
 

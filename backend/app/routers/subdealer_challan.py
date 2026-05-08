@@ -52,6 +52,13 @@ CHALLAN_COMMITTED_SCHEMA_HINT = (
     "(requires vehicle_inventory_master). See Documentation/Database DDL.md and DDL/README.md."
 )
 
+CHALLAN_COMMITTED_COLUMN_HINT = (
+    "Committed challan schema mismatch (missing column on challan_master or joined tables). "
+    "Apply DDL/alter/18a_challan_master_add_order_invoice_totals.sql, "
+    "DDL/alter/20b_challan_master_created_at.sql, and DDL/alter/20c_challan_master_transport_cost.sql as needed. "
+    "See Documentation/Database DDL.md and DDL/README.md."
+)
+
 
 class ChallanLineIn(BaseModel):
     raw_engine: str | None = None
@@ -412,6 +419,9 @@ def list_committed_invoices_recent(
     except pg_errors.UndefinedTable as e:
         logger.warning("subdealer_challan invoices: missing schema: %s", e)
         raise HTTPException(status_code=503, detail=CHALLAN_COMMITTED_SCHEMA_HINT) from e
+    except pg_errors.UndefinedColumn as e:
+        logger.warning("subdealer_challan invoices: missing column: %s", e)
+        raise HTTPException(status_code=503, detail=CHALLAN_COMMITTED_COLUMN_HINT) from e
 
 
 @router.get("/invoices/{challan_id}/details")
@@ -427,6 +437,9 @@ def list_committed_invoice_details(
     except pg_errors.UndefinedTable as e:
         logger.warning("subdealer_challan invoice details: missing schema: %s", e)
         raise HTTPException(status_code=503, detail=CHALLAN_COMMITTED_SCHEMA_HINT) from e
+    except pg_errors.UndefinedColumn as e:
+        logger.warning("subdealer_challan invoice details: missing column: %s", e)
+        raise HTTPException(status_code=503, detail=CHALLAN_COMMITTED_COLUMN_HINT) from e
     if lines is None:
         raise HTTPException(status_code=404, detail="Challan not found or access denied")
     return lines
