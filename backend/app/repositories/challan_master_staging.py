@@ -273,7 +273,7 @@ def list_masters_recent(
 
 
 def count_masters_needing_attention_recent(from_dealer_id: int, *, days: int = 15) -> int:
-    """Badge: number of ``challan_master_staging`` rows in the default Processed list (same filter as ``list_masters_recent`` without book search)."""
+    """Badge: number of ``challan_master_staging`` rows in the default Failed-tab list (same filter as ``list_masters_recent`` without book search)."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:

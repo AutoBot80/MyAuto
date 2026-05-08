@@ -3,8 +3,11 @@ import { DEALER_ID } from "./dealerId";
 import { isElectron } from "../electron";
 import { getAccessToken } from "../auth/token";
 
-/** Matches server default for Processed list and failed badge window. */
+/** Matches server default for Failed-tab list and failed badge window. */
 export const CHALLAN_STAGING_RECENT_DAYS = 15;
+
+/** Default window for committed subdealer invoices (Invoices tab). */
+export const CHALLAN_INVOICES_RECENT_DAYS = 365;
 
 /** Timeout for sidecar subdealer challan processing (same order as Fill DMS). */
 const SUBDEALER_CHALLAN_TIMEOUT_MS = 900_000;
@@ -405,7 +408,7 @@ export type ChallanFailedDetailLine = {
 };
 
 /**
- * GET /subdealer-challan/staging/recent — one row per batch (master) for the Processed tab.
+ * GET /subdealer-challan/staging/recent — one row per batch (master) for the Failed tab.
  */
 export type ChallanMasterProcessedRow = {
   challan_batch_id: string;
@@ -526,5 +529,56 @@ export async function patchChallanStagingFailedLine(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }
+  );
+}
+
+/** One committed ``challan_master`` row (GET /subdealer-challan/invoices/recent). */
+export type ChallanInvoiceMasterRow = {
+  challan_id: number;
+  challan_date: string | null;
+  challan_book_num: string | null;
+  dealer_from: number;
+  dealer_to: number;
+  num_vehicles: number | null;
+  order_number: string | null;
+  invoice_number: string | null;
+  total_ex_showroom_price: number | null;
+  total_discount: number | null;
+  created_at: string | null;
+  to_dealer_name: string;
+};
+
+/** One vehicle line on a committed challan (GET …/invoices/{id}/details). */
+export type ChallanInvoiceDetailLine = {
+  inventory_line_id: number;
+  chassis_no: string | null;
+  engine_no: string | null;
+  model: string | null;
+  variant: string | null;
+  color: string | null;
+  ex_showroom_price: number | null;
+  discount: number | null;
+};
+
+export async function listRecentCommittedChallanInvoices(
+  dealerId?: number,
+  days: number = CHALLAN_INVOICES_RECENT_DAYS,
+  limit: number = 500
+): Promise<ChallanInvoiceMasterRow[]> {
+  const search = new URLSearchParams();
+  search.set("dealer_id", String(dealerId ?? DEALER_ID));
+  search.set("days", String(days));
+  search.set("limit", String(limit));
+  return apiFetch<ChallanInvoiceMasterRow[]>(`/subdealer-challan/invoices/recent?${search.toString()}`);
+}
+
+export async function listCommittedChallanInvoiceDetails(
+  challanId: number,
+  dealerId?: number
+): Promise<ChallanInvoiceDetailLine[]> {
+  const search = new URLSearchParams();
+  search.set("dealer_id", String(dealerId ?? DEALER_ID));
+  return apiFetch<ChallanInvoiceDetailLine[]>(
+    `/subdealer-challan/invoices/${encodeURIComponent(String(challanId))}/details?${search.toString()}`
   );
 }

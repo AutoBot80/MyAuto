@@ -108,11 +108,11 @@ _CENTER_LIST_POLL_MS = 300
 _CENTER_LIST_MAX_POLLS = 15
 
 # Third Level View Bar: total wall-clock wait across frame roots (Chromium + iframe paint).
-_DMS_THIRD_LEVEL_BAR_TOTAL_WAIT_SEC = 18.0
+_DMS_THIRD_LEVEL_BAR_TOTAL_WAIT_SEC = 10.0
 _DMS_THIRD_LEVEL_BAR_STABILITY_MS = 280
 
 # After PDI tab click: wait until the PDI tab **List:New** ``+`` is visible and stable (no URL heuristics).
-_DMS_PDI_POST_TAB_SETTLE_MS = 22_000
+_DMS_PDI_POST_TAB_SETTLE_MS = 10_000
 _PDI_PLUS_VISIBLE_IN_DOC_JS = """() => {
     const vis = (el) => {
         if (!el) return false;
@@ -148,10 +148,10 @@ _PDI_PLUS_VISIBLE_IN_DOC_JS = """() => {
 }"""
 
 # After Serial Number drilldown, Siebel may still be on **Features** while the Third Level View Bar repaints.
-_DMS_FEATURES_BEFORE_PRECHECK_SETTLE_MS = 16_000
+_DMS_FEATURES_BEFORE_PRECHECK_SETTLE_MS = 10_000
 # After Pre-check tab click: wait until Pre-check **List:New** / **Service Request List:New** ``+`` is
 # visible and stable (consecutive polls); no transient-URL gating.
-_DMS_PRECHECK_POST_TAB_SETTLE_MS = 22_000
+_DMS_PRECHECK_POST_TAB_SETTLE_MS = 10_000
 _DMS_SUBTAB_PLUS_STABLE_STREAK = 2
 _FEATURES_BAR_STABLE_BEFORE_PRECHECK_JS = """() => {
     const vis = (el) => {
@@ -2010,7 +2010,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     vehicle_url: str = "",
     frame_partial: str = "",
     engine_partial: str = "",
-    nav_timeout_ms: int = 30_000,
+    nav_timeout_ms: int = 10_000,
 ) -> tuple[bool, str | None]:
     """
     Pre-check + PDI applets on the **vehicle serial** detail view (after ``Serial Number`` drilldown).
@@ -2138,7 +2138,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             f"{log_prefix}: Pre-check post-tab + ready-wait timed out after {_DMS_PRECHECK_POST_TAB_SETTLE_MS}ms "
             "— continuing."
         )
-    _safe_page_wait(page, 450, log_label="precheck_post_tab_stability_tail")
+    _safe_page_wait(page, 750, log_label="precheck_post_tab_stability_tail")
 
     note(f"{log_prefix}: Pre-check tab loaded (networkidle + post-tab ready-wait complete).")
 
@@ -3462,7 +3462,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         note(
             f"{log_prefix}: PDI post-tab + ready-wait timed out after {_DMS_PDI_POST_TAB_SETTLE_MS}ms — continuing."
         )
-    _safe_page_wait(page, 450, log_label="pdi_post_tab_stability_tail")
+    _safe_page_wait(page, 750, log_label="pdi_post_tab_stability_tail")
 
     try:
         _post_pdi_url = page.url or ""

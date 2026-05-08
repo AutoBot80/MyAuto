@@ -1157,7 +1157,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             pending = [
                 r
                 for r in (ctx.get("detail_rows") or [])
-                if (r.get("status") or "").strip().lower() == "queued"
+                if (r.get("status") or "").strip().lower() in ("queued", "failed")
             ]
             if not pending:
                 break
@@ -1219,7 +1219,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             still_queued = [
                 r
                 for r in (ctx.get("detail_rows") or [])
-                if (r.get("status") or "").strip().lower() == "queued"
+                if (r.get("status") or "").strip().lower() in ("queued", "failed")
             ]
             if not still_queued:
                 break

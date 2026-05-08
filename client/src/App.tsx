@@ -219,7 +219,7 @@ function App() {
     return () => clearInterval(interval);
   }, [mode, pageVisible, canSeeBulkLoads, refreshBulkLoadsPendingCount]);
 
-  // Subdealer Challans: master batches needing attention in the last 15 days (nav + Processed sub-tab badges).
+  // Subdealer Challans: master batches needing attention in the last 15 days (nav + Failed sub-tab badges).
   useEffect(() => {
     if (mode !== "pos") {
       setChallanFailedCount(0);

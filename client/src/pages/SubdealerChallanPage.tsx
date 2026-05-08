@@ -1,14 +1,19 @@
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listDealersByParent, type DealerByParentRow } from "../api/dealers";
 import {
+  CHALLAN_INVOICES_RECENT_DAYS,
   CHALLAN_STAGING_RECENT_DAYS,
   createChallanStaging,
+  listCommittedChallanInvoiceDetails,
   listRecentChallanStaging,
+  listRecentCommittedChallanInvoices,
   parseSubdealerChallanScans,
   patchChallanStagingFailedLine,
   processChallanBatchLocal,
   retryChallanOrderOnlyLocal,
   type ChallanFailedDetailLine,
+  type ChallanInvoiceDetailLine,
+  type ChallanInvoiceMasterRow,
   type ChallanMasterProcessedRow,
   type SubdealerChallanLine,
 } from "../api/subdealerChallan";
@@ -79,7 +84,7 @@ function dedupeRowsByVehicleIdentity(rows: ChallanRow[]): ChallanRow[] {
   return out;
 }
 
-type ChallanSubTab = "new" | "processed";
+type ChallanSubTab = "new" | "invoices" | "failed";
 
 function formatDealerDisplay(name: string | null | undefined, dealerId: number): string {
   const n = (name || "").trim();
@@ -93,14 +98,19 @@ function formatPreparedOverTotal(r: ChallanMasterProcessedRow): string {
   return `${p}/${t}`;
 }
 
-/** Detail lines for one master row (failed rows first). Retry uses this with an explicit batch id because row click does not fire when pressing Retry (`stopPropagation`). */
+/**
+ * Detail lines for one master row, sorted by **Status** A–Z (case-insensitive), e.g. Committed, Failed, Queued, Ready.
+ * Tie-break: staging line id. Retry uses this with an explicit batch id because row click does not fire when pressing Retry (`stopPropagation`).
+ */
 function sortedDetailLinesForBatch(row: ChallanMasterProcessedRow | null): ChallanFailedDetailLine[] {
   if (!row) return [];
   const lines = row.detail_lines !== undefined ? row.detail_lines : row.failed_lines ?? [];
   return [...lines].sort((a, b) => {
-    const af = (a.status || "").trim().toLowerCase() === "failed" ? 0 : 1;
-    const bf = (b.status || "").trim().toLowerCase() === "failed" ? 0 : 1;
-    return af - bf;
+    const sa = (a.status || "").trim();
+    const sb = (b.status || "").trim();
+    const cmp = sa.localeCompare(sb, undefined, { sensitivity: "base" });
+    if (cmp !== 0) return cmp;
+    return (a.challan_detail_staging_id ?? 0) - (b.challan_detail_staging_id ?? 0);
   });
 }
 
@@ -190,6 +200,19 @@ function formatLatestRunDisplay(iso: string | null | undefined): string {
   return fmt.format(d).replace(",", "").replace(/\s+/g, " ").trim();
 }
 
+function formatInrAmount(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 2,
+    }).format(Number(n));
+  } catch {
+    return String(n);
+  }
+}
+
 function showRetryOrderOnly(r: ChallanMasterProcessedRow): boolean {
   const inv = (r.invoice_status || "").trim().toLowerCase();
   const failed = r.failed_line_count ?? 0;
@@ -268,6 +291,13 @@ export function SubdealerChallanPage({
   const fileInputRef = useRef<HTMLInputElement>(null);
   /** Multi-page OCR: ``parse-scan`` is one file per request. */
   const [parseOcrProgress, setParseOcrProgress] = useState<{ current: number; total: number } | null>(null);
+  const [invoiceMasters, setInvoiceMasters] = useState<ChallanInvoiceMasterRow[]>([]);
+  const [invoiceLoading, setInvoiceLoading] = useState(false);
+  const [invoiceError, setInvoiceError] = useState<string | null>(null);
+  const [selectedInvoiceChallanId, setSelectedInvoiceChallanId] = useState<number | null>(null);
+  const [invoiceLines, setInvoiceLines] = useState<ChallanInvoiceDetailLine[]>([]);
+  const [invoiceDetailsLoading, setInvoiceDetailsLoading] = useState(false);
+  const [invoiceDetailsError, setInvoiceDetailsError] = useState<string | null>(null);
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
 
@@ -365,6 +395,19 @@ export function SubdealerChallanPage({
     }
   }, [dealerId, processedChallanSearchApplied, onChallanCountsRefresh]);
 
+  const loadInvoices = useCallback(async () => {
+    setInvoiceLoading(true);
+    setInvoiceError(null);
+    try {
+      const rows = await listRecentCommittedChallanInvoices(dealerId, CHALLAN_INVOICES_RECENT_DAYS, 500);
+      setInvoiceMasters(rows);
+    } catch (err) {
+      setInvoiceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInvoiceLoading(false);
+    }
+  }, [dealerId]);
+
   useEffect(() => {
     setFailedLineDrafts({});
   }, [selectedProcessedBatchId]);
@@ -454,7 +497,7 @@ export function SubdealerChallanPage({
   }, [processedChallanSearchDraft]);
 
   useEffect(() => {
-    if (challanSubTab === "processed") {
+    if (challanSubTab === "failed") {
       void loadProcessed();
     } else {
       setProcessedRows([]);
@@ -467,11 +510,63 @@ export function SubdealerChallanPage({
   }, [challanSubTab, loadProcessed]);
 
   useEffect(() => {
-    if (challanSubTab !== "processed") return;
+    if (challanSubTab === "invoices") {
+      void loadInvoices();
+    } else {
+      setInvoiceMasters([]);
+      setInvoiceError(null);
+      setInvoiceLoading(false);
+      setSelectedInvoiceChallanId(null);
+      setInvoiceLines([]);
+      setInvoiceDetailsError(null);
+      setInvoiceDetailsLoading(false);
+    }
+  }, [challanSubTab, loadInvoices]);
+
+  useEffect(() => {
+    if (challanSubTab !== "invoices") {
+      return;
+    }
+    if (selectedInvoiceChallanId === null) {
+      setInvoiceLines([]);
+      setInvoiceDetailsError(null);
+      setInvoiceDetailsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setInvoiceDetailsError(null);
+    setInvoiceDetailsLoading(true);
+    void listCommittedChallanInvoiceDetails(selectedInvoiceChallanId, dealerId)
+      .then((lines) => {
+        if (!cancelled) setInvoiceLines(lines);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setInvoiceLines([]);
+          setInvoiceDetailsError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setInvoiceDetailsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [challanSubTab, selectedInvoiceChallanId, dealerId]);
+
+  useEffect(() => {
+    if (challanSubTab !== "failed") return;
     if (selectedProcessedBatchId === null) return;
     const exists = processedRows.some((r) => r.challan_batch_id === selectedProcessedBatchId);
     if (!exists) setSelectedProcessedBatchId(null);
   }, [challanSubTab, processedRows, selectedProcessedBatchId]);
+
+  useEffect(() => {
+    if (challanSubTab !== "invoices") return;
+    if (selectedInvoiceChallanId === null) return;
+    const exists = invoiceMasters.some((r) => r.challan_id === selectedInvoiceChallanId);
+    if (!exists) setSelectedInvoiceChallanId(null);
+  }, [challanSubTab, invoiceMasters, selectedInvoiceChallanId]);
 
   /** Re-run full batch (re-queues all Failed lines server-side, then prepare_vehicle + order). */
   const onRetryFailedBatch = async (challanBatchId: string) => {
@@ -660,13 +755,24 @@ export function SubdealerChallanPage({
         <button
           type="button"
           role="tab"
-          id="challans-tab-processed"
-          aria-controls="challans-panel-processed"
-          aria-selected={challanSubTab === "processed"}
-          className={`challans-subtab ${challanSubTab === "processed" ? "active" : ""}`}
-          onClick={() => setChallanSubTab("processed")}
+          id="challans-tab-invoices"
+          aria-controls="challans-panel-invoices"
+          aria-selected={challanSubTab === "invoices"}
+          className={`challans-subtab ${challanSubTab === "invoices" ? "active" : ""}`}
+          onClick={() => setChallanSubTab("invoices")}
         >
-          Processed
+          Invoices
+        </button>
+        <button
+          type="button"
+          role="tab"
+          id="challans-tab-failed"
+          aria-controls="challans-panel-failed"
+          aria-selected={challanSubTab === "failed"}
+          className={`challans-subtab ${challanSubTab === "failed" ? "active" : ""}`}
+          onClick={() => setChallanSubTab("failed")}
+        >
+          Failed
           {challanFailedCount > 0 ? (
             <span className="app-tab-badge app-tab-badge--danger">
               {" "}
@@ -771,7 +877,7 @@ export function SubdealerChallanPage({
           }
           onClick={() => void onCreateChallans()}
         >
-          {processingChallan ? "Creating Challans…" : "Create Challans"}
+          {processingChallan ? "Creating invoice…" : "Create Subdealer Invoice"}
         </button>
       </div>
 
@@ -932,11 +1038,157 @@ export function SubdealerChallanPage({
       </div>
       ) : null}
 
-      {challanSubTab === "processed" ? (
+      {challanSubTab === "invoices" ? (
+        <div
+          id="challans-panel-invoices"
+          role="tabpanel"
+          aria-labelledby="challans-tab-invoices"
+          className="challans-processed-panel challans-invoices-panel"
+        >
+          {invoiceError ? (
+            <div className="subdealer-challan-error" role="alert">
+              {invoiceError}
+            </div>
+          ) : null}
+          <div className="challans-processed-search" role="toolbar" aria-label="Invoice list actions">
+            <span className="challans-invoices-window-hint">
+              Showing committed invoices from the last {CHALLAN_INVOICES_RECENT_DAYS} days (newest first).
+            </span>
+            <button
+              type="button"
+              className="app-button app-button--small challans-processed-search-btn"
+              disabled={invoiceLoading}
+              aria-busy={invoiceLoading}
+              title="Reload invoice list"
+              onClick={() => void loadInvoices()}
+            >
+              {invoiceLoading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
+          {invoiceLoading ? (
+            <p className="app-table-empty challans-processed-loading-msg">Loading…</p>
+          ) : invoiceMasters.length === 0 ? (
+            <p className="app-table-empty challans-processed-loading-msg">
+              No committed subdealer invoices in this period.
+            </p>
+          ) : (
+            <div className="challans-processed-split">
+              <div className="challans-processed-master">
+                <div
+                  className="challans-processed-table-wrap"
+                  role="region"
+                  aria-label="Committed subdealer invoices"
+                >
+                  <table className="app-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Subdealer</th>
+                        <th scope="col">Vehicles</th>
+                        <th scope="col">Challan date</th>
+                        <th scope="col">Challan no.</th>
+                        <th scope="col">Order no.</th>
+                        <th scope="col">Invoice no.</th>
+                        <th scope="col">Created</th>
+                        <th scope="col">Total discount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invoiceMasters.map((r) => {
+                        const sel = selectedInvoiceChallanId === r.challan_id;
+                        return (
+                          <tr
+                            key={r.challan_id}
+                            className={
+                              "challans-proc-master-row" + (sel ? " challans-proc-master-row--selected" : "")
+                            }
+                            aria-selected={sel}
+                            tabIndex={0}
+                            onClick={() => setSelectedInvoiceChallanId(r.challan_id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setSelectedInvoiceChallanId(r.challan_id);
+                              }
+                            }}
+                          >
+                            <td>{(r.to_dealer_name || "").trim() || `Dealer ${r.dealer_to}`}</td>
+                            <td>{r.num_vehicles ?? "—"}</td>
+                            <td>{formatChallanDateDisplay(r.challan_date)}</td>
+                            <td>{(r.challan_book_num || "").trim() || "—"}</td>
+                            <td>{(r.order_number || "").trim() || "—"}</td>
+                            <td>{(r.invoice_number || "").trim() || "—"}</td>
+                            <td>{formatLatestRunDisplay(r.created_at)}</td>
+                            <td>{formatInrAmount(r.total_discount)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div
+                className="challans-processed-failed-section"
+                role="region"
+                aria-labelledby="challans-invoices-detail-heading"
+              >
+                <h3 className="challans-processed-failed-heading" id="challans-invoices-detail-heading">
+                  Vehicles (discount per line)
+                </h3>
+                <div className="challans-processed-failed-table-wrap">
+                  {selectedInvoiceChallanId === null ? (
+                    <p className="app-table-empty challans-processed-failed-placeholder">
+                      Select an invoice row above to view vehicles.
+                    </p>
+                  ) : invoiceDetailsError ? (
+                    <div className="subdealer-challan-error" role="alert">
+                      {invoiceDetailsError}
+                    </div>
+                  ) : invoiceDetailsLoading ? (
+                    <p className="app-table-empty challans-processed-failed-placeholder">Loading vehicles…</p>
+                  ) : invoiceLines.length === 0 ? (
+                    <p className="app-table-empty challans-processed-failed-placeholder">
+                      No vehicle lines for this invoice.
+                    </p>
+                  ) : (
+                    <table className="app-table challans-processed-failed-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Chassis</th>
+                          <th scope="col">Engine</th>
+                          <th scope="col">Model</th>
+                          <th scope="col">Variant</th>
+                          <th scope="col">Color</th>
+                          <th scope="col">Ex-showroom</th>
+                          <th scope="col">Discount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {invoiceLines.map((ln) => (
+                          <tr key={ln.inventory_line_id}>
+                            <td>{(ln.chassis_no || "").trim() || "—"}</td>
+                            <td>{(ln.engine_no || "").trim() || "—"}</td>
+                            <td>{(ln.model || "").trim() || "—"}</td>
+                            <td>{(ln.variant || "").trim() || "—"}</td>
+                            <td>{(ln.color || "").trim() || "—"}</td>
+                            <td>{formatInrAmount(ln.ex_showroom_price)}</td>
+                            <td>{formatInrAmount(ln.discount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {challanSubTab === "failed" ? (
       <div
-        id="challans-panel-processed"
+        id="challans-panel-failed"
         role="tabpanel"
-        aria-labelledby="challans-tab-processed"
+        aria-labelledby="challans-tab-failed"
         className="challans-processed-panel"
       >
         {processedError && (
@@ -975,7 +1227,7 @@ export function SubdealerChallanPage({
             className="app-button app-button--small challans-processed-search-btn"
             disabled={processedLoading}
             aria-busy={processedLoading}
-            title="Reload processed batches and prepared counts"
+            title="Reload failed batches and prepared counts"
             onClick={() => void loadProcessed()}
           >
             {processedLoading ? "Refreshing…" : "Refresh"}
@@ -997,7 +1249,7 @@ export function SubdealerChallanPage({
               <div
                 className="challans-processed-table-wrap"
                 role="region"
-                aria-label="Processed challan batches"
+                aria-label="Failed challan batches"
               >
                 <table className="app-table">
                   <thead>

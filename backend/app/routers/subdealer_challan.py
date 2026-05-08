@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.config import DMS_BASE_URL, MAX_TEXT_CHARS, UPLOAD_MAX_FILE_BYTES
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
+from app.repositories import challan_committed as committed_repo
 from app.repositories import challan_details_staging as detail_repo
 from app.repositories import challan_master_staging as master_repo
 from app.services.add_subdealer_challan_service import (
@@ -36,6 +37,11 @@ CHALLAN_STAGING_SCHEMA_HINT = (
     "Subdealer challan tables are missing. Apply, in order: DDL/23_challan_master_staging.sql, "
     "DDL/24_challan_details_staging.sql (requires dealer_ref and vehicle_inventory_master). "
     "See Documentation/Database DDL.md and DDL/README.md."
+)
+
+CHALLAN_COMMITTED_SCHEMA_HINT = (
+    "Committed challan tables are missing. Apply DDL/20_challan_master.sql and DDL/21_challan_details.sql "
+    "(requires vehicle_inventory_master). See Documentation/Database DDL.md and DDL/README.md."
 )
 
 
@@ -138,7 +144,7 @@ def create_staging(
                 detail=(
                     "All vehicles in this submission already appear on a challan for this book number and date "
                     "(including queued or failed lines). Add only vehicles that are not already listed, or open the "
-                    "Processed tab to continue or retry the existing batch."
+                    "Failed tab to continue or retry the existing batch."
                 ),
             )
         raise HTTPException(
@@ -206,7 +212,7 @@ def list_recent_staging(
         description="Trimmed challan book number; when set, matches challan_book_num for this dealer (any age); ignores failed-only and days window",
     ),
 ) -> list[dict]:
-    """``challan_master_staging`` rows with ``failed_lines`` and ``detail_lines`` for the Processed tab.
+    """``challan_master_staging`` rows with ``failed_lines`` and ``detail_lines`` for the Failed tab.
 
     ``detail_lines``: every vehicle line (Queued / Failed / Ready / Committed). ``failed_lines``: Failed only.
     Default: batches from the last *days* matching the attention filter (see ``list_masters_recent``).
@@ -241,7 +247,7 @@ def staging_failed_count(
     dealer_id: int | None = Query(None),
     days: int = Query(15, ge=1, le=365),
 ) -> dict[str, int]:
-    """Count of **master** batches in the default Processed window (same rows as ``GET …/staging/recent`` without ``challan_book_num``)."""
+    """Count of **master** batches in the default Failed-tab window (same rows as ``GET …/staging/recent`` without ``challan_book_num``)."""
     did = resolve_dealer_id(principal, dealer_id)
     try:
         n = master_repo.count_masters_needing_attention_recent(did, days=days)
@@ -343,3 +349,37 @@ async def parse_scan(
     if result.get("error"):
         raise HTTPException(status_code=502, detail=result["error"])
     return result
+
+
+@router.get("/invoices/recent")
+def list_committed_invoices_recent(
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="dealer_from; uses token dealer if omitted"),
+    days: int = Query(365, ge=1, le=3650, description="Include masters with created_at in the last N days (NULL created_at always included)"),
+    limit: int = Query(500, ge=1, le=2000),
+) -> list[dict]:
+    """Committed ``challan_master`` rows (subdealer invoices) for the Invoices tab, newest first."""
+    did = resolve_dealer_id(principal, dealer_id)
+    try:
+        return committed_repo.list_committed_masters_for_dealer(did, days=days, limit=limit)
+    except pg_errors.UndefinedTable as e:
+        logger.warning("subdealer_challan invoices: missing schema: %s", e)
+        raise HTTPException(status_code=503, detail=CHALLAN_COMMITTED_SCHEMA_HINT) from e
+
+
+@router.get("/invoices/{challan_id}/details")
+def list_committed_invoice_details(
+    challan_id: int,
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="dealer_from; uses token dealer if omitted"),
+) -> list[dict]:
+    """Vehicle lines for one committed challan (chassis, engine, discount, ex-showroom)."""
+    did = resolve_dealer_id(principal, dealer_id)
+    try:
+        lines = committed_repo.list_committed_details_for_challan(int(challan_id), did)
+    except pg_errors.UndefinedTable as e:
+        logger.warning("subdealer_challan invoice details: missing schema: %s", e)
+        raise HTTPException(status_code=503, detail=CHALLAN_COMMITTED_SCHEMA_HINT) from e
+    if lines is None:
+        raise HTTPException(status_code=404, detail="Challan not found or access denied")
+    return lines

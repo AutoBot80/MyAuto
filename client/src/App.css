@@ -206,7 +206,7 @@
   background: rgba(30, 90, 158, 0.06);
 }
 
-/* Tab label counts (POS nav + Subdealer Processed sub-tab); --danger = failed / attention */
+/* Tab label counts (POS nav + Subdealer Failed sub-tab); --danger = failed / attention */
 .app-tab-badge {
   font-weight: 600;
 }
@@ -2990,6 +2990,14 @@
   flex-shrink: 0;
 }
 
+.challans-invoices-panel .challans-invoices-window-hint {
+  flex: 1 1 14rem;
+  margin: 0;
+  font-size: 13px;
+  color: #455a64;
+  line-height: 1.35;
+}
+
 .challans-processed-loading-msg {
   padding: 1rem;
   margin: 0;
@@ -3235,7 +3243,7 @@
   word-break: break-word;
 }
 
-/* New tab only: fills space below sub-tabs (Processed tab is a separate mounted panel). */
+/* New tab only: fills space below sub-tabs (Invoices / Failed use separate mounted panels). */
 .challans-new-panel {
   display: flex;
   flex-direction: column;
