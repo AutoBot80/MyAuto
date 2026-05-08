@@ -197,6 +197,28 @@ def get_ocr_output_dir(dealer_id: int) -> Path:
     return OCR_OUTPUT_DIR / str(dealer_id)
 
 
+# Subdealer challan OCR + Playwright traces (same S3/sync path as Add Sales ``tree=ocr``).
+SUBDEALER_CHALLAN_OCR_SUBDIR = "subdealer_challan"
+
+
+def safe_challan_artifact_leaf_segment(leaf: str | None) -> str:
+    """Single path segment under ``subdealer_challan/`` (no traversal)."""
+    t = (leaf or "").strip().replace("\\", "/").split("/")[-1]
+    if not t or ".." in t:
+        return "unknown_challan"
+    return t
+
+
+def get_challan_ocr_session_dir(dealer_id: int, artifact_leaf: str | None) -> Path:
+    """
+    Per-batch folder under dealer OCR root — mirrors Add Sales layout for sidecar ``upload-artifacts`` ``tree=ocr``:
+
+    ``ocr_output/{dealer_id}/subdealer_challan/{safe_leaf}/``
+    """
+    safe = safe_challan_artifact_leaf_segment(artifact_leaf)
+    return get_ocr_output_dir(int(dealer_id)) / SUBDEALER_CHALLAN_OCR_SUBDIR / safe
+
+
 def get_bulk_upload_dir(dealer_id: int) -> Path:
     """Dealer-scoped bulk upload: Bulk Upload/{dealer_id}/."""
     return BULK_UPLOAD_DIR / str(dealer_id)

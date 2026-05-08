@@ -957,23 +957,20 @@ def _safe_challan_artifact_leaf(leaf: str | None) -> str:
 
 
 def _mirror_challan_parse_artifacts_impl(params: dict) -> dict:
-    """Write parse-scan OCR files under local ``CHALLANS_DIR/<leaf>/`` (same layout as EC2 / server)."""
-    from app.config import CHALLANS_DIR
+    """Write parse-scan OCR files under dealer ``ocr_output/.../subdealer_challan/<leaf>/`` (same layout as EC2)."""
+    from app.config import get_challan_ocr_session_dir
     from app.services.subdealer_challan_ocr_service import OCR_JSON_STEM
 
     raw_leaf = str(params.get("artifact_leaf") or "").strip()
     if not raw_leaf:
         return {"ok": False, "error": "artifact_leaf required"}
     leaf = _safe_challan_artifact_leaf(raw_leaf)
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
     raw_t = params.get("raw_ocr_text")
     js_t = params.get("ocr_json_text")
     if not (isinstance(raw_t, str) and raw_t.strip()) and not (isinstance(js_t, str) and js_t.strip()):
         return {"ok": False, "error": "raw_ocr_text or ocr_json_text required"}
-    try:
-        CHALLANS_DIR.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    base = CHALLANS_DIR / leaf
+    base = get_challan_ocr_session_dir(dealer_id, leaf)
     try:
         base.mkdir(parents=True, exist_ok=True)
         if isinstance(raw_t, str) and raw_t.strip():
@@ -1020,7 +1017,6 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     initial_leaf = challan_artifact_leaf_name(ctx.get("challan_book_num"), ctx.get("challan_date"))
 
     from app.config import (
-        CHALLANS_DIR,
         DMS_LOGIN_PASSWORD,
         DMS_LOGIN_USER,
         DMS_REAL_URL_CONTACT,
@@ -1028,6 +1024,8 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
         DMS_SIEBEL_ACTION_TIMEOUT_MS,
         DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
         DMS_SIEBEL_NAV_TIMEOUT_MS,
+        get_challan_ocr_session_dir,
+        get_ocr_output_dir,
     )
     from app.services.fill_hero_dms_service import (
         Playwright_Hero_DMS_fill_subdealer_challan_order_only,
@@ -1066,12 +1064,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
 
     prep_leaf = _safe_challan_artifact_leaf(initial_leaf)
-    # Match server layout: ``CHALLANS_DIR/<book>_<ddmmyyyy>/`` (see ``app.config`` when ``SAATHI_BASE_DIR`` is set).
-    try:
-        CHALLANS_DIR.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
-    challan_session_base = CHALLANS_DIR / prep_leaf
+    challan_session_base = get_challan_ocr_session_dir(dealer_id, prep_leaf)
 
     page, open_error = get_or_open_site_page(
         dms_base_url,
@@ -1090,250 +1083,273 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
         }
     _install_playwright_js_dialog_handler(page)
 
-    last_scrape: dict = {}
+    challan_dirs_to_sync: list[Path] = []
+    ocr_root = get_ocr_output_dir(dealer_id).resolve()
 
-    def _pv_note(msg: str) -> None:
-        if msg and ("pdi_scrape_" in msg or ": pdi_decision " in msg):
-            logging.info("subdealer_challan prepare: %s", msg)
-
-    form_trace_pv = lambda *_a, **_k: None
-    if not phase_is_order_only:
-        challan_session_base.mkdir(parents=True, exist_ok=True)
-        challan_prepare_log = challan_session_base / "playwright_challan.txt"
-
-        def _form_trace_prepare(siebel_step: str, form_name: str, action: str, **fields: object) -> None:
-            segments = [f"siebel_step={siebel_step}", f"form={form_name}", f"action={action}"]
-            for key in sorted(fields.keys()):
-                val = fields[key]
-                if val is None:
-                    continue
-                v = str(val).replace("\n", " ").strip()
-                if v == "":
-                    continue
-                if len(v) > 500:
-                    v = v[:497] + "..."
-                segments.append(f"{key}={v!r}")
-            line = f"{_ts_ist_iso()} [FORM] " + " | ".join(segments) + "\n"
+    def _flush_challan_ocr_dirs_to_server() -> None:
+        seen: set[Path] = set()
+        for d in challan_dirs_to_sync:
             try:
-                with challan_prepare_log.open("a", encoding="utf-8") as fp:
-                    fp.write(line)
+                dr = d.resolve()
             except OSError:
-                pass
+                continue
+            if dr in seen or not dr.is_dir():
+                continue
+            seen.add(dr)
+            _upload_tree_under(api_url, jwt, dealer_id, "ocr", d, ocr_root)
 
-        with challan_prepare_log.open("w", encoding="utf-8") as fp:
-            fp.write(f"=== subdealer challan (local) batch={challan_batch_id} ===\n")
-            fp.write(f"{_ts_ist_iso()} [NOTE] challan_trace_dir={challan_session_base!s}\n")
-            fp.write(
-                f"{_ts_ist_iso()} [NOTE] challan_book_num={ctx.get('challan_book_num')!r} "
-                f"challan_date={ctx.get('challan_date')!r}\n"
-            )
-            fp.write(f"{_ts_ist_iso()} [NOTE] --- prepare_vehicle phase ---\n")
-        form_trace_pv = _form_trace_prepare
+    last_scrape: dict = {}
+    try:
 
-    if not phase_is_order_only:
-        try:
-            _api_post(api_url, jwt, "/sidecar/subdealer-challan/requeue-failed", resolve_body, timeout=120)
-        except Exception as exc:
-            return {
-                "ok": False,
-                "error": f"requeue-failed: {exc}",
-                "challan_id": None,
-                "dms_step_messages": [],
-                "vehicle": {},
-            }
-
-        for round_n in range(_SUBDEALER_MAX_PREP_ROUNDS):
-            try:
-                ctx = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
-            except Exception as exc:
-                return {
-                    "ok": False,
-                    "error": f"Resolve failed (prepare round {round_n + 1}): {exc}",
-                    "challan_id": None,
-                    "dms_step_messages": [],
-                    "vehicle": {},
-                }
-
-            pending = [
-                r
-                for r in (ctx.get("detail_rows") or [])
-                if (r.get("status") or "").strip().lower() in ("queued", "failed")
-            ]
-            if not pending:
-                break
-
-            for row in pending:
-                sid = int(row["challan_staging_id"])
-                rc = row.get("raw_chassis") or ""
-                re_ = row.get("raw_engine") or ""
-                to_id = int(row["to_dealer_id"])
-                dv = {
-                    "frame_partial": rc,
-                    "engine_partial": re_,
-                    "key_partial": "",
-                    "battery_partial": "",
-                }
-                ok, err, scraped, _in_tr, _crit, _info = prepare_vehicle(
-                    page,
-                    dv,
-                    urls_prepare,
-                    nav_timeout_ms=DMS_SIEBEL_NAV_TIMEOUT_MS,
-                    action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
-                    content_frame_selector=frame_sel,
-                    note=_pv_note,
-                    form_trace=form_trace_pv,
-                    ms_done=lambda _l: None,
-                    step=lambda _m: None,
-                )
+        def _pv_note(msg: str) -> None:
+            if msg and ("pdi_scrape_" in msg or ": pdi_decision " in msg):
+                logging.info("subdealer_challan prepare: %s", msg)
+    
+        form_trace_pv = lambda *_a, **_k: None
+        if not phase_is_order_only:
+            challan_session_base.mkdir(parents=True, exist_ok=True)
+            challan_dirs_to_sync.append(challan_session_base.resolve())
+            challan_prepare_log = challan_session_base / "playwright_challan.txt"
+    
+            def _form_trace_prepare(siebel_step: str, form_name: str, action: str, **fields: object) -> None:
+                segments = [f"siebel_step={siebel_step}", f"form={form_name}", f"action={action}"]
+                for key in sorted(fields.keys()):
+                    val = fields[key]
+                    if val is None:
+                        continue
+                    v = str(val).replace("\n", " ").strip()
+                    if v == "":
+                        continue
+                    if len(v) > 500:
+                        v = v[:497] + "..."
+                    segments.append(f"{key}={v!r}")
+                line = f"{_ts_ist_iso()} [FORM] " + " | ".join(segments) + "\n"
                 try:
-                    _api_post(
-                        api_url,
-                        jwt,
-                        "/sidecar/subdealer-challan/prepare-result",
-                        {
-                            "challan_batch_id": challan_batch_id,
-                            "dealer_id": dealer_id,
-                            "challan_staging_id": sid,
-                            "to_dealer_id": to_id,
-                            "ok": bool(ok),
-                            "error": ((err or "")[:2000] if not ok else None),
-                            "scraped_vehicle": dict(scraped or {}) if ok else None,
-                        },
-                        timeout=120,
-                    )
-                except Exception as exc:
-                    logging.warning("subdealer_challan prepare-result API: %s", exc)
-                if ok:
-                    last_scrape = dict(scraped or {})
-
+                    with challan_prepare_log.open("a", encoding="utf-8") as fp:
+                        fp.write(line)
+                except OSError:
+                    pass
+    
+            with challan_prepare_log.open("w", encoding="utf-8") as fp:
+                fp.write(f"=== subdealer challan (local) batch={challan_batch_id} ===\n")
+                fp.write(f"{_ts_ist_iso()} [NOTE] challan_trace_dir={challan_session_base!s}\n")
+                fp.write(
+                    f"{_ts_ist_iso()} [NOTE] challan_book_num={ctx.get('challan_book_num')!r} "
+                    f"challan_date={ctx.get('challan_date')!r}\n"
+                )
+                fp.write(f"{_ts_ist_iso()} [NOTE] --- prepare_vehicle phase ---\n")
+            form_trace_pv = _form_trace_prepare
+    
+        if not phase_is_order_only:
             try:
-                ctx = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
+                _api_post(api_url, jwt, "/sidecar/subdealer-challan/requeue-failed", resolve_body, timeout=120)
             except Exception as exc:
                 return {
                     "ok": False,
-                    "error": f"Resolve failed after prepare: {exc}",
+                    "error": f"requeue-failed: {exc}",
                     "challan_id": None,
                     "dms_step_messages": [],
                     "vehicle": {},
                 }
-            still_queued = [
-                r
-                for r in (ctx.get("detail_rows") or [])
-                if (r.get("status") or "").strip().lower() in ("queued", "failed")
-            ]
-            if not still_queued:
-                break
-            if round_n < _SUBDEALER_MAX_PREP_ROUNDS - 1:
-                time.sleep(_SUBDEALER_RETRY_WAIT_SEC)
-
+    
+            for round_n in range(_SUBDEALER_MAX_PREP_ROUNDS):
+                try:
+                    ctx = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "error": f"Resolve failed (prepare round {round_n + 1}): {exc}",
+                        "challan_id": None,
+                        "dms_step_messages": [],
+                        "vehicle": {},
+                    }
+    
+                pending = [
+                    r
+                    for r in (ctx.get("detail_rows") or [])
+                    if (r.get("status") or "").strip().lower() in ("queued", "failed")
+                ]
+                if not pending:
+                    break
+    
+                for row in pending:
+                    sid = int(row["challan_staging_id"])
+                    rc = row.get("raw_chassis") or ""
+                    re_ = row.get("raw_engine") or ""
+                    to_id = int(row["to_dealer_id"])
+                    dv = {
+                        "frame_partial": rc,
+                        "engine_partial": re_,
+                        "key_partial": "",
+                        "battery_partial": "",
+                    }
+                    ok, err, scraped, _in_tr, _crit, _info = prepare_vehicle(
+                        page,
+                        dv,
+                        urls_prepare,
+                        nav_timeout_ms=DMS_SIEBEL_NAV_TIMEOUT_MS,
+                        action_timeout_ms=DMS_SIEBEL_ACTION_TIMEOUT_MS,
+                        content_frame_selector=frame_sel,
+                        note=_pv_note,
+                        form_trace=form_trace_pv,
+                        ms_done=lambda _l: None,
+                        step=lambda _m: None,
+                    )
+                    try:
+                        _api_post(
+                            api_url,
+                            jwt,
+                            "/sidecar/subdealer-challan/prepare-result",
+                            {
+                                "challan_batch_id": challan_batch_id,
+                                "dealer_id": dealer_id,
+                                "challan_staging_id": sid,
+                                "to_dealer_id": to_id,
+                                "ok": bool(ok),
+                                "error": ((err or "")[:2000] if not ok else None),
+                                "scraped_vehicle": dict(scraped or {}) if ok else None,
+                            },
+                            timeout=120,
+                        )
+                    except Exception as exc:
+                        logging.warning("subdealer_challan prepare-result API: %s", exc)
+                    if ok:
+                        last_scrape = dict(scraped or {})
+    
+                try:
+                    ctx = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
+                except Exception as exc:
+                    return {
+                        "ok": False,
+                        "error": f"Resolve failed after prepare: {exc}",
+                        "challan_id": None,
+                        "dms_step_messages": [],
+                        "vehicle": {},
+                    }
+                still_queued = [
+                    r
+                    for r in (ctx.get("detail_rows") or [])
+                    if (r.get("status") or "").strip().lower() in ("queued", "failed")
+                ]
+                if not still_queued:
+                    break
+                if round_n < _SUBDEALER_MAX_PREP_ROUNDS - 1:
+                    time.sleep(_SUBDEALER_RETRY_WAIT_SEC)
+    
+            try:
+                ctx_final = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "error": f"Resolve failed (final): {exc}",
+                    "challan_id": None,
+                    "dms_step_messages": [],
+                    "vehicle": {},
+                }
+            rows = ctx_final.get("detail_rows") or []
+            not_ready = [r for r in rows if (r.get("status") or "").strip().lower() != "ready"]
+            if not_ready:
+                parts: list[str] = []
+                for r in not_ready[:16]:
+                    parts.append(
+                        f"id={r.get('challan_staging_id')} status={r.get('status')!r} "
+                        f"err={(r.get('last_error') or '')[:160]!r}"
+                    )
+                return {
+                    "ok": False,
+                    "error": "One or more vehicles did not reach Ready — " + "; ".join(parts),
+                    "challan_id": None,
+                    "dms_step_messages": [],
+                    "vehicle": {},
+                }
+    
+        oc_body = {
+            "challan_batch_id": challan_batch_id,
+            "dealer_id": dealer_id,
+            "last_vehicle_scrape": {} if phase_is_order_only else last_scrape,
+        }
         try:
-            ctx_final = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
+            pkg = _api_post(api_url, jwt, "/sidecar/subdealer-challan/order-context", oc_body, timeout=120)
         except Exception as exc:
             return {
                 "ok": False,
-                "error": f"Resolve failed (final): {exc}",
+                "error": f"order-context: {exc}",
                 "challan_id": None,
                 "dms_step_messages": [],
                 "vehicle": {},
             }
-        rows = ctx_final.get("detail_rows") or []
-        not_ready = [r for r in rows if (r.get("status") or "").strip().lower() != "ready"]
-        if not_ready:
-            parts: list[str] = []
-            for r in not_ready[:16]:
-                parts.append(
-                    f"id={r.get('challan_staging_id')} status={r.get('status')!r} "
-                    f"err={(r.get('last_error') or '')[:160]!r}"
-                )
+    
+        if not pkg.get("ok"):
             return {
                 "ok": False,
-                "error": "One or more vehicles did not reach Ready — " + "; ".join(parts),
+                "error": str(pkg.get("error") or "order-context failed"),
                 "challan_id": None,
                 "dms_step_messages": [],
                 "vehicle": {},
             }
-
-    oc_body = {
-        "challan_batch_id": challan_batch_id,
-        "dealer_id": dealer_id,
-        "last_vehicle_scrape": {} if phase_is_order_only else last_scrape,
-    }
-    try:
-        pkg = _api_post(api_url, jwt, "/sidecar/subdealer-challan/order-context", oc_body, timeout=120)
-    except Exception as exc:
-        return {
-            "ok": False,
-            "error": f"order-context: {exc}",
-            "challan_id": None,
-            "dms_step_messages": [],
-            "vehicle": {},
-        }
-
-    if not pkg.get("ok"):
-        return {
-            "ok": False,
-            "error": str(pkg.get("error") or "order-context failed"),
-            "challan_id": None,
-            "dms_step_messages": [],
-            "vehicle": {},
-        }
-
-    leaf = _safe_challan_artifact_leaf((pkg.get("artifact_leaf") or "").strip() or initial_leaf)
-    log_path = (CHALLANS_DIR / leaf / "playwright_challan.txt").resolve()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    if phase_is_order_only:
-        log_path.write_text("", encoding="utf-8")
-    elif not log_path.exists():
-        log_path.write_text("", encoding="utf-8")
-
-    dms_values = dict(pkg.get("dms_values") or {})
-    dms_values["challan_vin_frame_dump_dir"] = str(log_path.parent.resolve())
-
-    _urls_merged = {k: str(v or "") for k, v in dict(pkg.get("urls") or {}).items()}
-    for _z in ("enquiry", "precheck", "pdi", "line_items", "reports", "vehicles"):
-        _urls_merged[_z] = ""
-    for _req in ("contact", "vehicles", "precheck", "pdi", "vehicle", "enquiry", "line_items", "reports"):
-        _urls_merged.setdefault(_req, "")
-    urls_o = SiebelDmsUrls(**_urls_merged)
-
-    frag = Playwright_Hero_DMS_fill_subdealer_challan_order_only(
-        page,
-        dms_values,
-        urls_o,
-        action_timeout_ms=int(pkg.get("action_timeout_ms") or DMS_SIEBEL_ACTION_TIMEOUT_MS),
-        nav_timeout_ms=int(pkg.get("nav_timeout_ms") or DMS_SIEBEL_NAV_TIMEOUT_MS),
-        content_frame_selector=pkg.get("content_frame_selector"),
-        execution_log_path=log_path,
-    )
-
-    try:
-        fin = _api_post(
-            api_url,
-            jwt,
-            "/sidecar/subdealer-challan/finalize-order",
-            {
-                "challan_batch_id": challan_batch_id,
-                "dealer_id": dealer_id,
-                "playwright_result": frag,
-            },
-            timeout=120,
+    
+        leaf = _safe_challan_artifact_leaf((pkg.get("artifact_leaf") or "").strip() or initial_leaf)
+        log_path = (get_challan_ocr_session_dir(dealer_id, leaf) / "playwright_challan.txt").resolve()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            challan_dirs_to_sync.append(log_path.parent.resolve())
+        except OSError:
+            challan_dirs_to_sync.append(log_path.parent)
+        if phase_is_order_only:
+            log_path.write_text("", encoding="utf-8")
+        elif not log_path.exists():
+            log_path.write_text("", encoding="utf-8")
+    
+        dms_values = dict(pkg.get("dms_values") or {})
+        dms_values["challan_vin_frame_dump_dir"] = str(log_path.parent.resolve())
+    
+        _urls_merged = {k: str(v or "") for k, v in dict(pkg.get("urls") or {}).items()}
+        for _z in ("enquiry", "precheck", "pdi", "line_items", "reports", "vehicles"):
+            _urls_merged[_z] = ""
+        for _req in ("contact", "vehicles", "precheck", "pdi", "vehicle", "enquiry", "line_items", "reports"):
+            _urls_merged.setdefault(_req, "")
+        urls_o = SiebelDmsUrls(**_urls_merged)
+    
+        frag = Playwright_Hero_DMS_fill_subdealer_challan_order_only(
+            page,
+            dms_values,
+            urls_o,
+            action_timeout_ms=int(pkg.get("action_timeout_ms") or DMS_SIEBEL_ACTION_TIMEOUT_MS),
+            nav_timeout_ms=int(pkg.get("nav_timeout_ms") or DMS_SIEBEL_NAV_TIMEOUT_MS),
+            content_frame_selector=pkg.get("content_frame_selector"),
+            execution_log_path=log_path,
         )
-    except Exception as exc:
-        return {
-            "ok": False,
-            "error": f"finalize-order: {exc}",
-            "challan_id": None,
-            "dms_step_messages": list(frag.get("dms_step_messages") or []),
-            "vehicle": dict(frag.get("vehicle") or {}),
-        }
+    
+        try:
+            fin = _api_post(
+                api_url,
+                jwt,
+                "/sidecar/subdealer-challan/finalize-order",
+                {
+                    "challan_batch_id": challan_batch_id,
+                    "dealer_id": dealer_id,
+                    "playwright_result": frag,
+                },
+                timeout=120,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "error": f"finalize-order: {exc}",
+                "challan_id": None,
+                "dms_step_messages": list(frag.get("dms_step_messages") or []),
+                "vehicle": dict(frag.get("vehicle") or {}),
+            }
 
-    return {
-        "ok": bool(fin.get("ok")),
-        "error": fin.get("error"),
-        "challan_id": fin.get("challan_id"),
-        "dms_step_messages": list(fin.get("dms_step_messages") or []),
-        "vehicle": dict(fin.get("vehicle") or {}),
-    }
+        return {
+            "ok": bool(fin.get("ok")),
+            "error": fin.get("error"),
+            "challan_id": fin.get("challan_id"),
+            "dms_step_messages": list(fin.get("dms_step_messages") or []),
+            "vehicle": dict(fin.get("vehicle") or {}),
+        }
+    finally:
+        _flush_challan_ocr_dirs_to_server()
 
 
 # ---------------------------------------------------------------------------

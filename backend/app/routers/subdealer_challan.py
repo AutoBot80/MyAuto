@@ -2,12 +2,19 @@
 
 import logging
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from psycopg2 import errors as pg_errors
 from pydantic import BaseModel, Field
 
-from app.config import DMS_BASE_URL, MAX_TEXT_CHARS, UPLOAD_MAX_FILE_BYTES
+from app.config import (
+    DMS_BASE_URL,
+    MAX_TEXT_CHARS,
+    SUBDEALER_CHALLAN_OCR_SUBDIR,
+    UPLOAD_MAX_FILE_BYTES,
+    get_ocr_output_dir,
+)
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
 from app.repositories import challan_committed as committed_repo
@@ -21,6 +28,7 @@ from app.services.add_subdealer_challan_service import (
     run_subdealer_challan_batch,
 )
 from app.services.playwright_executor import run_playwright_callable_sync
+from app.services.dealer_storage import sync_ocr_file_to_s3
 from app.services.subdealer_challan_ocr_service import dedupe_raw_challan_lines, parse_subdealer_challan
 from app.services.upload_file_validation import read_upload_capped, validate_magic_jpeg_png_or_pdf
 from app.validation.text_limits import enforce_max_text_depth
@@ -56,6 +64,11 @@ class CreateChallanStagingRequest(BaseModel):
     challan_date: str | None = Field(None, description="dd/mm/yyyy when known")
     challan_book_num: str | None = None
     lines: list[ChallanLineIn] = Field(default_factory=list)
+    add_transport_cost: bool = False
+    transport_cost_per_vehicle: float | None = Field(
+        None,
+        description="Required when add_transport_cost is true; subtracted from each line discount in order phase.",
+    )
 
 
 class CreateChallanStagingResponse(BaseModel):
@@ -152,6 +165,21 @@ def create_staging(
             detail="No vehicle lines left after removing duplicates. Add at least one distinct engine/chassis line.",
         )
 
+    add_tc = bool(req.add_transport_cost)
+    tcp: float | None = None
+    if add_tc:
+        if req.transport_cost_per_vehicle is None:
+            raise HTTPException(
+                status_code=400,
+                detail="transport_cost_per_vehicle is required when add_transport_cost is true.",
+            )
+        if float(req.transport_cost_per_vehicle) < 0:
+            raise HTTPException(
+                status_code=400,
+                detail="transport_cost_per_vehicle must be zero or positive.",
+            )
+        tcp = float(req.transport_cost_per_vehicle)
+
     try:
         bid = create_challan_staging_batch(
             from_dealer_id=req.from_dealer_id,
@@ -159,6 +187,8 @@ def create_staging(
             challan_date=date,
             challan_book_num=book,
             lines=lines,
+            add_transport_cost=add_tc,
+            transport_cost_per_vehicle=tcp,
         )
     except pg_errors.UndefinedTable as e:
         logger.warning("subdealer_challan: missing schema: %s", e)
@@ -327,12 +357,15 @@ async def parse_scan(
         False,
         description="When true, include raw_ocr_text / ocr_json_text / local_artifact_leaf for dealer PC mirror.",
     ),
+    dealer_id: int | None = Query(None, description="Defaults to token dealer; scopes OCR artifacts on server"),
+    principal: Principal = Depends(get_principal),
 ) -> dict:
     """
     Run Textract FORMS+TABLES, parse challan no / date / engine-chassis rows,
-    write Raw_OCR.txt and OCR_To_be_Used.json under CHALLANS_DIR (server).
-    With ``mirror_bodies=true``, also return file bodies for Electron to write under ocr_output/{dealer_id}/.
+    write Raw_OCR.txt and OCR_To_be_Used.json under ``ocr_output/{dealer_id}/subdealer_challan/<leaf>/`` (server).
+    With ``mirror_bodies=true``, also return file bodies for Electron to mirror under the same layout (Add Sales OCR tree).
     """
+    did = resolve_dealer_id(principal, dealer_id)
     try:
         raw = await read_upload_capped(file, UPLOAD_MAX_FILE_BYTES)
     except ValueError as e:
@@ -343,11 +376,25 @@ async def parse_scan(
         validate_magic_jpeg_png_or_pdf(raw, label="Challan scan")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    challans_base = get_ocr_output_dir(did) / SUBDEALER_CHALLAN_OCR_SUBDIR
     result = parse_subdealer_challan(
-        raw, write_artifacts=True, include_artifact_bodies=bool(mirror_bodies)
+        raw,
+        write_artifacts=True,
+        include_artifact_bodies=bool(mirror_bodies),
+        challans_base=challans_base,
     )
     if result.get("error"):
         raise HTTPException(status_code=502, detail=result["error"])
+    for key in ("raw_ocr_path", "ocr_json_path"):
+        p = result.get(key)
+        if not p:
+            continue
+        path = Path(str(p))
+        if path.is_file():
+            try:
+                sync_ocr_file_to_s3(did, path)
+            except Exception:
+                logger.exception("subdealer_challan parse-scan: S3 sync failed for %s", path)
     return result
 
 

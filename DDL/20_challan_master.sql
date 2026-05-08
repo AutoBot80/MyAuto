@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS challan_master (
     invoice_number VARCHAR(128),
     total_ex_showroom_price NUMERIC(12, 2),
     total_discount NUMERIC(12, 2),
+    add_transport_cost BOOLEAN NOT NULL DEFAULT FALSE,
+    transport_cost_per_vehicle NUMERIC(12, 2),
     created_at TIMESTAMPTZ,
     CONSTRAINT fk_challan_master_dealer_from FOREIGN KEY (dealer_from) REFERENCES dealer_ref(dealer_id),
     CONSTRAINT fk_challan_master_dealer_to FOREIGN KEY (dealer_to) REFERENCES dealer_ref(dealer_id)
@@ -23,4 +25,6 @@ COMMENT ON COLUMN challan_master.order_number IS 'DMS or book order reference';
 COMMENT ON COLUMN challan_master.invoice_number IS 'Invoice reference when applicable';
 COMMENT ON COLUMN challan_master.total_ex_showroom_price IS 'Sum of ex-showroom across lines';
 COMMENT ON COLUMN challan_master.total_discount IS 'Total discount for the challan';
+COMMENT ON COLUMN challan_master.add_transport_cost IS 'Snapshot from staging at commit';
+COMMENT ON COLUMN challan_master.transport_cost_per_vehicle IS 'Snapshot from staging; per-vehicle transport deducted from discount when flag was true';
 COMMENT ON COLUMN challan_master.created_at IS 'UTC time when the row was inserted (set by application)';

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from decimal import Decimal
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any, Literal
@@ -13,7 +14,6 @@ from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from app.config import (
-    CHALLANS_DIR,
     DMS_BASE_URL,
     DMS_LOGIN_PASSWORD,
     DMS_LOGIN_USER,
@@ -22,8 +22,11 @@ from app.config import (
     DMS_SIEBEL_ACTION_TIMEOUT_MS,
     DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
     DMS_SIEBEL_NAV_TIMEOUT_MS,
+    SUBDEALER_CHALLAN_OCR_SUBDIR,
     dms_automation_is_real_siebel,
+    get_challan_ocr_session_dir,
 )
+from app.services.dealer_storage import sync_ocr_subfolder_to_s3
 from app.repositories import challan_details_staging as detail_repo
 from app.repositories import challan_master_staging as master_repo
 from app.repositories.vehicle_inventory import (
@@ -50,6 +53,23 @@ from app.services.subdealer_challan_ocr_service import challan_artifact_leaf_nam
 logger = logging.getLogger(__name__)
 
 RETRY_WAIT_SEC = 3.0
+
+
+def line_discount_after_transport(
+    base: float,
+    *,
+    add_transport: bool,
+    per_vehicle: float | None,
+) -> float:
+    """Net line discount for DMS when transport is enabled: base minus per-vehicle amount, floored at zero."""
+    if not add_transport or per_vehicle is None:
+        return float(base)
+    b = Decimal(str(base))
+    t = Decimal(str(per_vehicle))
+    net = b - t
+    if net < 0:
+        net = Decimal("0")
+    return float(net.quantize(Decimal("0.01")))
 # Pass 1: Queued (and Failed when batch-wide retry). Pass 2: retry Failed only when requeue_all_failed.
 MAX_PREP_ROUNDS = 2
 
@@ -239,6 +259,12 @@ def _run_order_phase(
     """Returns (partial_out, error_message). partial_out includes vehicle on success."""
     final_rows = detail_repo.fetch_batch_rows(challan_batch_id)
     logln("All staging rows Ready — applying discounts and building order lines")
+    master_row = master_repo.fetch_master(challan_batch_id) or {}
+    add_tc = bool(master_row.get("add_transport_cost"))
+    raw_tcp = master_row.get("transport_cost_per_vehicle")
+    tcp = float(raw_tcp) if raw_tcp is not None else None
+    if add_tc and tcp is not None:
+        logln(f"Transport cost enabled: {tcp:.2f} per vehicle (deducted from each line discount).")
     inv_ids = [int(r["inventory_line_id"]) for r in final_rows if r.get("inventory_line_id")]
     for r in final_rows:
         iid = r.get("inventory_line_id")
@@ -249,7 +275,8 @@ def _run_order_phase(
             continue
         model = (inv.get("model") or "").strip()
         disc = get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)
-        update_discount_and_ex_showroom(int(iid), discount=float(disc))
+        eff = line_discount_after_transport(float(disc), add_transport=add_tc, per_vehicle=tcp)
+        update_discount_and_ex_showroom(int(iid), discount=float(eff))
 
     inv_rows = fetch_lines_for_batch_inventory(inv_ids)
     order_lines: list[dict] = []
@@ -310,6 +337,8 @@ def _run_order_phase(
         inventory_line_ids=inv_ids,
         order_number=oid,
         invoice_number=iid_inv,
+        add_transport_cost=add_tc,
+        transport_cost_per_vehicle=None if not add_tc else tcp,
     )
     out_partial["challan_id"] = cid
     for r in final_rows:
@@ -430,6 +459,10 @@ def sidecar_build_order_playwright_package(
 
     final_rows = detail_repo.fetch_batch_rows(challan_batch_id)
     inv_ids = [int(r["inventory_line_id"]) for r in final_rows if r.get("inventory_line_id")]
+    master_row = master_repo.fetch_master(challan_batch_id) or {}
+    add_tc = bool(master_row.get("add_transport_cost"))
+    raw_tcp = master_row.get("transport_cost_per_vehicle")
+    tcp = float(raw_tcp) if raw_tcp is not None else None
     for r in final_rows:
         iid = r.get("inventory_line_id")
         if not iid:
@@ -439,7 +472,8 @@ def sidecar_build_order_playwright_package(
             continue
         model = (inv.get("model") or "").strip()
         disc = get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)
-        update_discount_and_ex_showroom(int(iid), discount=float(disc))
+        eff = line_discount_after_transport(float(disc), add_transport=add_tc, per_vehicle=tcp)
+        update_discount_and_ex_showroom(int(iid), discount=float(eff))
 
     inv_rows = fetch_lines_for_batch_inventory(inv_ids)
     order_lines: list[dict] = []
@@ -547,6 +581,11 @@ def sidecar_finalize_order_playwright_result(
     oid = (veh_partial.get("order_number") or "").strip() or None
     iid_inv = (veh_partial.get("invoice_number") or "").strip() or None
 
+    mhead = master_repo.fetch_master(challan_batch_id) or {}
+    add_tc = bool(mhead.get("add_transport_cost"))
+    raw_tcp = mhead.get("transport_cost_per_vehicle")
+    tcp_fin = float(raw_tcp) if raw_tcp is not None else None
+
     cid = commit_challan_masters(
         challan_date=cd,
         challan_book_num=cb,
@@ -555,6 +594,8 @@ def sidecar_finalize_order_playwright_result(
         inventory_line_ids=inv_ids,
         order_number=oid,
         invoice_number=iid_inv,
+        add_transport_cost=add_tc,
+        transport_cost_per_vehicle=None if not add_tc else tcp_fin,
     )
     out["challan_id"] = int(cid)
     for r in rows:
@@ -603,6 +644,7 @@ def run_subdealer_challan_batch(
         "vehicle": {},
         "challan_log_path": None,
     }
+    leaf_for_ocr_sync: str | None = None
 
     rows = detail_repo.fetch_batch_rows(challan_batch_id)
     if not rows:
@@ -617,7 +659,8 @@ def run_subdealer_challan_batch(
     cd = None if challan_date is None else str(challan_date).strip() or None
 
     leaf = challan_artifact_leaf_name(cb, cd)
-    log_path = (CHALLANS_DIR / leaf / "playwright_challan.txt").resolve()
+    leaf_for_ocr_sync = leaf
+    log_path = (get_challan_ocr_session_dir(from_dealer_id, leaf) / "playwright_challan.txt").resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
     out["challan_log_path"] = str(log_path)
@@ -754,6 +797,16 @@ def run_subdealer_challan_batch(
         return out
     finally:
         master_repo.touch_last_run_at(challan_batch_id)
+        if leaf_for_ocr_sync:
+            try:
+                sync_ocr_subfolder_to_s3(
+                    from_dealer_id, f"{SUBDEALER_CHALLAN_OCR_SUBDIR}/{leaf_for_ocr_sync}"
+                )
+            except Exception:
+                logger.exception(
+                    "subdealer_challan: failed to sync OCR session folder to S3 (batch=%s)",
+                    challan_batch_id,
+                )
 
     out["error"] = "Invalid phase"
     return out
@@ -874,6 +927,8 @@ def create_challan_staging_batch(
     challan_date: str | None,
     challan_book_num: str | None,
     lines: list[dict],
+    add_transport_cost: bool = False,
+    transport_cost_per_vehicle: float | None = None,
 ) -> uuid.UUID:
     """Insert master + Queued detail rows; return batch id."""
     batch_id = uuid.uuid4()
@@ -885,6 +940,8 @@ def create_challan_staging_batch(
         challan_date=challan_date,
         challan_book_num=challan_book_num,
         num_vehicles=n,
+        add_transport_cost=add_transport_cost,
+        transport_cost_per_vehicle=transport_cost_per_vehicle,
     )
     detail_repo.insert_detail_rows(challan_batch_id=batch_id, lines=lines)
     master_repo.refresh_prepared_count(batch_id)

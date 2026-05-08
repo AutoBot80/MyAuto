@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from app.db import get_connection
@@ -16,6 +17,8 @@ def _row_jsonable(r: dict[str, Any]) -> dict[str, Any]:
             out[k] = str(v)
         elif isinstance(v, datetime):
             out[k] = v.isoformat()
+        elif isinstance(v, Decimal):
+            out[k] = float(v)
         elif hasattr(v, "isoformat") and callable(getattr(v, "isoformat")):
             out[k] = v.isoformat()
         else:
@@ -65,6 +68,8 @@ def insert_master(
     challan_date: str | None,
     challan_book_num: str | None,
     num_vehicles: int,
+    add_transport_cost: bool = False,
+    transport_cost_per_vehicle: float | None = None,
 ) -> None:
     conn = get_connection()
     try:
@@ -74,9 +79,10 @@ def insert_master(
                 INSERT INTO challan_master_staging (
                     challan_batch_id, from_dealer_id, to_dealer_id,
                     challan_date, challan_book_num, num_vehicles,
-                    num_vehicles_prepared, invoice_complete, invoice_status
+                    num_vehicles_prepared, invoice_complete, invoice_status,
+                    add_transport_cost, transport_cost_per_vehicle
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, 0, FALSE, 'Pending')
+                VALUES (%s, %s, %s, %s, %s, %s, 0, FALSE, 'Pending', %s, %s)
                 """,
                 (
                     str(challan_batch_id),
@@ -85,6 +91,8 @@ def insert_master(
                     challan_date,
                     challan_book_num,
                     int(num_vehicles),
+                    bool(add_transport_cost),
+                    None if not add_transport_cost else transport_cost_per_vehicle,
                 ),
             )
         conn.commit()
@@ -100,7 +108,7 @@ def fetch_master(challan_batch_id: uuid.UUID) -> dict[str, Any] | None:
                 """
                 SELECT challan_batch_id, from_dealer_id, to_dealer_id, challan_date, challan_book_num,
                        num_vehicles, num_vehicles_prepared, invoice_complete, invoice_status, created_at,
-                       last_run_at
+                       last_run_at, add_transport_cost, transport_cost_per_vehicle
                 FROM challan_master_staging
                 WHERE challan_batch_id = %s::uuid
                 """,
@@ -189,7 +197,7 @@ def set_invoice_state(
 _MASTER_LIST_SELECT = """
                 SELECT m.challan_batch_id, m.from_dealer_id, m.to_dealer_id, m.challan_date, m.challan_book_num,
                        m.num_vehicles, m.num_vehicles_prepared, m.invoice_complete, m.invoice_status, m.created_at,
-                       m.last_run_at,
+                       m.last_run_at, m.add_transport_cost, m.transport_cost_per_vehicle,
                        df.dealer_name AS from_dealer_name,
                        dt.dealer_name AS to_dealer_name,
                        COALESCE((

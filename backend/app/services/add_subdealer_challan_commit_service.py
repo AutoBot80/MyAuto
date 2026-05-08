@@ -19,6 +19,8 @@ def commit_challan_masters(
     inventory_line_ids: list[int],
     order_number: str | None,
     invoice_number: str | None,
+    add_transport_cost: bool = False,
+    transport_cost_per_vehicle: float | None = None,
 ) -> int:
     """
     Insert challan_master (with totals from vehicle_inventory_master) and challan_details links.
@@ -56,9 +58,11 @@ def commit_challan_masters(
                 INSERT INTO challan_master (
                     challan_date, challan_book_num, dealer_from, dealer_to,
                     num_vehicles, order_number, invoice_number,
-                    total_ex_showroom_price, total_discount, created_at
+                    total_ex_showroom_price, total_discount,
+                    add_transport_cost, transport_cost_per_vehicle,
+                    created_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING challan_id
                 """,
                 (
@@ -71,6 +75,8 @@ def commit_challan_masters(
                     (invoice_number or "").strip() or None,
                     total_ex_f,
                     total_disc_f,
+                    bool(add_transport_cost),
+                    None if not add_transport_cost else transport_cost_per_vehicle,
                     created,
                 ),
             )

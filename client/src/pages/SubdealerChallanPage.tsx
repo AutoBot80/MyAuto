@@ -298,6 +298,8 @@ export function SubdealerChallanPage({
   const [invoiceLines, setInvoiceLines] = useState<ChallanInvoiceDetailLine[]>([]);
   const [invoiceDetailsLoading, setInvoiceDetailsLoading] = useState(false);
   const [invoiceDetailsError, setInvoiceDetailsError] = useState<string | null>(null);
+  const [addTransportCost, setAddTransportCost] = useState(false);
+  const [transportCostPerVehicle, setTransportCostPerVehicle] = useState("");
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
 
@@ -689,18 +691,36 @@ export function SubdealerChallanPage({
       return;
     }
     setError(null);
+    if (addTransportCost) {
+      const raw = transportCostPerVehicle.trim();
+      if (raw === "") {
+        setError("Enter cost per vehicle when Add transport cost is checked.");
+        return;
+      }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        setError("Cost per vehicle must be a valid number that is zero or positive.");
+        return;
+      }
+    }
     setProcessingChallan(true);
     try {
       const lines = dataRows.map((r) => ({
         raw_engine: r.engineNo.trim(),
         raw_chassis: r.chassisNo.trim(),
       }));
+      let transportNum: number | undefined;
+      if (addTransportCost) {
+        transportNum = Number(transportCostPerVehicle.trim());
+      }
       const st = await createChallanStaging({
         from_dealer_id: dealerId,
         to_dealer_id: toId,
         challan_date: challanDdmmyyyy || challanDateRaw || null,
         challan_book_num: challanNo,
         lines,
+        add_transport_cost: addTransportCost,
+        transport_cost_per_vehicle: addTransportCost ? transportNum : undefined,
       });
       const stagingNotes: string[] = [];
       const ex = st.dropped_existing_same_book_date ?? 0;
@@ -880,6 +900,36 @@ export function SubdealerChallanPage({
           {processingChallan ? "Creating invoice…" : "Create Subdealer Invoice"}
         </button>
       </div>
+
+        <div className="subdealer-challan-transport-row" role="group" aria-label="Transport cost">
+          <label className="subdealer-challan-transport-check">
+            <input
+              type="checkbox"
+              checked={addTransportCost}
+              onChange={(e) => {
+                const on = e.target.checked;
+                setAddTransportCost(on);
+                if (!on) setTransportCostPerVehicle("");
+              }}
+              disabled={loading || processingChallan}
+            />
+            <span>Add transport cost</span>
+          </label>
+          <label className="subdealer-challan-transport-cost-label" htmlFor="sdc-transport-cost">
+            Cost per vehicle
+            <input
+              id="sdc-transport-cost"
+              type="number"
+              className="subdealer-challan-input subdealer-challan-transport-cost-input"
+              min={0}
+              step="0.01"
+              value={transportCostPerVehicle}
+              onChange={(e) => setTransportCostPerVehicle(e.target.value)}
+              disabled={!addTransportCost || loading || processingChallan}
+              aria-disabled={!addTransportCost}
+            />
+          </label>
+        </div>
 
       {showSummaryBar && (
         <div className="subdealer-challan-extract-banner" aria-live="polite">

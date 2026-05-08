@@ -27,7 +27,7 @@ export type ParseSubdealerChallanResponse = {
   artifact_dir: string | null;
   raw_ocr_path: string | null;
   ocr_json_path: string | null;
-  /** Present when ``?mirror_bodies=true`` (Electron): folder leaf under ``ocr_output/{dealer_id}/`` on dealer PC. */
+  /** Present when ``?mirror_bodies=true`` (Electron): folder leaf under ``ocr_output/{dealer_id}/subdealer_challan/`` on dealer PC. */
   local_artifact_leaf?: string | null;
   raw_ocr_text?: string | null;
   ocr_json_text?: string | null;
@@ -280,7 +280,11 @@ export async function parseSubdealerChallanScans(
   }
   if (files.length === 1) {
     onProgress?.(1, 1);
-    return parseSubdealerChallanScan(files[0]);
+    const single = await parseSubdealerChallanScan(files[0]);
+    if (isElectron() && !(single.error || "").trim()) {
+      await mirrorChallanParseArtifactsToDealerPc(single, [single], [files[0].name]);
+    }
+    return single;
   }
   const results: ParseSubdealerChallanResponse[] = [];
   const names: string[] = [];
@@ -308,6 +312,9 @@ export type CreateChallanStagingBody = {
   challan_date?: string | null;
   challan_book_num?: string | null;
   lines: { raw_engine?: string; raw_chassis?: string }[];
+  /** When true, ``transport_cost_per_vehicle`` is required and subtracted from each line discount in the order phase. */
+  add_transport_cost?: boolean;
+  transport_cost_per_vehicle?: number | null;
 };
 
 export type CreateChallanStagingResponse = {
@@ -427,6 +434,8 @@ export type ChallanMasterProcessedRow = {
   last_run_at?: string | null;
   ready_line_count: number;
   failed_line_count: number;
+  add_transport_cost?: boolean;
+  transport_cost_per_vehicle?: number | null;
   /** Failed-only subset (legacy). Prefer ``detail_lines`` when present. */
   failed_lines: ChallanFailedDetailLine[];
   /** All vehicle lines: Queued / Failed / Ready / Committed. */

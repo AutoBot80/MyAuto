@@ -1,6 +1,7 @@
 """
 Parse subdealer Daily Delivery Report scans: challan no, date, engine/chassis lines.
-Writes Raw_OCR.txt and OCR_To_be_Used.json under CHALLANS_DIR/<challan>_<ddmmyyyy>/.
+Writes Raw_OCR.txt and OCR_To_be_Used.json under ``challans_base/<challan>_<ddmmyyyy>/``
+(default: global CHALLANS_DIR; API parse-scan uses dealer ``ocr_output/.../subdealer_challan/``).
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.config import CHALLANS_DIR
+from app.config import CHALLANS_DIR  # default artifact root when challans_base is omitted
 from app.services.subdealer_challan_textract import extract_challan_textract
 
 logger = logging.getLogger(__name__)
@@ -232,7 +233,7 @@ def _challan_folder_name(challan_no: str | None, ddmmyyyy: str | None) -> str:
 
 def challan_artifact_leaf_name(challan_book_num: str | None, challan_date_stored: str | None) -> str:
     """
-    Folder under ``CHALLANS_DIR``, matching OCR artifacts: ``{challan_no}_{ddmmyyyy}``.
+    Folder leaf matching OCR artifacts: ``{challan_no}_{ddmmyyyy}`` (under ``challans_base`` or dealer OCR subtree).
     ``challan_date_stored`` may be ``DD/MM/YYYY`` or 8-digit ``ddmmyyyy`` (as from the client).
     """
     raw = (challan_date_stored or "").strip()
@@ -259,7 +260,7 @@ def parse_subdealer_challan(
     include_artifact_bodies: bool = False,
 ) -> dict[str, Any]:
     """
-    Textract + parse Daily Delivery Report. Optionally writes CHALLANS_DIR/<challan>_<ddmmyyyy>/.
+    Textract + parse Daily Delivery Report. Optionally writes under ``challans_base/<challan>_<ddmmyyyy>/``.
 
     Returns:
       challan_no, challan_date_raw, challan_date_iso, challan_ddmmyyyy (folder suffix),

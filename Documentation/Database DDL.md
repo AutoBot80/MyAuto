@@ -487,12 +487,14 @@ This document lists the current database tables and their columns. **Executable 
 | `num_vehicles_prepared` | `integer` | NO | `0` | Lines in Ready or Committed (derived) |
 | `invoice_complete` | `boolean` | NO | `FALSE` | Set when invoice number is captured |
 | `invoice_status` | `varchar(32)` | NO | `'Pending'` | **Pending** \| **Failed** \| **Completed** |
+| `add_transport_cost` | `boolean` | NO | `FALSE` | When true, subtract `transport_cost_per_vehicle` from each line discount before Siebel order attach |
+| `transport_cost_per_vehicle` | `numeric(12,2)` | YES |  | Per-vehicle transport amount (same currency as discount); meaningful when `add_transport_cost` is true |
 | `created_at` | `timestamptz` | NO | `CURRENT_TIMESTAMP` | Processed tab / window filters |
 | `last_run_at` | `timestamptz` | YES |  | Set when a process/retry DMS run completes (**Latest run** in UI); nullable until first run |
 
 **Primary key:** `challan_batch_id`
 
-**Scripts:** `DDL/23_challan_master_staging.sql`; existing DBs: `DDL/alter/23a_challan_master_staging_last_run_at.sql`
+**Scripts:** `DDL/23_challan_master_staging.sql`; existing DBs: `DDL/alter/23a_challan_master_staging_last_run_at.sql`, `DDL/alter/20c_challan_master_transport_cost.sql`
 
 ### `challan_details_staging`
 
@@ -533,6 +535,8 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `invoice_number` | `varchar(128)` | YES |  | Invoice reference when applicable |
 | `total_ex_showroom_price` | `numeric(12,2)` | YES |  | Sum of ex-showroom across lines |
 | `total_discount` | `numeric(12,2)` | YES |  | Total discount for the challan |
+| `add_transport_cost` | `boolean` | NO | `FALSE` | Snapshot from staging: transport deducted from per-line discount when true |
+| `transport_cost_per_vehicle` | `numeric(12,2)` | YES |  | Snapshot from staging; per-vehicle amount when flag was true |
 | `created_at` | `timestamptz` | YES |  | UTC insert time when the row is committed; NULL on legacy rows before this column |
 
 **Primary key:** `challan_master_pkey` on (`challan_id`)
@@ -541,7 +545,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 - `fk_challan_master_dealer_from`: (`dealer_from`) → `dealer_ref(dealer_id)`
 - `fk_challan_master_dealer_to`: (`dealer_to`) → `dealer_ref(dealer_id)`
 
-**Scripts:** `DDL/20_challan_master.sql`; existing DBs: `DDL/alter/18a_challan_master_add_order_invoice_totals.sql`, `DDL/alter/20b_challan_master_created_at.sql`
+**Scripts:** `DDL/20_challan_master.sql`; existing DBs: `DDL/alter/18a_challan_master_add_order_invoice_totals.sql`, `DDL/alter/20b_challan_master_created_at.sql`, `DDL/alter/20c_challan_master_transport_cost.sql`
 
 ---
 
@@ -679,10 +683,10 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
 | `add_sales_staging` | Validated Add Sales JSON before master commit; **`staging_id`** for Create Invoice (**LLD §2.2a**); scripts **`DDL/alter/13a`**, **`13c`** (`login_id`), **`13d`** (`subfolder`) |
 | `vehicle_inventory_master` | Subdealer challan / stock lines; **`DDL/18_vehicle_inventory_master.sql`** |
-| `challan_master_staging` | Subdealer challan batch header (staging); **`DDL/23_challan_master_staging.sql`** |
+| `challan_master_staging` | Subdealer challan batch header (staging); **`DDL/23_challan_master_staging.sql`**; upgrade **`DDL/alter/20c_challan_master_transport_cost.sql`** |
 | `challan_details_staging` | Per-line subdealer challan staging; **`DDL/24_challan_details_staging.sql`** |
 | `challan_staging` | Legacy single-table staging (optional; **`DDL/19_challan_staging.sql`**) |
-| `challan_master` | Challan headers; **`DDL/20_challan_master.sql`** |
+| `challan_master` | Challan headers; **`DDL/20_challan_master.sql`**; upgrade **`DDL/alter/20c_challan_master_transport_cost.sql`** |
 | `challan_details` | Challan ↔ inventory lines; **`DDL/21_challan_details.sql`** |
 | `subdealer_discount_master_ref` | PK **`(dealer_id, subdealer_type, valid_flag, model)`**; **`DDL/22_*.sql`**, **`alter/22a–22c`** as needed |
 | `roles_ref` | Role ↔ home-tile access flags; **`DDL/25_roles_ref.sql`**; preserved on admin reset |
@@ -832,4 +836,5 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.89 | Apr 2026 | **No schema change.** Subdealer challan per-line discount resolution: **`get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)`** — **`dealer_ref.subdealer_type`** (**`to_dealer_id`**) + **`subdealer_discount_master_ref`** (**`dealer_id`** = **`from_dealer_id`**, matching **`subdealer_type`**, **`valid_flag`** = **Y**, **model**); else **1500.00**; **`update_discount_and_ex_showroom`** on **`vehicle_inventory_master`** — **`backend/app/repositories/vehicle_inventory.py`**, **`add_subdealer_challan_service`** — **§12** ( **`vehicle_inventory_master.discount`** note ) |
 | 2.90 | Apr 2026 | **No schema change.** **Model** match: reference **`subdealer_discount_master_ref.model`** is a **prefix** of the DMS/inventory value (**`starts_with(BTRIM(DMS), BTRIM(ref.model))`**, SQL); **longest** ref **model** if multiple; **`backend/app/repositories/vehicle_inventory.get_subdealer_challan_discount`** — **§12**, **§16**; **LLD** **§2.4e**, **6.297** |
 | 2.91 | May 2026 | **`challan_master.created_at`** — **`DDL/alter/20b_challan_master_created_at.sql`**; greenfield: **`DDL/20_challan_master.sql`** — Admin Usage daily counts for committed challans |
+| 2.92 | May 2026 | **`challan_master_staging`**, **`challan_master`**: **`add_transport_cost`**, **`transport_cost_per_vehicle`** — **`DDL/alter/20c_challan_master_transport_cost.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`**, **`DDL/20_challan_master.sql`** — subdealer transport cost per vehicle |
 
