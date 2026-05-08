@@ -472,7 +472,7 @@ This document lists the current database tables and their columns. **Executable 
 
 ## 13) `challan_master_staging` and `challan_details_staging`
 
-**Purpose:** Subdealer challan **before** commit to `challan_master` / `challan_details`: one **header** row per batch (`challan_master_staging`) and **per-vehicle** lines (`challan_details_staging`), joined by `challan_batch_id` (UUID). Replaces the older single-table `challan_staging` model for new installs (**`DDL/23_challan_master_staging.sql`**, **`DDL/24_challan_details_staging.sql`**).
+**Purpose:** Subdealer challan **before** commit to `challan_master` / `challan_details`: one **header** row per batch (`challan_master_staging`) and **per-vehicle** lines (`challan_details_staging`), joined by `challan_batch_id` (UUID). Replaces the older single-table `challan_staging` model for new installs (**`DDL/23_challan_master_staging.sql`**, **`DDL/24_challan_details_staging.sql`**). When **`add_transport_cost`** is true, **`transport_cost_per_vehicle`** is stored on the header; the order phase subtracts that amount from each vehicle’s resolved subdealer discount (minimum zero), updates **`vehicle_inventory_master.discount`**, and passes the net values in **`order_line_vehicles`** to Siebel (**`add_subdealer_challan_service.line_discount_after_transport`** — **LLD** **§2.4e**, **6.301**).
 
 ### `challan_master_staging`
 
@@ -521,7 +521,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 ## 14) `challan_master`
 
-**Purpose:** Challan header after validation (book number, dealers, vehicle count).
+**Purpose:** Challan header after validation (book number, dealers, vehicle count). **`total_ex_showroom_price`** and **`total_discount`** are summed from linked **`vehicle_inventory_master`** rows at commit; **`add_transport_cost`** / **`transport_cost_per_vehicle`** copy the staging header snapshot for audit (same semantics as staging: when the flag was true, per-line discounts in inventory were already net of transport before **`order_line_vehicles`**).
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
@@ -836,5 +836,5 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.89 | Apr 2026 | **No schema change.** Subdealer challan per-line discount resolution: **`get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)`** — **`dealer_ref.subdealer_type`** (**`to_dealer_id`**) + **`subdealer_discount_master_ref`** (**`dealer_id`** = **`from_dealer_id`**, matching **`subdealer_type`**, **`valid_flag`** = **Y**, **model**); else **1500.00**; **`update_discount_and_ex_showroom`** on **`vehicle_inventory_master`** — **`backend/app/repositories/vehicle_inventory.py`**, **`add_subdealer_challan_service`** — **§12** ( **`vehicle_inventory_master.discount`** note ) |
 | 2.90 | Apr 2026 | **No schema change.** **Model** match: reference **`subdealer_discount_master_ref.model`** is a **prefix** of the DMS/inventory value (**`starts_with(BTRIM(DMS), BTRIM(ref.model))`**, SQL); **longest** ref **model** if multiple; **`backend/app/repositories/vehicle_inventory.get_subdealer_challan_discount`** — **§12**, **§16**; **LLD** **§2.4e**, **6.297** |
 | 2.91 | May 2026 | **`challan_master.created_at`** — **`DDL/alter/20b_challan_master_created_at.sql`**; greenfield: **`DDL/20_challan_master.sql`** — Admin Usage daily counts for committed challans |
-| 2.92 | May 2026 | **`challan_master_staging`**, **`challan_master`**: **`add_transport_cost`**, **`transport_cost_per_vehicle`** — **`DDL/alter/20c_challan_master_transport_cost.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`**, **`DDL/20_challan_master.sql`** — subdealer transport cost per vehicle |
+| 2.92 | May 2026 | **`challan_master_staging`**, **`challan_master`**: **`add_transport_cost`** (boolean, default false), **`transport_cost_per_vehicle`** (`numeric(12,2)`); optional on **`POST /subdealer-challan/staging`**; order phase nets **`vehicle_inventory_master.discount`** per line before Siebel **`order_line_vehicles`**; committed header snapshots same fields — **`DDL/alter/20c_challan_master_transport_cost.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`**, **`DDL/20_challan_master.sql`** — **BRD** **BR-22**, **FR-25**, **3.169**; **LLD** **§2.4e**, **6.301**; **HLD** **1.172** |
 
