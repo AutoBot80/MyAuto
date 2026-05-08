@@ -5216,6 +5216,7 @@ def _click_siebel_nav_tab_in_container(
     container_id: str,
     tab_needle: str,
     *,
+    content_frame_selector: str | None,
     note,
     log_tag: str,
 ) -> bool:
@@ -5292,11 +5293,21 @@ def _ensure_vehicles_receipt_hmcl_in_transit_tabs(
             "click_first_second_level_nav_tabs",
         )
     ok1 = _click_siebel_nav_tab_in_container(
-        page, "s_sctrl_tabScreen", "vehicles receipt", note=note, log_tag="in_transit_receipt"
+        page,
+        "s_sctrl_tabScreen",
+        "vehicles receipt",
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_tag="in_transit_receipt",
     )
     _safe_page_wait(page, 450, log_label="after_vehicles_receipt_tab")
     ok2 = _click_siebel_nav_tab_in_container(
-        page, "s_sctrl_tabView", "hmcl - in transit", note=note, log_tag="in_transit_receipt"
+        page,
+        "s_sctrl_tabView",
+        "hmcl - in transit",
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_tag="in_transit_receipt",
     )
     _safe_page_wait(page, 550, log_label="after_hmcl_in_transit_tab")
     if callable(step):

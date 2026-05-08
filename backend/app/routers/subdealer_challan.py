@@ -8,13 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from psycopg2 import errors as pg_errors
 from pydantic import BaseModel, Field
 
-from app.config import (
-    DMS_BASE_URL,
-    MAX_TEXT_CHARS,
-    SUBDEALER_CHALLAN_OCR_SUBDIR,
-    UPLOAD_MAX_FILE_BYTES,
-    get_ocr_output_dir,
-)
+from app.config import CHALLANS_DIR, DMS_BASE_URL, MAX_TEXT_CHARS, UPLOAD_MAX_FILE_BYTES
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
 from app.repositories import challan_committed as committed_repo
@@ -28,7 +22,7 @@ from app.services.add_subdealer_challan_service import (
     run_subdealer_challan_batch,
 )
 from app.services.playwright_executor import run_playwright_callable_sync
-from app.services.dealer_storage import sync_ocr_file_to_s3
+from app.services.dealer_storage import sync_challans_file_to_s3
 from app.services.subdealer_challan_ocr_service import dedupe_raw_challan_lines, parse_subdealer_challan
 from app.services.upload_file_validation import read_upload_capped, validate_magic_jpeg_png_or_pdf
 from app.validation.text_limits import enforce_max_text_depth
@@ -364,13 +358,13 @@ async def parse_scan(
         False,
         description="When true, include raw_ocr_text / ocr_json_text / local_artifact_leaf for dealer PC mirror.",
     ),
-    dealer_id: int | None = Query(None, description="Defaults to token dealer; scopes OCR artifacts on server"),
+    dealer_id: int | None = Query(None, description="Defaults to token dealer (JWT required for parse-scan)"),
     principal: Principal = Depends(get_principal),
 ) -> dict:
     """
     Run Textract FORMS+TABLES, parse challan no / date / engine-chassis rows,
-    write Raw_OCR.txt and OCR_To_be_Used.json under ``ocr_output/{dealer_id}/subdealer_challan/<leaf>/`` (server).
-    With ``mirror_bodies=true``, also return file bodies for Electron to mirror under the same layout (Add Sales OCR tree).
+    write Raw_OCR.txt and OCR_To_be_Used.json under ``CHALLANS_DIR/<leaf>/`` (server).
+    With ``mirror_bodies=true``, also return file bodies for Electron to mirror under the same layout.
     """
     did = resolve_dealer_id(principal, dealer_id)
     try:
@@ -383,7 +377,7 @@ async def parse_scan(
         validate_magic_jpeg_png_or_pdf(raw, label="Challan scan")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    challans_base = get_ocr_output_dir(did) / SUBDEALER_CHALLAN_OCR_SUBDIR
+    challans_base = CHALLANS_DIR
     result = parse_subdealer_challan(
         raw,
         write_artifacts=True,
@@ -399,7 +393,7 @@ async def parse_scan(
         path = Path(str(p))
         if path.is_file():
             try:
-                sync_ocr_file_to_s3(did, path)
+                sync_challans_file_to_s3(path)
             except Exception:
                 logger.exception("subdealer_challan parse-scan: S3 sync failed for %s", path)
     return result

@@ -22,11 +22,10 @@ from app.config import (
     DMS_SIEBEL_ACTION_TIMEOUT_MS,
     DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
     DMS_SIEBEL_NAV_TIMEOUT_MS,
-    SUBDEALER_CHALLAN_OCR_SUBDIR,
     dms_automation_is_real_siebel,
-    get_challan_ocr_session_dir,
+    get_challan_artifacts_dir,
 )
-from app.services.dealer_storage import sync_ocr_subfolder_to_s3
+from app.services.dealer_storage import sync_challans_subfolder_to_s3
 from app.repositories import challan_details_staging as detail_repo
 from app.repositories import challan_master_staging as master_repo
 from app.repositories.vehicle_inventory import (
@@ -660,7 +659,7 @@ def run_subdealer_challan_batch(
 
     leaf = challan_artifact_leaf_name(cb, cd)
     leaf_for_ocr_sync = leaf
-    log_path = (get_challan_ocr_session_dir(from_dealer_id, leaf) / "playwright_challan.txt").resolve()
+    log_path = (get_challan_artifacts_dir(from_dealer_id, leaf) / "playwright_challan.txt").resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text("", encoding="utf-8")
     out["challan_log_path"] = str(log_path)
@@ -799,12 +798,10 @@ def run_subdealer_challan_batch(
         master_repo.touch_last_run_at(challan_batch_id)
         if leaf_for_ocr_sync:
             try:
-                sync_ocr_subfolder_to_s3(
-                    from_dealer_id, f"{SUBDEALER_CHALLAN_OCR_SUBDIR}/{leaf_for_ocr_sync}"
-                )
+                sync_challans_subfolder_to_s3(leaf_for_ocr_sync)
             except Exception:
                 logger.exception(
-                    "subdealer_challan: failed to sync OCR session folder to S3 (batch=%s)",
+                    "subdealer_challan: failed to sync challans session folder to S3 (batch=%s)",
                     challan_batch_id,
                 )
 

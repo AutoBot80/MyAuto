@@ -197,26 +197,24 @@ def get_ocr_output_dir(dealer_id: int) -> Path:
     return OCR_OUTPUT_DIR / str(dealer_id)
 
 
-# Subdealer challan OCR + Playwright traces (same S3/sync path as Add Sales ``tree=ocr``).
-SUBDEALER_CHALLAN_OCR_SUBDIR = "subdealer_challan"
-
-
 def safe_challan_artifact_leaf_segment(leaf: str | None) -> str:
-    """Single path segment under ``subdealer_challan/`` (no traversal)."""
+    """Single folder name under ``CHALLANS_DIR`` (no traversal)."""
     t = (leaf or "").strip().replace("\\", "/").split("/")[-1]
     if not t or ".." in t:
         return "unknown_challan"
     return t
 
 
-def get_challan_ocr_session_dir(dealer_id: int, artifact_leaf: str | None) -> Path:
+def get_challan_artifacts_dir(dealer_id: int, artifact_leaf: str | None) -> Path:
     """
-    Per-batch folder under dealer OCR root — mirrors Add Sales layout for sidecar ``upload-artifacts`` ``tree=ocr``:
+    Subdealer challan OCR + Playwright traces: ``CHALLANS_DIR/<safe_leaf>/``.
 
-    ``ocr_output/{dealer_id}/subdealer_challan/{safe_leaf}/``
+    ``dealer_id`` is reserved for callers / symmetry with other helpers; the path is global per host
+    (same on dealer PC and EC2 when ``CHALLANS_DIR`` / ``SAATHI_BASE_DIR`` match layout).
     """
+    int(dealer_id)  # reserved for future per-dealer subfolders under CHALLANS_DIR
     safe = safe_challan_artifact_leaf_segment(artifact_leaf)
-    return get_ocr_output_dir(int(dealer_id)) / SUBDEALER_CHALLAN_OCR_SUBDIR / safe
+    return CHALLANS_DIR / safe
 
 
 def get_bulk_upload_dir(dealer_id: int) -> Path:

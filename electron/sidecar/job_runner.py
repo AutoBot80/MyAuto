@@ -949,7 +949,7 @@ _SUBDEALER_RETRY_WAIT_SEC = 3.0
 
 
 def _safe_challan_artifact_leaf(leaf: str | None) -> str:
-    """Single path segment under ocr_output/{dealer_id}/ (no traversal)."""
+    """Single folder name under CHALLANS_DIR (no traversal)."""
     t = (leaf or "").strip().replace("\\", "/").split("/")[-1]
     if not t or ".." in t:
         return "unknown_challan"
@@ -958,7 +958,7 @@ def _safe_challan_artifact_leaf(leaf: str | None) -> str:
 
 def _mirror_challan_parse_artifacts_impl(params: dict) -> dict:
     """Write parse-scan OCR files under dealer ``ocr_output/.../subdealer_challan/<leaf>/`` (same layout as EC2)."""
-    from app.config import get_challan_ocr_session_dir
+    from app.config import get_challan_artifacts_dir
     from app.services.subdealer_challan_ocr_service import OCR_JSON_STEM
 
     raw_leaf = str(params.get("artifact_leaf") or "").strip()
@@ -970,7 +970,7 @@ def _mirror_challan_parse_artifacts_impl(params: dict) -> dict:
     js_t = params.get("ocr_json_text")
     if not (isinstance(raw_t, str) and raw_t.strip()) and not (isinstance(js_t, str) and js_t.strip()):
         return {"ok": False, "error": "raw_ocr_text or ocr_json_text required"}
-    base = get_challan_ocr_session_dir(dealer_id, leaf)
+    base = get_challan_artifacts_dir(dealer_id, leaf)
     try:
         base.mkdir(parents=True, exist_ok=True)
         if isinstance(raw_t, str) and raw_t.strip():
@@ -1024,8 +1024,8 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
         DMS_SIEBEL_ACTION_TIMEOUT_MS,
         DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
         DMS_SIEBEL_NAV_TIMEOUT_MS,
-        get_challan_ocr_session_dir,
-        get_ocr_output_dir,
+        CHALLANS_DIR,
+        get_challan_artifacts_dir,
     )
     from app.services.fill_hero_dms_service import (
         Playwright_Hero_DMS_fill_subdealer_challan_order_only,
@@ -1064,7 +1064,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
 
     prep_leaf = _safe_challan_artifact_leaf(initial_leaf)
-    challan_session_base = get_challan_ocr_session_dir(dealer_id, prep_leaf)
+    challan_session_base = get_challan_artifacts_dir(dealer_id, prep_leaf)
 
     page, open_error = get_or_open_site_page(
         dms_base_url,
@@ -1084,7 +1084,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     _install_playwright_js_dialog_handler(page)
 
     challan_dirs_to_sync: list[Path] = []
-    ocr_root = get_ocr_output_dir(dealer_id).resolve()
+    challans_root = CHALLANS_DIR.resolve()
 
     def _flush_challan_ocr_dirs_to_server() -> None:
         seen: set[Path] = set()
@@ -1096,7 +1096,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             if dr in seen or not dr.is_dir():
                 continue
             seen.add(dr)
-            _upload_tree_under(api_url, jwt, dealer_id, "ocr", d, ocr_root)
+            _upload_tree_under(api_url, jwt, dealer_id, "challans", d, challans_root)
 
     last_scrape: dict = {}
     try:
@@ -1289,7 +1289,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             }
     
         leaf = _safe_challan_artifact_leaf((pkg.get("artifact_leaf") or "").strip() or initial_leaf)
-        log_path = (get_challan_ocr_session_dir(dealer_id, leaf) / "playwright_challan.txt").resolve()
+        log_path = (get_challan_artifacts_dir(dealer_id, leaf) / "playwright_challan.txt").resolve()
         log_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             challan_dirs_to_sync.append(log_path.parent.resolve())

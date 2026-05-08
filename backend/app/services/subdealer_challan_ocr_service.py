@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -156,6 +157,292 @@ def _find_engine_chassis_table(
                 if _header_row_engine_chassis_indices(row):
                     return table, hi
     return None
+
+
+def _strip_cell_suffix_noise(cell: str) -> str:
+    """Textract often glues ``the`` / ``to`` into the invoice cell."""
+    s = (cell or "").strip()
+    return re.sub(r"\s+(the|to|of)\s*$", "", s, flags=re.I).strip()
+
+
+def _best_id_token_from_cell(cell: str, *, role: str) -> str:
+    """Pick the best token inside a merged / noisy TABLE cell."""
+    raw = _strip_cell_suffix_noise(cell or "")
+    if not raw:
+        return ""
+    parts = re.split(r"\s+", raw)
+    if role == "inv":
+        best = ""
+        for part in parts:
+            s = sanitize_challan_line_field(part)
+            if _is_excise_invoice_like_token(s) and len(s) > len(best):
+                best = s
+        return best
+    if role == "cha":
+        for part in parts:
+            s = sanitize_challan_line_field(part)
+            if _is_hero_chassis_frame_token(s):
+                return s
+        return ""
+    if role == "eng":
+        for part in parts:
+            s = sanitize_challan_line_field(part)
+            if _is_hero_engine_token(s):
+                return s
+        return ""
+    return ""
+
+
+def _infer_engine_chassis_cols_from_data_row(row: list[str]) -> tuple[int, int] | None:
+    """Infer (engine_col, chassis_col) from a row that already looks like Model Details data."""
+    cha_i: int | None = None
+    eng_i: int | None = None
+    for i, cell in enumerate(row):
+        if _best_id_token_from_cell(str(cell), role="cha"):
+            cha_i = i if cha_i is None else cha_i
+        if _best_id_token_from_cell(str(cell), role="eng"):
+            eng_i = i if eng_i is None else eng_i
+    if cha_i is None or eng_i is None or cha_i == eng_i:
+        return None
+    return eng_i, cha_i
+
+
+def _find_loose_model_details_table(
+    tables: list[list[list[str]]],
+) -> tuple[list[list[str]], int, int, int] | None:
+    """
+    Textract TABLE with merged / split headers (``Frame`` + ``No`` on different rows) so strict
+    header matching never fires. Pick the (table, start_row, engine_i, chassis_i) with the most
+    rows that look like ``MB…`` + ``HA…`` data.
+    """
+    best: tuple[list[list[str]], int, int, int, int] | None = None
+    for table in tables:
+        if not table:
+            continue
+        for start in range(len(table)):
+            row = table[start]
+            if not row or not any(str(c or "").strip() for c in row):
+                continue
+            inf = _infer_engine_chassis_cols_from_data_row([str(c) for c in row])
+            if inf is None:
+                continue
+            ei, ci = inf
+            n_valid = 0
+            for r in table[start:]:
+                if max(ei, ci) >= len(r):
+                    continue
+                eng = _best_id_token_from_cell(str(r[ei]) if ei < len(r) else "", role="eng")
+                cha = _best_id_token_from_cell(str(r[ci]) if ci < len(r) else "", role="cha")
+                if _is_hero_engine_token(eng) and _is_hero_chassis_frame_token(cha):
+                    n_valid += 1
+            if best is None or n_valid > best[4]:
+                best = (table, start, ei, ci, n_valid)
+    if best is None or best[4] < 1:
+        return None
+    return best[0], best[1], best[2], best[3]
+
+
+def _rows_from_table_merged_headers(
+    table: list[list[str]], start_row: int, eng_i: int, cha_i: int
+) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for r in table[start_row:]:
+        if max(eng_i, cha_i) >= len(r):
+            continue
+        eng = _best_id_token_from_cell(str(r[eng_i]) if eng_i < len(r) else "", role="eng")
+        cha = _best_id_token_from_cell(str(r[cha_i]) if cha_i < len(r) else "", role="cha")
+        if not (_is_hero_engine_token(eng) and _is_hero_chassis_frame_token(cha)):
+            continue
+        out.append({"engine_no": eng, "chassis_no": cha, "status": "queued"})
+    return out
+
+
+def _invoice_from_table_column_zero(table: list[list[str]], start_row: int) -> str | None:
+    vals: list[str] = []
+    for r in table[start_row:]:
+        if not r:
+            continue
+        inv = _best_id_token_from_cell(str(r[0]), role="inv")
+        if inv:
+            vals.append(inv)
+    return _dominant_invoice_from_tokens(vals)
+
+
+def _token_is_alnum_id(s: str) -> bool:
+    t = (s or "").strip()
+    return bool(t) and bool(re.match(r"^[A-Za-z0-9]+$", t))
+
+
+def _model_details_column_offset(parts: list[str]) -> int | None:
+    """
+    Return starting index of (invoice, frame/vin, engine, …) within a whitespace-split LINE.
+    None if this line does not look like a Model Details-style data row.
+    """
+    n = len(parts)
+    if n < 3:
+        return None
+
+    def vin_like(i: int) -> bool:
+        if i < 0 or i >= n:
+            return False
+        t = sanitize_challan_line_field(parts[i])
+        return 11 <= len(t) <= 19 and _token_is_alnum_id(parts[i])
+
+    def engine_like(i: int) -> bool:
+        if i < 0 or i >= n:
+            return False
+        t = sanitize_challan_line_field(parts[i])
+        return 6 <= len(t) <= 22 and _token_is_alnum_id(parts[i])
+
+    # Optional leading S.No. column: <sno> <invoice> <vin> <engine> …
+    if n >= 5 and parts[0].isdigit() and vin_like(2) and engine_like(3):
+        return 1
+    if n >= 3 and vin_like(1) and engine_like(2):
+        return 0
+    return None
+
+
+def _vertical_model_details_field_start(lines: list[str]) -> int | None:
+    """First data line index after ``Material`` column header (Textract LINE layout)."""
+    for i, raw in enumerate(lines):
+        if raw.strip().lower() == "material":
+            return i + 1
+    return None
+
+
+def _is_single_cell_field_line(line: str) -> bool:
+    """One OCR cell per LINE (no spaces), typical for column-major Textract dumps."""
+    raw = line.strip()
+    if not raw or " " in raw:
+        return False
+    if len(raw) < 6:
+        return False
+    return bool(re.match(r"^[A-Za-z0-9.\-/]+$", raw))
+
+
+def _is_vertical_noise_line(line: str) -> bool:
+    low = line.strip().lower()
+    if len(low) <= 3 and low.isalpha():
+        return low in frozenset({"the", "to", "of", "or", "a", "an", "in", "on", "at", "by"})
+    return False
+
+
+def _is_hero_chassis_frame_token(san: str) -> bool:
+    return 14 <= len(san) <= 19 and san.startswith("MB") and bool(re.match(r"^[A-Z0-9]+$", san))
+
+
+def _is_hero_engine_token(san: str) -> bool:
+    return 8 <= len(san) <= 18 and san.startswith("HA") and bool(re.match(r"^[A-Z0-9]+$", san))
+
+
+def _is_excise_invoice_like_token(san: str) -> bool:
+    if len(san) < 8 or len(san) > 18:
+        return False
+    if san.startswith("MB") or san.startswith("HA") or san.startswith("HSPL"):
+        return False
+    if not bool(re.search(r"\d", san)) or not bool(re.search(r"[A-Za-z]", san)):
+        return False
+    return bool(re.match(r"^[A-Z0-9]+$", san))
+
+
+def _dominant_invoice_from_tokens(invoices: list[str]) -> str | None:
+    """Same excise invoice repeated; tolerate rare OCR variants (e.g. S vs 5) via majority vote."""
+    cleaned = [sanitize_challan_line_field(x) for x in invoices if sanitize_challan_line_field(x)]
+    if not cleaned:
+        return None
+    uniq = set(cleaned)
+    if len(uniq) == 1:
+        return cleaned[0]
+    c = Counter(cleaned)
+    val, n = c.most_common(1)[0]
+    if n >= max(3, int(0.72 * len(cleaned))):
+        return val
+    return None
+
+
+def _parse_vertical_model_details_lines(full_text: str) -> tuple[list[dict[str, str]], str | None]:
+    """
+    Textract often emits **one table cell per LINE** (column-major reading order).
+
+    Pair each ``MB…`` frame/VIN token with the next ``HA…`` engine token; skip invoices, material codes,
+    and short noise lines between them.
+    """
+    lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+    si = _vertical_model_details_field_start(lines)
+    if si is None:
+        return [], None
+
+    pending_cha: str | None = None
+    out_lines: list[dict[str, str]] = []
+    invoices: list[str] = []
+
+    for raw in lines[si:]:
+        if _is_vertical_noise_line(raw):
+            continue
+        low = raw.lower()
+        if low.startswith("authorised") or low.startswith("authorized"):
+            continue
+        if not _is_single_cell_field_line(raw):
+            continue
+        san = sanitize_challan_line_field(raw)
+        if not san:
+            continue
+        if _is_excise_invoice_like_token(san):
+            invoices.append(san)
+            continue
+        if san.startswith("HSPL") and len(san) >= 10:
+            continue
+        if _is_hero_chassis_frame_token(san):
+            pending_cha = san
+            continue
+        if _is_hero_engine_token(san):
+            if pending_cha:
+                out_lines.append({"engine_no": san, "chassis_no": pending_cha, "status": "queued"})
+                pending_cha = None
+            continue
+        # Unknown token: drop orphan chassis so a later MB row can pair cleanly
+        if pending_cha:
+            pending_cha = None
+
+    inv_one = _dominant_invoice_from_tokens(invoices)
+    return out_lines, inv_one
+
+
+def _parse_horizontal_model_details_lines(full_text: str) -> tuple[list[dict[str, str]], str | None]:
+    """One logical row per LINE: ``<invoice> <frame> <engine> …`` (whitespace-separated)."""
+    out_lines: list[dict[str, str]] = []
+    invoices: list[str] = []
+    for raw in full_text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = re.split(r"\s+", line)
+        off = _model_details_column_offset(parts)
+        if off is None:
+            continue
+        inv = sanitize_challan_line_field(parts[off] or "")
+        cha = sanitize_challan_line_field(parts[off + 1] or "")
+        eng = sanitize_challan_line_field(parts[off + 2] or "")
+        if not eng and not cha:
+            continue
+        out_lines.append({"engine_no": eng, "chassis_no": cha, "status": "queued"})
+        if inv:
+            invoices.append(inv)
+    inv_one = _dominant_invoice_from_tokens(invoices)
+    return out_lines, inv_one
+
+
+def _fallback_lines_from_full_text(full_text: str) -> tuple[list[dict[str, str]], str | None]:
+    """
+    When Textract TABLE blocks are missing or do not match, parse LINE-style ``full_text``.
+
+    Tries **vertical** (one cell per line, Model Details column order) first, then **horizontal**
+    (all columns on one LINE).
+    """
+    v_lines, v_inv = _parse_vertical_model_details_lines(full_text)
+    if v_lines:
+        return v_lines, v_inv
+    return _parse_horizontal_model_details_lines(full_text)
 
 
 def _invoice_column_index(header_row: list[str]) -> int | None:
@@ -358,6 +645,11 @@ def parse_subdealer_challan(
     iso, ddmmyyyy = parse_challan_date_to_iso(date_raw)
 
     lines: list[dict[str, str]] = []
+    dup_n = 0
+    used_line_fallback = False
+    used_table_loose = False
+    fallback_inv: str | None = None
+
     found = _find_engine_chassis_table(tables)
     if found:
         grid, hi = found
@@ -369,9 +661,46 @@ def parse_subdealer_challan(
             )
         if not challan_no:
             challan_no = _challan_no_from_repeated_invoice(grid, hi)
-    else:
+
+    if not lines:
+        loose = _find_loose_model_details_table(tables)
+        if loose is not None:
+            grid_l, sr, ei, ci = loose
+            lines = _rows_from_table_merged_headers(grid_l, sr, ei, ci)
+            used_table_loose = True
+            lines, dup_loose = dedupe_challan_lines(lines)
+            dup_n += dup_loose
+            if dup_loose:
+                out["warnings"].append(
+                    f"Removed {dup_loose} duplicate row(s) with the same engine and chassis numbers."
+                )
+            if not challan_no:
+                challan_no = _invoice_from_table_column_zero(grid_l, sr)
+
+    if not lines:
+        fb_lines, fallback_inv = _fallback_lines_from_full_text(full_text)
+        if fb_lines:
+            used_line_fallback = True
+            lines, dup_n_fb = dedupe_challan_lines(fb_lines)
+            dup_n += dup_n_fb
+            if dup_n_fb:
+                out["warnings"].append(
+                    f"Removed {dup_n_fb} duplicate row(s) with the same engine and chassis numbers."
+                )
+        if not challan_no and fallback_inv:
+            challan_no = fallback_inv
+
+    if not lines:
         out["warnings"].append(
-            "No table with Engine and Chassis/Frame/VIN headers found; lines empty."
+            "No vehicle rows could be extracted (no matching Textract TABLE and no Model Details LINE layout)."
+        )
+    elif used_table_loose:
+        out["warnings"].append(
+            "Vehicle rows parsed from Textract TABLE (merged Model Details headers / cells); verify before submitting."
+        )
+    elif used_line_fallback:
+        out["warnings"].append(
+            "Vehicle rows were parsed from LINE text because Textract TABLE blocks did not match; verify before submitting."
         )
 
     if not challan_no:

@@ -131,18 +131,29 @@ FunctionEnd
   CreateDirectory "$R5\scanner\landing"
   CreateDirectory "$R5\scanner\processed"
   CreateDirectory "$R5\logs"
-  IfFileExists "$R5\.env" sdr_envok
-  FileOpen $9 "$R5\.env" w
-  FileWrite $9 "# Dealer Saathi — created by installer (local Playwright / IPC fallback).$\r$\n"
-  FileWrite $9 "# API-first site URLs use the cloud; edit here only if needed.$\r$\n"
-  FileWrite $9 "# Production DMS gates (Create Invoice auto-click, etc.); see backend app.config ENVIRONMENT_IS_PRODUCTION.$\r$\n"
-  FileWrite $9 "ENVIRONMENT=PROD$\r$\n"
-  FileWrite $9 "DMS_MODE=real$\r$\n"
-  FileWrite $9 "DMS_BASE_URL=https://connect.heromotocorp.biz/edealerHMCL_enu?SWECmd=Start$\r$\n"
-  FileWrite $9 "INSURANCE_BASE_URL=https://heroinsurance.com/misp-partner-login$\r$\n"
-  FileWrite $9 "VAHAN_BASE_URL=https://vahan.parivahan.gov.in/vahan/vahan/ui/login/login.xhtml$\r$\n"
-  FileClose $9
-sdr_envok:
+  ; New .env: write full seed. Existing .env: skip seed but still ensure ENVIRONMENT= (upgrades).
+  IfFileExists "$R5\.env" sdr_env_exists
+    FileOpen $9 "$R5\.env" w
+    FileWrite $9 "# Dealer Saathi — created by installer (local Playwright / IPC fallback).$\r$\n"
+    FileWrite $9 "# API-first site URLs use the cloud; edit here only if needed.$\r$\n"
+    FileWrite $9 "# Production DMS gates (Create Invoice auto-click, etc.); see backend app.config ENVIRONMENT_IS_PRODUCTION.$\r$\n"
+    FileWrite $9 "ENVIRONMENT=PROD$\r$\n"
+    FileWrite $9 "DMS_MODE=real$\r$\n"
+    FileWrite $9 "DMS_BASE_URL=https://connect.heromotocorp.biz/edealerHMCL_enu?SWECmd=Start$\r$\n"
+    FileWrite $9 "INSURANCE_BASE_URL=https://heroinsurance.com/misp-partner-login$\r$\n"
+    FileWrite $9 "VAHAN_BASE_URL=https://vahan.parivahan.gov.in/vahan/vahan/ui/login/login.xhtml$\r$\n"
+    FileClose $9
+    Goto sdr_env_merge_done
+  sdr_env_exists:
+    ; findstr exit 0 = line containing ENVIRONMENT= exists; 1 = not found
+    ExecWait '"$SYSDIR\findstr.exe" /I /L /C:ENVIRONMENT= "$R5\.env"' $0
+    IntCmp $0 0 sdr_env_merge_done 0 sdr_env_append_env
+  sdr_env_append_env:
+    FileOpen $9 "$R5\.env" a
+    FileWrite $9 "$\r$\n# Production DMS gates (Create Invoice auto-click, etc.); see backend app.config ENVIRONMENT_IS_PRODUCTION.$\r$\n"
+    FileWrite $9 "ENVIRONMENT=PROD$\r$\n"
+    FileClose $9
+  sdr_env_merge_done:
   ; Sidecar Playwright Chromium (~300MB). Same path as job_runner frozen mode: $R5\playwright-browsers
   IfFileExists "$INSTDIR\resources\sidecar\job_runner.exe" sdr_pw_run sdr_pw_skip
   sdr_pw_run:

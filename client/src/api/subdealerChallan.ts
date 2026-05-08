@@ -27,7 +27,7 @@ export type ParseSubdealerChallanResponse = {
   artifact_dir: string | null;
   raw_ocr_path: string | null;
   ocr_json_path: string | null;
-  /** Present when ``?mirror_bodies=true`` (Electron): folder leaf under ``ocr_output/{dealer_id}/subdealer_challan/`` on dealer PC. */
+  /** Present when ``?mirror_bodies=true`` (Electron): folder leaf under ``Challans/<leaf>/`` on dealer PC (same as ``CHALLANS_DIR`` on server). */
   local_artifact_leaf?: string | null;
   raw_ocr_text?: string | null;
   ocr_json_text?: string | null;
@@ -40,7 +40,7 @@ function _pad2(n: number): string {
 }
 
 /**
- * Folder leaf under ``ocr_output/{dealer_id}/`` — matches backend ``challan_artifact_leaf_name`` / ``_challan_folder_name``.
+ * Folder leaf under ``Challans/<leaf>/`` — matches backend ``challan_artifact_leaf_name`` / ``_challan_folder_name``.
  */
 export function computeLocalChallanArtifactLeaf(r: ParseSubdealerChallanResponse): string {
   let ddmmyyyy = (r.challan_ddmmyyyy || "").trim();

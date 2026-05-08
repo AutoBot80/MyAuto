@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import (
+    CHALLANS_DIR,
     S3_CHALLANS_PREFIX,
     S3_DATA_BUCKET,
     S3_OCR_PREFIX,
@@ -29,6 +30,12 @@ def uploads_s3_key(dealer_id: int, *relative_parts: str) -> str:
 def ocr_s3_key(dealer_id: int, *relative_parts: str) -> str:
     parts = [p.replace("\\", "/").strip("/") for p in relative_parts if p and str(p).strip()]
     return f"{S3_OCR_PREFIX}/{int(dealer_id)}/" + "/".join(parts)
+
+
+def challans_s3_key(*relative_parts: str) -> str:
+    """Global challans prefix (no per-dealer segment)."""
+    parts = [p.replace("\\", "/").strip("/") for p in relative_parts if p and str(p).strip()]
+    return f"{S3_CHALLANS_PREFIX}/" + "/".join(parts)
 
 
 def _relative_under(base: Path, file_path: Path) -> str | None:
@@ -95,6 +102,35 @@ def sync_ocr_subfolder_to_s3(dealer_id: int, subfolder: str) -> None:
     for f in base.rglob("*"):
         if f.is_file():
             sync_ocr_file_to_s3(dealer_id, f)
+
+
+def sync_challans_file_to_s3(file_path: Path) -> None:
+    """Upload a single file under ``CHALLANS_DIR`` to S3 (``S3_CHALLANS_PREFIX``)."""
+    if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
+        return
+    base = CHALLANS_DIR.resolve()
+    rel = _relative_under(base, file_path)
+    if rel is None:
+        return
+    if not file_path.is_file():
+        return
+    key = challans_s3_key(*rel.split("/"))
+    try:
+        s3_storage.upload_file(file_path, key)
+    except Exception:
+        logger.exception("dealer_storage: failed to sync challans file to S3: %s", file_path)
+
+
+def sync_challans_subfolder_to_s3(subfolder: str) -> None:
+    """Upload all files under ``CHALLANS_DIR/{subfolder}/`` recursively."""
+    if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
+        return
+    base = CHALLANS_DIR / subfolder.strip().replace("\\", "/")
+    if not base.is_dir():
+        return
+    for f in base.rglob("*"):
+        if f.is_file():
+            sync_challans_file_to_s3(f)
 
 
 def ensure_uploads_local_file(dealer_id: int, subfolder: str, filename: str) -> Path | None:

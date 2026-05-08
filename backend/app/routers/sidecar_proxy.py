@@ -9,7 +9,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/insurance/commit``  → insert/update insurance_master
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
   - ``/sidecar/vahan/row-result``  → report per-row result (completed/failed/pending)
-  - ``/sidecar/upload-artifacts`` → multipart upload of one file into uploads or ocr tree (syncs to S3)
+  - ``/sidecar/upload-artifacts`` → multipart upload into uploads, ocr, or challans tree (syncs to S3)
   - ``/sidecar/subdealer-challan/*`` → resolve / per-line prepare / order-context / finalize (no local ``DATABASE_URL``)
 
 All endpoints are JWT-protected via ``get_principal`` / ``resolve_dealer_id``.
@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.config import (
+    CHALLANS_DIR,
     DMS_BASE_URL,
     INSURANCE_BASE_URL,
     VAHAN_BASE_URL,
@@ -36,7 +37,11 @@ from app.config import (
 from app.db import get_connection
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
-from app.services.dealer_storage import sync_ocr_file_to_s3, sync_uploads_file_to_s3
+from app.services.dealer_storage import (
+    sync_challans_file_to_s3,
+    sync_ocr_file_to_s3,
+    sync_uploads_file_to_s3,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -531,14 +536,19 @@ async def upload_artifacts(
 ) -> UploadArtifactResponse:
     """
     Multipart upload of one file from the dealer PC Playwright run. Writes under
-    ``get_uploads_dir`` or ``get_ocr_output_dir`` and syncs to S3 when configured.
+    ``get_uploads_dir``, ``get_ocr_output_dir``, or ``CHALLANS_DIR`` and syncs to S3 when configured.
     """
     did = resolve_dealer_id(principal, dealer_id)
     t = (tree or "").strip().lower()
-    if t not in ("uploads", "ocr"):
-        raise HTTPException(status_code=400, detail='tree must be "uploads" or "ocr"')
+    if t not in ("uploads", "ocr", "challans"):
+        raise HTTPException(status_code=400, detail='tree must be "uploads", "ocr", or "challans"')
     safe_rel = _sanitize_sidecar_rel_path(rel_path)
-    root = get_uploads_dir(did) if t == "uploads" else get_ocr_output_dir(did)
+    if t == "uploads":
+        root = get_uploads_dir(did)
+    elif t == "ocr":
+        root = get_ocr_output_dir(did)
+    else:
+        root = CHALLANS_DIR
     dest = root / safe_rel
     try:
         dest = dest.resolve()
@@ -555,8 +565,10 @@ async def upload_artifacts(
     dest.write_bytes(body)
     if t == "uploads":
         sync_uploads_file_to_s3(did, dest)
-    else:
+    elif t == "ocr":
         sync_ocr_file_to_s3(did, dest)
+    else:
+        sync_challans_file_to_s3(dest)
     return UploadArtifactResponse(ok=True, rel_path=safe_rel, tree=t)
 
 
