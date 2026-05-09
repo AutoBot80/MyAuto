@@ -323,7 +323,13 @@ def _run_order_phase(
         return out_partial, str(frag.get("error"))
 
     veh_out = dict(frag.get("vehicle") or {})
-    update_inventory_ex_showroom_from_order_scrape(inv_ids, veh_out)
+    try:
+        update_inventory_ex_showroom_from_order_scrape(inv_ids, veh_out)
+    except Exception:
+        logger.exception(
+            "_run_order_phase: ex_showroom update raised (continuing to commit) batch=%s",
+            challan_batch_id,
+        )
 
     oid = (veh_out.get("order_number") or "").strip() or None
     iid_inv = (veh_out.get("invoice_number") or "").strip() or None
@@ -543,9 +549,15 @@ def sidecar_finalize_order_playwright_result(
         "vehicle": {},
         "dms_step_messages": [],
     }
+    logger.info(
+        "finalize_order: start batch=%s dealer_id=%s",
+        challan_batch_id,
+        dealer_id,
+    )
     rows = detail_repo.fetch_batch_rows(challan_batch_id)
     if not rows:
         out["error"] = "No staging rows for this batch."
+        logger.warning("finalize_order: batch=%s — %s", challan_batch_id, out["error"])
         return out
     from_dealer_id = int(rows[0]["from_dealer_id"])
     to_dealer_id = int(rows[0]["to_dealer_id"])
@@ -556,12 +568,20 @@ def sidecar_finalize_order_playwright_result(
 
     if int(from_dealer_id) != int(dealer_id):
         out["error"] = "Session dealer does not match batch from_dealer_id."
+        logger.warning(
+            "finalize_order: batch=%s — %s (session=%s from_batch=%s)",
+            challan_batch_id,
+            out["error"],
+            dealer_id,
+            from_dealer_id,
+        )
         return out
 
     inv_ids = [int(r["inventory_line_id"]) for r in rows if r.get("inventory_line_id")]
     if not inv_ids:
         out["error"] = "No inventory_line_id on staging rows; complete prepare_vehicle first."
         master_repo.touch_last_run_at(challan_batch_id)
+        logger.warning("finalize_order: batch=%s — %s", challan_batch_id, out["error"])
         return out
 
     veh_partial = dict(playwright_result.get("vehicle") or {})
@@ -573,9 +593,16 @@ def sidecar_finalize_order_playwright_result(
         master_repo.set_invoice_state(challan_batch_id, invoice_status="Failed", invoice_complete=False)
         master_repo.touch_last_run_at(challan_batch_id)
         out["error"] = str(err)
+        logger.warning("finalize_order: batch=%s — playwright error=%r", challan_batch_id, out["error"])
         return out
 
-    update_inventory_ex_showroom_from_order_scrape(inv_ids, veh_partial)
+    try:
+        update_inventory_ex_showroom_from_order_scrape(inv_ids, veh_partial)
+    except Exception:
+        logger.exception(
+            "finalize_order: ex_showroom update raised (continuing to commit) batch=%s",
+            challan_batch_id,
+        )
 
     oid = (veh_partial.get("order_number") or "").strip() or None
     iid_inv = (veh_partial.get("invoice_number") or "").strip() or None
@@ -585,6 +612,13 @@ def sidecar_finalize_order_playwright_result(
     raw_tcp = mhead.get("transport_cost_per_vehicle")
     tcp_fin = float(raw_tcp) if raw_tcp is not None else None
 
+    logger.info(
+        "finalize_order: committing challan_master batch=%s lines=%s order=%r invoice=%r",
+        challan_batch_id,
+        len(inv_ids),
+        oid,
+        iid_inv,
+    )
     cid = commit_challan_masters(
         challan_date=cd,
         challan_book_num=cb,
@@ -614,6 +648,12 @@ def sidecar_finalize_order_playwright_result(
     master_repo.touch_last_run_at(challan_batch_id)
     out["ok"] = True
     out["error"] = None
+    logger.info(
+        "finalize_order: ok batch=%s challan_id=%s invoice_status=%s",
+        challan_batch_id,
+        cid,
+        "Completed" if inv_num_ok else "Pending",
+    )
     return out
 
 

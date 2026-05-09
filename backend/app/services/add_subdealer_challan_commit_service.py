@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 from app.db import get_connection
 from app.repositories.vehicle_inventory import update_discount_and_ex_showroom
+
+logger = logging.getLogger(__name__)
 
 
 def commit_challan_masters(
@@ -97,39 +100,76 @@ def commit_challan_masters(
         conn.close()
 
 
+def _coerce_ex_showroom_scalar(val: Any) -> float | None:
+    if val is None:
+        return None
+    s = str(val).replace(",", "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ex_showroom_from_line_item_dict(item: dict[str, Any]) -> float | None:
+    """Prefer subdealer challan key ``vehicle_ex_showroom_cost``, then legacy scrape keys."""
+    for key in ("vehicle_ex_showroom_cost", "ex_showroom", "price", "total"):
+        px = _coerce_ex_showroom_scalar(item.get(key))
+        if px is not None:
+            return px
+    return None
+
+
 def update_inventory_ex_showroom_from_order_scrape(
     inventory_line_ids: list[int],
     vehicle_out: dict[str, Any],
 ) -> None:
     """
     Best-effort: map per-line ex-showroom from ``order_line_ex_showroom`` when present on scrape.
-    Expected shapes: list of dicts with chassis/vin + price, or dict keyed by chassis — depends on DMS scrape.
+    Never raises: failures are logged and skipped.
     """
-    raw = vehicle_out.get("order_line_ex_showroom")
-    if raw is None:
-        return
-    # Minimal: single total on vehicle_price updates all lines equally (fallback).
-    vp = vehicle_out.get("vehicle_price") or vehicle_out.get("total_amount")
-    if vp and not isinstance(raw, (list, dict)):
-        try:
-            px = float(str(vp).replace(",", "").strip())
-        except (TypeError, ValueError):
+    try:
+        raw = vehicle_out.get("order_line_ex_showroom")
+        if raw is None:
             return
-        for iid in inventory_line_ids:
-            update_discount_and_ex_showroom(iid, ex_showroom_price=px)
-        return
-
-    if isinstance(raw, list):
-        for i, iid in enumerate(inventory_line_ids):
-            if i >= len(raw):
-                break
-            item = raw[i]
-            if isinstance(item, dict):
-                pr = item.get("ex_showroom") or item.get("price") or item.get("total")
-            else:
+        # Minimal: single total on vehicle_price updates all lines equally (fallback).
+        vp = vehicle_out.get("vehicle_price") or vehicle_out.get("total_amount")
+        if vp and not isinstance(raw, (list, dict)):
+            try:
+                px = float(str(vp).replace(",", "").strip())
+            except (TypeError, ValueError):
+                return
+            for iid in inventory_line_ids:
                 try:
-                    pr = float(str(item).replace(",", ""))
-                except (TypeError, ValueError):
+                    update_discount_and_ex_showroom(int(iid), ex_showroom_price=px)
+                except Exception as exc:
+                    logger.warning(
+                        "update_inventory_ex_showroom_from_order_scrape: line update failed iid=%s: %s",
+                        iid,
+                        exc,
+                    )
+            return
+
+        if isinstance(raw, list):
+            for i, iid in enumerate(inventory_line_ids):
+                if i >= len(raw):
+                    break
+                item = raw[i]
+                pr: float | None = None
+                if isinstance(item, dict):
+                    pr = _ex_showroom_from_line_item_dict(item)
+                else:
+                    pr = _coerce_ex_showroom_scalar(item)
+                if pr is None:
                     continue
-            if pr is not None:
-                update_discount_and_ex_showroom(int(iid), ex_showroom_price=float(pr))
+                try:
+                    update_discount_and_ex_showroom(int(iid), ex_showroom_price=float(pr))
+                except Exception as exc:
+                    logger.warning(
+                        "update_inventory_ex_showroom_from_order_scrape: line update failed iid=%s: %s",
+                        iid,
+                        exc,
+                    )
+    except Exception as exc:
+        logger.warning("update_inventory_ex_showroom_from_order_scrape: skipped: %s", exc)

@@ -458,24 +458,52 @@ def _invoice_column_index(header_row: list[str]) -> int | None:
     return None
 
 
+_INVOICE_COLUMN_LOOKBACK = 4
+
+
+def _invoice_column_index_for_table(table: list[list[str]], header_row_index: int) -> int | None:
+    """
+    Column index for excise invoice values on data rows. Textract often splits labels across rows:
+    the Engine/Frame header row may be ``<sample_id> | Frame No | Engine No | Material`` with no
+    ``Excise Invoice`` text on that row. Scan upward for a row that names the invoice column, then
+    fall back to column 0 when that row is a hybrid (titles + sample ID in the first cell).
+    """
+    lo = max(0, header_row_index - _INVOICE_COLUMN_LOOKBACK)
+    for ri in range(header_row_index, lo - 1, -1):
+        if ri < 0 or ri >= len(table):
+            continue
+        inv_i = _invoice_column_index(table[ri])
+        if inv_i is not None:
+            return inv_i
+    if header_row_index < len(table):
+        row = table[header_row_index]
+        if not row:
+            return None
+        joined = " ".join(str(c or "") for c in row).lower()
+        if "frame" in joined and "engine" in joined:
+            v0 = sanitize_challan_line_field(row[0] or "")
+            if v0 and _is_excise_invoice_like_token(v0):
+                return 0
+    return None
+
+
 def _challan_no_from_repeated_invoice(table: list[list[str]], header_row_index: int) -> str | None:
     """
-    If every non-empty body cell in the invoice column sanitizes to the same value, return it.
+    Book number from the invoice column on body rows. Resolves the column when labels sit on
+    rows above the Frame/Engine header, and uses dominant voting so OCR variants (e.g. ``3U`` vs
+    truncated ``U``) still resolve when one token clearly repeats.
     """
-    header = table[header_row_index]
-    inv_i = _invoice_column_index(header)
+    inv_i = _invoice_column_index_for_table(table, header_row_index)
     if inv_i is None:
         return None
-    seen: set[str] = set()
+    vals: list[str] = []
     for row in table[header_row_index + 1 :]:
         if inv_i >= len(row):
             continue
         v = sanitize_challan_line_field(row[inv_i] or "")
         if v:
-            seen.add(v)
-    if len(seen) == 1:
-        return next(iter(seen))
-    return None
+            vals.append(v)
+    return _dominant_invoice_from_tokens(vals)
 
 
 def _ist_now() -> datetime:

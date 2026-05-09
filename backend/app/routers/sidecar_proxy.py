@@ -840,6 +840,13 @@ async def subdealer_challan_finalize_order(
         )
 
     err = out.get("error")
+    if not out.get("ok"):
+        logger.warning(
+            "subdealer_challan finalize-order: ok=False batch=%s dealer_id=%s error=%r",
+            bid,
+            int(did),
+            err,
+        )
     return SubdealerChallanFinalizeOrderResponse(
         ok=bool(out.get("ok")),
         error=str(err) if err else None,

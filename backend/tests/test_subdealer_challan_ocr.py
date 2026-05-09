@@ -232,6 +232,36 @@ class TestInvoiceChallanFallback(unittest.TestCase):
         ]
         self.assertIsNone(_challan_no_from_repeated_invoice(grid, 0))
 
+    def test_hybrid_header_row_finds_invoice_column(self) -> None:
+        """Excise label on row above ``<id> | Frame No | Engine No`` (Textract split layout)."""
+        inv = "3U2603006451"
+        grid = [
+            ["Model Details Table", "", "", ""],
+            ["Excise Invoice", "", "", ""],
+            [inv, "Frame No", "Engine No", "Material"],
+            [inv, "MBLHAW332THE08873", "HA11FBTHE09177", "HSPPLHRSCFIBHG"],
+            [inv, "MBLHAW334THE07594", "HA11FBTHE08084", "HSPPLHRSCFIBHG"],
+            [inv, "MBLHAW335THE08897", "HA11FBTHE09217", "HSPPLHRSCFIBHG"],
+        ]
+        self.assertEqual(_challan_no_from_repeated_invoice(grid, 2), inv)
+
+    def test_mixed_full_and_truncated_invoice_majority(self) -> None:
+        """Leading digit dropped on some rows; dominant token should be the full book number."""
+        inv_full = "3U2603006451"
+        inv_short = "U2603006451"
+        body = [[inv_full, "MBLHAW332THE08873", "HA11FBTHE09177", "HSPPLHRSCFIBHG"]] * 8
+        body += [
+            [inv_short, "MBLHAW493THE02860", "HA11F9THE02913", "HSPLMTRSCFIRBK"],
+            [inv_short, "MBLHAW495THE02519", "HA11F9THE02665", "HSPLMTRSCFIRBK"],
+        ]
+        grid = [
+            ["Model Details Table", "", "", ""],
+            ["Excise Invoice", "", "", ""],
+            [inv_full, "Frame No", "Engine No", "Material"],
+            *body,
+        ]
+        self.assertEqual(_challan_no_from_repeated_invoice(grid, 2), inv_full)
+
 
 class TestParseSubdealerChallanMergedTable(unittest.TestCase):
     @patch("app.services.subdealer_challan_ocr_service.extract_challan_textract")
@@ -300,6 +330,40 @@ class TestParseSubdealerChallanMocked(unittest.TestCase):
             out = parse_subdealer_challan(b"x", write_artifacts=False)
         self.assertEqual(out["challan_no"], "5V2605002394")
         self.assertEqual(len(out["lines"]), 2)
+
+    @patch("app.services.subdealer_challan_ocr_service.extract_challan_textract")
+    def test_parse_hybrid_model_details_table_book_number(self, mock_tx) -> None:
+        """End-to-end: strict table match on hybrid header + dominant invoice (real OCR shape)."""
+        inv = "3U2603006451"
+        body_same = [
+            [inv, "MBLHAW332THE08873", "HA11FBTHE09177", "HSPPLHRSCFIBHG"],
+            [inv, "MBLHAW334THE07594", "HA11FBTHE08084", "HSPPLHRSCFIBHG"],
+        ]
+        body_same *= 4  # 8 rows with full book id (>=72% vs 2 truncated)
+        body_mix = [
+            ["U2603006451", "MBLHAW493THE02860", "HA11F9THE02913", "HSPLMTRSCFIRBK"],
+            ["U2603006451", "MBLHAW495THE02519", "HA11F9THE02665", "HSPLMTRSCFIRBK"],
+        ]
+        tbl = [
+            ["Model Details Table", "", "", ""],
+            ["Excise Invoice", "", "", ""],
+            [inv, "Frame No", "Engine No", "Material"],
+            *body_same,
+            *body_mix,
+        ]
+        mock_tx.return_value = {
+            "error": None,
+            "full_text": "",
+            "key_value_pairs": [],
+            "tables": [tbl],
+        }
+        with patch("app.services.subdealer_challan_ocr_service._ist_now") as mock_ist:
+            mock_ist.return_value = datetime(2026, 5, 9, 12, 0, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+            out = parse_subdealer_challan(b"x", write_artifacts=False)
+        self.assertEqual(out.get("error"), None)
+        self.assertEqual(out["challan_no"], inv)
+        # Repeated MB/HA pairs dedupe to two rows; plus two distinct truncated-ID rows.
+        self.assertEqual(len(out["lines"]), 4)
 
 
 if __name__ == "__main__":

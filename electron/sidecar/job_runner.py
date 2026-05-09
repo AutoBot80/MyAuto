@@ -1319,7 +1319,34 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             content_frame_selector=pkg.get("content_frame_selector"),
             execution_log_path=log_path,
         )
-    
+
+        def _append_finalize_challan_log(
+            fin_result: dict | None,
+            *,
+            http_exc: BaseException | None = None,
+        ) -> None:
+            try:
+                ts = _ts_ist_iso()
+                with log_path.open("a", encoding="utf-8") as lf:
+                    lf.write("\n--- subdealer challan finalize_order (API response) ---\n")
+                    if http_exc is not None:
+                        lf.write(f"{ts} [NOTE] finalize-order request failed: {http_exc!s}\n")
+                    elif fin_result is not None:
+                        lf.write(
+                            f"{ts} [NOTE] ok={fin_result.get('ok')} error={fin_result.get('error')!r} "
+                            f"challan_id={fin_result.get('challan_id')!r}\n"
+                        )
+                        veh = fin_result.get("vehicle") if isinstance(fin_result.get("vehicle"), dict) else {}
+                        if isinstance(veh, dict):
+                            lf.write(
+                                f"{ts} [NOTE] vehicle order_number="
+                                f"{str(veh.get('order_number') or '')[:160]!r} "
+                                f"invoice_number={str(veh.get('invoice_number') or '')[:160]!r}\n"
+                            )
+                    lf.flush()
+            except OSError:
+                pass
+
         try:
             fin = _api_post(
                 api_url,
@@ -1332,7 +1359,9 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
                 },
                 timeout=120,
             )
+            _append_finalize_challan_log(fin)
         except Exception as exc:
+            _append_finalize_challan_log(None, http_exc=exc)
             return {
                 "ok": False,
                 "error": f"finalize-order: {exc}",

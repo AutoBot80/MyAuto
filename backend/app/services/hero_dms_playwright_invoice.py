@@ -2809,72 +2809,75 @@ def _attach_vehicle_to_bkg(
             return False, f"Siebel error after Allocate All: {_aa_err[:200]}", {}
 
         _extra: dict = {}
-        _safe_page_wait(page, 1200, log_label="after_allocate_all_before_ex_showroom_scrape")
-        _scroll_line_items_grid_right()
-        _safe_page_wait(page, 300, log_label="after_scroll_right_for_ex_showroom")
-        _n_lines = len(_line_items)
-        if _n_lines > 1:
-            _rows_out: list[dict[str, str]] = []
-            for _rn in range(1, _n_lines + 1):
-                _vin_rb = _read_vin_from_order_line_row(
-                    page, row_n=_rn, content_frame_selector=content_frame_selector
-                )
-                _ex_r = _scrape_ex_showroom_for_order_line_row(
-                    page, row_n=_rn, content_frame_selector=content_frame_selector
-                )
-                _exp_ch = (_line_items[_rn - 1].get("full_chassis") or "").strip()
-                _rows_out.append(
-                    {
-                        "full_chassis": (_vin_rb.strip() or _exp_ch),
-                        "vehicle_ex_showroom_cost": (_ex_r or "").strip(),
-                    }
-                )
-                if _ex_r and _looks_like_ex_showroom_price(_ex_r):
+        try:
+            _safe_page_wait(page, 1200, log_label="after_allocate_all_before_ex_showroom_scrape")
+            _scroll_line_items_grid_right()
+            _safe_page_wait(page, 300, log_label="after_scroll_right_for_ex_showroom")
+            _n_lines = len(_line_items)
+            if _n_lines > 1:
+                _rows_out: list[dict[str, str]] = []
+                for _rn in range(1, _n_lines + 1):
+                    _vin_rb = _read_vin_from_order_line_row(
+                        page, row_n=_rn, content_frame_selector=content_frame_selector
+                    )
+                    _ex_r = _scrape_ex_showroom_for_order_line_row(
+                        page, row_n=_rn, content_frame_selector=content_frame_selector
+                    )
+                    _exp_ch = (_line_items[_rn - 1].get("full_chassis") or "").strip()
+                    _rows_out.append(
+                        {
+                            "full_chassis": (_vin_rb.strip() or _exp_ch),
+                            "vehicle_ex_showroom_cost": (_ex_r or "").strip(),
+                        }
+                    )
+                    if _ex_r and _looks_like_ex_showroom_price(_ex_r):
+                        note(
+                            f"attach_vehicle_to_bkg: row {_rn} Ex-showroom={_ex_r!r}, VIN readback={_vin_rb!r}."
+                        )
+                    else:
+                        note(
+                            f"attach_vehicle_to_bkg: row {_rn} Ex-showroom missing or not numeric ({_ex_r!r}); "
+                            f"VIN readback={_vin_rb!r}."
+                        )
+                _extra["order_line_ex_showroom"] = _rows_out
+                _first_price = ""
+                for _r in _rows_out:
+                    _p = (_r.get("vehicle_ex_showroom_cost") or "").strip()
+                    if _p and _looks_like_ex_showroom_price(_p):
+                        _first_price = _p
+                        break
+                if _first_price:
+                    _extra["vehicle_ex_showroom_cost"] = _first_price
+                    _extra["vehicle_price"] = _first_price
                     note(
-                        f"attach_vehicle_to_bkg: row {_rn} Ex-showroom={_ex_r!r}, VIN readback={_vin_rb!r}."
+                        f"attach_vehicle_to_bkg: primary Total (Ex-showroom) from first valid line={_first_price!r}."
                     )
                 else:
                     note(
-                        f"attach_vehicle_to_bkg: row {_rn} Ex-showroom missing or not numeric ({_ex_r!r}); "
-                        f"VIN readback={_vin_rb!r}."
+                        "attach_vehicle_to_bkg: no per-row Ex-showroom passed validation after multi-line scrape "
+                        "(best-effort)."
                     )
-            _extra["order_line_ex_showroom"] = _rows_out
-            _first_price = ""
-            for _r in _rows_out:
-                _p = (_r.get("vehicle_ex_showroom_cost") or "").strip()
-                if _p and _looks_like_ex_showroom_price(_p):
-                    _first_price = _p
-                    break
-            if _first_price:
-                _extra["vehicle_ex_showroom_cost"] = _first_price
-                _extra["vehicle_price"] = _first_price
-                note(
-                    f"attach_vehicle_to_bkg: primary Total (Ex-showroom) from first valid line={_first_price!r}."
-                )
             else:
-                note(
-                    "attach_vehicle_to_bkg: no per-row Ex-showroom passed validation after multi-line scrape "
-                    "(best-effort)."
+                _ex_raw = _scrape_total_ex_showroom_after_price_allocate(
+                    page, content_frame_selector=content_frame_selector
                 )
-        else:
-            _ex_raw = _scrape_total_ex_showroom_after_price_allocate(
-                page, content_frame_selector=content_frame_selector
-            )
-            if _ex_raw and _looks_like_ex_showroom_price(_ex_raw):
-                _extra["vehicle_ex_showroom_cost"] = _ex_raw
-                _extra["vehicle_price"] = _ex_raw
-                _extra["order_line_ex_showroom"] = [
-                    {
-                        "full_chassis": (_line_items[0].get("full_chassis") or "").strip(),
-                        "vehicle_ex_showroom_cost": _ex_raw,
-                    }
-                ]
-                note(f"attach_vehicle_to_bkg: scraped Total (Ex-showroom)={_ex_raw!r} after Price All + Allocate All.")
-            else:
-                note(
-                    "attach_vehicle_to_bkg: Total (Ex-showroom) not scraped or not numeric after Allocate All "
-                    "(best-effort)."
-                )
+                if _ex_raw and _looks_like_ex_showroom_price(_ex_raw):
+                    _extra["vehicle_ex_showroom_cost"] = _ex_raw
+                    _extra["vehicle_price"] = _ex_raw
+                    _extra["order_line_ex_showroom"] = [
+                        {
+                            "full_chassis": (_line_items[0].get("full_chassis") or "").strip(),
+                            "vehicle_ex_showroom_cost": _ex_raw,
+                        }
+                    ]
+                    note(f"attach_vehicle_to_bkg: scraped Total (Ex-showroom)={_ex_raw!r} after Price All + Allocate All.")
+                else:
+                    note(
+                        "attach_vehicle_to_bkg: Total (Ex-showroom) not scraped or not numeric after Allocate All "
+                        "(best-effort)."
+                    )
+        except Exception as _ex_scrape_exc:
+            note(f"attach_vehicle_to_bkg: ex-showroom scrape skipped after exception (best-effort): {_ex_scrape_exc!r}")
 
         if _fin:
             _fo_post, _fe_post = _fill_order_finance_after_vin_attach(
@@ -3670,6 +3673,26 @@ def _create_order(
                 continue
         return ""
 
+    def _poll_invoice_number_loops_only() -> str:
+        """Up to 20×1s wait then scrape Invoice# each time (caller supplies any prior settle wait)."""
+        note("Create Order: polling Invoice# (up to 20×1s).")
+        inv_got = ""
+        for _inv_i in range(20):
+            _safe_page_wait(page, 1000, log_label=f"invoice_poll_wait_{_inv_i}")
+            try:
+                inv_got = (_scrape_invoice_number_current() or "").strip()
+            except Exception as _inv_exc:
+                note(f"Create Order: Invoice# scrape attempt {_inv_i + 1}/20 raised {_inv_exc!r} (ignored).")
+                inv_got = ""
+            if inv_got:
+                note(
+                    f"Create Order: scraped Invoice#={inv_got!r} after "
+                    f"{_inv_i + 1}×1s poll wait(s)."
+                )
+                return inv_got
+        note("Create Order: Invoice# not on screen or not readable after 20×1s poll (best-effort).")
+        return ""
+
     if callable(form_trace):
         form_trace(
             "v4_create_order",
@@ -3780,7 +3803,7 @@ def _create_order(
             order_ref = _scrape_order_number_current()
             if order_ref:
                 scraped["order_number"] = order_ref
-            inv_no = _scrape_invoice_number_current()
+            inv_no = _poll_invoice_number_loops_only()
             scraped["invoice_number"] = (inv_no or scraped.get("invoice_number") or "")
             if callable(form_trace):
                 form_trace(
@@ -4922,12 +4945,8 @@ def _create_order(
             scraped["order_number"] = order_ref
             if order_ref != order_no:
                 note(f"Create Order: refreshed Order#={order_ref!r} after header drill-down.")
-        inv_no = _scrape_invoice_number_current()
+        inv_no = _poll_invoice_number_loops_only()
         scraped["invoice_number"] = inv_no or ""
-        if inv_no:
-            note(f"Create Order: scraped Invoice#={inv_no!r} after drill-down.")
-        else:
-            note("Create Order: Invoice# not on screen or not readable yet (best-effort).")
         if callable(form_trace):
             form_trace(
                 "v4_create_order",
