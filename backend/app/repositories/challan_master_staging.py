@@ -232,6 +232,10 @@ _DEFAULT_PROCESSED_ATTENTION_SQL = """
     WHERE d2.challan_batch_id = m.challan_batch_id
       AND LOWER(TRIM(COALESCE(d2.status, ''))) = 'queued'
   )
+  OR (
+    NOT COALESCE(m.invoice_complete, FALSE)
+    AND LOWER(TRIM(COALESCE(m.invoice_status, ''))) = 'pending'
+  )
 )
 """
 
@@ -246,7 +250,8 @@ def list_masters_recent(
     Processed tab list.
 
     * No ``challan_book_num``: masters from the last *days* that need attention: Failed line(s), failed invoice,
-      **or** at least one **Queued** detail line (includes never-started sidecar runs where ``last_run_at`` is still null).
+      **Pending** invoice (``invoice_complete`` false), **or** at least one **Queued** detail line (includes
+      never-started sidecar runs where ``last_run_at`` is still null).
     * With non-empty ``challan_book_num`` (trimmed): masters for this dealer whose ``challan_book_num`` matches
       (case-insensitive, trimmed); **no** date window — used to open older challans by book number.
     """

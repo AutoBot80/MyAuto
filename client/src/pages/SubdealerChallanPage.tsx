@@ -216,7 +216,19 @@ function formatInrAmount(n: number | null | undefined): string {
 function showRetryOrderOnly(r: ChallanMasterProcessedRow): boolean {
   const inv = (r.invoice_status || "").trim().toLowerCase();
   const failed = r.failed_line_count ?? 0;
-  return inv === "failed" && failed === 0;
+  if (failed > 0) return false;
+  if (inv === "failed") return true;
+  const n = r.num_vehicles ?? 0;
+  const prep = r.num_vehicles_prepared ?? 0;
+  if (
+    !r.invoice_complete &&
+    inv === "pending" &&
+    n > 0 &&
+    prep >= n
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /** Full DMS retry (prepare + order): failed lines, or vehicles still not Ready/Committed (e.g. all Queued after a retry). */
@@ -277,7 +289,7 @@ export function SubdealerChallanPage({
   const [processedError, setProcessedError] = useState<string | null>(null);
   /** Draft input; **Search** copies trimmed value to ``processedChallanSearchApplied`` for the API. */
   const [processedChallanSearchDraft, setProcessedChallanSearchDraft] = useState("");
-  /** When empty: API lists batches needing attention (failed lines or failed invoice) in the last 15 days. */
+  /** When empty: API lists batches needing attention (failed / Queued lines, failed or Pending invoice) in the last 15 days. */
   const [processedChallanSearchApplied, setProcessedChallanSearchApplied] = useState("");
   const [retryingProcessBatchId, setRetryingProcessBatchId] = useState<string | null>(null);
   const [retryingOrderBatchId, setRetryingOrderBatchId] = useState<string | null>(null);
@@ -775,6 +787,23 @@ export function SubdealerChallanPage({
         <button
           type="button"
           role="tab"
+          id="challans-tab-failed"
+          aria-controls="challans-panel-failed"
+          aria-selected={challanSubTab === "failed"}
+          className={`challans-subtab ${challanSubTab === "failed" ? "active" : ""}`}
+          onClick={() => setChallanSubTab("failed")}
+        >
+          In-process
+          {challanFailedCount > 0 ? (
+            <span className="app-tab-badge app-tab-badge--danger">
+              {" "}
+              ({challanFailedCount})
+            </span>
+          ) : null}
+        </button>
+        <button
+          type="button"
+          role="tab"
           id="challans-tab-invoices"
           aria-controls="challans-panel-invoices"
           aria-selected={challanSubTab === "invoices"}
@@ -782,23 +811,6 @@ export function SubdealerChallanPage({
           onClick={() => setChallanSubTab("invoices")}
         >
           Invoices
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="challans-tab-failed"
-          aria-controls="challans-panel-failed"
-          aria-selected={challanSubTab === "failed"}
-          className={`challans-subtab ${challanSubTab === "failed" ? "active" : ""}`}
-          onClick={() => setChallanSubTab("failed")}
-        >
-          Failed
-          {challanFailedCount > 0 ? (
-            <span className="app-tab-badge app-tab-badge--danger">
-              {" "}
-              ({challanFailedCount})
-            </span>
-          ) : null}
         </button>
       </nav>
 
@@ -1277,7 +1289,7 @@ export function SubdealerChallanPage({
             className="app-button app-button--small challans-processed-search-btn"
             disabled={processedLoading}
             aria-busy={processedLoading}
-            title="Reload failed batches and prepared counts"
+            title="Reload in-process batches and prepared counts"
             onClick={() => void loadProcessed()}
           >
             {processedLoading ? "Refreshing…" : "Refresh"}
@@ -1291,7 +1303,7 @@ export function SubdealerChallanPage({
           <p className="app-table-empty challans-processed-loading-msg">
             {processedChallanSearchApplied.trim()
               ? "No challan found for this Challan No."
-              : "No matching batches in the last 15 days (Queued / Failed lines, failed invoice, or search by Challan No.)."}
+              : "No matching batches in the last 15 days (Queued / Failed lines, failed or Pending invoice, or search by Challan No.)."}
           </p>
         ) : (
           <div className="challans-processed-split">
@@ -1299,7 +1311,7 @@ export function SubdealerChallanPage({
               <div
                 className="challans-processed-table-wrap"
                 role="region"
-                aria-label="Failed challan batches"
+                aria-label="In-process challan batches"
               >
                 <table className="app-table">
                   <thead>

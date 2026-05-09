@@ -206,7 +206,7 @@
   background: rgba(30, 90, 158, 0.06);
 }
 
-/* Tab label counts (POS nav + Subdealer Failed sub-tab); --danger = failed / attention */
+/* Tab label counts (POS nav + Subdealer In-process sub-tab); --danger = failed / attention */
 .app-tab-badge {
   font-weight: 600;
 }
@@ -3071,7 +3071,7 @@
   margin: 0;
 }
 
-/* Tight Chassis/Engine/Status (~10ch); Reason column uses the rest and wraps */
+/* Line + Status tight; Chassis/Engine ~20ch for 17-digit VIN; Reason gets remainder and wraps */
 .challans-processed-failed-table {
   table-layout: fixed;
   width: 100%;
@@ -3098,11 +3098,17 @@
 .challans-processed-failed-table.app-table thead th:nth-child(2),
 .challans-processed-failed-table.app-table tbody td:nth-child(2),
 .challans-processed-failed-table.app-table thead th:nth-child(3),
-.challans-processed-failed-table.app-table tbody td:nth-child(3),
+.challans-processed-failed-table.app-table tbody td:nth-child(3) {
+  width: 20ch;
+  max-width: 20ch;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .challans-processed-failed-table.app-table thead th:nth-child(4),
 .challans-processed-failed-table.app-table tbody td:nth-child(4) {
-  width: 10ch;
-  max-width: 10ch;
+  width: 11ch;
+  max-width: 11ch;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -3123,7 +3129,7 @@
 
 .challans-processed-failed-table .challans-proc-vehicle-cell {
   min-width: 0;
-  max-width: 10ch;
+  max-width: 20ch;
   overflow: hidden;
 }
 
@@ -3243,7 +3249,7 @@
   word-break: break-word;
 }
 
-/* New tab only: fills space below sub-tabs (Invoices / Failed use separate mounted panels). */
+/* New tab only: fills space below sub-tabs (In-process / Invoices use separate mounted panels). */
 .challans-new-panel {
   display: flex;
   flex-direction: column;

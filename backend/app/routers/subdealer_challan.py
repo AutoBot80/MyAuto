@@ -236,7 +236,10 @@ def list_recent_staging(
         15,
         ge=1,
         le=365,
-        description="Default list: last N days, batches with failed detail lines or failed invoice_status",
+        description=(
+            "Default list: last N days, batches with failed detail lines, failed or Pending invoice "
+            "(incomplete), or at least one Queued detail line"
+        ),
     ),
     challan_book_num: str | None = Query(
         None,
@@ -246,7 +249,8 @@ def list_recent_staging(
     """``challan_master_staging`` rows with ``failed_lines`` and ``detail_lines`` for the Failed tab.
 
     ``detail_lines``: every vehicle line (Queued / Failed / Ready / Committed). ``failed_lines``: Failed only.
-    Default: batches from the last *days* matching the attention filter (see ``list_masters_recent``).
+    Default: batches from the last *days* matching the attention filter (failed / Queued lines, failed or
+    Pending incomplete invoice; see ``list_masters_recent``).
     With ``challan_book_num``: batches matching that book number (``challan_book_num`` column), no date limit.
     """
     did = resolve_dealer_id(principal, dealer_id)
@@ -276,7 +280,14 @@ def list_recent_staging(
 def staging_failed_count(
     principal: Principal = Depends(get_principal),
     dealer_id: int | None = Query(None),
-    days: int = Query(15, ge=1, le=365),
+    days: int = Query(
+        15,
+        ge=1,
+        le=365,
+        description=(
+            "Same attention window as GET /staging/recent: failed / Queued lines, failed or Pending invoice"
+        ),
+    ),
 ) -> dict[str, int]:
     """Count of **master** batches in the default Failed-tab window (same rows as ``GET …/staging/recent`` without ``challan_book_num``)."""
     did = resolve_dealer_id(principal, dealer_id)
