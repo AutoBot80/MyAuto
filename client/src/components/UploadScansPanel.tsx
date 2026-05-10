@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { getDocumentFileUrl } from "../api/customerSearch";
+import { DEALER_ID } from "../api/dealerId";
 import { validateAadharScanFile } from "../utils/aadharScanFileValidation";
 import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
 import {
@@ -31,6 +33,35 @@ interface UploadScansPanelProps {
   ocrCountdownSeconds?: number | null;
   /** When false (default), consolidated PDF is the only upload path when `onUploadConsolidated` is set. */
   showIndividualFileUploadToggle?: boolean;
+  /** For `/documents/...` links to saved scans (Add Sales). */
+  dealerId?: number;
+}
+
+/** Detail sheet, then Aadhaar front, then back — only entries with a matching `uploadedFiles` name. */
+function resolveIdentifiedDocumentLinks(files: readonly string[]): { label: string; filename: string }[] {
+  if (!files.length) return [];
+  const lowerToOriginal = new Map<string, string>();
+  for (const f of files) {
+    if (!f.includes("/")) lowerToOriginal.set(f.toLowerCase(), f);
+  }
+  const pick = (candidates: string[]): string | undefined => {
+    for (const c of candidates) {
+      const hit = lowerToOriginal.get(c.toLowerCase());
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  const detail =
+    pick(["Details.jpg", "Details.jpeg", "Sales_Detail_Sheet.pdf"]) ??
+    files.find((f) => !f.includes("/") && /^details\.(jpe?g|png)$/i.test(f)) ??
+    files.find((f) => !f.includes("/") && /^sales_detail_sheet\.pdf$/i.test(f));
+  const front = pick(["Aadhar_front.jpg", "Aadhar_front.jpeg", "Aadhar.jpg", "Aadhar.jpeg"]);
+  const back = pick(["Aadhar_back.jpg", "Aadhar_back.jpeg"]);
+  const out: { label: string; filename: string }[] = [];
+  if (detail) out.push({ label: "Detail Sheet", filename: detail });
+  if (front) out.push({ label: "Aadhaar front", filename: front });
+  if (back) out.push({ label: "Aadhaar back", filename: back });
+  return out;
 }
 
 function formatOcrCountdown(totalSec: number): string {
@@ -87,6 +118,7 @@ export function UploadScansPanel({
   onUploadConsolidated,
   ocrCountdownSeconds = null,
   showIndividualFileUploadToggle = false,
+  dealerId,
 }: UploadScansPanelProps) {
   void onUpload;
   void mobile;
@@ -233,6 +265,9 @@ export function UploadScansPanel({
   const envScannerPath = import.meta.env.VITE_SCANNER_ROOT?.trim() ?? "";
   const scansFolderButtonLabel = scansFolderPickerButtonLabel(scannerRootHandle, envScannerPath);
   const scansFolderButtonTitle = scansFolderPickerTitle(scannerRootHandle, envScannerPath);
+
+  const identifiedDocLinks =
+    savedTo && uploadedFiles.length > 0 ? resolveIdentifiedDocumentLinks(uploadedFiles) : [];
 
   return (
     <section className="app-panel">
@@ -496,6 +531,25 @@ export function UploadScansPanel({
           ) : null}
         </>
       )}
+      {savedTo && identifiedDocLinks.length > 0 ? (
+        <div className="app-panel-identified-docs">
+          <div className="app-panel-identified-docs-title">Identified documents</div>
+          <ul className="app-panel-identified-docs-list">
+            {identifiedDocLinks.map(({ label, filename }) => (
+              <li key={`${label}:${filename}`}>
+                <a
+                  href={getDocumentFileUrl(savedTo, filename, dealerId ?? DEALER_ID)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {label}
+                </a>
+                <span className="app-panel-identified-docs-filename">{filename}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {uploadStatus ? (
         <div className="app-panel-status">{uploadStatus}</div>
       ) : null}

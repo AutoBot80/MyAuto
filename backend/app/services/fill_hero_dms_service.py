@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -2846,6 +2847,7 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
     nav_timeout_ms: int,
     content_frame_selector: str | None,
     execution_log_path: Path | None = None,
+    challan_progress_callback: Callable[..., None] | None = None,
 ) -> dict:
     """
     After per-vehicle ``prepare_vehicle`` (and DB upserts), run **only** ``prepare_order`` for the challan batch:
@@ -2967,6 +2969,7 @@ def Playwright_Hero_DMS_fill_subdealer_challan_order_only(
             ms_done=ms_done,
             log_vehicle_snapshot=log_vehicle_snapshot,
             frame_dump_dir=_frame_dump_dir,
+            challan_progress_callback=challan_progress_callback,
         )
         if out.get("error"):
             return out

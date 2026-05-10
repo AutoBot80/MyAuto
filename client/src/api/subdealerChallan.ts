@@ -434,6 +434,10 @@ export type ChallanMasterProcessedRow = {
   last_run_at?: string | null;
   ready_line_count: number;
   failed_line_count: number;
+  /** Persisted during sidecar order run after Ctrl+S (resume). */
+  dms_order_number?: string | null;
+  /** Lines with VIN+discount complete in Siebel (resume progress). */
+  dms_attached_vin_count?: number | null;
   add_transport_cost?: boolean;
   transport_cost_per_vehicle?: number | null;
   /** Failed-only subset (legacy). Prefer ``detail_lines`` when present. */

@@ -1480,6 +1480,7 @@ export function AddSalesPage({
       onUploadConsolidated={uploadConsolidatedV2}
       ocrCountdownSeconds={ocrWaitActive ? ocrCountdownSec : null}
       showIndividualFileUploadToggle={showIndividualFileUploadToggle}
+      dealerId={dealerId}
     />
   );
 

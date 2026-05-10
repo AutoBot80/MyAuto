@@ -501,7 +501,20 @@ def sidecar_build_order_playwright_package(
         from_dealer_id=from_dealer_id,
     )
     dms_values["order_line_vehicles"] = order_lines
+    dms_values["challan_full_order_line_vehicles"] = list(order_lines)
     dms_values["_challan_last_vehicle"] = dict(last_vehicle_scrape or {})
+    try:
+        _nv = int(master_row.get("num_vehicles") or len(order_lines) or 0)
+    except (TypeError, ValueError):
+        _nv = len(order_lines) or 0
+    dms_values["challan_num_vehicles"] = _nv
+    dms_values["challan_dms_order_number"] = str(master_row.get("dms_order_number") or "").strip()
+    try:
+        dms_values["challan_dms_attached_vin_count"] = int(master_row.get("dms_attached_vin_count") or 0)
+    except (TypeError, ValueError):
+        dms_values["challan_dms_attached_vin_count"] = 0
+    dms_values["challan_batch_id"] = str(challan_batch_id)
+    dms_values["challan_from_dealer_id"] = int(from_dealer_id)
 
     urls_dict = {
         "contact": DMS_REAL_URL_CONTACT,
@@ -530,6 +543,31 @@ def sidecar_build_order_playwright_package(
     out["inventory_line_ids"] = inv_ids
     out["artifact_leaf"] = challan_artifact_leaf_name(cb, cd)
     return out
+
+
+def sidecar_challan_order_checkpoint(
+    *,
+    challan_batch_id: uuid.UUID,
+    dealer_id: int,
+    order_number: str | None = None,
+    attached_vin_count: int | None = None,
+) -> dict[str, object]:
+    """Persist ``dms_order_number`` / ``dms_attached_vin_count`` during local order-phase Playwright (Electron sidecar)."""
+    rows = detail_repo.fetch_batch_rows(challan_batch_id)
+    if not rows:
+        return {"ok": False, "error": "No staging rows for this batch."}
+    from_dealer_id = int(rows[0]["from_dealer_id"])
+    if int(from_dealer_id) != int(dealer_id):
+        return {"ok": False, "error": "Session dealer does not match batch from_dealer_id."}
+    ok = master_repo.update_challan_dms_checkpoint(
+        challan_batch_id,
+        from_dealer_id=int(from_dealer_id),
+        dms_order_number=order_number,
+        dms_attached_vin_count=attached_vin_count,
+    )
+    if not ok and (order_number is not None or attached_vin_count is not None):
+        return {"ok": False, "error": "Checkpoint did not update a row (batch or dealer mismatch?)."}
+    return {"ok": True, "error": None}
 
 
 def sidecar_finalize_order_playwright_result(

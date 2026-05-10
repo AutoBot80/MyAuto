@@ -1309,6 +1309,28 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
         for _req in ("contact", "vehicles", "precheck", "pdi", "vehicle", "enquiry", "line_items", "reports"):
             _urls_merged.setdefault(_req, "")
         urls_o = SiebelDmsUrls(**_urls_merged)
+
+        def _challan_order_checkpoint_cb(payload: dict) -> None:
+            try:
+                on = (payload.get("order_number") or "").strip() if isinstance(payload, dict) else ""
+                av = payload.get("attached_vin_count") if isinstance(payload, dict) else None
+                body: dict = {
+                    "challan_batch_id": challan_batch_id,
+                    "dealer_id": dealer_id,
+                    "order_number": on or None,
+                    "attached_vin_count": int(av) if av is not None else None,
+                }
+                if body["order_number"] is None and body["attached_vin_count"] is None:
+                    return
+                _api_post(
+                    api_url,
+                    jwt,
+                    "/sidecar/subdealer-challan/order-checkpoint",
+                    body,
+                    timeout=60,
+                )
+            except Exception as _exc:
+                logging.warning("subdealer challan order-checkpoint: %s", _exc)
     
         frag = Playwright_Hero_DMS_fill_subdealer_challan_order_only(
             page,
@@ -1318,6 +1340,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             nav_timeout_ms=int(pkg.get("nav_timeout_ms") or DMS_SIEBEL_NAV_TIMEOUT_MS),
             content_frame_selector=pkg.get("content_frame_selector"),
             execution_log_path=log_path,
+            challan_progress_callback=_challan_order_checkpoint_cb,
         )
 
         def _append_finalize_challan_log(

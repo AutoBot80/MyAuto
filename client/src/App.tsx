@@ -105,6 +105,8 @@ function App() {
   const [page, setPage] = useState<Page>("add-sales");
   const [bulkLoadsPendingCount, setBulkLoadsPendingCount] = useState<number>(0);
   const [challanFailedCount, setChallanFailedCount] = useState<number>(0);
+  /** ``null`` until ``GET /dealers/{id}`` resolves; tab hidden unless explicitly principal (``parent_id`` is null). */
+  const [isPrincipalDealer, setIsPrincipalDealer] = useState<boolean | null>(null);
   const [dealerName, setDealerName] = useState<string>("—");
   const [dealerAddress, setDealerAddress] = useState<string | null>(null);
   const [dealerOemId, setDealerOemId] = useState<number | null>(null);
@@ -123,6 +125,7 @@ function App() {
 
   useEffect(() => {
     if (boot !== "ready") return;
+    setIsPrincipalDealer(null);
     getDealer(dealerId)
       .then((d) => {
         setDealerName(d.dealer_name);
@@ -130,10 +133,12 @@ function App() {
         setDealerAddress(addr ? addr : null);
         setDealerOemId(d.oem_id ?? null);
         setDealerPreferInsurer(d.prefer_insurer ?? null);
+        setIsPrincipalDealer(d.parent_id == null);
       })
       .catch(() => {
         setDealerName("Dealer");
         setDealerAddress(null);
+        setIsPrincipalDealer(false);
       });
   }, [boot, dealerId]);
 
@@ -175,7 +180,13 @@ function App() {
   }, []);
 
   const canSeeBulkLoads = sessionLoginId === BULK_LOADS_VISIBLE_LOGIN_ID;
-  const posPages = useMemo(() => posPagesForSession(sessionLoginId), [sessionLoginId]);
+  const posPages = useMemo(() => {
+    const base = posPagesForSession(sessionLoginId);
+    if (isPrincipalDealer !== true) {
+      return base.filter((p) => p !== "subdealer-challan");
+    }
+    return base;
+  }, [sessionLoginId, isPrincipalDealer]);
 
   const refreshBulkLoadsPendingCount = useCallback(() => {
     if (mode === "pos" && canSeeBulkLoads) {
@@ -202,6 +213,7 @@ function App() {
     setSessionLoginId(null);
     setHomeTiles(ALL_HOME_TILES_TRUE);
     setSessionAdmin(false);
+    setIsPrincipalDealer(null);
     setBoot("need-login");
   }, [authDisabled]);
 
@@ -221,7 +233,7 @@ function App() {
 
   // Subdealer Challans: master batches needing attention in the last 15 days (nav + In-process sub-tab badges).
   useEffect(() => {
-    if (mode !== "pos") {
+    if (mode !== "pos" || isPrincipalDealer !== true) {
       setChallanFailedCount(0);
       return;
     }
@@ -231,7 +243,7 @@ function App() {
     refreshChallanFailedCount();
     const interval = setInterval(refreshChallanFailedCount, 60000);
     return () => clearInterval(interval);
-  }, [mode, pageVisible, refreshChallanFailedCount]);
+  }, [mode, pageVisible, isPrincipalDealer, refreshChallanFailedCount]);
 
   // When switching mode, ensure page is in the current tab list (avoid blank screen). Must run on every render (before any early return).
   useEffect(() => {
@@ -486,7 +498,7 @@ function App() {
             mode === "pos"
               ? {
                   ...(canSeeBulkLoads ? { "bulk-loads": bulkLoadsPendingCount } : {}),
-                  "subdealer-challan": challanFailedCount,
+                  ...(isPrincipalDealer === true ? { "subdealer-challan": challanFailedCount } : {}),
                 }
               : undefined
           }

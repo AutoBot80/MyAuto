@@ -10,7 +10,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
   - ``/sidecar/vahan/row-result``  → report per-row result (completed/failed/pending)
   - ``/sidecar/upload-artifacts`` → multipart upload into uploads, ocr, or challans tree (syncs to S3)
-  - ``/sidecar/subdealer-challan/*`` → resolve / per-line prepare / order-context / finalize (no local ``DATABASE_URL``)
+  - ``/sidecar/subdealer-challan/*`` → resolve / per-line prepare / order-context / order-checkpoint / finalize (no local ``DATABASE_URL``)
 
 All endpoints are JWT-protected via ``get_principal`` / ``resolve_dealer_id``.
 """
@@ -787,6 +787,45 @@ async def subdealer_challan_order_context(
     if not out.get("ok"):
         raise HTTPException(status_code=400, detail=str(out.get("error") or "order context failed"))
     return out
+
+
+class SubdealerChallanOrderCheckpointRequest(BaseModel):
+    challan_batch_id: str
+    dealer_id: int | None = None
+    order_number: str | None = None
+    attached_vin_count: int | None = None
+
+
+class SubdealerChallanOrderCheckpointResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+
+
+@router.post("/subdealer-challan/order-checkpoint", response_model=SubdealerChallanOrderCheckpointResponse)
+async def subdealer_challan_order_checkpoint(
+    req: SubdealerChallanOrderCheckpointRequest,
+    principal: Principal = Depends(get_principal),
+) -> SubdealerChallanOrderCheckpointResponse:
+    """Persist ``dms_order_number`` / ``dms_attached_vin_count`` during local order-phase Playwright (resume UI)."""
+    from uuid import UUID as PyUUID
+
+    from app.services.add_subdealer_challan_service import sidecar_challan_order_checkpoint
+
+    did = resolve_dealer_id(principal, req.dealer_id)
+    try:
+        bid = PyUUID(req.challan_batch_id.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
+
+    out = sidecar_challan_order_checkpoint(
+        challan_batch_id=bid,
+        dealer_id=int(did),
+        order_number=req.order_number,
+        attached_vin_count=req.attached_vin_count,
+    )
+    if not out.get("ok"):
+        raise HTTPException(status_code=400, detail=str(out.get("error") or "order checkpoint failed"))
+    return SubdealerChallanOrderCheckpointResponse(ok=True, error=None)
 
 
 class SubdealerChallanFinalizeOrderRequest(BaseModel):

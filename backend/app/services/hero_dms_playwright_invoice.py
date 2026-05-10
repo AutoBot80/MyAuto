@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import json
+import os
 import re
 import time
 from collections.abc import Callable
@@ -76,6 +77,28 @@ logger = logging.getLogger(__name__)
 # Siebel **Create Invoice** after order attach: enabled only when ``ENVIRONMENT`` is ``prod`` / ``production``
 # (see ``HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE`` in ``app.config``). Dev/test/staging skip the UI click.
 _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE = HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE
+
+# Line Items jqGrid pager: Hero Siebel often wires **``ui-icon-seek-end``** (title "Last record set") as the
+# control that advances **one page / slice** (next 4–5 rows). Stock jqGrid uses ``seek-end`` for the true
+# last page only. We click ``seek-end`` first; if the row counter jumps **past** the target row, we
+# ``seek-first`` and set ``_ORDER_LINE_JQGRID_FORWARD_USE_NEXT_AFTER_SEEK_END_OVERSHOOT`` so subsequent
+# forward steps use ``ui-icon-seek-next`` (stock behavior) for this process.
+_ORDER_LINE_JQGRID_FORWARD_USE_NEXT_AFTER_SEEK_END_OVERSHOOT: bool = False
+
+# Paged Line Items: max pager steps per ``_ensure_order_line_jqgrid_global_row_visible`` (large orders).
+try:
+    _ORDER_LINE_JQGRID_PAGER_MAX_STEPS = max(48, min(400, int(os.getenv("HERO_DMS_ORDER_LINE_PAGER_MAX_STEPS", "120"))))
+except ValueError:
+    _ORDER_LINE_JQGRID_PAGER_MAX_STEPS = 120
+# Settle after seek / first (ms). Older code used 520ms per step — main delay between pages.
+try:
+    _ORDER_LINE_JQGRID_PAGER_AFTER_SEEK_MS = max(80, min(3000, int(os.getenv("HERO_DMS_ORDER_LINE_PAGER_AFTER_SEEK_MS", "240"))))
+except ValueError:
+    _ORDER_LINE_JQGRID_PAGER_AFTER_SEEK_MS = 240
+try:
+    _ORDER_LINE_JQGRID_PAGER_AFTER_VISIBLE_MS = max(40, min(2000, int(os.getenv("HERO_DMS_ORDER_LINE_PAGER_VISIBLE_MS", "120"))))
+except ValueError:
+    _ORDER_LINE_JQGRID_PAGER_AFTER_VISIBLE_MS = 120
 
 
 def _scrape_total_ex_showroom_after_price_allocate(
@@ -169,13 +192,21 @@ def _normalize_attach_line_items(
     )
 
 
-def _read_vin_from_order_line_row(
+def _scroll_order_line_jqgrid_row_into_view(
     page: Page,
     *,
     row_n: int,
     content_frame_selector: str | None,
-) -> str:
-    """Best-effort read of the VIN input for Siebel order line row ``row_n`` (1-based)."""
+    dom_row_n: int | None = None,
+) -> None:
+    """
+    Vertically scroll the Siebel **ATP line items** jqGrid (``#s_1_l`` inside ``#gview_s_1_l``) so the
+    ``n``-th ``tr.jqgrow`` sits inside the ``ui-jqgrid-bdiv`` / ``#s_1_l_scroll`` viewport.
+
+    When Siebel has already loaded a **page** of rows into the DOM, this nudges ``scrollTop`` on
+    ``#s_1_l_scroll`` so a row is inside the bdiv viewport. **Pager** navigation (``#s_1_rc`` +
+    ``ui-icon-seek-next``) is handled by ``_ensure_order_line_jqgrid_global_row_visible`` before reads.
+    """
     roots: list = []
     try:
         roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
@@ -186,18 +217,847 @@ def _read_vin_from_order_line_row(
     except Exception:
         pass
     roots.append(page)
-    _rid = f"{int(row_n)}_s_1_l_VIN"
+
+    _logical = max(1, int(row_n))
+    _dom = max(1, int(dom_row_n)) if dom_row_n is not None else _logical
+    _payload = {"logical": _logical, "dom": _dom}
+
+    _js = r"""(p) => {
+      const logical = Math.max(1, Number(p && p.logical) || 1);
+      const dom = Math.max(1, Number(p && p.dom) || logical);
+      const ls = String(logical);
+      const ds = String(dom);
+      const tbody =
+        document.querySelector("table#s_1_l tbody") ||
+        document.querySelector("table.ui-jqgrid-btable#s_1_l tbody") ||
+        document.querySelector("table.ui-jqgrid-btable tbody");
+      if (!tbody) return "no-tbody";
+      const bdiv =
+        tbody.closest(".ui-jqgrid-bdiv") ||
+        document.querySelector("#gview_s_1_l .ui-jqgrid-bdiv") ||
+        document.querySelector(".ui-jqgrid-view .ui-jqgrid-bdiv");
+      let scrollHost = bdiv;
+      if (bdiv) {
+        const inner = bdiv.querySelector("#s_1_l_scroll");
+        if (inner && inner.scrollHeight > inner.clientHeight + 2) scrollHost = inner;
+      }
+      const findTrByLogicalId = () =>
+        tbody.querySelector("tr.jqgrow[id='" + ls + "']") ||
+        tbody.querySelector("tr.jqgrow#" + ls) ||
+        tbody.querySelector("tr[id='" + ls + "']");
+      const findTrByDomId = () =>
+        tbody.querySelector("tr.jqgrow[id='" + ds + "']") ||
+        tbody.querySelector("tr.jqgrow#" + ds) ||
+        tbody.querySelector("tr[id='" + ds + "']");
+      let tr = findTrByLogicalId() || findTrByDomId();
+      if (!tr && scrollHost) {
+        const maxSt = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
+        scrollHost.scrollTop = Math.min(maxSt, Math.max(0, (dom - 1) * 34));
+        tr = findTrByLogicalId() || findTrByDomId();
+      }
+      if (!tr && scrollHost) {
+        const maxSt = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
+        for (let step = 0; step < 80 && !tr; step++) {
+          scrollHost.scrollTop = Math.min(maxSt, scrollHost.scrollTop + 48);
+          tr = findTrByLogicalId() || findTrByDomId();
+        }
+      }
+      if (!tr) {
+        const rows = Array.from(tbody.querySelectorAll("tr.jqgrow"));
+        if (rows.length >= dom) tr = rows[dom - 1];
+        else if (rows.length >= logical) tr = rows[logical - 1];
+      }
+      if (!tr) return "no-tr";
+      if (!scrollHost) {
+        try { tr.scrollIntoView({ block: "center", inline: "nearest" }); } catch (e) {}
+        return "no-host";
+      }
+      for (let step = 0; step < 48; step++) {
+        const trR = tr.getBoundingClientRect();
+        const hR = scrollHost.getBoundingClientRect();
+        const pad = 6;
+        if (trR.height > 0 && trR.top >= hR.top + pad && trR.bottom <= hR.bottom - pad) break;
+        let delta = 0;
+        if (trR.bottom < hR.top + 2) delta = -Math.min(scrollHost.clientHeight, 100);
+        else if (trR.top < hR.top + pad) delta = trR.top - hR.top - pad;
+        else if (trR.bottom > hR.bottom - pad) delta = trR.bottom - hR.bottom + pad;
+        else if (trR.height <= 0) delta = 72;
+        const maxSt = Math.max(0, scrollHost.scrollHeight - scrollHost.clientHeight);
+        scrollHost.scrollTop = Math.max(0, Math.min(maxSt, scrollHost.scrollTop + delta));
+      }
+      try { tr.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) {}
+      return "ok";
+    }"""
     for root in roots:
-        for css in (f"#{_rid}", f"[id='{_rid}']"):
+        try:
+            root.evaluate(_js, _payload)
+            break
+        except Exception:
+            continue
+    _safe_page_wait(page, 100, log_label=f"jqgrid_row_L{_logical}_D{_dom}_scroll_into_view")
+
+
+def _parse_siebel_jqgrid_row_counter(text: str) -> tuple[int, int, int] | None:
+    """
+    Parse Siebel jqGrid row counter text, e.g. ``1 - 4 of 25`` → ``(1, 4, 25)`` (lo, hi, total).
+    """
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    m = re.search(r"(\d+)\s*-\s*(\d+)\s+of\s+(\d+)", t, flags=re.I)
+    if not m:
+        return None
+    lo, hi, tot = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if lo < 1 or hi < lo or tot < hi:
+        return None
+    return lo, hi, tot
+
+
+def _read_order_line_jqgrid_row_counter(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+) -> tuple[int, int, int] | None:
+    """Read ``#s_1_rc`` / ``.siebui-row-counter`` (e.g. ``1 - 4 of 25``) from the Line Items grid context."""
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        for sel in ("#s_1_rc", "[id='s_1_rc']", "span.siebui-row-counter#s_1_rc"):
             try:
-                loc = root.locator(css).first
-                if loc.count() > 0 and loc.is_visible(timeout=500):
-                    v = (loc.input_value(timeout=900) or "").strip()
-                    if v:
-                        return v
+                loc = root.locator(sel).first
+                if loc.count() <= 0:
+                    continue
+                raw = str(loc.inner_text(timeout=2500) or "").strip()
+                p = _parse_siebel_jqgrid_row_counter(raw)
+                if p:
+                    return p
             except Exception:
                 continue
+    return None
+
+
+def _order_line_jqgrid_dom_row_index(
+    logical_row_n: int,
+    counter: tuple[int, int, int] | None,
+) -> int:
+    """
+    Map **logical** order line index (1..N across the order) to Siebel's **page-local** row id prefix.
+
+    Paged jqGrid shows ``#s_1_rc`` like ``5 - 8 of 25`` while cell ids on that page are often ``1_s_1_l_VIN`` …
+    ``4_s_1_l_VIN`` (indices within the slice), not ``5_s_1_l_VIN``. Use ``logical - lo + 1`` when the counter
+    shows ``lo..hi`` and ``logical`` lies in that range.
+    """
+    n = max(1, int(logical_row_n))
+    if not counter:
+        return n
+    lo, hi, _tot = counter
+    if lo <= n <= hi:
+        return n - lo + 1
+    return n
+
+
+def _order_line_jqgrid_pager_seek(
+    page: Page,
+    *,
+    direction: str,
+    content_frame_selector: str | None,
+) -> bool:
+    """
+    Click a jqGrid pager icon on the **order line** grid (``table#s_1_l``).
+
+    ``direction``: ``next`` (``.ui-icon-seek-next``), ``prev`` (``.ui-icon-seek-prev``),
+    ``first`` (``.ui-icon-seek-first``), ``last`` (``.ui-icon-seek-end`` — "Last record set" in Siebel).
+    """
+    d = (direction or "").strip().lower()
+    if d not in ("next", "prev", "first", "last"):
+        return False
+    cls = {
+        "next": ".ui-icon-seek-next",
+        "prev": ".ui-icon-seek-prev",
+        "first": ".ui-icon-seek-first",
+        "last": ".ui-icon-seek-end",
+    }[d]
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    _js = r"""(arg) => {
+      const direction = String(arg || "").toLowerCase();
+      const cls =
+        direction === "next"
+          ? ".ui-icon-seek-next"
+          : direction === "prev"
+          ? ".ui-icon-seek-prev"
+          : direction === "last"
+          ? ".ui-icon-seek-end"
+          : ".ui-icon-seek-first";
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === "none" || st.visibility === "hidden") return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      const tbl =
+        document.querySelector("table#s_1_l") ||
+        document.querySelector("table.ui-jqgrid-btable[id='s_1_l']");
+      if (!tbl) return { ok: false, reason: "no_table" };
+      let p = tbl;
+      for (let d = 0; d < 15 && p; d++) {
+        const g = p.closest && p.closest("div.ui-jqgrid");
+        if (!g) {
+          p = p.parentElement;
+          continue;
+        }
+        const btn = g.querySelector(cls);
+        if (btn && vis(btn) && !btn.classList.contains("ui-state-disabled")) {
+          try {
+            btn.click();
+          } catch (e) {}
+          return { ok: true };
+        }
+        return { ok: false, reason: "no_btn_or_disabled" };
+      }
+      return { ok: false, reason: "no_jqgrid_parent" };
+    }"""
+    for root in roots:
+        try:
+            res = root.evaluate(_js, d)
+            if isinstance(res, dict) and res.get("ok"):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _ensure_order_line_jqgrid_global_row_visible(
+    page: Page,
+    *,
+    row_n: int,
+    content_frame_selector: str | None,
+) -> None:
+    """
+    Ensure global line row ``row_n`` (1-based, as in ``{n}_s_1_l_VIN``) is on the **current jqGrid page**.
+
+    Siebel shows only a slice (e.g. ``1 - 4 of 25`` in ``#s_1_rc``). Forward paging prefers
+    **``ui-icon-seek-end``** (per Hero deployment); if that jumps past the target (stock jqGrid "last page"),
+    we **First** then switch to **``ui-icon-seek-next``** for the rest of the process. Backward paging uses
+    **First** / **Prev** as before.
+    """
+    global _ORDER_LINE_JQGRID_FORWARD_USE_NEXT_AFTER_SEEK_END_OVERSHOOT
+    n = int(row_n)
+    if n < 1:
+        return
+    prev: tuple[int, int, int] | None = None
+    stuck = 0
+    for _ in range(_ORDER_LINE_JQGRID_PAGER_MAX_STEPS):
+        ctr = _read_order_line_jqgrid_row_counter(page, content_frame_selector=content_frame_selector)
+        if ctr is None:
+            return
+        lo, hi, tot = ctr
+        if n > tot:
+            # Caller asked for a row past ``#s_1_rc`` total — no pager sequence can surface it.
+            return
+        if lo <= n <= hi:
+            _safe_page_wait(
+                page,
+                _ORDER_LINE_JQGRID_PAGER_AFTER_VISIBLE_MS,
+                log_label=f"order_line_pager_row_{n}_visible_{lo}_{hi}",
+            )
+            return
+        if ctr == prev:
+            stuck += 1
+            if stuck >= 3:
+                return
+        else:
+            stuck = 0
+        prev = ctr
+        clicked = False
+        if n > hi:
+            if _ORDER_LINE_JQGRID_FORWARD_USE_NEXT_AFTER_SEEK_END_OVERSHOOT:
+                clicked = _order_line_jqgrid_pager_seek(
+                    page, direction="next", content_frame_selector=content_frame_selector
+                )
+            else:
+                clicked = _order_line_jqgrid_pager_seek(
+                    page, direction="last", content_frame_selector=content_frame_selector
+                )
+            if clicked:
+                _safe_page_wait(
+                    page,
+                    _ORDER_LINE_JQGRID_PAGER_AFTER_SEEK_MS,
+                    log_label=f"order_line_pager_seek_row_{n}_forward",
+                )
+                ctr_after = _read_order_line_jqgrid_row_counter(
+                    page, content_frame_selector=content_frame_selector
+                )
+                if (
+                    ctr_after
+                    and n < ctr_after[0]
+                    and not _ORDER_LINE_JQGRID_FORWARD_USE_NEXT_AFTER_SEEK_END_OVERSHOOT
+                ):
+                    # ``seek-end`` moved to the final slice (stock jqGrid), not the next slice (Hero).
+                    _ORDER_LINE_JQGRID_FORWARD_USE_NEXT_AFTER_SEEK_END_OVERSHOOT = True
+                    if _order_line_jqgrid_pager_seek(
+                        page, direction="first", content_frame_selector=content_frame_selector
+                    ):
+                        _safe_page_wait(
+                            page,
+                            _ORDER_LINE_JQGRID_PAGER_AFTER_SEEK_MS,
+                            log_label="order_line_pager_after_seek_end_overshoot_first",
+                        )
+                continue
+        else:
+            clicked = _order_line_jqgrid_pager_seek(
+                page, direction="first", content_frame_selector=content_frame_selector
+            )
+            if not clicked:
+                clicked = _order_line_jqgrid_pager_seek(
+                    page, direction="prev", content_frame_selector=content_frame_selector
+                )
+        if not clicked:
+            return
+        _safe_page_wait(page, _ORDER_LINE_JQGRID_PAGER_AFTER_SEEK_MS, log_label=f"order_line_pager_seek_row_{n}")
+
+
+def _read_vin_from_order_line_row(
+    page: Page,
+    *,
+    row_n: int,
+    content_frame_selector: str | None,
+) -> str:
+    """
+    Best-effort read of the VIN for Siebel order line row ``row_n`` (1-based).
+
+    For orders with more lines than Siebel loads at once, the grid pager shows ``1 - 4 of 25`` in
+    ``#s_1_rc``; we advance the pager (**``ui-icon-seek-end``** for forward slices on Hero; **First** /
+    **Prev** backward; see ``_ensure_order_line_jqgrid_global_row_visible``) until global row ``row_n``
+    is in the loaded slice, then optionally scroll within the page body.
+    """
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+
+    _ensure_order_line_jqgrid_global_row_visible(
+        page, row_n=int(row_n), content_frame_selector=content_frame_selector
+    )
+    _ctr_after = _read_order_line_jqgrid_row_counter(page, content_frame_selector=content_frame_selector)
+    logical = int(row_n)
+    dom_n = _order_line_jqgrid_dom_row_index(logical, _ctr_after)
+    _dns = str(dom_n)
+
+    _scroll_order_line_jqgrid_row_into_view(
+        page,
+        row_n=logical,
+        content_frame_selector=content_frame_selector,
+        dom_row_n=dom_n,
+    )
+
+    n = logical
+    _ns = _dns
+    _vis_ms = 2500
+
+    def _loc_text_or_value(loc) -> str:
+        try:
+            v = (loc.input_value(timeout=1200) or "").strip()
+            if v:
+                return v
+        except Exception:
+            pass
+        try:
+            v2 = str(
+                loc.evaluate(
+                    """el => {
+                if (!el) return '';
+                const t = (el.tagName || '').toUpperCase();
+                if (t === 'INPUT' || t === 'TEXTAREA') return String(el.value || '').trim();
+                const inp = el.querySelector && el.querySelector('input,textarea');
+                if (inp) return String(inp.value || '').trim();
+                return String(el.innerText || el.textContent || '').trim();
+            }"""
+                )
+                or ""
+            ).strip()
+            if v2:
+                return v2
+        except Exception:
+            pass
+        return ""
+
+    _css: tuple[str, ...] = (
+        f"#{_ns}_s_1_l_VIN",
+        f"[id='{_ns}_s_1_l_VIN']",
+        f"input[id='{_ns}_s_1_l_VIN']",
+        f"td[id='{_ns}_s_1_l_VIN']",
+    )
+    if dom_n == 1:
+        _css = _css + (
+            "input[id$='_l_VIN']",
+            "input[id*='_l_VIN' i]",
+            "input[name='VIN']",
+            "input[aria-label='VIN']",
+            "input[title='VIN']",
+            "input[title*='VIN' i]",
+        )
+
+    for root in roots:
+        for css in _css:
+            try:
+                loc = root.locator(css).first
+                if loc.count() <= 0 or not loc.is_visible(timeout=_vis_ms):
+                    continue
+                got = _loc_text_or_value(loc)
+                if got:
+                    return got
+            except Exception:
+                continue
+
+    _js_read_jqgrid_vin = r"""(p) => {
+      const logicalN = Math.max(1, Number(p && p.logical) || 1);
+      const domN = Math.max(1, Number(p && p.dom) || logicalN);
+      const norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
+      const valFromEl = (el) => {
+        if (!el) return "";
+        const t = (el.tagName || "").toUpperCase();
+        if (t === "INPUT" || t === "TEXTAREA") return norm(el.value || "");
+        const inp = el.querySelector && el.querySelector("input,textarea");
+        if (inp) return norm(inp.value || "");
+        return norm(el.innerText || el.textContent || "");
+      };
+      const pickRows = (tbody) => {
+        if (!tbody || (tbody.closest && tbody.closest("thead"))) return [];
+        // Prefer **jqGrid data rows only** — mixing ``tr[role='row']`` can include headers / chrome so
+        // ``rows[n-1]`` for n=2 becomes the same physical line as row 1 (duplicate VIN readback).
+        let rows = Array.from(tbody.querySelectorAll("tr.jqgrow"));
+        if (rows.length === 0) {
+          rows = Array.from(tbody.querySelectorAll("tr[role='row']")).filter((tr) => {
+            if (!tr || tr.querySelector("th")) return false;
+            if (tr.closest && tr.closest("thead")) return false;
+            if ((tr.getAttribute("class") || "").indexOf("ui-jqgrid-h") >= 0) return false;
+            return tr.querySelector("td");
+          });
+        }
+        if (rows.length === 0) {
+          rows = Array.from(tbody.querySelectorAll("tr")).filter((tr) => {
+            if (!tr || tr.querySelector("th")) return false;
+            if (tr.closest && tr.closest("thead")) return false;
+            if ((tr.getAttribute("class") || "").indexOf("ui-jqgrid-h") >= 0) return false;
+            return tr.querySelector("td");
+          });
+        }
+        return rows;
+      };
+      const tbodies = [];
+      const tPrimary = document.querySelector("table#s_1_l tbody");
+      if (tPrimary) tbodies.push(tPrimary);
+      document.querySelectorAll("table.ui-jqgrid-btable tbody").forEach((tb) => {
+        if (tb && tb !== tPrimary && tbodies.indexOf(tb) < 0) tbodies.push(tb);
+      });
+      if (tbodies.length === 0) {
+        document.querySelectorAll(".ui-jqgrid-bdiv table tbody").forEach((tb) => {
+          if (tb && tbodies.indexOf(tb) < 0) tbodies.push(tb);
+        });
+      }
+      for (const tbody of tbodies) {
+        let tr =
+          tbody.querySelector("tr.jqgrow[id='" + logicalN + "']") ||
+          tbody.querySelector("tr.jqgrow#" + logicalN) ||
+          tbody.querySelector("tr[id='" + logicalN + "']") ||
+          tbody.querySelector("tr.jqgrow[id='" + domN + "']") ||
+          tbody.querySelector("tr.jqgrow#" + domN) ||
+          tbody.querySelector("tr[id='" + domN + "']");
+        if (!tr) {
+          const rows = pickRows(tbody);
+          if (rows.length < domN) continue;
+          tr = rows[domN - 1];
+        }
+        if (!tr) continue;
+        const tryVinForPrefix = (pfx) => {
+          let byId = tr.querySelector("[id='" + pfx + "_s_1_l_VIN']");
+          let v0 = valFromEl(byId);
+          if (!v0) {
+            const g = document.getElementById(pfx + "_s_1_l_VIN");
+            if (g && tr.contains(g)) v0 = valFromEl(g);
+          }
+          if (v0) return v0;
+          const inp =
+            tr.querySelector("input[id='" + pfx + "_s_1_l_VIN']") ||
+            tr.querySelector("input[id^='" + pfx + "_'][id$='_l_VIN']") ||
+            (pfx === 1 || pfx === "1"
+              ? tr.querySelector("input[id$='_l_VIN'], input[name='VIN']")
+              : null);
+          const v1 = valFromEl(inp);
+          if (v1) return v1;
+          const td = tr.querySelector(
+            "td[id='" + pfx + "_s_1_l_VIN'], td[id*='" + pfx + "_'][id*='_l_VIN'], td[aria-describedby*='_l_VIN' i], td[aria-describedby*='VIN' i]"
+          );
+          const v2 = valFromEl(td);
+          if (v2 && v2.length > 3) return v2;
+          return "";
+        };
+        let got = tryVinForPrefix(domN);
+        if (got) return got;
+        if (domN !== logicalN) {
+          got = tryVinForPrefix(logicalN);
+          if (got) return got;
+        }
+      }
+      return "";
+    }"""
+
+    _vin_payload = {"logical": logical, "dom": dom_n}
+    for root in roots:
+        try:
+            s = str(root.evaluate(_js_read_jqgrid_vin, _vin_payload) or "").strip()
+            if s:
+                return s
+        except Exception:
+            continue
     return ""
+
+
+def _norm_vin_chassis_key(s: str) -> str:
+    return re.sub(r"\s+", "", (s or "").strip()).upper()
+
+
+def _discount_cell_matches_expected(expected: str, readback: str) -> bool:
+    """True when ``expected`` discount is considered satisfied by ``readback`` (trim / comma / spacing)."""
+
+    def _nz(x: str) -> str:
+        return re.sub(r"[\s,]", "", (x or "").strip())
+
+    e = _nz(expected)
+    r = _nz(readback)
+    if not e:
+        return True
+    if not r:
+        return False
+    if e == r:
+        return True
+    try:
+        if abs(float(e) - float(r)) < 0.02:
+            return True
+    except ValueError:
+        pass
+    return e in r or r in e
+
+
+def _read_discount_from_order_line_row(
+    page: Page,
+    *,
+    row_n: int,
+    content_frame_selector: str | None,
+) -> str:
+    """
+    Best-effort read of line-item **Discount** for Siebel order line row ``row_n`` (1-based).
+
+    Same fields as ``attach_vehicle_to_bkg`` → ``_fill_discount_for_row``: column ``s_1_l_Discount`` /
+    HHML ``s_1_l_HHML_Discount``; DOM ids typically ``{n}_s_1_l_Discount``, ``{n}_s_1_l_HHML_Discount``,
+    ``{n}_HHML_Discount``. Uses the same jqGrid **pager** + in-page scroll as ``_read_vin_from_order_line_row``.
+    """
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+
+    _ensure_order_line_jqgrid_global_row_visible(
+        page, row_n=int(row_n), content_frame_selector=content_frame_selector
+    )
+    _ctr_after = _read_order_line_jqgrid_row_counter(page, content_frame_selector=content_frame_selector)
+    logical = int(row_n)
+    dom_n = _order_line_jqgrid_dom_row_index(logical, _ctr_after)
+    _dns = str(dom_n)
+
+    _scroll_order_line_jqgrid_row_into_view(
+        page,
+        row_n=logical,
+        content_frame_selector=content_frame_selector,
+        dom_row_n=dom_n,
+    )
+
+    n = logical
+    _ns = _dns
+    _vis_ms = 2500
+
+    def _loc_text_or_value(loc) -> str:
+        try:
+            v = (loc.input_value(timeout=1200) or "").strip()
+            if v:
+                return v
+        except Exception:
+            pass
+        try:
+            v2 = str(
+                loc.evaluate(
+                    """el => {
+                if (!el) return '';
+                const t = (el.tagName || '').toUpperCase();
+                if (t === 'INPUT' || t === 'TEXTAREA') return String(el.value || '').trim();
+                const inp = el.querySelector && el.querySelector('input,textarea');
+                if (inp) return String(inp.value || '').trim();
+                return String(el.innerText || el.textContent || '').trim();
+            }"""
+                )
+                or ""
+            ).strip()
+            if v2:
+                return v2
+        except Exception:
+            pass
+        return ""
+
+    _css: tuple[str, ...] = (
+        f"[id='{_ns}_s_1_l_Discount']",
+        f"input[id='{_ns}_s_1_l_Discount']",
+        f"[id='{_ns}_s_1_l_HHML_Discount']",
+        f"input[id='{_ns}_s_1_l_HHML_Discount']",
+        f"[id='{_ns}_HHML_Discount']",
+        f"input[id='{_ns}_HHML_Discount']",
+    )
+    if dom_n == 1:
+        _css = _css + (
+            "input[id$='_l_Discount']",
+            "input[id*='_l_Discount' i]",
+            "input[name='Discount']",
+            "input[aria-label='Discount']",
+            "input[title='Discount']",
+            "input[title*='Discount' i]",
+        )
+
+    for root in roots:
+        for css in _css:
+            try:
+                loc = root.locator(css).first
+                if loc.count() <= 0 or not loc.is_visible(timeout=_vis_ms):
+                    continue
+                got = _loc_text_or_value(loc)
+                if got:
+                    return got
+            except Exception:
+                continue
+
+    _js_read_jqgrid_disc = r"""(p) => {
+      const logicalN = Math.max(1, Number(p && p.logical) || 1);
+      const domN = Math.max(1, Number(p && p.dom) || logicalN);
+      const norm = (s) => String(s || "").replace(/\s+/g, " ").trim();
+      const valFromEl = (el) => {
+        if (!el) return "";
+        const t = (el.tagName || "").toUpperCase();
+        if (t === "INPUT" || t === "TEXTAREA") return norm(el.value || "");
+        const inp = el.querySelector && el.querySelector("input,textarea");
+        if (inp) return norm(inp.value || "");
+        return norm(el.innerText || el.textContent || "");
+      };
+      const pickRows = (tbody) => {
+        if (!tbody || (tbody.closest && tbody.closest("thead"))) return [];
+        let rows = Array.from(tbody.querySelectorAll("tr.jqgrow"));
+        if (rows.length === 0) {
+          rows = Array.from(tbody.querySelectorAll("tr[role='row']")).filter((tr) => {
+            if (!tr || tr.querySelector("th")) return false;
+            if (tr.closest && tr.closest("thead")) return false;
+            if ((tr.getAttribute("class") || "").indexOf("ui-jqgrid-h") >= 0) return false;
+            return tr.querySelector("td");
+          });
+        }
+        if (rows.length === 0) {
+          rows = Array.from(tbody.querySelectorAll("tr")).filter((tr) => {
+            if (!tr || tr.querySelector("th")) return false;
+            if (tr.closest && tr.closest("thead")) return false;
+            if ((tr.getAttribute("class") || "").indexOf("ui-jqgrid-h") >= 0) return false;
+            return tr.querySelector("td");
+          });
+        }
+        return rows;
+      };
+      const tbodies = [];
+      const tPrimary = document.querySelector("table#s_1_l tbody");
+      if (tPrimary) tbodies.push(tPrimary);
+      document.querySelectorAll("table.ui-jqgrid-btable tbody").forEach((tb) => {
+        if (tb && tb !== tPrimary && tbodies.indexOf(tb) < 0) tbodies.push(tb);
+      });
+      if (tbodies.length === 0) {
+        document.querySelectorAll(".ui-jqgrid-bdiv table tbody").forEach((tb) => {
+          if (tb && tbodies.indexOf(tb) < 0) tbodies.push(tb);
+        });
+      }
+      const tryDiscForPrefix = (tr, pfx) => {
+        const inp =
+          tr.querySelector("input[id='" + pfx + "_s_1_l_HHML_Discount']") ||
+          tr.querySelector("input[id='" + pfx + "_s_1_l_Discount']") ||
+          tr.querySelector("input[id='" + pfx + "_HHML_Discount']") ||
+          tr.querySelector("input[id^='" + pfx + "_'][id$='_l_HHML_Discount']") ||
+          tr.querySelector("input[id^='" + pfx + "_'][id$='_l_Discount']") ||
+          (pfx === 1 || pfx === "1"
+            ? tr.querySelector("input[id$='_l_Discount'], input[name='Discount']")
+            : null);
+        const v1 = valFromEl(inp);
+        if (v1) return v1;
+        const td = tr.querySelector(
+          "td[id*='" + pfx + "_'][id*='Discount'], td[aria-describedby*='Discount' i], td[aria-describedby*='HHML_Discount' i]"
+        );
+        return valFromEl(td);
+      };
+      for (const tbody of tbodies) {
+        let tr =
+          tbody.querySelector("tr.jqgrow[id='" + logicalN + "']") ||
+          tbody.querySelector("tr.jqgrow#" + logicalN) ||
+          tbody.querySelector("tr[id='" + logicalN + "']") ||
+          tbody.querySelector("tr.jqgrow[id='" + domN + "']") ||
+          tbody.querySelector("tr.jqgrow#" + domN) ||
+          tbody.querySelector("tr[id='" + domN + "']");
+        if (!tr) {
+          const rows = pickRows(tbody);
+          if (rows.length < domN) continue;
+          tr = rows[domN - 1];
+        }
+        if (!tr) continue;
+        let v = tryDiscForPrefix(tr, domN);
+        if (v) return v;
+        if (domN !== logicalN) {
+          v = tryDiscForPrefix(tr, logicalN);
+          if (v) return v;
+        }
+      }
+      return "";
+    }"""
+
+    _disc_payload = {"logical": logical, "dom": dom_n}
+    for root in roots:
+        try:
+            s = str(root.evaluate(_js_read_jqgrid_disc, _disc_payload) or "").strip()
+            if s:
+                return s
+        except Exception:
+            continue
+    return ""
+
+
+def _read_order_line_row_vin_and_discount(
+    page: Page,
+    *,
+    row_n: int,
+    content_frame_selector: str | None,
+) -> tuple[str, str]:
+    """
+    Read **VIN** and **line discount** for order line row ``row_n`` (1-based).
+
+    Uses the same Siebel HHML surfaces as ``attach_vehicle_to_bkg`` (``_fill_vin_for_row`` /
+    ``_fill_discount_for_row``): ``s_1_l_VIN`` → ``{n}_s_1_l_VIN`` (and row-1 ``input[name='VIN']`` fallbacks);
+    ``s_1_l_Discount`` / HHML ``s_1_l_HHML_Discount`` → ``{n}_s_1_l_Discount``, ``{n}_s_1_l_HHML_Discount``, etc.
+    """
+    vin = (_read_vin_from_order_line_row(page, row_n=row_n, content_frame_selector=content_frame_selector) or "").strip()
+    disc = (
+        _read_discount_from_order_line_row(page, row_n=row_n, content_frame_selector=content_frame_selector) or ""
+    ).strip()
+    return vin, disc
+
+
+def _challan_try_set_line_discount_on_row(
+    page: Page,
+    *,
+    row_n: int,
+    disc_raw: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> bool:
+    """Set discount on an existing line-item row (resume repair)."""
+    _disc = (disc_raw or "").strip()
+    if not _disc:
+        return True
+    logical = int(row_n)
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    _ensure_order_line_jqgrid_global_row_visible(
+        page, row_n=logical, content_frame_selector=content_frame_selector
+    )
+    _ctr_c = _read_order_line_jqgrid_row_counter(page, content_frame_selector=content_frame_selector)
+    dom_n = _order_line_jqgrid_dom_row_index(logical, _ctr_c)
+    _dp = {"val": _disc, "dom": dom_n, "logical": logical}
+    _js_disc_pick = """(payload) => {
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const c = String((payload && payload.val) || '');
+      const domN = Math.max(1, Number(payload && payload.dom) || 1);
+      const logicalN = Math.max(1, Number(payload && payload.logical) || domN);
+      const idGroups = [[domN + '_s_1_l_HHML_Discount', domN + '_HHML_Discount', domN + '_s_1_l_Discount']];
+      if (logicalN !== domN) {
+        idGroups.push([
+          logicalN + '_s_1_l_HHML_Discount',
+          logicalN + '_HHML_Discount',
+          logicalN + '_s_1_l_Discount',
+        ]);
+      }
+      for (const ids of idGroups) {
+        for (const id0 of ids) {
+          const el = document.getElementById(id0);
+          if (!el || !vis(el)) continue;
+          try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+          try { el.focus(); } catch (e) {}
+          el.value = '';
+          el.value = c;
+          try {
+            el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: c }));
+          } catch (e) {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return true;
+        }
+      }
+      return false;
+    }"""
+    for root in roots:
+        try:
+            if bool(root.evaluate(_js_disc_pick, _dp)):
+                note(f"challan_resume: JS set discount row={row_n} value={_disc!r}.")
+                _safe_page_wait(page, 200, log_label="challan_resume_after_discount_js")
+                try:
+                    page.keyboard.press("Tab")
+                except Exception:
+                    pass
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _scrape_ex_showroom_for_order_line_row(
@@ -209,9 +1069,10 @@ def _scrape_ex_showroom_for_order_line_row(
     """
     Best-effort **Total (Ex-showroom)** for a single order line row (1-based index) after **Price All** + **Allocate All**.
     """
-    n = int(row_n)
-    js = """(rowNum) => {
-      const n = Number(rowNum) || 1;
+    logical = int(row_n)
+    js = """(p) => {
+      const domN = Math.max(1, Number(p && p.dom) || 1);
+      const logicalN = Math.max(1, Number(p && p.logical) || domN);
       const vis = (el) => {
         if (!el) return false;
         const st = window.getComputedStyle(el);
@@ -225,23 +1086,38 @@ def _scrape_ex_showroom_for_order_line_row(
         return String(el.value || '').trim();
       };
       const suffixTry = ['Total_Ex_Showroom', 'Ex_Showroom', 'Total_Ex_Show_Room', 'ExShowroom'];
-      for (const suf of suffixTry) {
-        const v = tryId(`${n}_s_1_l_${suf}`);
-        if (v) return v;
+      const trySuffixesFor = (pfx) => {
+        for (const suf of suffixTry) {
+          const v = tryId(`${pfx}_s_1_l_${suf}`);
+          if (v) return v;
+        }
+        return '';
+      };
+      let out = trySuffixesFor(domN);
+      if (out) return out;
+      if (domN !== logicalN) {
+        out = trySuffixesFor(logicalN);
+        if (out) return out;
       }
-      const inputs = Array.from(document.querySelectorAll('input'));
-      const prefix = `${n}_s_1_l_`;
-      for (const el of inputs) {
-        const id = String(el.getAttribute('id') || '');
-        if (!id.startsWith(prefix)) continue;
-        const al = String(el.getAttribute('aria-label') || '').toLowerCase();
-        const tt = String(el.getAttribute('title') || '').toLowerCase();
-        const nm = String(el.getAttribute('name') || '').toLowerCase();
-        const blob = (al + ' ' + tt + ' ' + nm);
-        if (!blob.includes('ex-showroom') && !blob.includes('ex showroom') && !blob.includes('ex_showroom')) continue;
-        const val = String(el.value || '').trim();
-        if (val) return val;
-      }
+      const tryScanPrefix = (pfx) => {
+        const inputs = Array.from(document.querySelectorAll('input'));
+        const prefix = `${pfx}_s_1_l_`;
+        for (const el of inputs) {
+          const id = String(el.getAttribute('id') || '');
+          if (!id.startsWith(prefix)) continue;
+          const al = String(el.getAttribute('aria-label') || '').toLowerCase();
+          const tt = String(el.getAttribute('title') || '').toLowerCase();
+          const nm = String(el.getAttribute('name') || '').toLowerCase();
+          const blob = (al + ' ' + tt + ' ' + nm);
+          if (!blob.includes('ex-showroom') && !blob.includes('ex showroom') && !blob.includes('ex_showroom')) continue;
+          const val = String(el.value || '').trim();
+          if (val) return val;
+        }
+        return '';
+      };
+      out = tryScanPrefix(domN);
+      if (out) return out;
+      if (domN !== logicalN) return tryScanPrefix(logicalN);
       return '';
     }"""
     roots: list = []
@@ -254,9 +1130,15 @@ def _scrape_ex_showroom_for_order_line_row(
     except Exception:
         pass
     roots.append(page)
+    _ensure_order_line_jqgrid_global_row_visible(
+        page, row_n=logical, content_frame_selector=content_frame_selector
+    )
+    _ctr_e = _read_order_line_jqgrid_row_counter(page, content_frame_selector=content_frame_selector)
+    dom_n = _order_line_jqgrid_dom_row_index(logical, _ctr_e)
+    _ex_payload = {"logical": logical, "dom": dom_n}
     for root in roots:
         try:
-            v = root.evaluate(js, n)
+            v = root.evaluate(js, _ex_payload)
             if (v or "").strip():
                 return str(v).strip()
         except Exception:
@@ -990,6 +1872,140 @@ def _run_vehicle_sales_my_orders_mobile_search(
         return _MyOrdersGridSearchResult(outcome="error", error=str(_ex))
 
 
+def _run_vehicle_sales_my_orders_order_number_search(
+    page: Page,
+    *,
+    order_number: str,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> _MyOrdersGridSearchResult:
+    """
+    My Orders view: Find ``s_1_1_1_0`` → **Order #** column → value = stored order# → Enter → jqGrid.
+    Used for subdealer challan resume (``x > 0``); does **not** use mobile digits.
+    """
+    _tmo = min(int(action_timeout_ms or 3000), 8000)
+    on = (order_number or "").strip()
+    if not on:
+        return _MyOrdersGridSearchResult(outcome="error", error="order_number_empty")
+    root = _find_vehicle_sales_my_orders_search_root(page, content_frame_selector)
+    if root is None:
+        note("Create Order: My Orders Find (s_1_1_1_0) not found — challan Order# search.")
+        return _MyOrdersGridSearchResult(outcome="unknown_rows", error="find_root_missing")
+    try:
+        dd = root.locator('[name="s_1_1_1_0"]').first
+        dd.scroll_into_view_if_needed(timeout=_tmo)
+        _safe_page_wait(page, 500, log_label="before_my_orders_order_find_dropdown")
+        try:
+            dd.click(timeout=_tmo)
+        except Exception:
+            dd.click(timeout=_tmo, force=True)
+        _safe_page_wait(page, 200, log_label="after_my_orders_order_find_click")
+        _picked = False
+        try:
+            tag = (dd.evaluate("el => (el.tagName || '').toLowerCase()") or "").strip()
+            if tag == "select":
+                for _pat in (
+                    re.compile(r"order\s*#\s*$", re.I),
+                    re.compile(r"order\s*#", re.I),
+                    re.compile(r"order\s*number", re.I),
+                ):
+                    try:
+                        dd.select_option(label=_pat)
+                        _picked = True
+                        note(f"Create Order: My Orders Find select_option Order# ({_pat.pattern!r}).")
+                        break
+                    except Exception:
+                        continue
+            else:
+                try:
+                    dd.press("Alt+ArrowDown", timeout=1200)
+                except Exception:
+                    pass
+                _safe_page_wait(page, 250, log_label="my_orders_order_find_lov_open")
+                for _ in range(36):
+                    try:
+                        dd.press("ArrowDown", timeout=400)
+                    except Exception:
+                        break
+                    try:
+                        tx = (
+                            dd.input_value(timeout=200) or dd.evaluate("el => el.value || el.textContent || ''") or ""
+                        ).lower()
+                    except Exception:
+                        tx = ""
+                    if "order" in tx and "#" in tx:
+                        _picked = True
+                        break
+                    if "order" in tx and "number" in tx:
+                        _picked = True
+                        break
+                if not _picked:
+                    try:
+                        dd.type("Order #", delay=40, timeout=2000)
+                        _picked = True
+                    except Exception:
+                        pass
+        except Exception as _e:
+            note(f"Create Order: My Orders Find Order# selection raised {_e!r} — continuing.")
+        try:
+            dd.press("Tab", timeout=1200)
+        except Exception:
+            page.keyboard.press("Tab")
+        _safe_page_wait(page, 200, log_label="after_my_orders_order_find_tab_to_value")
+        _filled = False
+        for name in ("s_1_1_1_1", "s_1_1_1_2"):
+            try:
+                loc = root.locator(f'input[name="{name}"], [name="{name}"]').first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    loc.click(timeout=800)
+                    loc.fill("", timeout=500)
+                    loc.type(on, delay=25, timeout=3000)
+                    _filled = True
+                    note(f"Create Order: filled My Orders Order# Find value field name={name!r}.")
+                    break
+            except Exception:
+                continue
+        if not _filled:
+            try:
+                page.keyboard.type(on, delay=25)
+                _filled = True
+            except Exception:
+                pass
+        if not _filled:
+            return _MyOrdersGridSearchResult(outcome="error", error="could_not_fill_order_find_value")
+        try:
+            page.keyboard.press("Tab")
+        except Exception:
+            pass
+        _safe_page_wait(page, 150, log_label="after_my_orders_order_value_tab")
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+        _safe_page_wait(page, 500, log_label="after_my_orders_order_enter_grid_settle")
+        _safe_page_wait(page, min(2500, _tmo), log_label="after_my_orders_order_find_enter")
+        rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
+        _full_row_count = len(rows or [])
+        _matched = [r for r in (rows or []) if _my_orders_row_matches_order_number(r, on)]
+        if not _matched:
+            note(
+                f"Create Order: My Orders Order# search returned {_full_row_count} row(s); "
+                f"none match Order# {on!r}."
+            )
+            return _MyOrdersGridSearchResult(outcome="no_rows", error="my_orders_order_no_match", rows=rows or [])
+        rows = _matched
+        oc, po, pi = _classify_my_orders_grid_rows(rows)
+        note(
+            f"Create Order: My Orders Order# grid outcome={oc!r} rows={len(rows)} "
+            f"primary_order={po!r} primary_invoice={pi!r}."
+        )
+        return _MyOrdersGridSearchResult(outcome=oc, primary_order=po, primary_invoice=pi, rows=rows or [])
+    except Exception as _ex:
+        note(f"Create Order: My Orders Order# search failed: {_ex!r}")
+        return _MyOrdersGridSearchResult(outcome="error", error=str(_ex))
+
+
 def _fill_order_finance_after_vin_attach(
     page: Page,
     *,
@@ -1249,6 +2265,10 @@ def _attach_vehicle_to_bkg(
     attach_line_items: list[dict] | None = None,
     financier_name: str = "",
     frame_dump_dir: Path | str | None = None,
+    attach_start_row_1based: int = 1,
+    challan_progress_callback: Callable[..., None] | None = None,
+    skip_line_item_fill: bool = False,
+    scrape_attach_line_items: list[dict] | None = None,
 ) -> tuple[bool, str | None, dict]:
     """
     After a new sales order is saved:
@@ -2741,54 +3761,68 @@ def _attach_vehicle_to_bkg(
         # Row 1: original JS/CSS approach (untouched)
         # Rows >= 2: Playwright-based approach (scroll left → click New → click VIN TD → fill → Tab → click Discount TD → fill → Tab)
         _n_tot = len(_line_items)
-        for _ix, _it in enumerate(_line_items):
-            n = _ix + 1
-            _ch = (_it.get("full_chassis") or "").strip()
-            _disc_raw = (_it.get("line_item_discount") or "").strip()
+        _start0 = max(1, int(attach_start_row_1based or 1))
+        _scrape_lines = scrape_attach_line_items if isinstance(scrape_attach_line_items, list) else _line_items
+        if skip_line_item_fill:
+            note(
+                "attach_vehicle_to_bkg: skip_line_item_fill=True — line items already on form; "
+                "proceeding to Price All / Allocate All."
+            )
+        else:
+            for _ix, _it in enumerate(_line_items):
+                n = _start0 + _ix
+                _ch = (_it.get("full_chassis") or "").strip()
+                _disc_raw = (_it.get("line_item_discount") or "").strip()
 
-            if n == 1:
-                # ────────────────────────────────────────────────────────────────────────────
-                # Row 1: ORIGINAL LOGIC (untouched) — JS/CSS-based approach
-                # ────────────────────────────────────────────────────────────────────────────
-                if not _click_new_line_item():
-                    return False, "Could not click New button (id=s_1_1_35_0_Ctrl or id suffix _35_0_Ctrl) on order line items.", {}
-                _safe_page_wait(page, 900, log_label="after_new_before_vin_field")
-                if not _fill_vin_for_row(n, _ch):
-                    return False, f"Could not fill line-item VIN for row {n} (selectors id/_l_VIN/name=VIN) with {_ch!r}.", {}
-                _is_last = _ix == _n_tot - 1
-                if _is_last:
-                    _safe_page_wait(page, 2800, log_label="after_vin_tab_settle")
-                else:
-                    _safe_page_wait(page, 800, log_label=f"after_vin_tab_settle_row_{n}")
+                if n == 1:
+                    # ────────────────────────────────────────────────────────────────────────────
+                    # Row 1: ORIGINAL LOGIC (untouched) — JS/CSS-based approach
+                    # ────────────────────────────────────────────────────────────────────────────
+                    if not _click_new_line_item():
+                        return False, "Could not click New button (id=s_1_1_35_0_Ctrl or id suffix _35_0_Ctrl) on order line items.", {}
+                    _safe_page_wait(page, 900, log_label="after_new_before_vin_field")
+                    if not _fill_vin_for_row(n, _ch):
+                        return False, f"Could not fill line-item VIN for row {n} (selectors id/_l_VIN/name=VIN) with {_ch!r}.", {}
+                    _is_last = _ix == _n_tot - 1
+                    if _is_last:
+                        _safe_page_wait(page, 2800, log_label="after_vin_tab_settle")
+                    else:
+                        _safe_page_wait(page, 800, log_label=f"after_vin_tab_settle_row_{n}")
 
-                if _disc_raw:
-                    for _t6 in range(6):
-                        try:
-                            page.keyboard.press("Tab")
-                        except Exception:
-                            pass
-                        _safe_page_wait(page, 70, log_label=f"tab_to_line_discount_after_vin_r{n}_{_t6}")
-                    if not _fill_discount_for_row(n, _disc_raw):
-                        return (
-                            False,
-                            f"Could not fill line-item Discount for row {n} (id/_l_Discount/name=Discount) with {_disc_raw!r}.",
-                            {},
-                        )
-                    _safe_page_wait(page, 500, log_label="after_discount_tab_settle")
-            else:
-                # ────────────────────────────────────────────────────────────────────────────
-                # Rows >= 2: NEW Playwright-based approach
-                # Actions: scroll left → click New → click VIN TD → fill VIN → Tab → click Discount TD → fill → Tab
-                # ────────────────────────────────────────────────────────────────────────────
-                note(f"attach_vehicle_to_bkg: [row {n}] starting Playwright-based sequence for multi-VIN attach.")
-                _pw_ok, _pw_err = _fill_vin_and_discount_row_2_plus_playwright(n, _ch, _disc_raw)
-                if not _pw_ok:
-                    return False, _pw_err or f"Row {n}: Playwright attach failed.", {}
-                _is_last = _ix == _n_tot - 1
-                if _is_last:
-                    _safe_page_wait(page, 2800, log_label="after_row_2_plus_playwright_settle_last")
+                    if _disc_raw:
+                        for _t6 in range(6):
+                            try:
+                                page.keyboard.press("Tab")
+                            except Exception:
+                                pass
+                            _safe_page_wait(page, 70, log_label=f"tab_to_line_discount_after_vin_r{n}_{_t6}")
+                        if not _fill_discount_for_row(n, _disc_raw):
+                            return (
+                                False,
+                                f"Could not fill line-item Discount for row {n} (id/_l_Discount/name=Discount) with {_disc_raw!r}.",
+                                {},
+                            )
+                        _safe_page_wait(page, 500, log_label="after_discount_tab_settle")
                 else:
-                    _safe_page_wait(page, 500, log_label=f"after_row_2_plus_playwright_settle_row_{n}")
+                    # ────────────────────────────────────────────────────────────────────────────
+                    # Rows >= 2: NEW Playwright-based approach
+                    # Actions: scroll left → click New → click VIN TD → fill VIN → Tab → click Discount TD → fill → Tab
+                    # ────────────────────────────────────────────────────────────────────────────
+                    note(f"attach_vehicle_to_bkg: [row {n}] starting Playwright-based sequence for multi-VIN attach.")
+                    _pw_ok, _pw_err = _fill_vin_and_discount_row_2_plus_playwright(n, _ch, _disc_raw)
+                    if not _pw_ok:
+                        return False, _pw_err or f"Row {n}: Playwright attach failed.", {}
+                    _is_last = _ix == _n_tot - 1
+                    if _is_last:
+                        _safe_page_wait(page, 2800, log_label="after_row_2_plus_playwright_settle_last")
+                    else:
+                        _safe_page_wait(page, 500, log_label=f"after_row_2_plus_playwright_settle_row_{n}")
+
+                if callable(challan_progress_callback):
+                    try:
+                        challan_progress_callback({"attached_vin_count": int(_start0) + int(_ix)})
+                    except Exception as _cb_exc:
+                        note(f"attach_vehicle_to_bkg: challan_progress_callback raised {_cb_exc!r} (ignored).")
 
         _safe_page_wait(page, 400, log_label="after_all_line_items_before_price_all")
 
@@ -2813,7 +3847,7 @@ def _attach_vehicle_to_bkg(
             _safe_page_wait(page, 1200, log_label="after_allocate_all_before_ex_showroom_scrape")
             _scroll_line_items_grid_right()
             _safe_page_wait(page, 300, log_label="after_scroll_right_for_ex_showroom")
-            _n_lines = len(_line_items)
+            _n_lines = len(_scrape_lines)
             if _n_lines > 1:
                 _rows_out: list[dict[str, str]] = []
                 for _rn in range(1, _n_lines + 1):
@@ -2823,7 +3857,7 @@ def _attach_vehicle_to_bkg(
                     _ex_r = _scrape_ex_showroom_for_order_line_row(
                         page, row_n=_rn, content_frame_selector=content_frame_selector
                     )
-                    _exp_ch = (_line_items[_rn - 1].get("full_chassis") or "").strip()
+                    _exp_ch = (_scrape_lines[_rn - 1].get("full_chassis") or "").strip()
                     _rows_out.append(
                         {
                             "full_chassis": (_vin_rb.strip() or _exp_ch),
@@ -2866,7 +3900,7 @@ def _attach_vehicle_to_bkg(
                     _extra["vehicle_price"] = _ex_raw
                     _extra["order_line_ex_showroom"] = [
                         {
-                            "full_chassis": (_line_items[0].get("full_chassis") or "").strip(),
+                            "full_chassis": (_scrape_lines[0].get("full_chassis") or "").strip(),
                             "vehicle_ex_showroom_cost": _ex_raw,
                         }
                     ]
@@ -3505,6 +4539,11 @@ def _create_order(
     challan_network_pin: str = "",
     expected_order_number: str = "",
     frame_dump_dir: Path | str | None = None,
+    challan_resume_order_number: str = "",
+    challan_resume_attached: int = 0,
+    challan_resume_total: int = 0,
+    full_order_line_vehicles: list[dict] | None = None,
+    challan_progress_callback: Callable[..., None] | None = None,
 ) -> tuple[bool, str | None, dict]:
     """
     Vehicle Sales → Sales Orders flow (same frame as the ``+`` New control):
@@ -3723,6 +4762,194 @@ def _create_order(
             note(f"Create Order: goto Vehicle Sales URL raised {_e!r} — continuing.")
     _siebel_after_goto_wait(page, floor_ms=4500)
     note(f"Create Order: arrived at Vehicle Sales (post-goto wait). URL={page.url[:120]}")
+
+    # Subdealer challan resume: reopen existing order via My Orders **Order#** (skip '+' new booking).
+    _olv_full = (
+        full_order_line_vehicles
+        if isinstance(full_order_line_vehicles, list) and len(full_order_line_vehicles) > 0
+        else (attach_line_items if isinstance(attach_line_items, list) else None)
+    )
+    try:
+        _cr_x = int(challan_resume_attached or 0)
+    except (TypeError, ValueError):
+        _cr_x = 0
+    try:
+        _cr_y = int(challan_resume_total or 0)
+    except (TypeError, ValueError):
+        _cr_y = 0
+    _cr_ord = (challan_resume_order_number or "").strip()
+    if (
+        (hero_dms_flow or "add_sales").strip() == "add_subdealer_challan"
+        and _cr_ord
+        and _cr_x > 0
+        and isinstance(_olv_full, list)
+        and len(_olv_full) > 0
+    ):
+        _hint_y = _cr_y if _cr_y > 0 else len(_olv_full)
+        note(
+            f"Create Order: challan resume — Order#={_cr_ord!r}, "
+            f"checkpoint attached={_cr_x}/{_hint_y} (re-open via My Orders Order# search)."
+        )
+        _moso = _run_vehicle_sales_my_orders_order_number_search(
+            page,
+            order_number=_cr_ord,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+        )
+        _mo_oc_r = (_moso.outcome or "").strip()
+        if _mo_oc_r == "invoiced":
+            scraped["order_number"] = (_moso.primary_order or "").strip() or _cr_ord
+            scraped["invoice_number"] = (_moso.primary_invoice or "").strip()
+            scraped["my_orders_branch"] = "invoiced"
+            scraped["ready_for_client_create_invoice"] = True
+            note("Create Order: challan resume — My Orders shows invoiced row; skipping attach.")
+            return True, None, scraped
+        if _mo_oc_r in ("error", "no_rows"):
+            _em = str(_moso.error or _mo_oc_r or "order_number_search_failed").strip()
+            return (
+                False,
+                f"Create Order: challan resume — My Orders Order# search did not find order {_cr_ord!r} ({_em}).",
+                scraped,
+            )
+        _branch = "allocated" if _mo_oc_r == "allocated" else "pending"
+        if not _click_my_orders_jqgrid_order_for_mobile_or_order(
+            page,
+            mobile="",
+            order_number=_cr_ord,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            action_timeout_ms=action_timeout_ms,
+        ):
+            return (
+                False,
+                "Create Order: challan resume — could not open Order# from My Orders grid.",
+                scraped,
+            )
+        try:
+            page.wait_for_load_state("networkidle", timeout=8_000)
+        except Exception:
+            pass
+        _err_o = _poll_and_handle_siebel_error_popup(
+            page,
+            content_frame_selector,
+            note,
+            context="Create Order after challan resume Order# drilldown",
+            total_ms=1400,
+            step_ms=300,
+        )
+        if _err_o:
+            return (
+                False,
+                f"Create Order: Siebel error after challan Order# drill: {_err_o[:220]}",
+                scraped,
+            )
+        _safe_page_wait(page, 1800, log_label="after_challan_resume_order_drill")
+        scraped["order_number"] = _cr_ord
+
+        N = len(_olv_full)
+        first_inc: int | None = None
+        for _i in range(N):
+            _n = _i + 1
+            _exp = _norm_vin_chassis_key(str((_olv_full[_i].get("full_chassis") or "")).strip())
+            if not _exp:
+                continue
+            _vin_rb = _read_vin_from_order_line_row(
+                page, row_n=_n, content_frame_selector=content_frame_selector
+            )
+            if _norm_vin_chassis_key(_vin_rb) != _exp:
+                first_inc = _i
+                break
+        _repair_upto = N if first_inc is None else first_inc
+        for _i in range(_repair_upto):
+            _n = _i + 1
+            _exp = _norm_vin_chassis_key(str((_olv_full[_i].get("full_chassis") or "")).strip())
+            if not _exp:
+                continue
+            _vin_rb = _read_vin_from_order_line_row(
+                page, row_n=_n, content_frame_selector=content_frame_selector
+            )
+            if _norm_vin_chassis_key(_vin_rb) != _exp:
+                continue
+            _dexp = str((_olv_full[_i].get("line_item_discount") or "")).strip()
+            _drb = _read_discount_from_order_line_row(
+                page, row_n=_n, content_frame_selector=content_frame_selector
+            )
+            if not _discount_cell_matches_expected(_dexp, _drb):
+                if _dexp and not _challan_try_set_line_discount_on_row(
+                    page,
+                    row_n=_n,
+                    disc_raw=_dexp,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                ):
+                    note(
+                        f"Create Order: challan resume discount repair best-effort failed row={_n} "
+                        f"(expected disc={_dexp!r})."
+                    )
+
+        _start_alloc = _branch == "allocated"
+        if first_inc is None:
+            _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
+                page,
+                full_chassis=full_chassis,
+                order_number=_cr_ord,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                start_at_order_link_before_apply=_start_alloc,
+                line_item_discount=line_item_discount,
+                attach_line_items=[],
+                financier_name=financier_name,
+                frame_dump_dir=frame_dump_dir,
+                skip_line_item_fill=True,
+                scrape_attach_line_items=_olv_full,
+                challan_progress_callback=challan_progress_callback,
+            )
+        else:
+            _remain = list(_olv_full[first_inc:])
+            _start_row = first_inc + 1
+            _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
+                page,
+                full_chassis=full_chassis,
+                order_number=_cr_ord,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                start_at_order_link_before_apply=_start_alloc,
+                line_item_discount=line_item_discount,
+                attach_line_items=_remain,
+                financier_name=financier_name,
+                frame_dump_dir=frame_dump_dir,
+                attach_start_row_1based=_start_row,
+                scrape_attach_line_items=_olv_full,
+                challan_progress_callback=challan_progress_callback,
+            )
+        scraped["order_drilldown_opened"] = bool(_att_ok)
+        scraped["my_orders_branch"] = _branch
+        if _att_scraped:
+            scraped.update(_att_scraped)
+        if not _att_ok:
+            return False, (_att_err or "attach_vehicle_to_bkg failed (challan resume).").strip(), scraped
+        _safe_page_wait(page, 900, log_label="after_challan_resume_attach")
+        order_ref = _scrape_order_number_current()
+        if order_ref:
+            scraped["order_number"] = order_ref
+            if order_ref != _cr_ord:
+                note(f"Create Order: challan resume — refreshed Order#={order_ref!r} after attach.")
+        inv_no = _poll_invoice_number_loops_only()
+        scraped["invoice_number"] = inv_no or ""
+        if callable(form_trace):
+            form_trace(
+                "v4_create_order",
+                "Vehicle Sales — challan resume",
+                "attach_vehicle_to_bkg_after_order_number_search",
+                order_number=str(scraped.get("order_number") or ""),
+                invoice_number=str(scraped.get("invoice_number") or ""),
+            )
+        return True, None, scraped
+
     _challan_skip_my_orders = (hero_dms_flow or "add_sales").strip() == "add_subdealer_challan"
     if _challan_skip_my_orders:
         note(
@@ -4922,6 +6149,11 @@ def _create_order(
                 f"placeholder ({_on_norm[:80]}). Fix validation errors (e.g. required fields) and retry.",
                 scraped,
             )
+        if callable(challan_progress_callback) and _on_norm:
+            try:
+                challan_progress_callback({"order_number": _on_norm})
+            except Exception as _cb_e:
+                note(f"Create Order: challan_progress_callback(order_number) raised {_cb_e!r} (ignored).")
         _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
             page,
             full_chassis=full_chassis,
@@ -4933,6 +6165,7 @@ def _create_order(
             attach_line_items=attach_line_items,
             financier_name=financier_name,
             frame_dump_dir=frame_dump_dir,
+            challan_progress_callback=challan_progress_callback,
         )
         scraped["order_drilldown_opened"] = bool(_att_ok)
         if _att_scraped:
@@ -5851,6 +7084,7 @@ def prepare_order(
     ms_done: Callable[[str], None] | None,
     log_vehicle_snapshot: Callable[[str], None],
     frame_dump_dir: Path | str | None = None,
+    challan_progress_callback: Callable[..., None] | None = None,
 ) -> dict:
     """
     Generate Booking + ``_create_order`` + merge scrape into ``out[\"vehicle\"]``.
@@ -5914,11 +7148,24 @@ def prepare_order(
     )
     _raw_olv = dms_values.get("order_line_vehicles") or dms_values.get("attach_vehicles")
     _attach_li = _raw_olv if isinstance(_raw_olv, list) and len(_raw_olv) > 0 else None
+    _full_olv_src = dms_values.get("challan_full_order_line_vehicles")
+    _full_olv = (
+        _full_olv_src if isinstance(_full_olv_src, list) and len(_full_olv_src) > 0 else _attach_li
+    )
     _flow_pv = str(dms_values.get("hero_dms_flow") or "add_sales").strip()
     _expected_order = (
         str(dms_values.get("order_number") or "").strip()
         or str((out.get("vehicle") or {}).get("order_number") or "").strip()
     )
+    try:
+        _cr_att = int(dms_values.get("challan_dms_attached_vin_count") or 0)
+    except (TypeError, ValueError):
+        _cr_att = 0
+    try:
+        _cr_tot = int(dms_values.get("challan_num_vehicles") or 0)
+    except (TypeError, ValueError):
+        _cr_tot = 0
+    _cr_dms_ord = str(dms_values.get("challan_dms_order_number") or "").strip()
     ok_order, order_err, order_scraped = _create_order(
         page,
         mobile=mobile,
@@ -5943,6 +7190,11 @@ def prepare_order(
         ).strip(),
         expected_order_number=_expected_order,
         frame_dump_dir=frame_dump_dir,
+        challan_resume_order_number=_cr_dms_ord,
+        challan_resume_attached=_cr_att,
+        challan_resume_total=_cr_tot,
+        full_order_line_vehicles=_full_olv,
+        challan_progress_callback=challan_progress_callback,
     )
     if not ok_order:
         step("Stopped: create_order flow failed.")

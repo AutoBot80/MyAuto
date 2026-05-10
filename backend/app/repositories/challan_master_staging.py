@@ -108,7 +108,8 @@ def fetch_master(challan_batch_id: uuid.UUID) -> dict[str, Any] | None:
                 """
                 SELECT challan_batch_id, from_dealer_id, to_dealer_id, challan_date, challan_book_num,
                        num_vehicles, num_vehicles_prepared, invoice_complete, invoice_status, created_at,
-                       last_run_at, add_transport_cost, transport_cost_per_vehicle
+                       last_run_at, add_transport_cost, transport_cost_per_vehicle,
+                       dms_order_number, dms_attached_vin_count
                 FROM challan_master_staging
                 WHERE challan_batch_id = %s::uuid
                 """,
@@ -161,6 +162,46 @@ def touch_last_run_at(challan_batch_id: uuid.UUID) -> None:
         conn.close()
 
 
+def update_challan_dms_checkpoint(
+    challan_batch_id: uuid.UUID,
+    *,
+    from_dealer_id: int,
+    dms_order_number: str | None = None,
+    dms_attached_vin_count: int | None = None,
+) -> bool:
+    """
+    Persist mid-run Siebel order# and/or attach progress for subdealer challan resume.
+    Only updates columns that are non-None. Verifies ``from_dealer_id`` matches the master row.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            sets: list[str] = []
+            params: list[Any] = []
+            if dms_order_number is not None:
+                sets.append("dms_order_number = %s")
+                params.append((dms_order_number or "").strip() or None)
+            if dms_attached_vin_count is not None:
+                sets.append("dms_attached_vin_count = %s")
+                params.append(max(0, int(dms_attached_vin_count)))
+            if not sets:
+                return True
+            params.extend([str(challan_batch_id), int(from_dealer_id)])
+            cur.execute(
+                f"""
+                UPDATE challan_master_staging
+                SET {", ".join(sets)}
+                WHERE challan_batch_id = %s::uuid AND from_dealer_id = %s
+                """,
+                params,
+            )
+            _ok = cur.rowcount > 0
+        conn.commit()
+        return _ok
+    finally:
+        conn.close()
+
+
 def set_invoice_state(
     challan_batch_id: uuid.UUID,
     *,
@@ -198,6 +239,7 @@ _MASTER_LIST_SELECT = """
                 SELECT m.challan_batch_id, m.from_dealer_id, m.to_dealer_id, m.challan_date, m.challan_book_num,
                        m.num_vehicles, m.num_vehicles_prepared, m.invoice_complete, m.invoice_status, m.created_at,
                        m.last_run_at, m.add_transport_cost, m.transport_cost_per_vehicle,
+                       m.dms_order_number, m.dms_attached_vin_count,
                        df.dealer_name AS from_dealer_name,
                        dt.dealer_name AS to_dealer_name,
                        COALESCE((

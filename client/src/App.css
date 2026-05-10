@@ -2593,6 +2593,37 @@
   border-radius: 6px;
 }
 
+.app-panel-identified-docs {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #d8e6f2;
+}
+.app-panel-identified-docs-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1e5a9e;
+  margin-bottom: 6px;
+}
+.app-panel-identified-docs-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.app-panel-identified-docs-list li {
+  margin-bottom: 4px;
+}
+.app-panel-identified-docs-list a {
+  color: #0b57d0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.app-panel-identified-docs-filename {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #64748b;
+}
+
 .app-panel-status {
   font-size: 13px;
   color: #333;

@@ -1323,6 +1323,12 @@ export function SubdealerChallanPage({
                       <th scope="col" title="Vehicles prepared vs total in this batch">
                         Vehicles Prepared
                       </th>
+                      <th scope="col" title="Siebel order number saved mid run (subdealer resume)">
+                        DMS Order#
+                      </th>
+                      <th scope="col" title="VIN lines completed in Siebel vs vehicles in batch">
+                        DMS VINs
+                      </th>
                       <th scope="col">Invoice</th>
                       <th scope="col">Latest run</th>
                       <th scope="col">Action</th>
@@ -1356,6 +1362,12 @@ export function SubdealerChallanPage({
                           <td>{formatChallanDateDisplay(r.challan_date)}</td>
                           <td>{(r.challan_book_num || "").trim() || "—"}</td>
                           <td>{formatPreparedOverTotal(r)}</td>
+                          <td>{(r.dms_order_number || "").trim() || "—"}</td>
+                          <td>
+                            {typeof r.dms_attached_vin_count === "number" && r.num_vehicles > 0
+                              ? `${r.dms_attached_vin_count} / ${r.num_vehicles}`
+                              : "—"}
+                          </td>
                           <td>
                             {(r.invoice_status || "—").trim()}
                             {r.invoice_complete ? " ✓" : ""}

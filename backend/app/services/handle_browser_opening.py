@@ -1109,6 +1109,16 @@ def _page_matches_site_for_dms_loose(page_url: str, site_base_url: str) -> bool:
     return ("siebel" in low) or ("heroconnect" in low) or ("edealer" in low) or ("swecmd=" in low)
 
 
+def retain_automation_browser_for_operator_manual_close() -> None:
+    """
+    Move Playwright browser / persistent-context handles off the active maps into the retain list
+    without calling ``Browser.close()``. Use from short-lived CLI test scripts so the operator can
+    keep inspecting Siebel after Python exits (best-effort; CDP-attached Edge typically survives;
+    Playwright-launched Chromium may still exit with the driver unless the process stays alive).
+    """
+    _retain_browsers_without_closing()
+
+
 def _retain_browsers_without_closing() -> None:
     global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
     for b in list(_KEEP_OPEN_BROWSERS):
@@ -1153,7 +1163,11 @@ def _get_playwright():
 
 @atexit.register
 def _preserve_browsers_on_process_exit() -> None:
-    return
+    """Best-effort: do not actively close automation browsers during interpreter shutdown."""
+    try:
+        _retain_browsers_without_closing()
+    except Exception:
+        pass
 
 
 def _candidate_cdp_urls() -> list[str]:

@@ -38,6 +38,8 @@ _CHALLAN_STAGING_TEXT_MAX = max(MAX_TEXT_CHARS, 4096)
 CHALLAN_STAGING_SCHEMA_HINT = (
     "Subdealer challan tables are missing. Apply, in order: DDL/23_challan_master_staging.sql, "
     "DDL/24_challan_details_staging.sql (requires dealer_ref and vehicle_inventory_master). "
+    "For order-phase resume checkpoints (DMS Order# / VIN attach progress), also apply "
+    "DDL/alter/20d_challan_master_staging_dms_resume.sql. "
     "See Documentation/Database DDL.md and DDL/README.md."
 )
 
