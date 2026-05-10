@@ -16,6 +16,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from playwright.sync_api import Frame, Page, TimeoutError as PlaywrightTimeout
 
 from app.config import (
@@ -5197,6 +5198,123 @@ _IN_TRANSIT_RECEIPT_MAX_INVOICE_PAGES = 35
 _IN_TRANSIT_RECEIPT_INVOICE_GRID_WAIT_MS = 12_000
 _IN_TRANSIT_RECEIPT_VEHICLES_GRID_WAIT_MS = 14_000
 
+_IN_TRANSIT_RECEIPT_TZ = ZoneInfo("Asia/Kolkata")
+_IN_TRANSIT_PROCESS_RECEIPT_ALLOWED_ENVS = frozenset(
+    {
+        "prod",
+        "production",
+    }
+)
+
+
+def _in_transit_receipt_may_click_process_receipt() -> bool:
+    """
+    ``Process Receipt`` commits stock in Siebel — only auto-click when ``ENVIRONMENT`` is clearly
+    production-like (``prod`` / ``production``, case-insensitive, ignoring spaces; trailing ``.`` OK).
+    """
+    from app.config import ENVIRONMENT
+
+    raw = (ENVIRONMENT or "").strip().strip('"').strip("'").lower()
+    if not raw:
+        return False
+    raw = raw.rstrip(".")
+    if raw in _IN_TRANSIT_PROCESS_RECEIPT_ALLOWED_ENVS:
+        return True
+    compact = re.sub(r"\s+", "", raw)
+    return compact in _IN_TRANSIT_PROCESS_RECEIPT_ALLOWED_ENVS
+
+
+def _in_transit_receipt_reporting_datetime_str_ist() -> str:
+    """``dd/mm/yyyy 12:00:00 AM`` for *today* in Asia/Kolkata (Siebel Reporting Date & Time)."""
+    return datetime.now(_IN_TRANSIT_RECEIPT_TZ).strftime("%d/%m/%Y") + " 12:00:00 AM"
+
+
+def _fill_in_transit_vehicle_receipt_form_fields(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+    content_frame_selector: str | None,
+    note,
+) -> tuple[bool, str | None]:
+    """
+    On **Vehicles Receipt / HMCL In Transit** invoice drill-in: fill **Reporting Date & Time** and
+    **Remark about Loading/Truck** before ``Process Receipt``.
+
+    Returns ``(True, None)`` when both fields are filled, else ``(False, error)``.
+    """
+    reporting = _in_transit_receipt_reporting_datetime_str_ist()
+    remark = "Good"
+    tmo = max(2_000, min(int(action_timeout_ms), 25_000))
+
+    got_dt = False
+    got_rm = False
+
+    for fr in _ordered_frames(page):
+        if not got_dt:
+            for lbl in ("Reporting Date & Time", "Reporting Date"):
+                try:
+                    if _fill_by_label_on_frame(fr, lbl, reporting, action_timeout_ms=tmo):
+                        note(f"in_transit_receipt: filled {lbl!r} with {reporting!r}.")
+                        got_dt = True
+                        break
+                except Exception:
+                    continue
+            if not got_dt:
+                try:
+                    loc = fr.locator('input.siebui-ctrl-datetime[aria-label*="Reporting Date" i]').first
+                    if loc.count() > 0 and loc.is_visible(timeout=900):
+                        loc.click(timeout=tmo)
+                        loc.fill("", timeout=tmo)
+                        loc.fill(reporting, timeout=tmo)
+                        try:
+                            loc.press("Tab", timeout=1200)
+                        except Exception:
+                            pass
+                        note(f"in_transit_receipt: filled Reporting Date & Time via aria selector ({reporting!r}).")
+                        got_dt = True
+                except Exception:
+                    pass
+
+        if not got_rm:
+            for lbl in ("Remark about Loading/Truck etc.", "Remark about Loading", "Loading", "Truck"):
+                try:
+                    if _fill_by_label_on_frame(fr, lbl, remark, action_timeout_ms=tmo):
+                        note(f"in_transit_receipt: filled {lbl!r} with {remark!r}.")
+                        got_rm = True
+                        break
+                except Exception:
+                    continue
+            if not got_rm:
+                try:
+                    loc_ld = fr.locator('textarea[aria-label*="Remark about Loading" i]').first
+                    loc = (
+                        loc_ld
+                        if loc_ld.count() > 0
+                        else fr.locator('textarea[aria-label*="Truck" i]').first
+                    )
+                    if loc.count() > 0 and loc.is_visible(timeout=900):
+                        loc.click(timeout=tmo)
+                        loc.fill("", timeout=tmo)
+                        loc.fill(remark, timeout=tmo)
+                        try:
+                            loc.press("Tab", timeout=1200)
+                        except Exception:
+                            pass
+                        note("in_transit_receipt: filled Remarks via aria selector.")
+                        got_rm = True
+                except Exception:
+                    pass
+
+        if got_dt and got_rm:
+            break
+
+    if not got_dt:
+        return False, "Siebel: could not fill Reporting Date & Time before Process Receipt."
+    if not got_rm:
+        return False, "Siebel: could not fill Remark about Loading/Truck before Process Receipt."
+    _safe_page_wait(page, 400, log_label="after_in_transit_receipt_form_fills")
+    return True, None
+
 
 def _receipt_flow_search_roots(page: Page, content_frame_selector: str | None) -> list:
     """Ordered roots for Siebel receipt / tab / jqGrid locators (dedup by identity)."""
@@ -5211,6 +5329,62 @@ def _receipt_flow_search_roots(page: Page, content_frame_selector: str | None) -
     return out
 
 
+def _bar_tab_needle_regex(needle_lc: str) -> re.Pattern[str]:
+    """Build a flexible-whitespace regex from a lower-case tab needle (Siebel visible text)."""
+    parts = [p for p in (needle_lc or "").strip().split() if p]
+    if not parts:
+        return re.compile(r"^$")
+    return re.compile(r"\s+".join(re.escape(p) for p in parts), re.I)
+
+
+def _try_playwright_click_siebel_bar_tab_anchor(
+    page: Page,
+    container_id: str,
+    needle_lc: str,
+    *,
+    content_frame_selector: str | None,
+    action_timeout_ms: int,
+    note,
+    log_tag: str,
+) -> bool:
+    """
+    Prefer a real Playwright click on Siebel jQuery UI tabs: ``#<bar> a.ui-tabs-anchor`` (often
+    ``href`` ending in ``tabScreen_noop`` / ``tabView_noop``). DOM-injected clicks alone sometimes
+    do not switch Siebel views.
+    """
+    safe_id = (container_id or "").strip().lstrip("#")
+    if not safe_id:
+        return False
+    rx = _bar_tab_needle_regex(needle_lc)
+    tmo = max(2_000, min(int(action_timeout_ms), 25_000))
+    for root in _receipt_flow_search_roots(page, content_frame_selector):
+        try:
+            bar = root.locator(f"#{safe_id}")
+            if bar.count() == 0:
+                continue
+            if safe_id == "s_sctrl_tabScreen":
+                scoped = bar.locator('a.ui-tabs-anchor[href*="tabScreen_noop"]')
+            elif safe_id == "s_sctrl_tabView":
+                scoped = bar.locator('a.ui-tabs-anchor[href*="tabView_noop"]')
+            else:
+                scoped = bar.locator("a.ui-tabs-anchor")
+            link = scoped.filter(has_text=rx).first
+            if link.count() == 0:
+                link = bar.locator("a.ui-tabs-anchor").filter(has_text=rx).first
+            if link.count() == 0:
+                continue
+            link.scroll_into_view_if_needed(timeout=tmo)
+            link.click(timeout=tmo)
+            note(
+                f"{log_tag}: Playwright clicked #{safe_id!r} a.ui-tabs-anchor matching "
+                f"{needle_lc!r} (pattern={rx.pattern!r})."
+            )
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _click_siebel_nav_tab_in_container(
     page: Page,
     container_id: str,
@@ -5219,11 +5393,29 @@ def _click_siebel_nav_tab_in_container(
     content_frame_selector: str | None,
     note,
     log_tag: str,
+    action_timeout_ms: int = 10_000,
+    silent_miss: bool = False,
 ) -> bool:
-    """Click a visible tab/link inside ``#s_sctrl_tabScreen`` or ``#s_sctrl_tabView`` (First / Second level bar)."""
+    """Click a visible tab/link inside ``#s_sctrl_tabScreen`` or ``#s_sctrl_tabView`` (First / Second level bar).
+
+    Tries **Playwright** ``a.ui-tabs-anchor`` (Siebel ``tabScreen_noop`` / ``tabView_noop``) first, then
+    the legacy in-page JS click path.
+
+    ``silent_miss``: when True, do not log the final *tab not clicked* line (for tight polling loops).
+    """
     needle = (tab_needle or "").strip().lower()
     if not needle:
         return False
+    if _try_playwright_click_siebel_bar_tab_anchor(
+        page,
+        container_id,
+        needle,
+        content_frame_selector=content_frame_selector,
+        action_timeout_ms=action_timeout_ms,
+        note=note,
+        log_tag=log_tag,
+    ):
+        return True
     js = """(args) => {
         const containerId = args[0];
         const tabNeedle = String(args[1] || '').trim().toLowerCase();
@@ -5240,7 +5432,8 @@ def _click_siebel_nav_tab_in_container(
             if (!txt || !needle) return false;
             if (txt === needle || txt.includes(needle)) return true;
             const a = compact(txt); const b = compact(needle);
-            return a === b || a.includes(b) || b.includes(a);
+            if (a === b || a.includes(b)) return true;
+            return false;
         };
         const bar = document.getElementById(containerId);
         if (!bar || !vis(bar)) return { ok: false };
@@ -5269,11 +5462,15 @@ def _click_siebel_nav_tab_in_container(
         try:
             res = root.evaluate(js, [container_id, needle])
             if isinstance(res, dict) and res.get("ok"):
-                note(f"{log_tag}: clicked tab in #{container_id!r} needle={tab_needle!r} hit={res.get('hit')!r}.")
+                note(
+                    f"{log_tag}: clicked tab in #{container_id!r} needle={tab_needle!r} "
+                    f"hit={res.get('hit')!r}."
+                )
                 return True
         except Exception:
             continue
-    note(f"{log_tag}: tab not clicked — #{container_id!r} needle={tab_needle!r}.")
+    if not silent_miss:
+        note(f"{log_tag}: tab not clicked — #{container_id!r} needle={tab_needle!r}.")
     return False
 
 
@@ -5284,31 +5481,92 @@ def _ensure_vehicles_receipt_hmcl_in_transit_tabs(
     note,
     form_trace=None,
     step=None,
-) -> bool:
-    """First level **Vehicles Receipt**, second level **HMCL - In Transit** (best-effort both)."""
+    action_timeout_ms: int = 10_000,
+    debug_dump_dir: str | Path | None = None,
+) -> tuple[bool, bool]:
+    """First level **Vehicles Receipt**, second level **HMCL - In Transit** (both required for receipt).
+
+    Timing: after each first-level click, ``networkidle`` up to **5 s** then a fixed **2 s** UI wait;
+    second-level HMCL tab is retried on a **5 s** poll loop (450 ms steps); after a re-click on
+    Vehicles Receipt, settle again and poll **5 s** more.
+    """
     if callable(form_trace):
         form_trace(
             "5c_in_transit_receipt_tabs",
             "Vehicles Receipt / HMCL In Transit",
             "click_first_second_level_nav_tabs",
         )
-    ok1 = _click_siebel_nav_tab_in_container(
-        page,
-        "s_sctrl_tabScreen",
-        "vehicles receipt",
-        content_frame_selector=content_frame_selector,
-        note=note,
-        log_tag="in_transit_receipt",
-    )
-    _safe_page_wait(page, 450, log_label="after_vehicles_receipt_tab")
-    ok2 = _click_siebel_nav_tab_in_container(
-        page,
-        "s_sctrl_tabView",
+
+    _lvl2_needles = (
         "hmcl - in transit",
-        content_frame_selector=content_frame_selector,
-        note=note,
-        log_tag="in_transit_receipt",
+        "hmcl in transit",
+        "hmcl-in transit",
+        "hmcl – in transit",
+        "hmcl — in transit",
     )
+
+    def _click_vehicles_receipt_first_level() -> bool:
+        return _click_siebel_nav_tab_in_container(
+            page,
+            "s_sctrl_tabScreen",
+            "vehicles receipt",
+            content_frame_selector=content_frame_selector,
+            note=note,
+            log_tag="in_transit_receipt",
+            action_timeout_ms=action_timeout_ms,
+        )
+
+    def _settle_after_first_level() -> None:
+        try:
+            _pv_networkidle(note, page, 5_000, "after_vehicles_receipt_first_level_tab")
+        except Exception as e:
+            if _is_browser_disconnected_error(e):
+                raise
+        _safe_page_wait(page, 2_000, log_label="after_vehicles_receipt_tab_ui")
+
+    def _try_second_level_hmcl_in_transit(*, silent_miss: bool) -> bool:
+        for needle in _lvl2_needles:
+            if _click_siebel_nav_tab_in_container(
+                page,
+                "s_sctrl_tabView",
+                needle,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                log_tag="in_transit_receipt",
+                action_timeout_ms=action_timeout_ms,
+                silent_miss=silent_miss,
+            ):
+                return True
+        return False
+
+    ok1 = _click_vehicles_receipt_first_level()
+    _settle_after_first_level()
+
+    ok2 = False
+    _poll_deadline = time.monotonic() + 5.0
+    while time.monotonic() < _poll_deadline:
+        if _try_second_level_hmcl_in_transit(silent_miss=True):
+            ok2 = True
+            break
+        _safe_page_wait(page, 450, log_label="poll_hmcl_in_transit_second_level")
+
+    if not ok2:
+        note(
+            "in_transit_receipt: HMCL - In Transit still missing — re-clicking Vehicles Receipt once "
+            "and retrying second-level bar."
+        )
+        _click_vehicles_receipt_first_level()
+        _settle_after_first_level()
+        _poll_deadline = time.monotonic() + 5.0
+        while time.monotonic() < _poll_deadline:
+            if _try_second_level_hmcl_in_transit(silent_miss=True):
+                ok2 = True
+                break
+            _safe_page_wait(page, 450, log_label="poll_hmcl_in_transit_after_reclick")
+
+    if not ok2:
+        _try_second_level_hmcl_in_transit(silent_miss=False)
+
     _safe_page_wait(page, 550, log_label="after_hmcl_in_transit_tab")
     if callable(step):
         step(
@@ -5316,7 +5574,16 @@ def _ensure_vehicles_receipt_hmcl_in_transit_tabs(
             + ("Vehicles Receipt tab OK; " if ok1 else "Vehicles Receipt tab missing; ")
             + ("HMCL - In Transit tab OK." if ok2 else "HMCL - In Transit tab missing.")
         )
-    return ok1 or ok2
+    if (not ok1 or not ok2) and debug_dump_dir:
+        _dump_frames_and_elements_for_debug(
+            page,
+            content_frame_selector=content_frame_selector,
+            output_dir=Path(debug_dump_dir),
+            label="in_transit_receipt_tabs_incomplete",
+            note=note,
+            log_prefix="in_transit_receipt",
+        )
+    return ok1, ok2
 
 
 def _chassis_for_in_transit_receipt_find(scraped: dict, dms_values: dict) -> str:
@@ -5571,6 +5838,7 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
     note,
     form_trace=None,
     step=None,
+    debug_dump_dir: str | Path | None = None,
 ) -> tuple[bool, str | None]:
     """
     In-transit: from the current Siebel context after VIN scrape, open **Vehicles Receipt** /
@@ -5579,6 +5847,9 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
 
     Returns ``(True, None)`` on success, or ``(False, error)``. At most one full pass over paginated
     invoices (bounded); no inner retry loop on the same invoice beyond a single Find/Go + Process Receipt.
+
+    When ``debug_dump_dir`` is set, tab or Invoices-grid failures write ``temp_frame_dump.txt`` there
+    (same layout as Pre-check / PDI debug dumps).
     """
     chassis_raw = _chassis_for_in_transit_receipt_find(scraped, dms_values)
     want_norm = _normalize_chassis_compare_token(chassis_raw)
@@ -5602,19 +5873,36 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
         "in_transit_receipt: opening HMCL In Transit receipt via Vehicles Receipt / HMCL - In Transit "
         "view-bar tabs (no DMS_REAL_URL_VEHICLES GotoView)."
     )
-    _ensure_vehicles_receipt_hmcl_in_transit_tabs(
+    ok_tabs1, ok_tabs2 = _ensure_vehicles_receipt_hmcl_in_transit_tabs(
         page,
         content_frame_selector=content_frame_selector,
         note=note,
         form_trace=form_trace,
         step=step,
+        action_timeout_ms=action_timeout_ms,
+        debug_dump_dir=debug_dump_dir,
     )
+    if not ok_tabs1 or not ok_tabs2:
+        return (
+            False,
+            "Siebel: Vehicles Receipt and/or HMCL - In Transit tab could not be activated "
+            f"(first_level_ok={ok_tabs1}, second_level_ok={ok_tabs2}).",
+        )
     if not _wait_jqgrid_with_summary_visible(
         page,
         "Invoices",
         content_frame_selector=content_frame_selector,
         wait_ms=_IN_TRANSIT_RECEIPT_INVOICE_GRID_WAIT_MS,
     ):
+        if debug_dump_dir:
+            _dump_frames_and_elements_for_debug(
+                page,
+                content_frame_selector=content_frame_selector,
+                output_dir=Path(debug_dump_dir),
+                label="in_transit_receipt_invoices_grid_missing",
+                note=note,
+                log_prefix="in_transit_receipt",
+            )
         return False, "Siebel: Invoices grid (summary=Invoices) not visible after Vehicles Receipt / HMCL In Transit tabs."
 
     total_pages_walked = 0
@@ -5626,6 +5914,15 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
             content_frame_selector=content_frame_selector,
             wait_ms=6000,
         ):
+            if debug_dump_dir:
+                _dump_frames_and_elements_for_debug(
+                    page,
+                    content_frame_selector=content_frame_selector,
+                    output_dir=Path(debug_dump_dir),
+                    label="in_transit_receipt_invoices_grid_lost_mid_flow",
+                    note=note,
+                    log_prefix="in_transit_receipt",
+                )
             return False, "Siebel: Invoices grid disappeared during in-transit receipt pagination."
 
         n_inv = _invoice_drilldown_count(page, content_frame_selector=content_frame_selector)
@@ -5657,6 +5954,8 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
                     note=note,
                     form_trace=form_trace,
                     step=step,
+                    action_timeout_ms=action_timeout_ms,
+                    debug_dump_dir=debug_dump_dir,
                 )
                 continue
 
@@ -5673,6 +5972,8 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
                     note=note,
                     form_trace=form_trace,
                     step=step,
+                    action_timeout_ms=action_timeout_ms,
+                    debug_dump_dir=debug_dump_dir,
                 )
                 continue
 
@@ -5691,6 +5992,8 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
                     note=note,
                     form_trace=form_trace,
                     step=step,
+                    action_timeout_ms=action_timeout_ms,
+                    debug_dump_dir=debug_dump_dir,
                 )
                 continue
 
@@ -5703,6 +6006,36 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
                     page_index=total_pages_walked,
                 )
 
+            _form_ok, _form_err = _fill_in_transit_vehicle_receipt_form_fields(
+                page,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+            )
+            if not _form_ok:
+                note(f"in_transit_receipt: receipt form fill failed — {_form_err!r}.")
+                _ensure_vehicles_receipt_hmcl_in_transit_tabs(
+                    page,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    step=step,
+                    action_timeout_ms=action_timeout_ms,
+                    debug_dump_dir=debug_dump_dir,
+                )
+                continue
+
+            if not _in_transit_receipt_may_click_process_receipt():
+                _msg = (
+                    "Siebel: ENVIRONMENT is not production — Process Receipt is not run automatically. "
+                    "Reporting Date & Time and Remarks were filled; complete Process Receipt manually in Hero Connect. "
+                    "Set ENVIRONMENT=prod or ENVIRONMENT=production to allow auto-click."
+                )
+                note(f"in_transit_receipt: {_msg}")
+                if callable(step):
+                    step(_msg)
+                return False, _msg
+
             if not _try_click_process_receipt(
                 page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
             ):
@@ -5713,6 +6046,8 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
                     note=note,
                     form_trace=form_trace,
                     step=step,
+                    action_timeout_ms=action_timeout_ms,
+                    debug_dump_dir=debug_dump_dir,
                 )
                 continue
 
@@ -5731,6 +6066,8 @@ def _prepare_vehicle_receipt_in_transit_via_invoices(
                     note=note,
                     form_trace=form_trace,
                     step=step,
+                    action_timeout_ms=action_timeout_ms,
+                    debug_dump_dir=debug_dump_dir,
                 )
                 continue
 
@@ -6968,8 +7305,8 @@ def _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
     On the **vehicle** detail view (dealer stock): click **Serial Number**, run tab **Pre-check** + **PDI**
     (``_siebel_run_vehicle_serial_detail_precheck_pdi``), then **Features and Image** for cubic/type.
 
-    ``prepare_vehicle`` calls this only when ``in_transit`` is false after the inventory gate — not while the
-    unit is treated as in-transit (Siebel rejects Pre-check/PDI there).
+    ``prepare_vehicle`` calls this when the unit is **dealer-side** (not in-transit), and again **after**
+    a successful HMCL in-transit receipt once Siebel treats the vehicle as received.
 
     Returns ``None`` on success or when **Serial Number** is missing (best-effort skip); on Pre-check/PDI
     failure returns an error string.
@@ -7278,10 +7615,6 @@ def _siebel_fill_key_battery_from_dms_values(
 _INVENTORY_LOC_IN_TRANSIT_RE = re.compile(r"in\s*transit", re.I)
 _INVENTORY_LOC_DEALER_RE = re.compile(r"dealer", re.I)
 
-_ERROR_INVENTORY_IN_TRANSIT_BEFORE_BOOKING = (
-    "Vehicle is in transit. Create Receiving before Booking."
-)
-
 
 def _siebel_read_inventory_location_field(page: Page) -> str:
     """Read **Inventory Location** from ``aria-label="Inventory Location"`` (all frames)."""
@@ -7308,16 +7641,15 @@ def _prepare_vehicle_inventory_location_in_transit_gate(
     note,
     form_trace=None,
     step=None,
-) -> str | None:
+) -> None:
     """
     Authoritative **vehicle_in_transit** from Inventory Location when the field is readable.
 
-    - Substring **in transit** (spacing-flexible) → return hard error (caller stops Fill DMS run).
+    - Substring **in transit** (spacing-flexible) → ``scraped['in_transit']=True`` (HMCL receipt then
+      Serial / Features / Pre-check / PDI in ``prepare_vehicle``).
     - Substring **dealer** → ``scraped['in_transit']=False`` (unit with dealer).
     - Any other non-empty value → ``in_transit=False`` (overrides list-grid heuristic).
     - Empty field → leave ``scraped['in_transit']`` from grid scrape unchanged.
-
-    Returns error text for abort, or ``None`` to continue.
     """
     raw = _siebel_read_inventory_location_field(page)
     if not raw:
@@ -7325,21 +7657,15 @@ def _prepare_vehicle_inventory_location_in_transit_gate(
             "prepare_vehicle: Inventory Location (aria-label) not readable — "
             "in_transit may still come from list grid heuristic."
         )
-        return None
+        return
     scraped["inventory_location"] = raw
     if _INVENTORY_LOC_IN_TRANSIT_RE.search(raw):
-        note(f"DECISION: Inventory Location implies In Transit — {raw!r}.")
-        if callable(form_trace):
-            form_trace(
-                "5_vehicle_inventory_location",
-                "Auto Vehicle",
-                "inventory_location_in_transit_abort_before_booking",
-                inventory_location=raw[:240],
-            )
-        if callable(step):
-            step("Stopped: vehicle is in transit — create receiving before booking.")
-        return _ERROR_INVENTORY_IN_TRANSIT_BEFORE_BOOKING
-    if _INVENTORY_LOC_DEALER_RE.search(raw):
+        scraped["in_transit"] = True
+        note(
+            f"DECISION: Inventory Location implies In Transit — {raw!r}; "
+            "in_transit=True (HMCL receipt then dealer prep)."
+        )
+    elif _INVENTORY_LOC_DEALER_RE.search(raw):
         scraped["in_transit"] = False
         note(f"DECISION: vehicle with dealer per Inventory Location — {raw!r}; in_transit=False.")
     else:
@@ -7356,7 +7682,6 @@ def _prepare_vehicle_inventory_location_in_transit_gate(
             inventory_location=raw[:240],
             in_transit=bool(scraped.get("in_transit")),
         )
-    return None
 
 
 def prepare_vehicle(
@@ -7381,8 +7706,11 @@ def prepare_vehicle(
     3. **Click** the left pane Title link.
     4. **Poll center pane** (``#s_1_l``) until the center list shows the clicked VIN.
     5. **Scrape** the center grid row (only now — avoids stale data from a prior vehicle).
-    6. Key Number / Battery No. save, Vehicle Information aria-labels, Inventory Location gate.
-    7. For dealer stock: Serial Number drilldown → Features → Pre-check + PDI.
+    6. Key Number / Battery No. save, Vehicle Information aria-labels, Inventory Location gate
+       (may set ``in_transit`` from Inventory Location for HMCL receipt, then dealer prep).
+    7. When not in-transit: Serial Number drilldown → Features → Pre-check + PDI.
+    8. When in-transit: HMCL **Vehicles Receipt / In Transit** receipt; on success, same Serial /
+       Features / Pre-check + PDI as step 7.
 
     Returns ``(ok, error, merged_vehicle_dict, in_transit, critical_gaps, informational_notes)``.
     """
@@ -7512,17 +7840,13 @@ def prepare_vehicle(
             page, scraped, note=note, form_trace=form_trace
         )
     
-        _inv_gate_err = _prepare_vehicle_inventory_location_in_transit_gate(
+        _prepare_vehicle_inventory_location_in_transit_gate(
             scraped,
             page,
             note=note,
             form_trace=form_trace,
             step=step,
         )
-        if _inv_gate_err:
-            merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
-            vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
-            return False, _inv_gate_err, merged, True, vm_crit, vm_info
 
         _detail_pc_err: str | None = None
         if not bool(scraped.get("in_transit")):
@@ -7555,7 +7879,7 @@ def prepare_vehicle(
         else:
             note(
                 "prepare_vehicle: vehicle flagged in-transit — skipping Serial / Features / Pre-check / PDI "
-                "(Siebel rejects Pre-check and PDI until received at dealer)."
+                "until HMCL in-transit receipt completes (Siebel rejects Pre-check/PDI while in transit)."
             )
 
         note(
@@ -7590,10 +7914,10 @@ def prepare_vehicle(
         if in_transit_state:
             note(
                 "prepare_vehicle: vehicle in-transit — running HMCL In Transit receipt via view-bar tabs; "
-                "Pre-check/PDI skipped (not run until dealer stock)."
+                "Serial / Features / Pre-check / PDI run after successful receipt."
             )
             if callable(step):
-                step("Vehicle appears in transit — receipt path only (Pre-check/PDI skipped).")
+                step("Vehicle appears in transit — HMCL receipt first, then Serial / Pre-check / PDI.")
             if callable(form_trace):
                 form_trace(
                     "5b_in_transit_receipt",
@@ -7614,6 +7938,7 @@ def prepare_vehicle(
                 note=note,
                 form_trace=form_trace,
                 step=step,
+                debug_dump_dir=debug_dump_dir,
             )
             if _recv_ok:
                 scraped["in_transit"] = False
@@ -7626,6 +7951,42 @@ def prepare_vehicle(
                     step("Vehicle received (HMCL In Transit receipt) — list search refreshed.")
                 if callable(ms_done):
                     ms_done("Vehicle received")
+                note(
+                    "prepare_vehicle: after in-transit receipt — continuing Serial / Features / "
+                    "Pre-check / PDI."
+                )
+                if callable(step):
+                    step("Continuing vehicle prep: Serial Number, Features, Pre-check, PDI.")
+                _post_receipt_pc_err = _prepare_vehicle_scrape_serial_precheck_pdi_and_features(
+                    page,
+                    scraped,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    debug_dump_dir=debug_dump_dir,
+                    vehicle_url=vehicle_url,
+                    frame_partial=frame_p,
+                    engine_partial=engine_p,
+                    nav_timeout_ms=nav_timeout_ms,
+                )
+                if _post_receipt_pc_err:
+                    merged = _merge_dms_and_grid_for_vehicle_master(dms_values, scraped)
+                    vm_crit, vm_info = _vehicle_master_prepare_gaps(merged)
+                    if callable(step):
+                        step(
+                            "Stopped: vehicle serial drilldown, Features, Pre-check, or PDI failed "
+                            "after in-transit receipt."
+                        )
+                    _dump_branch_hits(note)
+                    return (
+                        False,
+                        _post_receipt_pc_err,
+                        merged,
+                        False,
+                        vm_crit,
+                        vm_info,
+                    )
             else:
                 note(f"prepare_vehicle: in-transit receipt flow failed — {_recv_err!r}.")
                 if callable(step):
