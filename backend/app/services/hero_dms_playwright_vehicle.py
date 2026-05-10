@@ -6464,12 +6464,20 @@ def _siebel_prepare_vehicle_list_find_vin_engine(
     expand Find, choose **Vehicles**, fill **VIN** / **Engine#** in ``#findfieldsbox`` or ``#findfieldbox``
     with ``*`` wildcards, then **Find** / **Enter**.
 
+    When ``engine_p`` is empty, **Engine#** is set to ``*`` for a VIN-only Find.
+
     Does **not** click a Search Results VIN (``prepare_vehicle`` does that after grid scrape).
     """
     fp = (frame_p or "").strip()
     ep = (engine_p or "").strip()
-    if not fp or not ep:
+    if not fp:
         return False
+    if not ep:
+        ep = "*"
+        note(
+            "prepare_vehicle: engine_partial empty — using Engine# wildcard * for Find→Vehicles "
+            "(VIN-only search)."
+        )
 
     if _try_expand_find_flyin(
         page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
@@ -6577,6 +6585,8 @@ def _siebel_goto_vehicle_list_and_search(
 ) -> str | None:
     """Navigate to Auto Vehicle List and run Find→Vehicles ``*``VIN + ``*``Engine partial query.
 
+    ``engine_p`` may be empty — **Engine#** is sent as ``*`` for a VIN-only Find.
+
     Returns an error string on failure, or ``None`` on success. Does **not** scrape the grid — the
     caller polls the left pane, clicks, polls center pane, and only *then* scrapes."""
 
@@ -6594,10 +6604,10 @@ def _siebel_goto_vehicle_list_and_search(
 
     fp = (frame_p or "").strip()
     ep = (engine_p or "").strip()
-    if not fp or not ep:
+    if not fp:
         return _log_phase_outcome(
-            "Siebel: Auto Vehicle List requires non-empty **frame_partial** (VIN/chassis) and "
-            "**engine_partial**; Find→Vehicles uses *-prefixed partials only (no key/grid search fallback)."
+            "Siebel: Auto Vehicle List requires non-empty **frame_partial** (VIN/chassis) for "
+            "Find→Vehicles (*-prefixed partial; **engine_partial** optional — empty uses Engine# *)."
         )
 
     query_ok = _siebel_prepare_vehicle_list_find_vin_engine(
@@ -6643,7 +6653,8 @@ def _siebel_goto_vehicle_list_and_search(
             )
             _hint = "find applet not ready/visible" if not final_ready else "query submit did not complete"
             return _log_phase_outcome(
-                "Siebel: Find→Vehicles VIN/Engine query failed even with frame_partial/engine_partial present; "
+                "Siebel: Find→Vehicles VIN/Engine query failed even with frame_partial present "
+                "(and engine_partial or Engine# wildcard); "
                 f"likely {_hint}. If applet is in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR."
             )
 
@@ -7701,7 +7712,8 @@ def prepare_vehicle(
     """
     Pre-booking **vehicle preparation** — ordered flow:
 
-    1. Navigate → Auto Vehicle List, run Find→Vehicles ``*``VIN + ``*``Engine.
+    1. Navigate → Auto Vehicle List, run Find→Vehicles ``*``VIN + ``*``Engine (``engine_partial`` may
+       be omitted — Engine# uses ``*`` in Siebel Find).
     2. **Poll left pane** (``#gview_s_1001_l a.drilldown[name="Title"]``) until the VIN appears.
     3. **Click** the left pane Title link.
     4. **Poll center pane** (``#s_1_l``) until the center list shows the clicked VIN.
