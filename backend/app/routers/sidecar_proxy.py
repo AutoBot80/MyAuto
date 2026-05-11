@@ -864,15 +864,19 @@ async def subdealer_challan_finalize_order(
             dealer_id=int(did),
             playwright_result=dict(req.playwright_result or {}),
         )
-    except Exception:
+    except Exception as exc:
         logger.exception(
             "subdealer_challan finalize-order: unhandled exception batch=%s dealer_id=%s",
             bid,
             int(did),
         )
+        _detail = f"{type(exc).__name__}: {str(exc)[:700]}"
         return SubdealerChallanFinalizeOrderResponse(
             ok=False,
-            error="Server error while saving challan to the database. Check API logs.",
+            error=(
+                "Server error while saving challan to the database. "
+                f"Detail: {_detail}. Check API logs for the full traceback."
+            ),
             challan_id=None,
             vehicle={},
             dms_step_messages=[],

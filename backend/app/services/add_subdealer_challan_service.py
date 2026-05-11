@@ -622,9 +622,13 @@ def sidecar_finalize_order_playwright_result(
         logger.warning("finalize_order: batch=%s — %s", challan_batch_id, out["error"])
         return out
 
-    veh_partial = dict(playwright_result.get("vehicle") or {})
+    _raw_veh = playwright_result.get("vehicle")
+    veh_partial = dict(_raw_veh) if isinstance(_raw_veh, dict) else {}
     out["vehicle"] = veh_partial
-    out["dms_step_messages"] = list(playwright_result.get("dms_step_messages") or [])
+    _raw_msgs = playwright_result.get("dms_step_messages") or []
+    if not isinstance(_raw_msgs, list):
+        _raw_msgs = []
+    out["dms_step_messages"] = [str(m) for m in _raw_msgs]
 
     err = playwright_result.get("error")
     if err:
@@ -648,7 +652,20 @@ def sidecar_finalize_order_playwright_result(
     mhead = master_repo.fetch_master(challan_batch_id) or {}
     add_tc = bool(mhead.get("add_transport_cost"))
     raw_tcp = mhead.get("transport_cost_per_vehicle")
-    tcp_fin = float(raw_tcp) if raw_tcp is not None else None
+    tcp_fin: float | None = None
+    if add_tc and raw_tcp is not None:
+        try:
+            if isinstance(raw_tcp, Decimal):
+                tcp_fin = float(raw_tcp)
+            else:
+                tcp_fin = float(str(raw_tcp).replace(",", "").strip())
+        except (TypeError, ValueError) as _tcp_exc:
+            logger.warning(
+                "finalize_order: invalid transport_cost_per_vehicle %r (%s); treating as None",
+                raw_tcp,
+                _tcp_exc,
+            )
+            tcp_fin = None
 
     logger.info(
         "finalize_order: committing challan_master batch=%s lines=%s order=%r invoice=%r",
@@ -657,41 +674,53 @@ def sidecar_finalize_order_playwright_result(
         oid,
         iid_inv,
     )
-    cid = commit_challan_masters(
-        challan_date=cd,
-        challan_book_num=cb,
-        dealer_from=from_dealer_id,
-        dealer_to=to_dealer_id,
-        inventory_line_ids=inv_ids,
-        order_number=oid,
-        invoice_number=iid_inv,
-        add_transport_cost=add_tc,
-        transport_cost_per_vehicle=None if not add_tc else tcp_fin,
-    )
-    out["challan_id"] = int(cid)
-    for r in rows:
-        if r.get("challan_staging_id"):
-            detail_repo.update_detail_status(
-                int(r["challan_staging_id"]),
-                status="Committed",
-                last_error=None,
-            )
+    cid: int | None = None
+    try:
+        cid = commit_challan_masters(
+            challan_date=cd,
+            challan_book_num=cb,
+            dealer_from=from_dealer_id,
+            dealer_to=to_dealer_id,
+            inventory_line_ids=inv_ids,
+            order_number=oid,
+            invoice_number=iid_inv,
+            add_transport_cost=add_tc,
+            transport_cost_per_vehicle=None if not add_tc else tcp_fin,
+        )
+        out["challan_id"] = int(cid)
+        for r in rows:
+            if r.get("challan_staging_id"):
+                detail_repo.update_detail_status(
+                    int(r["challan_staging_id"]),
+                    status="Committed",
+                    last_error=None,
+                )
 
-    inv_num_ok = bool(iid_inv and str(iid_inv).strip())
-    master_repo.set_invoice_state(
-        challan_batch_id,
-        invoice_complete=inv_num_ok,
-        invoice_status="Completed" if inv_num_ok else "Pending",
-    )
-    master_repo.touch_last_run_at(challan_batch_id)
-    out["ok"] = True
-    out["error"] = None
-    logger.info(
-        "finalize_order: ok batch=%s challan_id=%s invoice_status=%s",
-        challan_batch_id,
-        cid,
-        "Completed" if inv_num_ok else "Pending",
-    )
+        inv_num_ok = bool(iid_inv and str(iid_inv).strip())
+        master_repo.set_invoice_state(
+            challan_batch_id,
+            invoice_complete=inv_num_ok,
+            invoice_status="Completed" if inv_num_ok else "Pending",
+        )
+        master_repo.touch_last_run_at(challan_batch_id)
+        out["ok"] = True
+        out["error"] = None
+        logger.info(
+            "finalize_order: ok batch=%s challan_id=%s invoice_status=%s",
+            challan_batch_id,
+            cid,
+            "Completed" if inv_num_ok else "Pending",
+        )
+    except Exception as _commit_exc:
+        logger.exception(
+            "finalize_order: commit/update failed batch=%s dealer_id=%s",
+            challan_batch_id,
+            dealer_id,
+        )
+        master_repo.touch_last_run_at(challan_batch_id)
+        out["ok"] = False
+        out["error"] = str(_commit_exc)[:900]
+        out["challan_id"] = int(cid) if cid is not None else None
     return out
 
 

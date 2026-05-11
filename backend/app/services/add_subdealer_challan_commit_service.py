@@ -37,15 +37,23 @@ def commit_challan_masters(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT COALESCE(SUM(ex_showroom_price), 0), COALESCE(SUM(discount), 0)
+                SELECT COALESCE(SUM(ex_showroom_price), 0) AS total_ex_showroom,
+                       COALESCE(SUM(discount), 0) AS total_discount
                 FROM vehicle_inventory_master
                 WHERE inventory_line_id = ANY(%s)
                 """,
                 (inventory_line_ids,),
             )
             sum_row = cur.fetchone()
-            total_ex = sum_row[0] if sum_row else Decimal("0")
-            total_disc = sum_row[1] if sum_row else Decimal("0")
+            if not sum_row:
+                total_ex = Decimal("0")
+                total_disc = Decimal("0")
+            elif isinstance(sum_row, dict):
+                total_ex = sum_row.get("total_ex_showroom") or 0
+                total_disc = sum_row.get("total_discount") or 0
+            else:
+                total_ex = sum_row[0]
+                total_disc = sum_row[1]
             if isinstance(total_ex, Decimal):
                 total_ex_f = float(total_ex)
             else:
