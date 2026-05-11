@@ -363,6 +363,32 @@ def _api_post(api_url: str, jwt: str, path: str, body: dict, timeout: int = 120)
         raise RuntimeError(f"API {path} returned {exc.code}: {detail}") from exc
 
 
+def _slim_subdealer_challan_finalize_playwright_result(frag: dict) -> dict:
+    """
+    ``sidecar_finalize_order_playwright_result`` only uses ``error``, ``vehicle``, and
+    ``dms_step_messages``. The full order-phase ``frag`` also carries large fields such as
+    ``dms_siebel_notes`` (every automation NOTE); posting the full dict can exceed WAF / body
+    limits and yield CloudFront-style 403 HTML.
+    """
+    veh = dict(frag.get("vehicle") or {})
+    msgs = list(frag.get("dms_step_messages") or [])
+    _max_steps = 400
+    if len(msgs) > _max_steps:
+        msgs = msgs[-_max_steps:]
+    _max_msg_len = 8000
+    _out_msgs: list[str] = []
+    for m in msgs:
+        s = str(m)
+        if len(s) > _max_msg_len:
+            s = s[: _max_msg_len - 3] + "..."
+        _out_msgs.append(s)
+    return {
+        "error": frag.get("error"),
+        "vehicle": veh,
+        "dms_step_messages": _out_msgs,
+    }
+
+
 def _run_sidecar_playwright_job(fn):
     """
     Run Playwright / CDP browser work on the dedicated Playwright worker thread (matches the API server).
@@ -1378,7 +1404,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
                 {
                     "challan_batch_id": challan_batch_id,
                     "dealer_id": dealer_id,
-                    "playwright_result": frag,
+                    "playwright_result": _slim_subdealer_challan_finalize_playwright_result(frag),
                 },
                 timeout=120,
             )
