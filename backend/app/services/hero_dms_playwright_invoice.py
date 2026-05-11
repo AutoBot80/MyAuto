@@ -4848,49 +4848,36 @@ def _create_order(
         scraped["order_number"] = _cr_ord
 
         N = len(_olv_full)
-        first_inc: int | None = None
-        for _i in range(N):
-            _n = _i + 1
-            _exp = _norm_vin_chassis_key(str((_olv_full[_i].get("full_chassis") or "")).strip())
-            if not _exp:
-                continue
+        _n_scan = max(N, int(_hint_y), int(_cr_x) + 1)
+        _siebel_vin_set: set[str] = set()
+        _last_occ_row = 0
+        for _rn in range(1, _n_scan + 1):
             _vin_rb = _read_vin_from_order_line_row(
-                page, row_n=_n, content_frame_selector=content_frame_selector
+                page, row_n=_rn, content_frame_selector=content_frame_selector
             )
-            if _norm_vin_chassis_key(_vin_rb) != _exp:
-                first_inc = _i
-                break
-        _repair_upto = N if first_inc is None else first_inc
-        for _i in range(_repair_upto):
-            _n = _i + 1
-            _exp = _norm_vin_chassis_key(str((_olv_full[_i].get("full_chassis") or "")).strip())
-            if not _exp:
-                continue
-            _vin_rb = _read_vin_from_order_line_row(
-                page, row_n=_n, content_frame_selector=content_frame_selector
+            _vk = _norm_vin_chassis_key(str((_vin_rb or "")).strip())
+            if _vk:
+                _siebel_vin_set.add(_vk)
+                _last_occ_row = _rn
+        _to_attach: list[dict] = []
+        for _ln in _olv_full:
+            _sk = _norm_vin_chassis_key(str((_ln.get("full_chassis") or "")).strip())
+            if _sk and _sk not in _siebel_vin_set:
+                _to_attach.append(_ln)
+        if _cr_x > 0 and _last_occ_row > 0 and abs(int(_last_occ_row) - int(_cr_x)) > 2:
+            note(
+                "Create Order: challan resume — NOTE: Siebel last occupied row "
+                f"({_last_occ_row}) vs checkpoint attached ({_cr_x}); "
+                "if reads missed lines, verify grid paging."
             )
-            if _norm_vin_chassis_key(_vin_rb) != _exp:
-                continue
-            _dexp = str((_olv_full[_i].get("line_item_discount") or "")).strip()
-            _drb = _read_discount_from_order_line_row(
-                page, row_n=_n, content_frame_selector=content_frame_selector
-            )
-            if not _discount_cell_matches_expected(_dexp, _drb):
-                if _dexp and not _challan_try_set_line_discount_on_row(
-                    page,
-                    row_n=_n,
-                    disc_raw=_dexp,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                ):
-                    note(
-                        f"Create Order: challan resume discount repair best-effort failed row={_n} "
-                        f"(expected disc={_dexp!r})."
-                    )
+        note(
+            "Create Order: challan resume — set-diff: Siebel distinct VIN keys="
+            f"{len(_siebel_vin_set)}, last_occupied_row={_last_occ_row}, "
+            f"staging_lines_to_attach={len(_to_attach)} (Siebel row order may differ from staging)."
+        )
 
         _start_alloc = _branch == "allocated"
-        if first_inc is None:
+        if len(_to_attach) == 0:
             _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
                 page,
                 full_chassis=full_chassis,
@@ -4908,8 +4895,15 @@ def _create_order(
                 challan_progress_callback=challan_progress_callback,
             )
         else:
-            _remain = list(_olv_full[first_inc:])
-            _start_row = first_inc + 1
+            _start_row = (
+                int(_last_occ_row) + 1
+                if int(_last_occ_row) > 0
+                else max(1, int(_cr_x) + 1)
+            )
+            note(
+                "Create Order: challan resume — attaching "
+                f"{len(_to_attach)} line(s) starting Siebel row={_start_row}."
+            )
             _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
                 page,
                 full_chassis=full_chassis,
@@ -4919,7 +4913,7 @@ def _create_order(
                 note=note,
                 start_at_order_link_before_apply=_start_alloc,
                 line_item_discount=line_item_discount,
-                attach_line_items=_remain,
+                attach_line_items=list(_to_attach),
                 financier_name=financier_name,
                 frame_dump_dir=frame_dump_dir,
                 attach_start_row_1based=_start_row,
