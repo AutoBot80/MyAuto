@@ -1,4 +1,12 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import type { ExtractedVehicleDetails, ExtractedCustomerDetails, ExtractedInsuranceDetails } from "../types";
 import { buildDisplayAddress } from "../types";
 import { useUploadScans } from "../hooks/useUploadScans";
@@ -9,6 +17,7 @@ import { getExtractedDetails } from "../api/aiReaderQueue";
 import { submitInfo } from "../api/submitInfo";
 import {
   dispatchPrintJobsFromApi,
+  fillCpaAllianceInsuranceLocal,
   fillDmsLocal,
   fillHeroInsuranceLocal,
   overlayDealerSignaturesLocal,
@@ -17,7 +26,12 @@ import {
   warmDmsBrowserLocal,
   warmInsuranceBrowserLocal,
 } from "../api/fillForms";
-import { fetchCreateInvoiceEligibility, type CreateInvoiceEligibilityResponse } from "../api/addSales";
+import {
+  fetchCreateInvoiceEligibility,
+  fetchDealerCpaContext,
+  type CreateInvoiceEligibilityResponse,
+  type CpaInsurerPortalRow,
+} from "../api/addSales";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { markBulkLoadSuccess } from "../api/bulkLoads";
@@ -85,6 +99,51 @@ function Section2FieldError({
       {e.message}
     </div>
   );
+}
+
+/** Merge DB invoice # from eligibility into DMS display state (Order # comes from DMS scrape only). */
+function mergeDmsVehicleWithEligibilityInvoice(
+  setDmsScrapedVehicle: Dispatch<SetStateAction<ExtractedVehicleDetails | null>>,
+  res: CreateInvoiceEligibilityResponse
+) {
+  const inv = (res.invoice_number ?? "").trim();
+  if (!inv) return;
+  setDmsScrapedVehicle((prev) => {
+    const merged = { ...(prev ?? {}), invoice_number: inv };
+    return (sanitizeExtractedVehicleDetailFields(merged) ?? merged) as ExtractedVehicleDetails;
+  });
+}
+
+/** Normalize ``dealer_ref.hero_cpi`` from API (single-letter Y/N). */
+function normalizeHeroCpiFlag(raw: unknown): "Y" | "N" | null {
+  if (raw == null) return null;
+  const s = String(raw).trim().toUpperCase().slice(0, 1);
+  return s === "Y" || s === "N" ? s : null;
+}
+
+function deriveCpaAllianceUiState(res: CreateInvoiceEligibilityResponse): {
+  enabled: boolean;
+  insurers: CpaInsurerPortalRow[];
+  dealerCpa: string | null;
+} {
+  const insurers = res.cpa_insurers ?? [];
+  const enabled = Boolean(res.cpa_alliance_portal_enabled);
+  const dealerCpa = res.dealer_cpa_insurer?.trim() ? res.dealer_cpa_insurer.trim() : null;
+  return { enabled, insurers, dealerCpa };
+}
+
+/** Resolve which CPA portal row to open: dealer ``cpa_insurer`` match, else first list row with a URL. */
+function pickCpaPortalRow(
+  insurers: CpaInsurerPortalRow[],
+  dealerCpa: string | null
+): CpaInsurerPortalRow | undefined {
+  const d = (dealerCpa ?? "").trim();
+  if (d) {
+    const byDealer = insurers.find((p) => p.ref_value === d);
+    if (byDealer?.login_url?.trim()) return byDealer;
+  }
+  const first = insurers[0];
+  return first?.login_url?.trim() ? first : undefined;
 }
 
 /** True when extracted-details payload has at least one structured OCR block — used before DMS warm-browser. */
@@ -323,6 +382,11 @@ export function AddSalesPage({
   const [createInvoiceEligibilityReason, setCreateInvoiceEligibilityReason] = useState<string | null>(null);
   const [generateInsuranceEnabled, setGenerateInsuranceEnabled] = useState(false);
   const [generateInsuranceReason, setGenerateInsuranceReason] = useState<string | null>(null);
+  const [cpaAlliancePortalEnabled, setCpaAlliancePortalEnabled] = useState(false);
+  const [cpaInsurers, setCpaInsurers] = useState<CpaInsurerPortalRow[]>([]);
+  const [dealerCpaInsurer, setDealerCpaInsurer] = useState<string | null>(null);
+  const [heroCpi, setHeroCpi] = useState<string | null>(null);
+  const [isFillCpaInsuranceLoading, setIsFillCpaInsuranceLoading] = useState(false);
   /** DMS-scraped vehicle; shown in Fill Forms > DMS. Only populated when user presses Fill Forms. */
   const [dmsScrapedVehicle, setDmsScrapedVehicle] = useState<ExtractedVehicleDetails | null>(null);
   /** True when Form 21 and Form 22 PDFs have been downloaded from DMS. */
@@ -395,6 +459,53 @@ export function AddSalesPage({
       msg
     );
   }, []);
+
+  type CpaEligibilitySlice = Pick<
+    CreateInvoiceEligibilityResponse,
+    "cpa_insurers" | "hero_cpi" | "dealer_cpa_insurer" | "cpa_alliance_portal_enabled"
+  >;
+
+  const applyDealerCpaFromApiSlice = useCallback((res: CpaEligibilitySlice) => {
+    setHeroCpi(normalizeHeroCpiFlag(res.hero_cpi));
+    const cpa = deriveCpaAllianceUiState(res as CreateInvoiceEligibilityResponse);
+    setCpaAlliancePortalEnabled(cpa.enabled);
+    setCpaInsurers(cpa.insurers);
+    setDealerCpaInsurer(cpa.dealerCpa);
+  }, []);
+
+  const resolvedCpaPortal = useMemo(
+    () => pickCpaPortalRow(cpaInsurers, dealerCpaInsurer),
+    [cpaInsurers, dealerCpaInsurer]
+  );
+  const cpaSelectedPortalUrl = (resolvedCpaPortal?.login_url ?? "").trim();
+
+  useEffect(() => {
+    if (dealerId <= 0) {
+      setHeroCpi(null);
+      setDealerCpaInsurer(null);
+      setCpaInsurers([]);
+      setCpaAlliancePortalEnabled(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetchDealerCpaContext(dealerId);
+        if (cancelled) return;
+        applyDealerCpaFromApiSlice(res);
+      } catch {
+        if (!cancelled) {
+          setHeroCpi(null);
+          setDealerCpaInsurer(null);
+          setCpaInsurers([]);
+          setCpaAlliancePortalEnabled(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dealerId, applyDealerCpaFromApiSlice]);
 
   const triggerWarmBrowsers = useCallback(
     (subfolder: string) => {
@@ -589,22 +700,25 @@ export function AddSalesPage({
       setGenerateInsuranceReason(null);
       return;
     }
-    setCreateInvoiceEligibilityLoading(true);
     try {
       const res = byIds
         ? await fetchCreateInvoiceEligibility({
             customerId: lastSubmittedCustomerId!,
             vehicleId: lastSubmittedVehicleId!,
+            dealerId: dealerId > 0 ? dealerId : undefined,
           })
         : await fetchCreateInvoiceEligibility({
             chassisNum: ch,
             engineNum: eng,
             mobile: mob,
+            dealerId: dealerId > 0 ? dealerId : undefined,
           });
       setCreateInvoiceEnabled(res.create_invoice_enabled);
       setCreateInvoiceEligibilityReason(res.reason);
       setGenerateInsuranceEnabled(res.generate_insurance_enabled);
       setGenerateInsuranceReason(res.generate_insurance_reason);
+      applyDealerCpaFromApiSlice(res);
+      mergeDmsVehicleWithEligibilityInvoice(setDmsScrapedVehicle, res);
       if (res.resolved_customer_id != null) {
         setLastSubmittedCustomerId(res.resolved_customer_id);
       }
@@ -620,6 +734,10 @@ export function AddSalesPage({
       setGenerateInsuranceReason(
         e instanceof Error ? e.message : "Could not verify insurance eligibility for this sale."
       );
+      setHeroCpi(null);
+      setCpaAlliancePortalEnabled(false);
+      setCpaInsurers([]);
+      setDealerCpaInsurer(null);
     } finally {
       setCreateInvoiceEligibilityLoading(false);
     }
@@ -630,6 +748,8 @@ export function AddSalesPage({
     dmsScrapedVehicle,
     lastSubmittedCustomerId,
     lastSubmittedVehicleId,
+    dealerId,
+    applyDealerCpaFromApiSlice,
   ]);
 
   useEffect(() => {
@@ -666,6 +786,11 @@ export function AddSalesPage({
     setGenerateInsuranceReason(null);
     setCreateInvoiceCompleted(false);
     setGenerateInsuranceCompleted(false);
+    setCpaAlliancePortalEnabled(false);
+    setCpaInsurers([]);
+    setDealerCpaInsurer(null);
+    setHeroCpi(null);
+    setIsFillCpaInsuranceLoading(false);
     setFormResetKey((k) => k + 1);
   };
 
@@ -1047,6 +1172,8 @@ export function AddSalesPage({
             num_cylinders: scraped.num_cylinders ?? undefined,
             vehicle_price: scraped.vehicle_price ?? undefined,
             year_of_mfg: scraped.year_of_mfg ?? undefined,
+            order_number: String(scraped.order_number ?? "").trim() || undefined,
+            invoice_number: String(scraped.invoice_number ?? "").trim() || undefined,
           }) as ExtractedVehicleDetails
         );
       }
@@ -1092,6 +1219,8 @@ export function AddSalesPage({
           setCreateInvoiceEligibilityReason(res.reason);
           setGenerateInsuranceEnabled(res.generate_insurance_enabled);
           setGenerateInsuranceReason(res.generate_insurance_reason);
+          applyDealerCpaFromApiSlice(res);
+          mergeDmsVehicleWithEligibilityInvoice(setDmsScrapedVehicle, res);
           if (res.resolved_customer_id != null) setLastSubmittedCustomerId(res.resolved_customer_id);
           if (res.resolved_vehicle_id != null) setLastSubmittedVehicleId(res.resolved_vehicle_id);
         };
@@ -1138,11 +1267,20 @@ export function AddSalesPage({
           const vid = dmsRes?.vehicle_id ?? null;
           if (dmsRes?.success && cid != null && vid != null) {
             await runEligibilityRetry(() =>
-              fetchCreateInvoiceEligibility({ customerId: cid, vehicleId: vid })
+              fetchCreateInvoiceEligibility({
+                customerId: cid,
+                vehicleId: vid,
+                dealerId: dealerId > 0 ? dealerId : undefined,
+              })
             );
           } else if (ch && eng && mob) {
             await runEligibilityRetry(() =>
-              fetchCreateInvoiceEligibility({ chassisNum: ch, engineNum: eng, mobile: mob })
+              fetchCreateInvoiceEligibility({
+                chassisNum: ch,
+                engineNum: eng,
+                mobile: mob,
+                dealerId: dealerId > 0 ? dealerId : undefined,
+              })
             );
           } else {
             await refreshCreateInvoiceEligibility({ force: true });
@@ -1202,6 +1340,29 @@ export function AddSalesPage({
         setFillInsuranceStatus("Hero Insurance run completed (pre + main + post). Browser may remain open for operator.");
         setGenerateInsuranceCompleted(true);
         dispatchPrintJobsFromApi(insuranceRes.print_jobs);
+        if (
+          cpaAlliancePortalEnabled &&
+          savedTo &&
+          dealerId > 0 &&
+          !hasSuppliedInsuranceDoc
+        ) {
+          const portal = pickCpaPortalRow(cpaInsurers, dealerCpaInsurer);
+          if (portal?.login_url) {
+            const ocrVeh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
+            const dmsVeh = normalizeVehicleDetails(dmsScrapedVehicle) ?? dmsScrapedVehicle;
+            const frame = String(dmsVeh?.frame_no ?? ocrVeh?.frame_no ?? "").trim();
+            const eng = String(dmsVeh?.engine_no ?? ocrVeh?.engine_no ?? "").trim();
+            void fillCpaAllianceInsuranceLocal({
+              dealer_id: dealerId,
+              subfolder: savedTo,
+              portal_url: portal.login_url,
+              customer_name: extractedCustomer?.name?.trim() || undefined,
+              mobile: mobile.trim() || undefined,
+              frame_no: frame || undefined,
+              engine_no: eng || undefined,
+            }).catch(() => {});
+          }
+        }
       }
     } catch (insuranceErr) {
       if (isFillDmsAbortError(insuranceErr)) {
@@ -1217,6 +1378,64 @@ export function AddSalesPage({
     } finally {
       setIsFillInsuranceLoading(false);
       void refreshCreateInvoiceEligibility();
+    }
+  };
+
+  const handleCpaAllianceInsurance = async () => {
+    if (!savedTo) {
+      setFillInsuranceStatus("Upload scans first.");
+      return;
+    }
+    if (!submitInfoActionsComplete) {
+      setFillInsuranceStatus("Complete Submit Info (Section 2) before CPA Insurance.");
+      return;
+    }
+    if (!hasCommittedSaleIds) {
+      setFillInsuranceStatus("Run Create Invoice first so master IDs exist for CPA.");
+      return;
+    }
+    if (!cpaAlliancePortalEnabled || !cpaInsurers.length) {
+      setFillInsuranceStatus(
+        "CPA Alliance is not enabled (dealer hero_cpi = Y with CPI add-on, or no CPA URLs in master_ref)."
+      );
+      return;
+    }
+    const portal = pickCpaPortalRow(cpaInsurers, dealerCpaInsurer);
+    if (!portal?.login_url) {
+      setFillInsuranceStatus("No CPA portal URL — set master_ref.comments for the CPA row.");
+      return;
+    }
+    if (heroCpi === "Y") {
+      setFillInsuranceStatus("CPA Alliance is disabled while dealer Hero CPI is Y.");
+      return;
+    }
+    setIsFillCpaInsuranceLoading(true);
+    setFillInsuranceStatus(null);
+    try {
+      const ocrVeh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
+      const dmsVeh = normalizeVehicleDetails(dmsScrapedVehicle) ?? dmsScrapedVehicle;
+      const frame = String(dmsVeh?.frame_no ?? ocrVeh?.frame_no ?? "").trim();
+      const eng = String(dmsVeh?.engine_no ?? ocrVeh?.engine_no ?? "").trim();
+      const cpaRes = await fillCpaAllianceInsuranceLocal({
+        dealer_id: dealerId,
+        subfolder: savedTo,
+        portal_url: portal.login_url,
+        customer_name: extractedCustomer?.name?.trim() || undefined,
+        mobile: mobile.trim() || undefined,
+        frame_no: frame || undefined,
+        engine_no: eng || undefined,
+      });
+      if (!cpaRes.success) {
+        setFillInsuranceStatus(cpaRes.error ?? "CPA Insurance failed.");
+      } else {
+        setFillInsuranceStatus(
+          "CPA portal session started. Finish the flow in the browser; Playwright trace is under ocr_logs for this sale."
+        );
+      }
+    } catch (e) {
+      setFillInsuranceStatus(e instanceof Error ? e.message : "CPA Insurance failed.");
+    } finally {
+      setIsFillCpaInsuranceLoading(false);
     }
   };
 
@@ -1407,6 +1626,7 @@ export function AddSalesPage({
   const newButtonDisabled =
     isFillDmsLoading ||
     isFillInsuranceLoading ||
+    isFillCpaInsuranceLoading ||
     isPrintFormsLoading ||
     isSubmitting ||
     (submitInfoActionsComplete && !hasPrintedForms);
@@ -1433,6 +1653,7 @@ export function AddSalesPage({
 
   const generateInsurancePrimaryButtonDisabled =
     isFillInsuranceLoading ||
+    isFillCpaInsuranceLoading ||
     isPrintFormsLoading ||
     isSubmitting ||
     !submitInfoActionsComplete ||
@@ -1441,6 +1662,23 @@ export function AddSalesPage({
     generateInsuranceCompleted ||
     !generateInsuranceEnabled ||
     hasSuppliedInsuranceDoc ||
+    siteUrlsLoading ||
+    !!siteUrlsError;
+
+  const dealerCpaRef = (dealerCpaInsurer ?? "").trim();
+
+  const cpaAlliancePrimaryButtonDisabled =
+    isFillInsuranceLoading ||
+    isFillCpaInsuranceLoading ||
+    isPrintFormsLoading ||
+    isSubmitting ||
+    !submitInfoActionsComplete ||
+    !hasCommittedSaleIds ||
+    createInvoiceEligibilityLoading ||
+    !cpaAlliancePortalEnabled ||
+    !cpaInsurers.length ||
+    !cpaSelectedPortalUrl ||
+    dealerId <= 0 ||
     siteUrlsLoading ||
     !!siteUrlsError;
 
@@ -2032,12 +2270,14 @@ export function AddSalesPage({
                 </div>
               )}
               <div className="add-sales-v2-fill-forms-subsection">
-                <div className="add-sales-v2-subsection-head">
-                  <h3 className="add-sales-v2-subsection-title">A. DMS</h3>
-                  {isFillDmsLoading && <span className="add-sales-v2-processing">Processing</span>}
+                <div className="add-sales-v2-subsection-head add-sales-v2-subsection-head--fill-forms-row">
+                  <div className="add-sales-v2-subsection-head-left">
+                    <h3 className="add-sales-v2-subsection-title">A. DMS</h3>
+                    {isFillDmsLoading && <span className="add-sales-v2-processing">Processing</span>}
+                  </div>
                   <button
                     type="button"
-                    className="app-button app-button--primary"
+                    className="app-button app-button--primary add-sales-v2-fill-forms-action-btn"
                     disabled={createInvoicePrimaryButtonDisabled}
                     onClick={handleFillDms}
                     title={createInvoiceButtonTitle}
@@ -2057,67 +2297,32 @@ export function AddSalesPage({
                 {fillDmsStatus && (
                   <StatusMessage message={fillDmsStatus} className="app-panel-status" role="status" />
                 )}
-                <div className="add-sales-v2-dms-fields">
-                  <div className="add-sales-v2-dms-fields-title">Get fields from DMS</div>
-                  <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Chassis no.</dt>
-                        <dd>{d?.frame_no ?? "—"}</dd>
-                      </div>
+                <dl className="add-sales-v2-dl add-sales-v2-dl--dms" style={{ marginTop: "0.75rem" }}>
+                  <div className="add-sales-v2-dl-row-group">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Order #</dt>
+                      <dd>{d?.order_number?.trim() ? d.order_number : "—"}</dd>
                     </div>
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Engine no.</dt>
-                        <dd>{d?.engine_no ?? "—"}</dd>
-                      </div>
+                  </div>
+                  <div className="add-sales-v2-dl-row-group">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Invoice #</dt>
+                      <dd>{d?.invoice_number?.trim() ? d.invoice_number : "—"}</dd>
                     </div>
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Model</dt>
-                        <dd>{d?.model ?? "—"}</dd>
-                      </div>
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Vehicle Price</dt>
-                        <dd>{d?.vehicle_price ?? "—"}</dd>
-                      </div>
-                    </div>
-                  </dl>
-                </div>
-                <div className="add-sales-v2-dms-pdfs">
-                  <div className="add-sales-v2-dms-pdfs-title">Get PDFs</div>
-                  <ul className="add-sales-v2-dms-pdfs-list">
-                    <li className={dmsPdfsDownloaded ? "add-sales-v2-dms-pdf-done" : ""}>
-                      {dmsPdfsDownloaded ? (
-                        <span className="add-sales-v2-dms-pdf-check" aria-hidden>✓</span>
-                      ) : null}
-                      Form 21
-                    </li>
-                    <li className={dmsPdfsDownloaded ? "add-sales-v2-dms-pdf-done" : ""}>
-                      {dmsPdfsDownloaded ? (
-                        <span className="add-sales-v2-dms-pdf-check" aria-hidden>✓</span>
-                      ) : null}
-                      Form 22
-                    </li>
-                    <li className={dmsPdfsDownloaded ? "add-sales-v2-dms-pdf-done" : ""}>
-                      {dmsPdfsDownloaded ? (
-                        <span className="add-sales-v2-dms-pdf-check" aria-hidden>✓</span>
-                      ) : null}
-                      Invoice Details
-                    </li>
-                  </ul>
-                  {dmsPdfsDownloaded && (
-                    <p className="add-sales-v2-dms-pdfs-msg">Form 21, Form 22 and Invoice Details downloaded.</p>
-                  )}
-                </div>
+                  </div>
+                </dl>
               </div>
               <div className="add-sales-v2-fill-forms-subsection">
-                <div className="add-sales-v2-subsection-head">
-                  <h3 className="add-sales-v2-subsection-title">B. Insurance</h3>
-                  {isFillInsuranceLoading && <span className="add-sales-v2-processing">Processing</span>}
+                <div className="add-sales-v2-subsection-head add-sales-v2-subsection-head--fill-forms-row">
+                  <div className="add-sales-v2-subsection-head-left">
+                    <h3 className="add-sales-v2-subsection-title">B. Insurance</h3>
+                    {(isFillInsuranceLoading || isFillCpaInsuranceLoading) && (
+                      <span className="add-sales-v2-processing">Processing</span>
+                    )}
+                  </div>
                   <button
                     type="button"
-                    className="app-button app-button--primary"
+                    className="app-button app-button--primary add-sales-v2-fill-forms-action-btn"
                     disabled={generateInsurancePrimaryButtonDisabled}
                     onClick={handleFillInsurance}
                     title={generateInsuranceButtonTitle}
@@ -2125,6 +2330,26 @@ export function AddSalesPage({
                     {isFillInsuranceLoading ? "Processing…" : "Generate Insurance"}
                   </button>
                 </div>
+                <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
+                  <div className="add-sales-v2-dl-row-group">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Insurance Provider</dt>
+                      <dd>{(ins?.insurer ?? preferInsurer ?? "").trim() || "—"}</dd>
+                    </div>
+                  </div>
+                  <div className="add-sales-v2-dl-row-group">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Hero CPA Included</dt>
+                      <dd>{heroCpi === "Y" ? "Yes" : heroCpi === "N" ? "No" : "—"}</dd>
+                    </div>
+                  </div>
+                  <div className="add-sales-v2-dl-row-group">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Policy No.</dt>
+                      <dd>{ins?.policy_num?.trim() ? ins.policy_num : "—"}</dd>
+                    </div>
+                  </div>
+                </dl>
                 {submitInfoActionsComplete &&
                   !hasSuppliedInsuranceDoc &&
                   generateInsuranceReason &&
@@ -2135,61 +2360,62 @@ export function AddSalesPage({
                       <span className="add-sales-v2-status-text">{generateInsuranceReason}</span>
                     </div>
                   )}
-                <div className="add-sales-v2-dms-fields">
-                  <div className="add-sales-v2-dms-fields-title">Insurance details (from uploaded document)</div>
-                  <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Insurance Provider</dt>
-                        <dd className="add-sales-v2-dd--insurance-editable">
-                          <input
-                            type="text"
-                            className="add-sales-v2-dl-input add-sales-v2-dl-input--insurance-provider-wide"
-                            value={ins?.insurer ?? preferInsurer ?? ""}
-                            onChange={(e) =>
-                            setExtractedInsurance((prev) => ({
-                              ...(prev ?? {}),
-                              insurer: sanitizeFormFieldInputValue(e.target.value),
-                            }))
-                          }
-                            placeholder="—"
-                          />
-                        </dd>
-                      </div>
-                    </div>
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Policy No.</dt>
-                        <dd>{ins?.policy_num ?? "—"}</dd>
-                      </div>
-                    </div>
-                    <div className="add-sales-v2-dl-row-group">
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Valid From</dt>
-                        <dd>{ins?.policy_from ?? "—"}</dd>
-                      </div>
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Gross Premium</dt>
-                        <dd>{ins?.premium ?? "—"}</dd>
-                      </div>
-                    </div>
-                  </dl>
-                </div>
-                {fillInsuranceStatus && (
-                  <div className="add-sales-v2-print-forms-row">
-                    <StatusMessage message={fillInsuranceStatus} className="app-panel-status" role="status" />
-                  </div>
-                )}
-                {printFormsStatus && (
-                  <div className="add-sales-v2-print-forms-row">
-                    <StatusMessage message={printFormsStatus} className="app-panel-status" role="status" />
-                  </div>
-                )}
               </div>
+              {cpaAlliancePortalEnabled && cpaInsurers.length > 0 && dealerId > 0 && (
+              <div className="add-sales-v2-fill-forms-subsection">
+                <div className="add-sales-v2-subsection-head add-sales-v2-subsection-head--fill-forms-row">
+                  <div className="add-sales-v2-subsection-head-left">
+                    <h3 className="add-sales-v2-subsection-title">C. CPA</h3>
+                    {isFillCpaInsuranceLoading && <span className="add-sales-v2-processing">Processing</span>}
+                  </div>
+                  <button
+                    type="button"
+                    className="app-button app-button--primary add-sales-v2-fill-forms-action-btn"
+                    disabled={cpaAlliancePrimaryButtonDisabled}
+                    onClick={() => void handleCpaAllianceInsurance()}
+                    title={
+                      !cpaAlliancePortalEnabled || !cpaInsurers.length
+                        ? "CPA portal is not enabled or no insurers are configured for this dealer."
+                        : !cpaSelectedPortalUrl
+                          ? "No CPA row has a valid https URL in master_ref.comments."
+                          : !submitInfoActionsComplete || !hasCommittedSaleIds
+                            ? "Complete Submit Info and Create Invoice first."
+                            : undefined
+                    }
+                  >
+                    {isFillCpaInsuranceLoading ? "Opening…" : "CPA Insurance"}
+                  </button>
+                </div>
+                <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
+                  <div className="add-sales-v2-dl-row-group">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>CPA Provider</dt>
+                      <dd>{resolvedCpaPortal?.ref_value || dealerCpaRef || "—"}</dd>
+                    </div>
+                  </div>
+                  <div className="add-sales-v2-dl-row-group">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Policy No.</dt>
+                      <dd>{ins?.policy_num?.trim() ? ins.policy_num : "—"}</dd>
+                    </div>
+                  </div>
+                </dl>
+              </div>
+              )}
+              {fillInsuranceStatus && (
+                <div className="add-sales-v2-print-forms-row">
+                  <StatusMessage message={fillInsuranceStatus} className="app-panel-status" role="status" />
+                </div>
+              )}
+              {printFormsStatus && (
+                <div className="add-sales-v2-print-forms-row">
+                  <StatusMessage message={printFormsStatus} className="app-panel-status" role="status" />
+                </div>
+              )}
               <div className="add-sales-v2-rto-actions add-sales-v2-print-forms-actions">
                 <button
                   type="button"
-                  className="app-button app-button--primary"
+                  className="app-button app-button--primary add-sales-v2-fill-forms-action-btn"
                   disabled={!printFormsButtonEnabled}
                   onClick={handlePrintForms}
                   title={printFormsButtonTitle}

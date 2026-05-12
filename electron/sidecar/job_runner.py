@@ -895,6 +895,47 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     }
 
 
+def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
+    """CPA Alliance portal — local Playwright only; uploads + ocr_logs mirrored like other sale jobs."""
+    api_url, jwt = _require_api_credentials(params)
+
+    from app.config import get_ocr_output_dir, get_uploads_dir
+    from app.services.add_alliance_cpa_insurance import add_alliance_cpa_insurance
+
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    portal_url = (params.get("portal_url") or "").strip() or None
+    customer_name = (params.get("customer_name") or "").strip() or None
+    mobile = (params.get("mobile") or "").strip() or None
+    frame_no = (params.get("frame_no") or "").strip() or None
+    engine_no = (params.get("engine_no") or "").strip() or None
+
+    result = add_alliance_cpa_insurance(
+        dealer_id=dealer_id,
+        subfolder=subfolder,
+        portal_url=portal_url,
+        customer_name=customer_name,
+        mobile=mobile,
+        frame_no=frame_no,
+        engine_no=engine_no,
+    )
+
+    uploads_dir = get_uploads_dir(dealer_id)
+    ocr_dir = get_ocr_output_dir(dealer_id)
+    if subfolder:
+        try:
+            _upload_sale_artifacts(api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir)
+        except Exception as exc:
+            logging.warning("fill_cpa_alliance_insurance sidecar artifact upload: %s", exc)
+
+    return {
+        "success": bool(result.get("success")),
+        "error": result.get("error"),
+        "page_url": result.get("page_url"),
+        "playwright_log": result.get("playwright_log"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Vahan RTO batch — claim (API) → per-row Playwright (local) → result (API)
 # ---------------------------------------------------------------------------
@@ -1468,6 +1509,9 @@ def dispatch(payload: dict) -> dict:
         return {"success": True, "data": data}
     if job_type == "fill_insurance":
         data = _run_sidecar_playwright_job(lambda: _dispatch_fill_insurance_impl(params))
+        return {"success": True, "data": data}
+    if job_type == "fill_cpa_alliance_insurance":
+        data = _run_sidecar_playwright_job(lambda: _dispatch_fill_cpa_alliance_insurance_impl(params))
         return {"success": True, "data": data}
     if job_type == "fill_vahan_batch":
         data = _run_sidecar_playwright_job(lambda: _dispatch_fill_vahan_batch_impl(params))

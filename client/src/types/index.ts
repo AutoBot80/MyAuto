@@ -116,6 +116,10 @@ export interface ExtractedVehicleDetails {
   num_cylinders?: string;
   vehicle_price?: string;
   year_of_mfg?: string;
+  /** From DMS Create Invoice / Siebel scrape */
+  order_number?: string;
+  /** From DMS Create Invoice / sales_master (eligibility may refresh this) */
+  invoice_number?: string;
 }
 
 /** Customer details: 15 granular fields (e.g. from QR) + optional legacy address. Full Aadhar shown only on frontend; DB stores last 4 only. */

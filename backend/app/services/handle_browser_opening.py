@@ -3,15 +3,16 @@ Shared Playwright browser lifecycle: CDP attach to existing Edge/Chrome, optiona
 Playwright Chromium (``launch_persistent_context``), or launch managed Edge/Chrome; tab matching by
 site base URL; optional auto-login when credentials are pre-filled.
 
-Used by Fill DMS, Vahan, and Insurance — independent of Siebel/DMS business logic.
+Used by Fill DMS, Vahan, Insurance, and CPA third-party portals — independent of Siebel/DMS business logic.
 
 **Native Playwright Chromium (default):** When ``USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS`` is true,
-``site_label="DMS"``, ``site_label="Insurance"``, and ``site_label="Vahan"`` each use Playwright-bundled
+``site_label="DMS"``, ``site_label="Insurance"``, ``site_label="CPAInsurance"``, and ``site_label="Vahan"`` each use Playwright-bundled
 Chromium with ``launch_persistent_context`` — DMS under ``browser-profile-playwright-chromium``,
-Insurance under ``browser-profile-playwright-chromium-insurance``, Vahan under
+Insurance under ``browser-profile-playwright-chromium-insurance``, CPA (Alliance-style portals) under
+``browser-profile-playwright-chromium-cpa-insurance``, Vahan under
 ``browser-profile-playwright-chromium-vahan`` (siblings of the Edge/Chrome profile dir). No CDP
 attach for those paths. Set the env var to ``false`` to restore CDP + managed Edge/Chrome for DMS,
-Insurance, and Vahan.
+Insurance, CPAInsurance, and Vahan.
 The DMS profile is **not** Edge's saved-password vault: Windows Hello / PIN prompts when picking
 stored passwords in Edge do not apply; automation uses ``DMS_LOGIN_USER`` / ``DMS_LOGIN_PASSWORD``
 or ``operator_dms_login.json`` (written after a successful programmatic or snapshotted login).
@@ -430,6 +431,7 @@ _CDP_PROBE_TIMEOUT_SEC = 0.35
 # Playwright-bundled Chromium persistent contexts (no CDP attach to Edge/Chrome).
 _DMS_NATIVE_PERSISTENT_CONTEXT: object | None = None
 _INSURANCE_NATIVE_PERSISTENT_CONTEXT: object | None = None
+_CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT: object | None = None
 _VAHAN_NATIVE_PERSISTENT_CONTEXT: object | None = None
 
 
@@ -441,6 +443,11 @@ def _playwright_chromium_profile_dir() -> Path:
 def _playwright_chromium_insurance_profile_dir() -> Path:
     """Separate user-data-dir from DMS so MISP cookies/session do not mix with Siebel."""
     return _browser_profile_dir().resolve().parent / "browser-profile-playwright-chromium-insurance"
+
+
+def _playwright_chromium_cpa_insurance_profile_dir() -> Path:
+    """Separate user-data-dir for CPA third-party portals (e.g. Alliance Assure) vs MISP/DMS."""
+    return _browser_profile_dir().resolve().parent / "browser-profile-playwright-chromium-cpa-insurance"
 
 
 def _playwright_chromium_vahan_profile_dir() -> Path:
@@ -975,7 +982,12 @@ def _use_native_pw_chromium_for_site(site_label: str) -> bool:
     if not bool(USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS):
         return False
     sl = (site_label or "").strip()
-    return sl in ("DMS", "Insurance", "Vahan")
+    return sl in ("DMS", "Insurance", "CPAInsurance", "Vahan")
+
+
+def _host_matched_portal_skips_dms_siebel(site_label: str) -> bool:
+    """MISP and CPA insurer portals match by host; never reuse or navigate a Siebel/DMS tab."""
+    return (site_label or "").strip() in ("Insurance", "CPAInsurance")
 
 
 def _clear_native_dms_persistent_context(reason: str = "") -> None:
@@ -999,6 +1011,17 @@ def _clear_native_insurance_persistent_context(reason: str = "") -> None:
         )
 
 
+def _clear_native_cpa_insurance_persistent_context(reason: str = "") -> None:
+    global _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT
+    if _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT is None:
+        return
+    _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+    if reason:
+        logger.warning(
+            "handle_browser_opening: cleared native CPAInsurance persistent context (%s).", reason
+        )
+
+
 def _clear_native_vahan_persistent_context(reason: str = "") -> None:
     global _VAHAN_NATIVE_PERSISTENT_CONTEXT
     if _VAHAN_NATIVE_PERSISTENT_CONTEXT is None:
@@ -1016,6 +1039,8 @@ def _clear_native_persistent_context_for_site(site_label: str, reason: str = "")
         _clear_native_dms_persistent_context(reason)
     elif sl == "Insurance":
         _clear_native_insurance_persistent_context(reason)
+    elif sl == "CPAInsurance":
+        _clear_native_cpa_insurance_persistent_context(reason)
     elif sl == "Vahan":
         _clear_native_vahan_persistent_context(reason)
 
@@ -1051,6 +1076,21 @@ def _refresh_native_insurance_context_liveness() -> None:
         _INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
 
 
+def _refresh_native_cpa_insurance_context_liveness() -> None:
+    global _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT
+    ctx = _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT
+    if ctx is None:
+        return
+    try:
+        list(ctx.pages)
+    except Exception as exc:
+        logger.warning(
+            "handle_browser_opening: native CPAInsurance context no longer valid (%s) — clearing reference.",
+            exc,
+        )
+        _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+
+
 def _refresh_native_vahan_context_liveness() -> None:
     global _VAHAN_NATIVE_PERSISTENT_CONTEXT
     ctx = _VAHAN_NATIVE_PERSISTENT_CONTEXT
@@ -1072,6 +1112,8 @@ def _refresh_native_context_liveness_for_site(site_label: str) -> None:
         _refresh_native_dms_context_liveness()
     elif sl == "Insurance":
         _refresh_native_insurance_context_liveness()
+    elif sl == "CPAInsurance":
+        _refresh_native_cpa_insurance_context_liveness()
     elif sl == "Vahan":
         _refresh_native_vahan_context_liveness()
 
@@ -1080,6 +1122,8 @@ def _dms_browser_closed_operator_message(site_label: str) -> str:
     sl = (site_label or "").strip()
     if sl == "Insurance":
         retry = "Press Generate Insurance again to open a new browser window."
+    elif sl == "CPAInsurance":
+        retry = "Press CPA Insurance again to open a new browser window."
     elif sl == "Vahan":
         retry = (
             "Press Warm Vahan or retry the RTO action to open a new browser window "
@@ -1120,7 +1164,7 @@ def retain_automation_browser_for_operator_manual_close() -> None:
 
 
 def _retain_browsers_without_closing() -> None:
-    global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
+    global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
     for b in list(_KEEP_OPEN_BROWSERS):
         _RETAINED_BROWSERS_NO_CLOSE.append(b)
     _KEEP_OPEN_BROWSERS.clear()
@@ -1133,6 +1177,9 @@ def _retain_browsers_without_closing() -> None:
     if _INSURANCE_NATIVE_PERSISTENT_CONTEXT is not None:
         _RETAINED_BROWSERS_NO_CLOSE.append(_INSURANCE_NATIVE_PERSISTENT_CONTEXT)
         _INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+    if _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT is not None:
+        _RETAINED_BROWSERS_NO_CLOSE.append(_CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT)
+        _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
     if _VAHAN_NATIVE_PERSISTENT_CONTEXT is not None:
         _RETAINED_BROWSERS_NO_CLOSE.append(_VAHAN_NATIVE_PERSISTENT_CONTEXT)
         _VAHAN_NATIVE_PERSISTENT_CONTEXT = None
@@ -1222,13 +1269,16 @@ def _close_playwright_browser_handle(browser: object) -> None:
 
 def _disconnect_all_playwright_browsers_on_worker_thread() -> None:
     """Must run on the Playwright sync worker thread (via ``run_playwright_callable_sync``)."""
-    global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
+    global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
     if _DMS_NATIVE_PERSISTENT_CONTEXT is not None:
         _close_playwright_browser_handle(_DMS_NATIVE_PERSISTENT_CONTEXT)
         _DMS_NATIVE_PERSISTENT_CONTEXT = None
     if _INSURANCE_NATIVE_PERSISTENT_CONTEXT is not None:
         _close_playwright_browser_handle(_INSURANCE_NATIVE_PERSISTENT_CONTEXT)
         _INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+    if _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT is not None:
+        _close_playwright_browser_handle(_CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT)
+        _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
     if _VAHAN_NATIVE_PERSISTENT_CONTEXT is not None:
         _close_playwright_browser_handle(_VAHAN_NATIVE_PERSISTENT_CONTEXT)
         _VAHAN_NATIVE_PERSISTENT_CONTEXT = None
@@ -1652,7 +1702,7 @@ def _launch_managed_browser_for_site(
                         url = (page.url or "").strip()
                         if not url or not _page_matches_site_for_reuse(url, base_url, site_label):
                             continue
-                        if (site_label or "").strip() == "Insurance" and _url_looks_like_dms_siebel_tab(
+                        if _host_matched_portal_skips_dms_siebel(site_label) and _url_looks_like_dms_siebel_tab(
                             url
                         ):
                             continue
@@ -1681,14 +1731,15 @@ def _launch_managed_browser_for_site(
                             u0 = (pg0.url or "").strip()
                         except Exception:
                             u0 = ""
-                        if (site_label or "").strip() == "Insurance" and _url_looks_like_dms_siebel_tab(
+                        if _host_matched_portal_skips_dms_siebel(site_label) and _url_looks_like_dms_siebel_tab(
                             u0
                         ):
                             if launch_background:
                                 # Silent warm: new_page + goto would foreground Edge/Chrome on Windows.
                                 continue
                             logger.info(
-                                "handle_browser_opening: sole CDP tab is Siebel/DMS — opening a new tab for Insurance instead of reusing DMS (base=%s).",
+                                "handle_browser_opening: sole CDP tab is Siebel/DMS — opening a new tab for %s instead of reusing DMS (base=%s).",
+                                (site_label or "").strip() or "portal",
                                 (base_url or "")[:120],
                             )
                             try:
@@ -1700,7 +1751,8 @@ def _launch_managed_browser_for_site(
                                 return pg_new, channel
                             except Exception as exc:
                                 logger.warning(
-                                    "handle_browser_opening: could not open Insurance tab while DMS-only tab was present: %s",
+                                    "handle_browser_opening: could not open %s tab while DMS-only tab was present: %s",
+                                    (site_label or "").strip() or "portal",
                                     exc,
                                 )
                                 continue
@@ -1818,7 +1870,7 @@ def _launch_managed_browser_for_site(
 def _page_matches_site_for_reuse(page_url: str, site_base_url: str, site_label: str) -> bool:
     """Match an open browser tab to the configured site URL.
 
-    **Vahan** and **Insurance** use hostname-only matching so tabs still match after login
+    **Vahan** and **Insurance** / **CPAInsurance** use hostname-only matching so tabs still match after login
     (paths move away from ``login.xhtml`` / partner-login into SPAs like ``/ekycpage``). Other
     sites keep path-prefix matching via :func:`_playwright_page_url_matches_site_base`.
     """
@@ -1827,7 +1879,7 @@ def _page_matches_site_for_reuse(page_url: str, site_base_url: str, site_label: 
         ph = _hostname_for_site_match(page_url)
         bh = _hostname_for_site_match(site_base_url)
         return bool(ph and bh and ph == bh)
-    if sl == "Insurance":
+    if sl in ("Insurance", "CPAInsurance"):
         low = (page_url or "").strip().lower()
         if "blank" in low or low.startswith("chrome://") or low.startswith("edge://") or low.startswith("about:"):
             return False
@@ -2439,6 +2491,9 @@ def _find_matching_page_on_native_site_context(base_url: str, site_label: str) -
     elif sl == "Insurance":
         ctx = _INSURANCE_NATIVE_PERSISTENT_CONTEXT
         clear_ctx = _clear_native_insurance_persistent_context
+    elif sl == "CPAInsurance":
+        ctx = _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT
+        clear_ctx = _clear_native_cpa_insurance_persistent_context
     elif sl == "Vahan":
         ctx = _VAHAN_NATIVE_PERSISTENT_CONTEXT
         clear_ctx = _clear_native_vahan_persistent_context
@@ -2488,6 +2543,10 @@ def _navigate_native_site_persistent_to(target_url: str, site_label: str) -> obj
         _refresh_native_insurance_context_liveness()
         ctx = _INSURANCE_NATIVE_PERSISTENT_CONTEXT
         clear_on_disc = lambda r: _clear_native_insurance_persistent_context(r)
+    elif sl == "CPAInsurance":
+        _refresh_native_cpa_insurance_context_liveness()
+        ctx = _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT
+        clear_on_disc = lambda r: _clear_native_cpa_insurance_persistent_context(r)
     elif sl == "Vahan":
         _refresh_native_vahan_context_liveness()
         ctx = _VAHAN_NATIVE_PERSISTENT_CONTEXT
@@ -2570,8 +2629,8 @@ def _launch_native_site_persistent_context(
     site_label: str,
     profile_dir: Path,
 ) -> tuple[object | None, str]:
-    """Launch or reuse Playwright Chromium ``launch_persistent_context`` for DMS, Insurance, or Vahan."""
-    global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
+    """Launch or reuse Playwright Chromium ``launch_persistent_context`` for DMS, Insurance, CPA, or Vahan."""
+    global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
     sl = (site_label or "").strip()
     _refresh_native_context_liveness_for_site(sl)
     pw = _get_playwright()
@@ -2585,6 +2644,8 @@ def _launch_native_site_persistent_context(
             ctx_ref = _DMS_NATIVE_PERSISTENT_CONTEXT
         elif sl == "Insurance":
             ctx_ref = _INSURANCE_NATIVE_PERSISTENT_CONTEXT
+        elif sl == "CPAInsurance":
+            ctx_ref = _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT
         elif sl == "Vahan":
             ctx_ref = _VAHAN_NATIVE_PERSISTENT_CONTEXT
         else:
@@ -2598,6 +2659,8 @@ def _launch_native_site_persistent_context(
                     _DMS_NATIVE_PERSISTENT_CONTEXT = None
                 elif sl == "Insurance":
                     _INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
+                elif sl == "CPAInsurance":
+                    _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT = None
                 elif sl == "Vahan":
                     _VAHAN_NATIVE_PERSISTENT_CONTEXT = None
                 ctx_ref = None
@@ -2624,6 +2687,17 @@ def _launch_native_site_persistent_context(
                 "handle_browser_opening: launched Playwright Chromium Insurance profile=%s",
                 profile_dir,
             )
+        elif sl == "CPAInsurance" and _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT is None:
+            _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT = pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=False,
+                args=args,
+                ignore_default_args=["--enable-automation"],
+            )
+            logger.info(
+                "handle_browser_opening: launched Playwright Chromium CPAInsurance profile=%s",
+                profile_dir,
+            )
         elif sl == "Vahan" and _VAHAN_NATIVE_PERSISTENT_CONTEXT is None:
             _VAHAN_NATIVE_PERSISTENT_CONTEXT = pw.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),
@@ -2640,6 +2714,8 @@ def _launch_native_site_persistent_context(
             ctx = _DMS_NATIVE_PERSISTENT_CONTEXT
         elif sl == "Insurance":
             ctx = _INSURANCE_NATIVE_PERSISTENT_CONTEXT
+        elif sl == "CPAInsurance":
+            ctx = _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT
         elif sl == "Vahan":
             ctx = _VAHAN_NATIVE_PERSISTENT_CONTEXT
         else:
@@ -2709,6 +2785,18 @@ def _launch_native_insurance_persistent_context(
     )
 
 
+def _launch_native_cpa_insurance_persistent_context(
+    open_target: str, *, launch_background: bool
+) -> tuple[object | None, str]:
+    """Launch or reuse Playwright Chromium for CPA insurer portals (Alliance-style), separate from MISP/DMS."""
+    return _launch_native_site_persistent_context(
+        open_target,
+        launch_background=launch_background,
+        site_label="CPAInsurance",
+        profile_dir=_playwright_chromium_cpa_insurance_profile_dir(),
+    )
+
+
 def _launch_native_vahan_persistent_context(
     open_target: str, *, launch_background: bool
 ) -> tuple[object | None, str]:
@@ -2724,9 +2812,9 @@ def _launch_native_vahan_persistent_context(
 def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
     """Navigate an existing tab in a connected CDP browser to ``target_url``.
 
-    For **Insurance**, never navigates a Siebel/DMS tab to MISP — those tabs are skipped
-    (same rules as :func:`find_open_site_page`). If every open tab is DMS-only, opens a
-    **new** tab in the same context instead of hijacking DMS.
+    For **Insurance** and **CPAInsurance**, never navigates a Siebel/DMS tab to the portal host —
+    those tabs are skipped (same rules as :func:`find_open_site_page`). If every open tab is
+    DMS-only, opens a **new** tab in the same context instead of hijacking DMS.
 
     For other ``site_label`` values, the first tab is still navigated in-place (Vahan, etc.).
 
@@ -2739,7 +2827,7 @@ def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
         return None
     _refresh_cdp_browsers()
     browsers = list(_CDP_BROWSERS_BY_URL.values()) + list(_KEEP_OPEN_BROWSERS)
-    want_insurance = (site_label or "").strip() == "Insurance"
+    want_skip_siebel = _host_matched_portal_skips_dms_siebel(site_label)
 
     for browser in browsers:
         try:
@@ -2748,7 +2836,7 @@ def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
                 if not pages:
                     continue
 
-                if want_insurance:
+                if want_skip_siebel:
                     navigable: list = []
                     for page in pages:
                         try:
@@ -2757,7 +2845,8 @@ def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
                             u = ""
                         if _url_looks_like_dms_siebel_tab(u):
                             logger.info(
-                                "handle_browser_opening: skip DMS/Siebel tab for Insurance navigate — %s",
+                                "handle_browser_opening: skip DMS/Siebel tab for %s navigate — %s",
+                                (site_label or "").strip() or "portal",
                                 u[:120],
                             )
                             continue
@@ -2767,24 +2856,30 @@ def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
                         try:
                             page.goto(target_url, wait_until="domcontentloaded", timeout=20_000)
                             logger.info(
-                                "handle_browser_opening: navigated non-DMS tab to Insurance URL",
+                                "handle_browser_opening: navigated non-DMS tab to %s URL",
+                                (site_label or "").strip() or "portal",
                             )
                             return page
                         except Exception as exc:
                             logger.debug(
-                                "handle_browser_opening: navigate Insurance tab failed: %s", exc
+                                "handle_browser_opening: navigate %s tab failed: %s",
+                                (site_label or "").strip() or "portal",
+                                exc,
                             )
                             continue
                     try:
                         pg_new = ctx.new_page()
                         pg_new.goto(target_url, wait_until="domcontentloaded", timeout=20_000)
                         logger.info(
-                            "handle_browser_opening: opened new Insurance tab (skipped DMS-only or failed reuses).",
+                            "handle_browser_opening: opened new %s tab (skipped DMS-only or failed reuses).",
+                            (site_label or "").strip() or "portal",
                         )
                         return pg_new
                     except Exception as exc:
                         logger.debug(
-                            "handle_browser_opening: new_page/goto Insurance failed: %s", exc
+                            "handle_browser_opening: new_page/goto %s failed: %s",
+                            (site_label or "").strip() or "portal",
+                            exc,
                         )
                         continue
 
@@ -2952,6 +3047,10 @@ def get_or_open_site_page(
             opened_page, channel = _launch_native_insurance_persistent_context(
                 open_target, launch_background=launch_background
             )
+        elif sl_open == "CPAInsurance":
+            opened_page, channel = _launch_native_cpa_insurance_persistent_context(
+                open_target, launch_background=launch_background
+            )
         elif sl_open == "Vahan":
             opened_page, channel = _launch_native_vahan_persistent_context(
                 open_target, launch_background=launch_background
@@ -3034,9 +3133,10 @@ def find_open_site_page(base_url: str, site_label: str = ""):
                     if len(sample_urls) < 15 and url:
                         sample_urls.append(url[:160])
                     if _page_matches_site_for_reuse(url, base_url, site_label):
-                        if (site_label or "").strip() == "Insurance" and _url_looks_like_dms_siebel_tab(url):
+                        if _host_matched_portal_skips_dms_siebel(site_label) and _url_looks_like_dms_siebel_tab(url):
                             logger.info(
-                                "handle_browser_opening: skipping Siebel/DMS tab when matching Insurance — %s",
+                                "handle_browser_opening: skipping Siebel/DMS tab when matching %s — %s",
+                                (site_label or "").strip() or "portal",
                                 url[:120],
                             )
                             continue

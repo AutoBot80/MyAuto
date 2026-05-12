@@ -11,9 +11,11 @@ from app.config import (
     CHALLANS_DIR,
     S3_CHALLANS_PREFIX,
     S3_DATA_BUCKET,
+    S3_OCR_LOGS_PREFIX,
     S3_OCR_PREFIX,
     S3_UPLOADS_PREFIX,
     STORAGE_USE_S3,
+    get_ocr_logs_dir,
     get_ocr_output_dir,
     get_uploads_dir,
 )
@@ -30,6 +32,11 @@ def uploads_s3_key(dealer_id: int, *relative_parts: str) -> str:
 def ocr_s3_key(dealer_id: int, *relative_parts: str) -> str:
     parts = [p.replace("\\", "/").strip("/") for p in relative_parts if p and str(p).strip()]
     return f"{S3_OCR_PREFIX}/{int(dealer_id)}/" + "/".join(parts)
+
+
+def ocr_logs_s3_key(dealer_id: int, *relative_parts: str) -> str:
+    parts = [p.replace("\\", "/").strip("/") for p in relative_parts if p and str(p).strip()]
+    return f"{S3_OCR_LOGS_PREFIX}/{int(dealer_id)}/" + "/".join(parts)
 
 
 def challans_s3_key(*relative_parts: str) -> str:
@@ -102,6 +109,35 @@ def sync_ocr_subfolder_to_s3(dealer_id: int, subfolder: str) -> None:
     for f in base.rglob("*"):
         if f.is_file():
             sync_ocr_file_to_s3(dealer_id, f)
+
+
+def sync_ocr_logs_file_to_s3(dealer_id: int, file_path: Path) -> None:
+    """Upload a file under ``get_ocr_logs_dir(dealer_id)`` to S3."""
+    if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
+        return
+    base = get_ocr_logs_dir(dealer_id)
+    rel = _relative_under(base, file_path)
+    if rel is None:
+        return
+    if not file_path.is_file():
+        return
+    key = ocr_logs_s3_key(dealer_id, *rel.split("/"))
+    try:
+        s3_storage.upload_file(file_path, key)
+    except Exception:
+        logger.exception("dealer_storage: failed to sync ocr_logs file to S3: %s", file_path)
+
+
+def sync_ocr_logs_subfolder_to_s3(dealer_id: int, subfolder: str) -> None:
+    """Upload all files under ``ocr_logs/{dealer_id}/{subfolder}/`` recursively."""
+    if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
+        return
+    base = get_ocr_logs_dir(dealer_id) / subfolder.strip().replace("\\", "/")
+    if not base.is_dir():
+        return
+    for f in base.rglob("*"):
+        if f.is_file():
+            sync_ocr_logs_file_to_s3(dealer_id, f)
 
 
 def sync_challans_file_to_s3(file_path: Path) -> None:

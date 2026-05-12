@@ -189,6 +189,7 @@ This document lists the current database tables and their columns. **Executable 
 | `rto_name` | `varchar(128)` | YES |  | Dealer-mapped RTO office name (e.g. `RTO-Bharatpur`) |
 | `prefer_insurer` | `varchar(255)` | YES |  | Optional canonical MISP insurer label; when merged details-sheet insurer fuzzy-matches (≥20%) to this string, **`build_insurance_fill_values`** uses **`prefer_insurer`** for KYC (**`DDL/alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql`**) |
 | `hero_cpi` | `char(1)` | NO | `'N'` | **Y** or **N**: MISP proposal CPA add-on row (label varies — NIC/CPI/Hero CPI); automation checks when **Y**, unchecks when **N** (**`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**) |
+| `cpa_insurer` | `varchar(512)` | YES |  | Optional CPA third-party portal row (**`ref_type`** = **CPA** on **`master_ref`**); portal login URL stored in **`master_ref.comments`**; composite FK **`fk_dealer_ref_cpa_insurer`** — **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**, greenfield **`DDL/04b_dealer_ref.sql`** |
 
 **Primary key:** `dealer_ref_pkey` on (`dealer_id`)
 
@@ -196,8 +197,9 @@ This document lists the current database tables and their columns. **Executable 
 
 **Foreign keys:**
 - `fk_dealer_ref_oem`: (`oem_id`) → `oem_ref(oem_id)`
+- `fk_dealer_ref_cpa_insurer`: (`cpa_insurer_ref_type`, `cpa_insurer`) → `master_ref(ref_type, ref_value)` when **`cpa_insurer`** is set (**`DDL/alter/29a_*.sql`**)
 
-**Scripts:** `DDL/04b_dealer_ref.sql` (greenfield); add **`subdealer_type`**, reordered columns on new installs: same file; **upgrade** existing DB: **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**
+**Scripts:** `DDL/04b_dealer_ref.sql` (greenfield); add **`subdealer_type`**, reordered columns on new installs: same file; **upgrade** existing DB: **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**, **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**, **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**
 
 ---
 
@@ -837,4 +839,5 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.90 | Apr 2026 | **No schema change.** **Model** match: reference **`subdealer_discount_master_ref.model`** is a **prefix** of the DMS/inventory value (**`starts_with(BTRIM(DMS), BTRIM(ref.model))`**, SQL); **longest** ref **model** if multiple; **`backend/app/repositories/vehicle_inventory.get_subdealer_challan_discount`** — **§12**, **§16**; **LLD** **§2.4e**, **6.297** |
 | 2.91 | May 2026 | **`challan_master.created_at`** — **`DDL/alter/20b_challan_master_created_at.sql`**; greenfield: **`DDL/20_challan_master.sql`** — Admin Usage daily counts for committed challans |
 | 2.92 | May 2026 | **`challan_master_staging`**, **`challan_master`**: **`add_transport_cost`** (boolean, default false), **`transport_cost_per_vehicle`** (`numeric(12,2)`); optional on **`POST /subdealer-challan/staging`**; order phase nets **`vehicle_inventory_master.discount`** per line before Siebel **`order_line_vehicles`**; committed header snapshots same fields — **`DDL/alter/20c_challan_master_transport_cost.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`**, **`DDL/20_challan_master.sql`** — **BRD** **BR-22**, **FR-25**, **3.169**; **LLD** **§2.4e**, **6.301**; **HLD** **1.172** |
+| 2.93 | May 2026 | **`master_ref.comments`** (CPA portal **https** URL); **`dealer_ref.cpa_insurer`** + **`cpa_insurer_ref_type`** (generated) + **`fk_dealer_ref_cpa_insurer`**; seed **Alliance Assure** — **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**, greenfield **`DDL/28_master_ref.sql`** / **`DDL/04b_dealer_ref.sql`** — **BRD** **3.170**; **LLD** **6.302**; **HLD** **1.173** |
 

@@ -68,6 +68,8 @@ export interface FillDmsResponse {
     num_cylinders?: string;
     vehicle_price?: string;
     year_of_mfg?: string;
+    order_number?: string | null;
+    invoice_number?: string | null;
   };
   pdfs_saved: string[];
   application_id?: string | null;
@@ -427,6 +429,59 @@ export async function fillHeroInsuranceLocal(req: FillHeroInsuranceRequest): Pro
     });
     if (result.timedOut) return { success: false, error: "Insurance sidecar timed out." };
     const data = (result.parsed as { data?: FillHeroInsuranceResponse })?.data;
+    if (data) return data;
+    return { success: result.success, error: result.error ?? undefined };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export interface FillCpaAllianceInsuranceRequest {
+  dealer_id: number;
+  subfolder: string;
+  portal_url: string;
+  customer_name?: string | null;
+  mobile?: string | null;
+  frame_no?: string | null;
+  engine_no?: string | null;
+}
+
+export interface FillCpaAllianceInsuranceResponse {
+  success: boolean;
+  error?: string | null;
+  page_url?: string | null;
+  playwright_log?: string | null;
+}
+
+/**
+ * CPA Alliance third-party portal (native Chromium profile). Desktop sidecar only.
+ */
+export async function fillCpaAllianceInsuranceLocal(
+  req: FillCpaAllianceInsuranceRequest
+): Promise<FillCpaAllianceInsuranceResponse> {
+  if (!isElectron()) {
+    return { success: false, error: "CPA Insurance runs in the Saathi desktop app (Electron) only." };
+  }
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "fill_cpa_alliance_insurance",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: {
+        dealer_id: req.dealer_id,
+        subfolder: req.subfolder,
+        portal_url: req.portal_url,
+        customer_name: req.customer_name ?? undefined,
+        mobile: req.mobile ?? undefined,
+        frame_no: req.frame_no ?? undefined,
+        engine_no: req.engine_no ?? undefined,
+      },
+      timeoutMs: FILL_HERO_INSURANCE_TIMEOUT_MS,
+    });
+    if (result.timedOut) {
+      return { success: false, error: "CPA Insurance sidecar timed out." };
+    }
+    const data = (result.parsed as { data?: FillCpaAllianceInsuranceResponse })?.data;
     if (data) return data;
     return { success: result.success, error: result.error ?? undefined };
   } catch (err) {

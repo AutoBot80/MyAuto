@@ -7,6 +7,7 @@ from typing import Any
 # Must match ``ref_type`` values used in DDL/seed scripts.
 REF_TYPE_INSURER = "INSURER"
 REF_TYPE_FINANCER = "FINANCER"
+REF_TYPE_CPA = "CPA"
 
 
 def list_ref_values(conn: Any, ref_type: str) -> list[str]:
@@ -35,4 +36,38 @@ def list_ref_values(conn: Any, ref_type: str) -> list[str]:
             v = row[0] if row else None
         if v and str(v).strip():
             out.append(str(v).strip())
+    return out
+
+
+def list_cpa_portals(conn: Any) -> list[dict[str, str]]:
+    """
+    CPA third-party portal rows: ``ref_value`` (display name) and ``comments`` (login URL).
+
+    Only rows with non-empty ``comments`` are returned (URL required for automation).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ref_value, TRIM(COALESCE(comments, '')) AS login_url
+            FROM master_ref
+            WHERE ref_type = %s
+              AND TRIM(COALESCE(comments, '')) <> ''
+              AND TRIM(COALESCE(comments, '')) LIKE 'http%%'
+            ORDER BY ref_value
+            """,
+            (REF_TYPE_CPA,),
+        )
+        rows = cur.fetchall()
+    out: list[dict[str, str]] = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            rv = row.get("ref_value")
+            lu = row.get("login_url")
+        else:
+            rv = row[0] if row else None
+            lu = row[1] if row and len(row) > 1 else None
+        rvs = str(rv or "").strip()
+        lus = str(lu or "").strip()
+        if rvs and lus:
+            out.append({"ref_value": rvs, "login_url": lus})
     return out

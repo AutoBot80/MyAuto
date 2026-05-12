@@ -401,10 +401,47 @@
 .add-sales-v2-rto-actions {
   display: flex;
   justify-content: flex-end;
+  width: 100%;
+  box-sizing: border-box;
 }
 
+/* Print/RTO row vertical offset (was -40px; +30px = shift down 30px) */
 .add-sales-v2-box-fill-forms .add-sales-v2-print-forms-actions {
-  margin-top: 10px;
+  margin-top: -10px;
+}
+
+/* Fill forms A/B/C: title row with primary action on the same line */
+.add-sales-v2-subsection-head--fill-forms-row {
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.add-sales-v2-subsection-head-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Fill forms primary actions: uniform width, slimmer height, right-aligned in their rows */
+.add-sales-v2-box-fill-forms .add-sales-v2-fill-forms-action-btn {
+  width: 190px;
+  min-width: 190px;
+  max-width: 190px;
+  min-height: 34px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  white-space: normal;
+  line-height: 1.2;
+  padding: 5px 8px;
+  font-size: 13px;
+  flex-shrink: 0;
 }
 
 .add-sales-v2-print-forms-row {

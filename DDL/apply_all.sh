@@ -150,6 +150,7 @@ run alter/15b_vehicle_master_drop_horse_power.sql
 # dealer_ref prefer_insurer, hero_cpi + form_insurance_view
 run alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql
 run alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql
+run alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql
 
 # challan / inventory alters
 run alter/18a_challan_master_add_order_invoice_totals.sql

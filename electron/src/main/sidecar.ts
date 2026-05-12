@@ -71,6 +71,7 @@ function defaultTimeoutMs(payload: SidecarJobPayload): number {
   if (
     payload.type === "fill_dms" ||
     payload.type === "fill_insurance" ||
+    payload.type === "fill_cpa_alliance_insurance" ||
     payload.type === "fill_subdealer_challan"
   ) {
     return 900_000;

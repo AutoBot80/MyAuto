@@ -1,9 +1,12 @@
 """Add Sales helpers: Create Invoice / Generate Insurance eligibility (natural keys; no dealer filter)."""
 
+from __future__ import annotations
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
+from app.repositories.master_ref import list_cpa_portals
 
 router = APIRouter(prefix="/add-sales", tags=["add-sales"])
 
@@ -15,6 +18,69 @@ def _digits_mobile(mobile: str) -> int | None:
     if len(digits) > 0:
         return int(digits)
     return None
+
+
+def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
+    """
+    Optional CPA Alliance portal context when ``dealer_id`` is provided on eligibility requests.
+
+    ``cpa_alliance_portal_enabled``: dealer is not on Hero CPI MISP add-on (``hero_cpi`` not **Y**)
+    and at least one CPA row with a URL exists in ``master_ref``.
+
+    ``dealer_cpa_insurer`` / ``hero_cpi`` come from ``dealer_ref`` (Add Sales CPA Provider display when ``hero_cpi = 'N'``).
+    """
+    blank: dict[str, object] = {
+        "cpa_insurers": None,
+        "hero_cpi": None,
+        "dealer_cpa_insurer": None,
+        "cpa_alliance_portal_enabled": False,
+    }
+    if dealer_id is None or int(dealer_id) < 1:
+        return blank
+    conn = get_connection()
+    try:
+        portals = list_cpa_portals(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT hero_cpi, cpa_insurer FROM dealer_ref WHERE dealer_id = %s LIMIT 1",
+                (int(dealer_id),),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    hero = "N"
+    dcpa: str | None = None
+    if row:
+        if isinstance(row, dict):
+            hero_raw = row.get("hero_cpi")
+            dcpa_raw = row.get("cpa_insurer")
+        else:
+            hero_raw = row[0] if row else None
+            dcpa_raw = row[1] if row and len(row) > 1 else None
+        hero = str(hero_raw or "N").strip().upper()[:1] or "N"
+        if hero not in ("Y", "N"):
+            hero = "N"
+        if dcpa_raw is not None and str(dcpa_raw).strip():
+            dcpa = str(dcpa_raw).strip()
+    enabled = hero != "Y" and len(portals) > 0
+    return {
+        "cpa_insurers": portals,
+        "hero_cpi": hero,
+        "dealer_cpa_insurer": dcpa,
+        "cpa_alliance_portal_enabled": enabled,
+    }
+
+
+@router.get("/dealer-cpa-context")
+def get_dealer_cpa_context(
+    dealer_id: int = Query(
+        ...,
+        ge=1,
+        description="``dealer_ref`` row for ``hero_cpi``, ``cpa_insurer``, and CPA portal list (no sale natural keys).",
+    ),
+) -> dict:
+    """Hero CPI + dealer CPA + CPA portals for Add Sales section C — use as soon as ``dealer_id`` is known."""
+    return _cpa_eligibility_extras(dealer_id)
 
 
 def _eligibility_by_customer_vehicle_ids(customer_id: int, vehicle_id: int) -> dict:
@@ -132,6 +198,11 @@ def get_create_invoice_eligibility(
         ge=1,
         description="Optional: use with customer_id for eligibility by committed master IDs.",
     ),
+    dealer_id: int | None = Query(
+        None,
+        ge=1,
+        description="Optional: when set, response includes CPA portal list and dealer hero_cpi / cpa_insurer for Add Sales UI.",
+    ),
 ) -> dict:
     """
     Eligibility uses **vehicle** identity (``raw_frame_num`` + ``raw_engine_num``) and **customer**
@@ -147,9 +218,13 @@ def get_create_invoice_eligibility(
     When **customer_id** and **vehicle_id** are both provided, eligibility is resolved from ``sales_master`` /
     ``insurance_master`` only (ignores chassis / engine / mobile). Prefer this after a successful Create Invoice
     response that includes committed IDs.
+
+    When **dealer_id** is provided, the response also includes **CPA Alliance** portal metadata
+    (``cpa_insurers``, ``hero_cpi``, ``dealer_cpa_insurer``, ``cpa_alliance_portal_enabled``).
     """
+    cpa_x = _cpa_eligibility_extras(dealer_id)
     if customer_id is not None and vehicle_id is not None:
-        return _eligibility_by_customer_vehicle_ids(int(customer_id), int(vehicle_id))
+        return {**_eligibility_by_customer_vehicle_ids(int(customer_id), int(vehicle_id)), **cpa_x}
 
     ch = (chassis_num or "").strip()
     eng = (engine_num or "").strip()
@@ -160,6 +235,10 @@ def get_create_invoice_eligibility(
         raise HTTPException(status_code=400, detail="mobile must contain digits for customer_master.mobile_number.")
 
     conn = get_connection()
+    vrow = None
+    crow = None
+    srow = None
+    ins_row = None
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -180,8 +259,6 @@ def get_create_invoice_eligibility(
             )
             crow = cur.fetchone()
 
-            srow = None
-            ins_row = None
             if vrow and crow:
                 vid = vrow["vehicle_id"]
                 cid = crow["customer_id"]
@@ -233,6 +310,7 @@ def get_create_invoice_eligibility(
             "generate_insurance_reason": "Create Invoice before Generating Insurance",
             "resolved_customer_id": None,
             "resolved_vehicle_id": None,
+            **cpa_x,
         }
 
     if srow is None:
@@ -249,6 +327,7 @@ def get_create_invoice_eligibility(
             ),
             "resolved_customer_id": resolved_cid,
             "resolved_vehicle_id": resolved_vid,
+            **cpa_x,
         }
 
     inv_raw = srow["invoice_number"]
@@ -276,4 +355,5 @@ def get_create_invoice_eligibility(
         "generate_insurance_reason": gen_reason,
         "resolved_customer_id": resolved_cid,
         "resolved_vehicle_id": resolved_vid,
+        **cpa_x,
     }
