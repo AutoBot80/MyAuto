@@ -633,6 +633,14 @@ export function SubdealerChallanPage({
       }
       await loadProcessed();
       onChallanCountsRefresh();
+      if (pr.error || !pr.ok) {
+        window.setTimeout(() => {
+          document.getElementById("challans-processed-error")?.scrollIntoView({
+            behavior: "smooth",
+            block: "nearest",
+          });
+        }, 0);
+      }
     } catch (err) {
       const aborted =
         (err instanceof Error && err.name === "AbortError") ||
@@ -1254,7 +1262,7 @@ export function SubdealerChallanPage({
         className="challans-processed-panel"
       >
         {processedError && (
-          <div className="subdealer-challan-error" role="alert">
+          <div id="challans-processed-error" className="subdealer-challan-error" role="alert">
             {processedError}
           </div>
         )}

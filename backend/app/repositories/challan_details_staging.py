@@ -371,3 +371,35 @@ def batch_all_ready_for_order(challan_batch_id: uuid.UUID) -> bool:
             return n > 0 and bool(ar)
     finally:
         conn.close()
+
+
+def batch_all_prepared_for_order_retry(challan_batch_id: uuid.UUID) -> bool:
+    """
+    True if at least one line and every line is Ready or Committed (no Queued/Failed).
+
+    Used for order-only retry after finalize may have marked lines Committed while
+    ``invoice_complete`` is still false (e.g. re-scrape invoice from DMS).
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*)::integer AS n,
+                       BOOL_AND(
+                           LOWER(TRIM(COALESCE(status, ''))) IN ('ready', 'committed')
+                       ) AS all_prepared
+                FROM challan_details_staging
+                WHERE challan_batch_id = %s::uuid
+                """,
+                (str(challan_batch_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            d = dict(row)
+            n = int(d.get("n") or 0)
+            ap = d.get("all_prepared")
+            return n > 0 and bool(ap)
+    finally:
+        conn.close()

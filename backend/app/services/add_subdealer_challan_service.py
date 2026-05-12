@@ -458,8 +458,11 @@ def sidecar_build_order_playwright_package(
     if int(from_dealer_id) != int(dealer_id):
         out["error"] = "Session dealer does not match batch from_dealer_id."
         return out
-    if not detail_repo.batch_all_ready_for_order(challan_batch_id):
-        out["error"] = "Not all vehicles are Ready; complete prepare_vehicle first."
+    if not detail_repo.batch_all_prepared_for_order_retry(challan_batch_id):
+        out["error"] = (
+            "Not all vehicles are Ready or Committed (or some lines are still Queued/Failed); "
+            "complete prepare_vehicle or fix failed lines first."
+        )
         return out
 
     final_rows = detail_repo.fetch_batch_rows(challan_batch_id)
@@ -860,8 +863,11 @@ def run_subdealer_challan_batch(
                 return out
 
         if phase in ("full", "order_only"):
-            if not detail_repo.batch_all_ready_for_order(challan_batch_id):
-                out["error"] = "Not all vehicles are Ready; complete prepare_vehicle first."
+            if not detail_repo.batch_all_prepared_for_order_retry(challan_batch_id):
+                out["error"] = (
+                    "Not all vehicles are Ready or Committed (or some lines are still Queued/Failed); "
+                    "complete prepare_vehicle or fix failed lines first."
+                )
                 return out
             if phase == "order_only" and not last_vehicle_scrape:
                 last_vehicle_scrape = {}
@@ -962,8 +968,14 @@ def retry_order_only_batch(
         return {"ok": False, "error": "Batch not found."}
     if int(m["from_dealer_id"]) != int(dealer_id):
         return {"ok": False, "error": "Not authorized for this batch."}
-    if not detail_repo.batch_all_ready_for_order(challan_batch_id):
-        return {"ok": False, "error": "All vehicles must be Ready before retrying order."}
+    if not detail_repo.batch_all_prepared_for_order_retry(challan_batch_id):
+        return {
+            "ok": False,
+            "error": (
+                "All vehicles must be Ready or Committed with no Queued/Failed lines "
+                "before retrying order."
+            ),
+        }
     return run_subdealer_challan_batch(
         challan_batch_id=challan_batch_id,
         dms_base_url=dms_base_url,
