@@ -26,11 +26,18 @@ def commit_challan_masters(
     transport_cost_per_vehicle: float | None = None,
 ) -> int:
     """
-    Insert challan_master (with totals from vehicle_inventory_master) and challan_details links.
-    Returns challan_id.
+    Insert or update challan_master (totals from vehicle_inventory_master) and challan_details links.
+
+    When ``order_number`` is non-empty, rows matching ``dealer_from`` + that order number are treated
+    as one challan: keep the **oldest** ``challan_id``, ``UPDATE`` it with new totals / invoice / book,
+    delete duplicate headers for the same order, then replace ``challan_details``. Otherwise insert
+    a new header (legacy behaviour when order number is unknown).
     """
     if not inventory_line_ids:
         raise ValueError("inventory_line_ids required")
+
+    ord_key = (order_number or "").strip() or None
+    inv_key = (invoice_number or "").strip() or None
 
     conn = get_connection()
     try:
@@ -64,35 +71,134 @@ def commit_challan_masters(
                 total_disc_f = float(total_disc or 0)
 
             created = datetime.now(timezone.utc)
-            cur.execute(
-                """
-                INSERT INTO challan_master (
-                    challan_date, challan_book_num, dealer_from, dealer_to,
-                    num_vehicles, order_number, invoice_number,
-                    total_ex_showroom_price, total_discount,
-                    add_transport_cost, transport_cost_per_vehicle,
-                    created_at
+            challan_id: int
+
+            if ord_key:
+                cur.execute(
+                    """
+                    SELECT challan_id
+                    FROM challan_master
+                    WHERE dealer_from = %s
+                      AND TRIM(COALESCE(order_number, '')) = %s
+                    ORDER BY challan_id ASC
+                    """,
+                    (int(dealer_from), ord_key),
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING challan_id
-                """,
-                (
-                    challan_date,
-                    challan_book_num,
-                    int(dealer_from),
-                    int(dealer_to),
-                    len(inventory_line_ids),
-                    (order_number or "").strip() or None,
-                    (invoice_number or "").strip() or None,
-                    total_ex_f,
-                    total_disc_f,
-                    bool(add_transport_cost),
-                    None if not add_transport_cost else transport_cost_per_vehicle,
-                    created,
-                ),
-            )
-            cid_row = cur.fetchone()
-            challan_id = int(cid_row["challan_id"] if isinstance(cid_row, dict) else cid_row[0])
+                existing = cur.fetchall()
+                if existing:
+                    first_row = existing[0]
+                    challan_id = int(
+                        first_row["challan_id"]
+                        if isinstance(first_row, dict)
+                        else first_row[0]
+                    )
+                    if len(existing) > 1:
+                        cur.execute(
+                            """
+                            DELETE FROM challan_master
+                            WHERE dealer_from = %s
+                              AND TRIM(COALESCE(order_number, '')) = %s
+                              AND challan_id <> %s
+                            """,
+                            (int(dealer_from), ord_key, challan_id),
+                        )
+                    cur.execute(
+                        "DELETE FROM challan_details WHERE challan_id = %s",
+                        (challan_id,),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE challan_master SET
+                            challan_date = %s,
+                            challan_book_num = %s,
+                            dealer_to = %s,
+                            num_vehicles = %s,
+                            order_number = %s,
+                            invoice_number = COALESCE(NULLIF(TRIM(%s), ''), invoice_number),
+                            total_ex_showroom_price = %s,
+                            total_discount = %s,
+                            add_transport_cost = %s,
+                            transport_cost_per_vehicle = %s
+                        WHERE challan_id = %s
+                        """,
+                        (
+                            challan_date,
+                            challan_book_num,
+                            int(dealer_to),
+                            len(inventory_line_ids),
+                            ord_key,
+                            inv_key or "",
+                            total_ex_f,
+                            total_disc_f,
+                            bool(add_transport_cost),
+                            None if not add_transport_cost else transport_cost_per_vehicle,
+                            challan_id,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO challan_master (
+                            challan_date, challan_book_num, dealer_from, dealer_to,
+                            num_vehicles, order_number, invoice_number,
+                            total_ex_showroom_price, total_discount,
+                            add_transport_cost, transport_cost_per_vehicle,
+                            created_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING challan_id
+                        """,
+                        (
+                            challan_date,
+                            challan_book_num,
+                            int(dealer_from),
+                            int(dealer_to),
+                            len(inventory_line_ids),
+                            ord_key,
+                            inv_key,
+                            total_ex_f,
+                            total_disc_f,
+                            bool(add_transport_cost),
+                            None if not add_transport_cost else transport_cost_per_vehicle,
+                            created,
+                        ),
+                    )
+                    cid_row = cur.fetchone()
+                    challan_id = int(
+                        cid_row["challan_id"] if isinstance(cid_row, dict) else cid_row[0]
+                    )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO challan_master (
+                        challan_date, challan_book_num, dealer_from, dealer_to,
+                        num_vehicles, order_number, invoice_number,
+                        total_ex_showroom_price, total_discount,
+                        add_transport_cost, transport_cost_per_vehicle,
+                        created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING challan_id
+                    """,
+                    (
+                        challan_date,
+                        challan_book_num,
+                        int(dealer_from),
+                        int(dealer_to),
+                        len(inventory_line_ids),
+                        None,
+                        inv_key,
+                        total_ex_f,
+                        total_disc_f,
+                        bool(add_transport_cost),
+                        None if not add_transport_cost else transport_cost_per_vehicle,
+                        created,
+                    ),
+                )
+                cid_row = cur.fetchone()
+                challan_id = int(
+                    cid_row["challan_id"] if isinstance(cid_row, dict) else cid_row[0]
+                )
 
             for iid in inventory_line_ids:
                 cur.execute(

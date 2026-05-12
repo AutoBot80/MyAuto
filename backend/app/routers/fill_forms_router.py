@@ -273,6 +273,94 @@ def _mobile_10_digits_for_overlay(raw_mobile: str) -> str:
     return "0000000000"
 
 
+def _record_failure_fill_dms_cloud(
+    dealer_id: int,
+    process_label: str,
+    staging_id: str | None,
+    customer_id: int | None,
+    vehicle_id: int | None,
+    staging_payload,
+    customer_dict: dict,
+    normalized_error: str | None,
+) -> None:
+    if not normalized_error:
+        return
+    from app.services.process_failure_log_service import digits_only_mobile, entity_key_fill_dms, record_safe
+
+    mob_raw = _mobile_for_invoice_dispatch(staging_payload, customer_dict)
+    md = digits_only_mobile(mob_raw)
+    ek = entity_key_fill_dms(
+        staging_id=staging_id,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
+        mobile_digits=md,
+    )
+    disp = md if md else ((mob_raw or "")[:32] or None)
+    record_safe(
+        dealer_id=int(dealer_id),
+        process_label=process_label,
+        entity_dedupe_key=ek,
+        error_text=normalized_error,
+        customer_mobile=disp,
+    )
+
+
+def _record_failure_insurance_cloud(
+    dealer_id: int,
+    staging_id: str | None,
+    customer_id: int,
+    vehicle_id: int,
+    staging_payload,
+    error_text: str | None,
+) -> None:
+    if not error_text:
+        return
+    from app.services.process_failure_log_service import digits_only_mobile, entity_key_fill_dms, record_safe
+
+    mob_raw = ""
+    if staging_payload and isinstance(staging_payload.get("customer"), dict):
+        c = staging_payload["customer"]
+        raw = c.get("mobile_number") if c.get("mobile_number") is not None else c.get("mobile")
+        mob_raw = str(raw).strip() if raw is not None else ""
+    md = digits_only_mobile(mob_raw)
+    ek = entity_key_fill_dms(
+        staging_id=staging_id,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
+        mobile_digits=md,
+    )
+    disp = md if md else (mob_raw[:32] if mob_raw else None)
+    record_safe(
+        dealer_id=int(dealer_id),
+        process_label="Generate Insurance",
+        entity_dedupe_key=ek,
+        error_text=error_text,
+        customer_mobile=disp,
+    )
+
+
+def _record_failure_print_cloud(
+    dealer_id: int,
+    process_label: str,
+    req: PrintForm20Request,
+    error_text: str,
+    suffix: str,
+) -> None:
+    from app.services.process_failure_log_service import digits_only_mobile, entity_key_print_forms, record_safe
+
+    mob_raw = _mobile_for_print_forms(req)
+    md = digits_only_mobile(mob_raw)
+    ek = entity_key_print_forms(subfolder=req.subfolder or "", mobile_digits=md, suffix=suffix)
+    disp = md if md else ((mob_raw or "")[:32] or None)
+    record_safe(
+        dealer_id=int(dealer_id),
+        process_label=process_label,
+        entity_dedupe_key=ek,
+        error_text=error_text,
+        customer_mobile=disp,
+    )
+
+
 class WarmDmsBrowserRequest(BaseModel):
     dms_base_url: str | None = Field(
         default=None,
@@ -638,13 +726,24 @@ async def fill_dms_only(
     #             _mobile_for_invoice_dispatch(staging_payload, customer_dict),
     #             _invoice_dispatch_pdf_paths(result),
     #         )
+    norm_err = _normalize_automation_error(result.get("error"))
+    _record_failure_fill_dms_cloud(
+        did,
+        "DMS only (Add Sales)",
+        sid_for_commit,
+        int(cc) if cc is not None else None,
+        int(vv) if vv is not None else None,
+        staging_payload,
+        customer_dict,
+        norm_err,
+    )
     return FillDmsResponse(
-        success=result.get("error") is None,
+        success=norm_err is None,
         vehicle=scraped,
         pdfs_saved=_invoice_dispatch_pdf_paths(result),
         application_id=None,
         rto_fees=None,
-        error=_normalize_automation_error(result.get("error")),
+        error=norm_err,
         customer_id=int(cc) if cc is not None else None,
         vehicle_id=int(vv) if vv is not None else None,
         warning=warn,
@@ -750,6 +849,7 @@ async def print_form20(
         raise
     except Exception as e:
         logger.warning("print_form20: Form 20 generation failed: %s", e)
+        _record_failure_print_cloud(did, "Form 20", req, str(e), "pf20")
         return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
 
 
@@ -882,9 +982,11 @@ async def print_gate_pass(
         raise
     except FileNotFoundError as e:
         logger.warning("print_gate_pass: %s", e)
+        _record_failure_print_cloud(did, "Gate pass", req, str(e), "pfgp")
         return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
     except Exception as e:
         logger.warning("print_gate_pass: Gate Pass generation failed: %s", e)
+        _record_failure_print_cloud(did, "Gate pass", req, str(e), "pfgp")
         return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
 
 
@@ -1028,6 +1130,15 @@ async def fill_hero_insurance(
             print_jobs = collect_insurance_print_jobs_s3(did, subfolder_resolved)
         else:
             schedule_dispatch_pdf_after_generate_insurance(did, subfolder_resolved)
+    err_ins = None if bool(result.get("success")) and not result.get("error") else str(result.get("error") or "Generate Insurance failed")
+    _record_failure_insurance_cloud(
+        did,
+        sid_for_process,
+        int(cid),
+        int(vid),
+        staging_payload,
+        err_ins,
+    )
     return FillHeroInsuranceResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
@@ -1145,13 +1256,24 @@ async def fill_dms(
     #             _mobile_for_invoice_dispatch(staging_payload, customer_dict),
     #             _invoice_dispatch_pdf_paths(result),
     #         )
+    norm_err = _normalize_automation_error(result.get("error"))
+    _record_failure_fill_dms_cloud(
+        did,
+        "Create Invoice",
+        sid_for_commit,
+        int(cc) if cc is not None else None,
+        int(vv) if vv is not None else None,
+        staging_payload,
+        customer_dict,
+        norm_err,
+    )
     return FillDmsResponse(
-        success=result.get("error") is None,
+        success=norm_err is None,
         vehicle=scraped,
         pdfs_saved=_invoice_dispatch_pdf_paths(result),
         application_id=result.get("application_id"),
         rto_fees=result.get("rto_fees"),
-        error=_normalize_automation_error(result.get("error")),
+        error=norm_err,
         customer_id=int(cc) if cc is not None else None,
         vehicle_id=int(vv) if vv is not None else None,
         warning=warn,

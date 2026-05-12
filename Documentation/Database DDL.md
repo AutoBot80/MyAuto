@@ -840,4 +840,28 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.91 | May 2026 | **`challan_master.created_at`** — **`DDL/alter/20b_challan_master_created_at.sql`**; greenfield: **`DDL/20_challan_master.sql`** — Admin Usage daily counts for committed challans |
 | 2.92 | May 2026 | **`challan_master_staging`**, **`challan_master`**: **`add_transport_cost`** (boolean, default false), **`transport_cost_per_vehicle`** (`numeric(12,2)`); optional on **`POST /subdealer-challan/staging`**; order phase nets **`vehicle_inventory_master.discount`** per line before Siebel **`order_line_vehicles`**; committed header snapshots same fields — **`DDL/alter/20c_challan_master_transport_cost.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`**, **`DDL/20_challan_master.sql`** — **BRD** **BR-22**, **FR-25**, **3.169**; **LLD** **§2.4e**, **6.301**; **HLD** **1.172** |
 | 2.93 | May 2026 | **`master_ref.comments`** (CPA portal **https** URL); **`dealer_ref.cpa_insurer`** + **`cpa_insurer_ref_type`** (generated) + **`fk_dealer_ref_cpa_insurer`**; seed **Alliance Assure** — **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**, greenfield **`DDL/28_master_ref.sql`** / **`DDL/04b_dealer_ref.sql`** — **BRD** **3.170**; **LLD** **6.302**; **HLD** **1.173** |
+| 2.94 | May 2026 | **`process_failure_log`** — terminal client-visible automation failures (upsert by dealer + process + entity key); **`DDL/30_process_failure_log.sql`** — Admin Usage **Failure Logs**; **`GET /admin/failure-logs`**, **`POST /sidecar/failure-log`** |
+
+
+## `process_failure_log`
+
+**Purpose:** One row per `(dealer_id, process_label, entity_dedupe_key)`; **`ON CONFLICT DO UPDATE`** refreshes **`occurred_at`**, **`error_text`**, and display columns with the **latest** client-visible failure for admin diagnostics.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `id` | `bigserial` | NO | nextval | Primary key |
+| `dealer_id` | `integer` | NO | | FK to **`dealer_ref.dealer_id`** |
+| `occurred_at` | `timestamptz` | NO | `now()` | Stored in UTC; Admin API formats IST |
+| `process_label` | `text` | NO | | e.g. Create Invoice, Generate Insurance, Subdealer challan |
+| `customer_mobile` | `text` | YES | | Display / filter |
+| `challan_book_num` | `text` | YES | | |
+| `challan_date` | `text` | YES | | |
+| `challan_batch_id` | `uuid` | YES | | |
+| `rto_queue_id` | `integer` | YES | | Vahan row failures |
+| `error_text` | `text` | NO | | Client-visible message (capped in app) |
+| `entity_dedupe_key` | `text` | NO | | Stable opaque dedupe key |
+
+**Unique:** `uq_process_failure_log_dedupe` on (`dealer_id`, `process_label`, `entity_dedupe_key`)
+
+**Indexes:** `occurred_at DESC`; partial btree on `customer_mobile`, `challan_book_num`, `rto_queue_id` (where not null)
 

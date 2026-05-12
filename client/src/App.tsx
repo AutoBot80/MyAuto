@@ -9,6 +9,7 @@ import { AddSalesPage } from "./pages/AddSalesPage";
 import { AdminPage } from "./pages/AdminPage";
 import { AdminDealersPage } from "./pages/AdminDealersPage";
 import { AdminUsagePage } from "./pages/AdminUsagePage";
+import { DealerDashboardPage } from "./pages/DealerDashboardPage";
 import { HomePage } from "./pages/HomePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ViewCustomerPage } from "./pages/ViewCustomerPage";
@@ -323,7 +324,7 @@ function App() {
       case "service-reminders":
         return <PlaceholderPage title="Service Reminders" />;
       case "dealer-dashboard":
-        return <PlaceholderPage title="Dealer Saathi" message="RTO details, Sub-dealer sales etc. – Coming soon." />;
+        return <DealerDashboardPage dealerId={dealerId} />;
       case "admin-tools":
         return <AdminPage />;
       case "admin-dealers":

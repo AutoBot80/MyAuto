@@ -133,3 +133,28 @@ export interface AdminUsageDealerMatrixResponse {
 export function getAdminUsageDealerMatrix() {
   return apiFetch<AdminUsageDealerMatrixResponse>("/admin/usage-dealer-matrix");
 }
+
+export interface AdminProcessFailureLogRow {
+  id: number;
+  dealer_id: number;
+  dealer_name: string;
+  occurred_at_ist: string;
+  process_label: string;
+  customer_mobile: string | null;
+  challan_book_num: string | null;
+  challan_date: string | null;
+  challan_batch_id: string | null;
+  rto_queue_id: number | null;
+  error_text: string;
+  entity_dedupe_key: string;
+}
+
+export interface AdminProcessFailureLogListResponse {
+  timezone_label: string;
+  rows: AdminProcessFailureLogRow[];
+}
+
+export function getAdminFailureLogs(limit = 200) {
+  const q = new URLSearchParams({ limit: String(limit) });
+  return apiFetch<AdminProcessFailureLogListResponse>(`/admin/failure-logs?${q.toString()}`);
+}

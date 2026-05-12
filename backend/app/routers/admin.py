@@ -127,6 +127,26 @@ class UsageDealerMatrixResponse(BaseModel):
     challans: list[UsageDealerMatrixRow]
 
 
+class ProcessFailureLogRow(BaseModel):
+    id: int
+    dealer_id: int
+    dealer_name: str
+    occurred_at_ist: str = Field(..., description="ISO-like local IST wall time for display")
+    process_label: str
+    customer_mobile: str | None = None
+    challan_book_num: str | None = None
+    challan_date: str | None = None
+    challan_batch_id: str | None = None
+    rto_queue_id: int | None = None
+    error_text: str
+    entity_dedupe_key: str
+
+
+class ProcessFailureLogListResponse(BaseModel):
+    timezone_label: str = Field(default="Asia/Kolkata (IST)")
+    rows: list[ProcessFailureLogRow]
+
+
 _IST = ZoneInfo("Asia/Kolkata")
 
 _SALES_MATRIX_SQL = """
@@ -266,6 +286,47 @@ def get_usage_dealer_matrix(
         sales=_pivot_dealer_day_counts(list(sales_raw), days),
         challans=_pivot_dealer_day_counts(list(chall_raw), days),
     )
+
+
+def _occurred_at_to_ist_display(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, datetime):
+        dt = val
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_IST).strftime("%Y-%m-%d %H:%M:%S IST")
+    return str(val)
+
+
+@router.get("/failure-logs", response_model=ProcessFailureLogListResponse)
+def get_process_failure_logs(
+    _principal: Principal = Depends(get_principal),
+    limit: int = Query(200, ge=1, le=1000),
+) -> ProcessFailureLogListResponse:
+    """Recent terminal automation failures (all dealers), newest first."""
+    from app.repositories.process_failure_log import list_recent_for_admin
+
+    raw = list_recent_for_admin(limit=limit)
+    rows: list[ProcessFailureLogRow] = []
+    for r in raw:
+        rows.append(
+            ProcessFailureLogRow(
+                id=int(r["id"]),
+                dealer_id=int(r["dealer_id"]),
+                dealer_name=str(r.get("dealer_name") or ""),
+                occurred_at_ist=_occurred_at_to_ist_display(r.get("occurred_at")),
+                process_label=str(r.get("process_label") or ""),
+                customer_mobile=r.get("customer_mobile"),
+                challan_book_num=r.get("challan_book_num"),
+                challan_date=r.get("challan_date"),
+                challan_batch_id=r.get("challan_batch_id"),
+                rto_queue_id=int(r["rto_queue_id"]) if r.get("rto_queue_id") is not None else None,
+                error_text=str(r.get("error_text") or ""),
+                entity_dedupe_key=str(r.get("entity_dedupe_key") or ""),
+            )
+        )
+    return ProcessFailureLogListResponse(rows=rows)
 
 
 AdminFolderRoot = Literal["upload_scans", "ocr_output", "challans"]

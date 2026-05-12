@@ -26,6 +26,7 @@ from app.config import (
     get_challan_artifacts_dir,
 )
 from app.services.dealer_storage import sync_challans_subfolder_to_s3
+from app.services.process_failure_log_service import entity_key_challan, record_safe as _record_process_failure_safe
 from app.repositories import challan_details_staging as detail_repo
 from app.repositories import challan_master_staging as master_repo
 from app.repositories.vehicle_inventory import (
@@ -727,6 +728,33 @@ def sidecar_finalize_order_playwright_result(
     return out
 
 
+def _maybe_log_subdealer_challan_failure(
+    *,
+    out: dict[str, object],
+    session_dealer_id: int,
+    challan_batch_id: uuid.UUID,
+    from_dealer_id: int | None,
+    challan_book: str | None,
+    challan_date: str | None,
+) -> None:
+    err = out.get("error")
+    if not err or out.get("ok"):
+        return
+    log_dealer = int(from_dealer_id) if from_dealer_id is not None else int(session_dealer_id)
+    cb = (challan_book or "").strip() or None
+    cd = (challan_date or "").strip() or None
+    ek = entity_key_challan(challan_book_num=cb, challan_date=cd, batch_id=challan_batch_id)
+    _record_process_failure_safe(
+        dealer_id=log_dealer,
+        process_label="Subdealer challan",
+        entity_dedupe_key=ek,
+        error_text=str(err),
+        challan_book_num=cb,
+        challan_date=cd,
+        challan_batch_id=challan_batch_id,
+    )
+
+
 def run_subdealer_challan_batch(
     *,
     challan_batch_id: uuid.UUID,
@@ -758,6 +786,14 @@ def run_subdealer_challan_batch(
     rows = detail_repo.fetch_batch_rows(challan_batch_id)
     if not rows:
         out["error"] = "No staging rows for this batch."
+        _maybe_log_subdealer_challan_failure(
+            out=out,
+            session_dealer_id=dealer_id,
+            challan_batch_id=challan_batch_id,
+            from_dealer_id=None,
+            challan_book=None,
+            challan_date=None,
+        )
         return out
 
     from_dealer_id = int(rows[0]["from_dealer_id"])
@@ -787,12 +823,28 @@ def run_subdealer_challan_batch(
     if not dms_automation_is_real_siebel():
         logln("ERROR: DMS_MODE must be real/siebel for subdealer challan automation.")
         out["error"] = "DMS_MODE must be real/siebel for subdealer challan automation."
+        _maybe_log_subdealer_challan_failure(
+            out=out,
+            session_dealer_id=dealer_id,
+            challan_batch_id=challan_batch_id,
+            from_dealer_id=from_dealer_id,
+            challan_book=cb,
+            challan_date=cd,
+        )
         return out
 
     base_url = (dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         logln("ERROR: dms_base_url required")
         out["error"] = "dms_base_url required"
+        _maybe_log_subdealer_challan_failure(
+            out=out,
+            session_dealer_id=dealer_id,
+            challan_batch_id=challan_batch_id,
+            from_dealer_id=from_dealer_id,
+            challan_book=cb,
+            challan_date=cd,
+        )
         return out
 
     logln(f"dms_base_url={base_url[:120]!r}")
@@ -817,6 +869,14 @@ def run_subdealer_challan_batch(
 
     if int(from_dealer_id) != int(dealer_id):
         out["error"] = "Session dealer does not match batch from_dealer_id."
+        _maybe_log_subdealer_challan_failure(
+            out=out,
+            session_dealer_id=dealer_id,
+            challan_batch_id=challan_batch_id,
+            from_dealer_id=from_dealer_id,
+            challan_book=cb,
+            challan_date=cd,
+        )
         return out
 
     try:
@@ -917,8 +977,24 @@ def run_subdealer_challan_batch(
                     "subdealer_challan: failed to sync challans session folder to S3 (batch=%s)",
                     challan_batch_id,
                 )
+        _maybe_log_subdealer_challan_failure(
+            out=out,
+            session_dealer_id=dealer_id,
+            challan_batch_id=challan_batch_id,
+            from_dealer_id=from_dealer_id,
+            challan_book=cb,
+            challan_date=cd,
+        )
 
     out["error"] = "Invalid phase"
+    _maybe_log_subdealer_challan_failure(
+        out=out,
+        session_dealer_id=dealer_id,
+        challan_batch_id=challan_batch_id,
+        from_dealer_id=from_dealer_id,
+        challan_book=cb,
+        challan_date=cd,
+    )
     return out
 
 

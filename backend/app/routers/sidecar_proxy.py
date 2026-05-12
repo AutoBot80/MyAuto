@@ -156,6 +156,22 @@ class VahanRowResultResponse(BaseModel):
     ok: bool
 
 
+class SidecarFailureLogRequest(BaseModel):
+    dealer_id: int | None = None
+    process_label: str
+    entity_dedupe_key: str
+    error_text: str
+    customer_mobile: str | None = None
+    challan_book_num: str | None = None
+    challan_date: str | None = None
+    challan_batch_id: str | None = None
+    rto_queue_id: int | None = None
+
+
+class SidecarFailureLogResponse(BaseModel):
+    ok: bool = True
+
+
 class UploadArtifactResponse(BaseModel):
     ok: bool
     rel_path: str
@@ -511,6 +527,28 @@ async def vahan_row_result(
         repo.mark_batch_row_failed(
             req.rto_queue_id, req.session_id, req.worker_id, req.error or "Unknown error"
         )
+        try:
+            from app.services.process_failure_log_service import digits_only_mobile, record_safe
+
+            qrow = repo.get_by_queue_id(req.rto_queue_id)
+            if qrow and qrow.get("dealer_id") is not None:
+                did_v = int(qrow["dealer_id"])
+            else:
+                did_v = resolve_dealer_id(principal, None)
+            mob_raw = (qrow or {}).get("customer_mobile") or (qrow or {}).get("mobile")
+            mob_s = str(mob_raw).strip() if mob_raw is not None else ""
+            digits = digits_only_mobile(mob_s) if mob_s else None
+            disp_mob = digits or (mob_s[:32] if mob_s else None)
+            record_safe(
+                dealer_id=did_v,
+                process_label="Fill Vahan (RTO row)",
+                entity_dedupe_key=f"rto:{int(req.rto_queue_id)}",
+                error_text=str(req.error or "Unknown error"),
+                customer_mobile=disp_mob,
+                rto_queue_id=int(req.rto_queue_id),
+            )
+        except Exception:
+            logger.exception("vahan_row_result: failure log upsert skipped")
     elif status == "Pending":
         repo.mark_batch_row_pending(
             req.rto_queue_id, req.session_id, req.worker_id, req.error
@@ -519,6 +557,33 @@ async def vahan_row_result(
         raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
 
     return VahanRowResultResponse(ok=True)
+
+
+@router.post("/failure-log", response_model=SidecarFailureLogResponse)
+async def sidecar_failure_log(
+    req: SidecarFailureLogRequest,
+    principal: Principal = Depends(get_principal),
+) -> SidecarFailureLogResponse:
+    """Persist one terminal failure row (Electron sidecar; same upsert semantics as cloud callers)."""
+    from app.services.process_failure_log_service import record_safe
+
+    did = resolve_dealer_id(principal, req.dealer_id)
+    pl = (req.process_label or "").strip()
+    ek = (req.entity_dedupe_key or "").strip()
+    if not pl or not ek:
+        raise HTTPException(status_code=400, detail="process_label and entity_dedupe_key are required")
+    record_safe(
+        dealer_id=int(did),
+        process_label=pl,
+        entity_dedupe_key=ek,
+        error_text=req.error_text,
+        customer_mobile=req.customer_mobile,
+        challan_book_num=req.challan_book_num,
+        challan_date=req.challan_date,
+        challan_batch_id=req.challan_batch_id,
+        rto_queue_id=req.rto_queue_id,
+    )
+    return SidecarFailureLogResponse(ok=True)
 
 
 # ---------------------------------------------------------------------------

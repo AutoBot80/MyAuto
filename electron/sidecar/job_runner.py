@@ -363,6 +363,14 @@ def _api_post(api_url: str, jwt: str, path: str, body: dict, timeout: int = 120)
         raise RuntimeError(f"API {path} returned {exc.code}: {detail}") from exc
 
 
+def _record_process_failure_via_api(api_url: str, jwt: str, body: dict) -> None:
+    """POST terminal failure to cloud API; never raises."""
+    try:
+        _api_post(api_url, jwt, "/sidecar/failure-log", body, timeout=45)
+    except Exception as exc:
+        logging.warning("failure-log sidecar API: %s", exc)
+
+
 def _slim_subdealer_challan_finalize_playwright_result(frag: dict) -> dict:
     """
     ``sidecar_finalize_order_playwright_result`` only uses ``error``, ``vehicle``, and
@@ -611,9 +619,34 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
     from app.services.handle_browser_opening import get_or_open_site_page
 
     if not dms_automation_is_real_siebel():
+        msg = "DMS_MODE must be real/siebel on the server."
+        try:
+            from app.services.process_failure_log_service import entity_key_fill_dms
+
+            sid_s = (params.get("staging_id") or "").strip() or None
+            cid_p = params.get("customer_id")
+            vid_p = params.get("vehicle_id")
+            ek = entity_key_fill_dms(
+                staging_id=sid_s,
+                customer_id=int(cid_p) if cid_p is not None else None,
+                vehicle_id=int(vid_p) if vid_p is not None else None,
+                mobile_digits=None,
+            )
+            _record_process_failure_via_api(
+                api_url,
+                jwt,
+                {
+                    "dealer_id": dealer_id,
+                    "process_label": "Create Invoice",
+                    "entity_dedupe_key": ek,
+                    "error_text": msg,
+                },
+            )
+        except Exception:
+            logging.exception("fill_dms sidecar failure-log (early)")
         return {
             "success": False,
-            "error": "DMS_MODE must be real/siebel on the server.",
+            "error": msg,
             "vehicle": {},
             "pdfs_saved": [],
             "print_jobs": [],
@@ -733,6 +766,40 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
 
     pdfs_list = _invoice_dispatch_pdf_paths(result)
     err_norm = _normalize_automation_error(result.get("error"))
+    if err_norm:
+        try:
+            from app.services.process_failure_log_service import digits_only_mobile, entity_key_fill_dms
+
+            cust = dms_values.get("customer_export") or {}
+            mob_raw = ""
+            if isinstance(cust, dict):
+                mob_raw = str(cust.get("mobile") or cust.get("mobile_number") or "").strip()
+            if not mob_raw and isinstance(staging_payload, dict):
+                c0 = staging_payload.get("customer")
+                if isinstance(c0, dict):
+                    mob_raw = str(c0.get("mobile_number") or c0.get("mobile") or "").strip()
+            md = digits_only_mobile(mob_raw)
+            sid_s = (params.get("staging_id") or "").strip() or None
+            ek = entity_key_fill_dms(
+                staging_id=sid_s,
+                customer_id=int(cc) if cc is not None else None,
+                vehicle_id=int(vv) if vv is not None else None,
+                mobile_digits=md,
+            )
+            disp = md if md else (mob_raw[:32] if mob_raw else None)
+            _record_process_failure_via_api(
+                api_url,
+                jwt,
+                {
+                    "dealer_id": dealer_id,
+                    "process_label": "Create Invoice",
+                    "entity_dedupe_key": ek,
+                    "error_text": err_norm,
+                    "customer_mobile": disp,
+                },
+            )
+        except Exception:
+            logging.exception("fill_dms sidecar failure-log")
 
     return {
         "success": err_norm is None,
@@ -885,6 +952,41 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
         except Exception as exc:
             logging.warning("fill_insurance sidecar artifact upload: %s", exc)
 
+    if result.get("error") or not result.get("success"):
+        err_txt = str(result.get("error") or "Generate Insurance failed")
+        try:
+            from app.services.process_failure_log_service import digits_only_mobile, entity_key_fill_dms
+
+            mob_raw = ""
+            if staging_payload and isinstance(staging_payload.get("customer"), dict):
+                c = staging_payload["customer"]
+                raw = c.get("mobile_number") if c.get("mobile_number") is not None else c.get("mobile")
+                mob_raw = str(raw).strip() if raw is not None else ""
+            md = digits_only_mobile(mob_raw)
+            sid_s = (str(staging_id).strip() if staging_id else "") or None
+            if sid_s == "":
+                sid_s = (params.get("staging_id") or "").strip() or None
+            ek = entity_key_fill_dms(
+                staging_id=sid_s,
+                customer_id=int(cid),
+                vehicle_id=int(vid),
+                mobile_digits=md,
+            )
+            disp = md if md else (mob_raw[:32] if mob_raw else None)
+            _record_process_failure_via_api(
+                api_url,
+                jwt,
+                {
+                    "dealer_id": dealer_id,
+                    "process_label": "Generate Insurance",
+                    "entity_dedupe_key": ek,
+                    "error_text": err_txt,
+                    "customer_mobile": disp,
+                },
+            )
+        except Exception:
+            logging.exception("fill_insurance sidecar failure-log")
+
     return {
         "success": bool(result.get("success")),
         "error": result.get("error"),
@@ -928,6 +1030,28 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
         except Exception as exc:
             logging.warning("fill_cpa_alliance_insurance sidecar artifact upload: %s", exc)
 
+    if not result.get("success") or result.get("error"):
+        err_txt = str(result.get("error") or "CPA Insurance failed")
+        try:
+            from app.services.process_failure_log_service import digits_only_mobile, entity_key_print_forms
+
+            md = digits_only_mobile(mobile)
+            ek = entity_key_print_forms(subfolder=subfolder or "default", mobile_digits=md, suffix="cpa")
+            disp = md if md else ((mobile or "")[:32] or None)
+            _record_process_failure_via_api(
+                api_url,
+                jwt,
+                {
+                    "dealer_id": dealer_id,
+                    "process_label": "CPA Insurance",
+                    "entity_dedupe_key": ek,
+                    "error_text": err_txt,
+                    "customer_mobile": disp,
+                },
+            )
+        except Exception:
+            logging.exception("fill_cpa sidecar failure-log")
+
     return {
         "success": bool(result.get("success")),
         "error": result.get("error"),
@@ -944,11 +1068,28 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
 def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
     api_url, jwt = _require_api_credentials(params)
 
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
     claim_body = {
         "dealer_id": params.get("dealer_id"),
         "limit": params.get("limit", 7),
     }
-    claim_resp = _api_post(api_url, jwt, "/sidecar/vahan/claim-batch", claim_body)
+    try:
+        claim_resp = _api_post(api_url, jwt, "/sidecar/vahan/claim-batch", claim_body)
+    except Exception as exc:
+        try:
+            _record_process_failure_via_api(
+                api_url,
+                jwt,
+                {
+                    "dealer_id": dealer_id,
+                    "process_label": "Fill Vahan (batch)",
+                    "entity_dedupe_key": f"vahan_batch:{dealer_id}",
+                    "error_text": str(exc)[:4000],
+                },
+            )
+        except Exception:
+            logging.exception("vahan batch claim failure-log")
+        return {"success": False, "total": 0, "completed": 0, "failed": 0, "error": str(exc)}
 
     rows = claim_resp.get("rows") or []
     session_id = claim_resp["session_id"]
@@ -959,7 +1100,6 @@ def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
 
     from app.services.fill_rto_service import fill_rto_row
 
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
     completed_count = 0
     failed_count = 0
 
@@ -1049,6 +1189,48 @@ def _mirror_challan_parse_artifacts_impl(params: dict) -> dict:
     return {"ok": True, "local_dir": str(base.resolve())}
 
 
+def _log_subdealer_challan_sidecar_failure(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    challan_batch_id,
+    ctx: dict,
+    err_msg: str | None,
+) -> None:
+    if not err_msg:
+        return
+    try:
+        from uuid import UUID as _UUID
+
+        from app.services.process_failure_log_service import entity_key_challan
+
+        bid = _UUID(str(challan_batch_id).strip())
+        cb_raw = ctx.get("challan_book_num")
+        cd_raw = ctx.get("challan_date")
+        cb = str(cb_raw).strip() if cb_raw is not None else None
+        cd = str(cd_raw).strip() if cd_raw is not None else None
+        if cb == "":
+            cb = None
+        if cd == "":
+            cd = None
+        ek = entity_key_challan(challan_book_num=cb, challan_date=cd, batch_id=bid)
+        _record_process_failure_via_api(
+            api_url,
+            jwt,
+            {
+                "dealer_id": dealer_id,
+                "process_label": "Subdealer challan",
+                "entity_dedupe_key": ek,
+                "error_text": str(err_msg)[:4000],
+                "challan_book_num": cb,
+                "challan_date": cd,
+                "challan_batch_id": str(bid),
+            },
+        )
+    except Exception:
+        logging.exception("subdealer challan failure-log (sidecar)")
+
+
 def _fill_subdealer_challan_impl(params: dict) -> dict:
     api_url, jwt = _require_api_credentials(params)
 
@@ -1062,22 +1244,39 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     phase_is_order_only = phase_raw == "order_only"
 
     resolve_body = {"challan_batch_id": challan_batch_id, "dealer_id": dealer_id}
+    ctx: dict = {}
+
+    def _ret_challan(d: dict) -> dict:
+        if not d.get("ok") and d.get("error"):
+            _log_subdealer_challan_sidecar_failure(
+                api_url,
+                jwt,
+                dealer_id,
+                challan_batch_id,
+                ctx if isinstance(ctx, dict) else {},
+                str(d.get("error")),
+            )
+        return d
 
     try:
         ctx = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
     except Exception as exc:
-        return {"ok": False, "error": f"Resolve failed: {exc}", "challan_id": None, "dms_step_messages": [], "vehicle": {}}
+        return _ret_challan(
+            {"ok": False, "error": f"Resolve failed: {exc}", "challan_id": None, "dms_step_messages": [], "vehicle": {}}
+        )
 
     if not dms_base_url:
         dms_base_url = (ctx.get("dms_base_url") or "").strip()
     if not dms_base_url:
-        return {
-            "ok": False,
-            "error": "dms_base_url is empty (pass from app or set DMS_BASE_URL on server).",
-            "challan_id": None,
-            "dms_step_messages": [],
-            "vehicle": {},
-        }
+        return _ret_challan(
+            {
+                "ok": False,
+                "error": "dms_base_url is empty (pass from app or set DMS_BASE_URL on server).",
+                "challan_id": None,
+                "dms_step_messages": [],
+                "vehicle": {},
+            }
+        )
 
     from app.services.subdealer_challan_ocr_service import challan_artifact_leaf_name
 
@@ -1104,13 +1303,15 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     from app.services.hero_dms_shared_utilities import SiebelDmsUrls, _ts_ist_iso
 
     if not dms_automation_is_real_siebel():
-        return {
-            "ok": False,
-            "error": "DMS_MODE must be real/siebel on the server.",
-            "challan_id": None,
-            "dms_step_messages": [],
-            "vehicle": {},
-        }
+        return _ret_challan(
+            {
+                "ok": False,
+                "error": "DMS_MODE must be real/siebel on the server.",
+                "challan_id": None,
+                "dms_step_messages": [],
+                "vehicle": {},
+            }
+        )
 
     urls_prepare = SiebelDmsUrls(
         contact=DMS_REAL_URL_CONTACT,
@@ -1141,13 +1342,15 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
         login_password=DMS_LOGIN_PASSWORD,
     )
     if page is None:
-        return {
-            "ok": False,
-            "error": open_error or "Could not open DMS",
-            "challan_id": None,
-            "dms_step_messages": [],
-            "vehicle": {},
-        }
+        return _ret_challan(
+            {
+                "ok": False,
+                "error": open_error or "Could not open DMS",
+                "challan_id": None,
+                "dms_step_messages": [],
+                "vehicle": {},
+            }
+        )
     _install_playwright_js_dialog_handler(page)
 
     challan_dirs_to_sync: list[Path] = []
@@ -1211,25 +1414,29 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             try:
                 _api_post(api_url, jwt, "/sidecar/subdealer-challan/requeue-failed", resolve_body, timeout=120)
             except Exception as exc:
-                return {
-                    "ok": False,
-                    "error": f"requeue-failed: {exc}",
-                    "challan_id": None,
-                    "dms_step_messages": [],
-                    "vehicle": {},
-                }
+                return _ret_challan(
+                    {
+                        "ok": False,
+                        "error": f"requeue-failed: {exc}",
+                        "challan_id": None,
+                        "dms_step_messages": [],
+                        "vehicle": {},
+                    }
+                )
     
             for round_n in range(_SUBDEALER_MAX_PREP_ROUNDS):
                 try:
                     ctx = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
                 except Exception as exc:
-                    return {
-                        "ok": False,
-                        "error": f"Resolve failed (prepare round {round_n + 1}): {exc}",
-                        "challan_id": None,
-                        "dms_step_messages": [],
-                        "vehicle": {},
-                    }
+                    return _ret_challan(
+                        {
+                            "ok": False,
+                            "error": f"Resolve failed (prepare round {round_n + 1}): {exc}",
+                            "challan_id": None,
+                            "dms_step_messages": [],
+                            "vehicle": {},
+                        }
+                    )
     
                 pending = [
                     r
@@ -1286,13 +1493,15 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
                 try:
                     ctx = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
                 except Exception as exc:
-                    return {
-                        "ok": False,
-                        "error": f"Resolve failed after prepare: {exc}",
-                        "challan_id": None,
-                        "dms_step_messages": [],
-                        "vehicle": {},
-                    }
+                    return _ret_challan(
+                        {
+                            "ok": False,
+                            "error": f"Resolve failed after prepare: {exc}",
+                            "challan_id": None,
+                            "dms_step_messages": [],
+                            "vehicle": {},
+                        }
+                    )
                 still_queued = [
                     r
                     for r in (ctx.get("detail_rows") or [])
@@ -1306,13 +1515,16 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             try:
                 ctx_final = _api_post(api_url, jwt, "/sidecar/subdealer-challan/resolve", resolve_body, timeout=120)
             except Exception as exc:
-                return {
-                    "ok": False,
-                    "error": f"Resolve failed (final): {exc}",
-                    "challan_id": None,
-                    "dms_step_messages": [],
-                    "vehicle": {},
-                }
+                return _ret_challan(
+                    {
+                        "ok": False,
+                        "error": f"Resolve failed (final): {exc}",
+                        "challan_id": None,
+                        "dms_step_messages": [],
+                        "vehicle": {},
+                    }
+                )
+            ctx = ctx_final
             rows = ctx_final.get("detail_rows") or []
             not_ready = [r for r in rows if (r.get("status") or "").strip().lower() != "ready"]
             if not_ready:
@@ -1322,13 +1534,15 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
                         f"id={r.get('challan_staging_id')} status={r.get('status')!r} "
                         f"err={(r.get('last_error') or '')[:160]!r}"
                     )
-                return {
-                    "ok": False,
-                    "error": "One or more vehicles did not reach Ready — " + "; ".join(parts),
-                    "challan_id": None,
-                    "dms_step_messages": [],
-                    "vehicle": {},
-                }
+                return _ret_challan(
+                    {
+                        "ok": False,
+                        "error": "One or more vehicles did not reach Ready — " + "; ".join(parts),
+                        "challan_id": None,
+                        "dms_step_messages": [],
+                        "vehicle": {},
+                    }
+                )
     
         oc_body = {
             "challan_batch_id": challan_batch_id,
@@ -1338,22 +1552,26 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
         try:
             pkg = _api_post(api_url, jwt, "/sidecar/subdealer-challan/order-context", oc_body, timeout=120)
         except Exception as exc:
-            return {
-                "ok": False,
-                "error": f"order-context: {exc}",
-                "challan_id": None,
-                "dms_step_messages": [],
-                "vehicle": {},
-            }
-    
+            return _ret_challan(
+                {
+                    "ok": False,
+                    "error": f"order-context: {exc}",
+                    "challan_id": None,
+                    "dms_step_messages": [],
+                    "vehicle": {},
+                }
+            )
+
         if not pkg.get("ok"):
-            return {
-                "ok": False,
-                "error": str(pkg.get("error") or "order-context failed"),
-                "challan_id": None,
-                "dms_step_messages": [],
-                "vehicle": {},
-            }
+            return _ret_challan(
+                {
+                    "ok": False,
+                    "error": str(pkg.get("error") or "order-context failed"),
+                    "challan_id": None,
+                    "dms_step_messages": [],
+                    "vehicle": {},
+                }
+            )
     
         leaf = _safe_challan_artifact_leaf((pkg.get("artifact_leaf") or "").strip() or initial_leaf)
         log_path = (get_challan_artifacts_dir(dealer_id, leaf) / "playwright_challan.txt").resolve()
@@ -1452,21 +1670,25 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             _append_finalize_challan_log(fin)
         except Exception as exc:
             _append_finalize_challan_log(None, http_exc=exc)
-            return {
-                "ok": False,
-                "error": f"finalize-order: {exc}",
-                "challan_id": None,
-                "dms_step_messages": list(frag.get("dms_step_messages") or []),
-                "vehicle": dict(frag.get("vehicle") or {}),
-            }
+            return _ret_challan(
+                {
+                    "ok": False,
+                    "error": f"finalize-order: {exc}",
+                    "challan_id": None,
+                    "dms_step_messages": list(frag.get("dms_step_messages") or []),
+                    "vehicle": dict(frag.get("vehicle") or {}),
+                }
+            )
 
-        return {
-            "ok": bool(fin.get("ok")),
-            "error": fin.get("error"),
-            "challan_id": fin.get("challan_id"),
-            "dms_step_messages": list(fin.get("dms_step_messages") or []),
-            "vehicle": dict(fin.get("vehicle") or {}),
-        }
+        return _ret_challan(
+            {
+                "ok": bool(fin.get("ok")),
+                "error": fin.get("error"),
+                "challan_id": fin.get("challan_id"),
+                "dms_step_messages": list(fin.get("dms_step_messages") or []),
+                "vehicle": dict(fin.get("vehicle") or {}),
+            }
+        )
     finally:
         _flush_challan_ocr_dirs_to_server()
 

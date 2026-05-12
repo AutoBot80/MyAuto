@@ -1,0 +1,232 @@
+.dealer-dashboard-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  box-sizing: border-box;
+  /* Do not use negative horizontal margins here: they pull content past the padded
+     main column and the first characters clip under .app-main-v2-content overflow. */
+}
+
+/* Merged metrics + subdealer breakdown: 5px gap between columns; day headers & counts right-aligned */
+.dealer-dash-matrix-wrap--compact-cols {
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  padding-right: 12px;
+  box-sizing: border-box;
+}
+
+.dealer-dash-matrix-wrap--compact-cols .app-table {
+  width: max-content;
+  max-width: 100%;
+}
+
+/* Label column: 10px gap before first day column */
+.dealer-dash-matrix-wrap--compact-cols .app-table thead th:first-child,
+.dealer-dash-matrix-wrap--compact-cols .app-table tbody th {
+  text-align: left;
+  padding-left: 12px;
+  padding-right: 10px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+/* Day columns: right-aligned; 10px space after each column */
+.dealer-dash-matrix-wrap--compact-cols .app-table thead th:nth-child(n + 2),
+.dealer-dash-matrix-wrap--compact-cols .app-table tbody td {
+  text-align: right;
+  padding-left: 0;
+  padding-right: 10px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Clickable metric row label (Total Subdealer Sales) */
+.dealer-dash-matrix-rowhit {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: #1e5a9e;
+  text-decoration: underline;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dealer-dash-matrix-rowhit:hover {
+  color: #0d3d6e;
+}
+
+/* Inline expanded subdealer rows (non-zero sales in window) */
+.dealer-dash-matrix-sub-row th,
+.dealer-dash-matrix-sub-row td {
+  color: #6a737d;
+  font-size: 0.92em;
+  font-weight: 400;
+}
+
+.dealer-dash-matrix-sub-row th.admin-usage-matrix-dealer {
+  font-weight: 400;
+}
+
+.dealer-dash-matrix-sub-name {
+  padding-left: 1.75rem !important;
+}
+
+.dealer-dash-matrix-sub-msg {
+  text-align: left;
+  font-style: italic;
+}
+
+.dealer-dash-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+section.dealer-dash-section + section.dealer-dash-section {
+  border-top: 1px solid rgba(30, 90, 158, 0.25);
+  padding-top: 1.25rem;
+}
+
+.dealer-dash-rto-count {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.dealer-dash-section--merged-metrics .dealer-dash-hint {
+  margin-top: 0;
+}
+
+/* Merged B/C/D: metric names in first column can be longer than “Total” */
+.dealer-dash-section--merged-metrics .admin-usage-matrix-dealer {
+  max-width: 16rem;
+}
+
+.dealer-dash-matrix-hit {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: #1e5a9e;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.dealer-dash-matrix-hit:hover {
+  color: #0d3d6e;
+}
+
+.dealer-dash-detail-block {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.dealer-dash-detail-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.dealer-dash-sub-id {
+  font-weight: 400;
+  color: #666;
+  font-size: 0.85rem;
+}
+
+.dealer-dash-challan-table {
+  font-size: 0.88rem;
+}
+
+.dealer-dash-nowrap {
+  white-space: nowrap;
+}
+
+.dealer-dash-empty {
+  margin: 0.25rem 0 0;
+  color: #555;
+}
+
+.dealer-dash-muted {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.dealer-dash-challan-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1.25rem 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.dealer-dash-challan-filter-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 12rem;
+}
+
+.dealer-dash-challan-filter-caption {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.dealer-dash-challan-select {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #c5d9ed;
+  border-radius: 6px;
+  background: #fff;
+  color: #1b2a3a;
+  max-width: 100%;
+}
+
+.dealer-dash-challan-period {
+  margin: 0;
+  padding: 0.35rem 0.75rem 0.5rem;
+  border: 1px solid #c5d9ed;
+  border-radius: 8px;
+  background: #fafcfe;
+}
+
+.dealer-dash-challan-period-legend {
+  padding: 0 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #333;
+}
+
+.dealer-dash-radio-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-right: 1rem;
+  font-size: 0.9rem;
+  color: #1b2a3a;
+  cursor: pointer;
+}
+
+.dealer-dash-radio-label input {
+  cursor: pointer;
+}
+
+.dealer-dash-error {
+  margin: 0.25rem 0 0;
+  color: #a40000;
+}
+
+.dealer-dash-retry {
+  margin-top: 0.5rem;
+}

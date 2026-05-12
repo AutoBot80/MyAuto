@@ -101,3 +101,62 @@
   font-weight: 600;
   color: #1e5a9e;
 }
+
+.admin-failure-logs-hint {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.admin-failure-logs-wrap {
+  max-width: 100%;
+}
+
+.admin-failure-logs-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.admin-failure-logs-table th,
+.admin-failure-logs-table td {
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.admin-failure-logs-nowrap {
+  white-space: nowrap;
+}
+
+.admin-failure-logs-dealer {
+  font-weight: 600;
+}
+
+.admin-failure-logs-dealer-id {
+  font-weight: 400;
+  color: #666;
+  font-size: 0.85em;
+}
+
+.admin-failure-logs-challan {
+  font-size: 0.92em;
+}
+
+.admin-failure-logs-batch {
+  color: #666;
+}
+
+.admin-failure-logs-num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.admin-failure-logs-error {
+  color: #8b1538;
+}
+
+.admin-failure-logs-key {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  color: #333;
+}
