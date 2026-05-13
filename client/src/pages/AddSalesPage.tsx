@@ -146,6 +146,20 @@ function pickCpaPortalRow(
   return first?.login_url?.trim() ? first : undefined;
 }
 
+/** Insurer for Add Sales Section 3 when details fuzzy match is not portal-enabled (``comments = 'Y'``). */
+function effectivePortalInsurer(
+  currentInsurer: string | undefined,
+  preferInsurer: string | null | undefined,
+  portalInsurers: readonly string[]
+): string | null {
+  if (!portalInsurers.length) return null;
+  const S = (currentInsurer ?? "").trim();
+  const P = (preferInsurer ?? "").trim();
+  if (S && portalInsurers.includes(S)) return S;
+  if (P && portalInsurers.includes(P)) return P;
+  return null;
+}
+
 /** True when extracted-details payload has at least one structured OCR block — used before DMS warm-browser. */
 function detailsHasOcrPayloadForWarm(details: unknown): boolean {
   if (!details || typeof details !== "object" || Array.isArray(details)) return false;
@@ -384,6 +398,8 @@ export function AddSalesPage({
   const [generateInsuranceReason, setGenerateInsuranceReason] = useState<string | null>(null);
   const [cpaAlliancePortalEnabled, setCpaAlliancePortalEnabled] = useState(false);
   const [cpaInsurers, setCpaInsurers] = useState<CpaInsurerPortalRow[]>([]);
+  /** ``master_ref`` INSURER rows with ``comments = 'Y'`` (Section 3 dropdown). */
+  const [portalInsurers, setPortalInsurers] = useState<string[]>([]);
   const [dealerCpaInsurer, setDealerCpaInsurer] = useState<string | null>(null);
   const [heroCpi, setHeroCpi] = useState<string | null>(null);
   const [isFillCpaInsuranceLoading, setIsFillCpaInsuranceLoading] = useState(false);
@@ -462,7 +478,11 @@ export function AddSalesPage({
 
   type CpaEligibilitySlice = Pick<
     CreateInvoiceEligibilityResponse,
-    "cpa_insurers" | "hero_cpi" | "dealer_cpa_insurer" | "cpa_alliance_portal_enabled"
+    | "cpa_insurers"
+    | "hero_cpi"
+    | "dealer_cpa_insurer"
+    | "cpa_alliance_portal_enabled"
+    | "portal_insurers"
   >;
 
   const applyDealerCpaFromApiSlice = useCallback((res: CpaEligibilitySlice) => {
@@ -471,6 +491,8 @@ export function AddSalesPage({
     setCpaAlliancePortalEnabled(cpa.enabled);
     setCpaInsurers(cpa.insurers);
     setDealerCpaInsurer(cpa.dealerCpa);
+    const pi = res.portal_insurers;
+    setPortalInsurers(Array.isArray(pi) ? pi.map((x) => String(x).trim()).filter(Boolean) : []);
   }, []);
 
   const resolvedCpaPortal = useMemo(
@@ -484,6 +506,7 @@ export function AddSalesPage({
       setHeroCpi(null);
       setDealerCpaInsurer(null);
       setCpaInsurers([]);
+      setPortalInsurers([]);
       setCpaAlliancePortalEnabled(false);
       return;
     }
@@ -498,6 +521,7 @@ export function AddSalesPage({
           setHeroCpi(null);
           setDealerCpaInsurer(null);
           setCpaInsurers([]);
+          setPortalInsurers([]);
           setCpaAlliancePortalEnabled(false);
         }
       }
@@ -737,6 +761,7 @@ export function AddSalesPage({
       setHeroCpi(null);
       setCpaAlliancePortalEnabled(false);
       setCpaInsurers([]);
+      setPortalInsurers([]);
       setDealerCpaInsurer(null);
     } finally {
       setCreateInvoiceEligibilityLoading(false);
@@ -788,6 +813,7 @@ export function AddSalesPage({
     setGenerateInsuranceCompleted(false);
     setCpaAlliancePortalEnabled(false);
     setCpaInsurers([]);
+    setPortalInsurers([]);
     setDealerCpaInsurer(null);
     setHeroCpi(null);
     setIsFillCpaInsuranceLoading(false);
@@ -806,6 +832,24 @@ export function AddSalesPage({
   const v = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
   const c = extractedCustomer;
   const ins = extractedInsurance;
+
+  /** Section 3 dropdown: value in list, else rule (prefer_insurer) until ``useEffect`` syncs ``extractedInsurance.insurer``. */
+  const insuranceProviderSelectValue = useMemo(() => {
+    const raw = (ins?.insurer ?? "").trim();
+    if (portalInsurers.includes(raw)) return raw;
+    return effectivePortalInsurer(ins?.insurer, preferInsurer, portalInsurers) ?? "";
+  }, [ins?.insurer, preferInsurer, portalInsurers]);
+
+  useEffect(() => {
+    if (!portalInsurers.length) return;
+    const eff = effectivePortalInsurer(extractedInsurance?.insurer, preferInsurer, portalInsurers);
+    if (eff == null) return;
+    const cur = (extractedInsurance?.insurer ?? "").trim();
+    if (cur !== eff) {
+      setExtractedInsurance((prev) => ({ ...(prev ?? {}), insurer: eff }));
+    }
+  }, [portalInsurers, preferInsurer, extractedInsurance?.insurer]);
+
   /** Allowed: letters, digits, space, hyphen, period, slash, comma. No other special characters. */
   const ALLOWED_CHAR_REGEX = /^[a-zA-Z0-9\s\-./,]*$/;
   const isBlank = (val: string | undefined | null): boolean =>
@@ -2334,7 +2378,27 @@ export function AddSalesPage({
                   <div className="add-sales-v2-dl-row-group">
                     <div className="add-sales-v2-dl-row">
                       <dt>Insurance Provider</dt>
-                      <dd>{(ins?.insurer ?? preferInsurer ?? "").trim() || "—"}</dd>
+                      <dd className="add-sales-v2-dd--insurance-editable">
+                        {portalInsurers.length > 0 ? (
+                          <select
+                            className="add-sales-v2-dl-input add-sales-v2-dl-input--insurance-provider-wide"
+                            aria-label="Insurance provider"
+                            value={insuranceProviderSelectValue}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setExtractedInsurance((prev) => ({ ...(prev ?? {}), insurer: v }));
+                            }}
+                          >
+                            {portalInsurers.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          (ins?.insurer ?? preferInsurer ?? "").trim() || "—"
+                        )}
+                      </dd>
                     </div>
                   </div>
                   <div className="add-sales-v2-dl-row-group">

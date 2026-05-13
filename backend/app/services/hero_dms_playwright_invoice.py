@@ -4437,9 +4437,38 @@ def _fill_challan_account_institution_name_verify_pin(
             page.keyboard.press("ArrowDown")
             _safe_page_wait(page, 150, log_label="pick_account_dropdown_down1")
             _dropdown_ok = True
-            note("Pick Account MVG: selected 'Account Name' via 1x ArrowDown.")
+            note("Pick Account MVG: first ArrowDown on criterion dropdown.")
         except Exception as e:
             note(f"Pick Account MVG: keyboard navigation failed: {e!r}")
+
+        # Read back selected criterion; first ArrowDown sometimes leaves Account ID
+        try:
+            _crit = (page.evaluate(
+                """() => {
+                    const selects = document.querySelectorAll('select');
+                    for (const sel of selects) {
+                        const rect = sel.getBoundingClientRect();
+                        if (rect.width <= 0 || rect.height <= 0) continue;
+                        const st = window.getComputedStyle(sel);
+                        if (st.display === 'none' || st.visibility === 'hidden') continue;
+                        const i = sel.selectedIndex;
+                        if (i < 0 || !sel.options[i]) continue;
+                        return (sel.options[i].textContent || '').trim();
+                    }
+                    return '';
+                }"""
+            ) or "").strip()
+            note(f"Pick Account MVG: criterion after ArrowDown = {_crit!r}.")
+            if (
+                _crit
+                and re.search(r"account\s*id", _crit, re.I)
+                and not re.search(r"account\s*name", _crit, re.I)
+            ):
+                page.keyboard.press("ArrowDown")
+                _safe_page_wait(page, 150, log_label="pick_account_dropdown_down2")
+                note("Pick Account MVG: second ArrowDown (criterion was Account ID).")
+        except Exception as e:
+            note(f"Pick Account MVG: criterion readback skipped ({e!r}).")
 
         _safe_page_wait(page, 300, log_label="pick_account_after_dropdown")
 

@@ -39,6 +39,34 @@ def list_ref_values(conn: Any, ref_type: str) -> list[str]:
     return out
 
 
+def list_portal_insurers(conn: Any) -> list[str]:
+    """
+    Insurer labels allowed on the Add Sales portal dropdown: ``ref_type = INSURER`` and
+    ``comments`` marks eligibility (``Y``). CPA rows use ``ref_type = CPA`` and ``comments`` as URL.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ref_value
+            FROM master_ref
+            WHERE ref_type = %s
+              AND UPPER(TRIM(COALESCE(comments, ''))) = 'Y'
+            ORDER BY ref_value
+            """,
+            (REF_TYPE_INSURER,),
+        )
+        rows = cur.fetchall()
+    out: list[str] = []
+    for row in rows or []:
+        if isinstance(row, dict):
+            v = row.get("ref_value")
+        else:
+            v = row[0] if row else None
+        if v and str(v).strip():
+            out.append(str(v).strip())
+    return out
+
+
 def list_cpa_portals(conn: Any) -> list[dict[str, str]]:
     """
     CPA third-party portal rows: ``ref_value`` (display name) and ``comments`` (login URL).

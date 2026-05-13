@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
-from app.repositories.master_ref import list_cpa_portals
+from app.repositories.master_ref import list_cpa_portals, list_portal_insurers
 
 router = APIRouter(prefix="/add-sales", tags=["add-sales"])
 
@@ -34,12 +34,14 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         "hero_cpi": None,
         "dealer_cpa_insurer": None,
         "cpa_alliance_portal_enabled": False,
+        "portal_insurers": [],
     }
     if dealer_id is None or int(dealer_id) < 1:
         return blank
     conn = get_connection()
     try:
         portals = list_cpa_portals(conn)
+        portal_insurers = list_portal_insurers(conn)
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT hero_cpi, cpa_insurer FROM dealer_ref WHERE dealer_id = %s LIMIT 1",
@@ -68,6 +70,7 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         "hero_cpi": hero,
         "dealer_cpa_insurer": dcpa,
         "cpa_alliance_portal_enabled": enabled,
+        "portal_insurers": portal_insurers,
     }
 
 

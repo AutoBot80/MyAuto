@@ -25,6 +25,34 @@ function formatIsoDateShort(iso: string): string {
   return `${d}/${m}/${y}`;
 }
 
+/** ``created_at`` from API (ISO string) → ``dd-mm-yyyy hh:mm`` in Asia/Kolkata (IST). */
+function formatChallanCreatedAtIst(value: unknown): string {
+  if (value == null) return "—";
+  const s = String(value).trim();
+  if (!s) return "—";
+  const ms = Date.parse(s);
+  if (Number.isNaN(ms)) return "—";
+  const d = new Date(ms);
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(d);
+  const get = (type: Intl.DateTimeFormatPartTypes): string => parts.find((p) => p.type === type)?.value ?? "";
+  const y = get("year");
+  const m = get("month");
+  const day = get("day");
+  const hour = get("hour");
+  const minute = get("minute");
+  if (!y || !m || !day) return "—";
+  return `${day}-${m}-${y} ${hour || "00"}:${minute || "00"}`;
+}
+
 type MergedMetricRow = {
   key: string;
   label: string;
@@ -186,29 +214,27 @@ function ChallanDetailTable({
       <table className="app-table dealer-dash-challan-table" aria-label={ariaLabel}>
         <thead>
           <tr>
-            <th scope="col">Challan ID</th>
-            <th scope="col">Book / date</th>
+            <th scope="col">Book No.</th>
             <th scope="col">To dealer</th>
             <th scope="col">Vehicles</th>
             <th scope="col">Order#</th>
             <th scope="col">Invoice#</th>
-            <th scope="col">Created</th>
+            <th scope="col">Create date/time</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r, idx) => (
-            <tr key={`${String(r.challan_id ?? idx)}`}>
-              <td>{String(r.challan_id ?? "—")}</td>
-              <td className="dealer-dash-nowrap">
-                {[r.challan_book_num, r.challan_date].filter(Boolean).join(" · ") || "—"}
-              </td>
+            <tr
+              key={`${idx}-${String(r.challan_book_num ?? "")}-${String(r.created_at ?? "")}-${String(r.dealer_to ?? "")}`}
+            >
+              <td className="dealer-dash-nowrap">{r.challan_book_num != null && String(r.challan_book_num).trim() !== "" ? String(r.challan_book_num) : "—"}</td>
               <td>
                 {String(r.to_dealer_name ?? "—")} ({String(r.dealer_to ?? "—")})
               </td>
               <td>{String(r.num_vehicles ?? "—")}</td>
               <td>{String(r.order_number ?? "—")}</td>
               <td>{String(r.invoice_number ?? "—")}</td>
-              <td className="dealer-dash-nowrap">{String(r.created_at ?? "—")}</td>
+              <td className="dealer-dash-nowrap">{formatChallanCreatedAtIst(r.created_at)}</td>
             </tr>
           ))}
         </tbody>
