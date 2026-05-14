@@ -81,7 +81,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_cpu_crit" {
   tags          = merge(var.tags, { Name = "${var.project_name}-ec2-cpu-crit", Severity = "critical" })
 }
 
-# Scale-in: average CPU over 15 min; same instance list as m0, m1.
+# Scale-in: average CPU over 10 min windows (600s); same instance list as m0, m1.
 resource "aws_cloudwatch_metric_alarm" "ec2_cpu_scale_in" {
   count = var.enable_cloudwatch_alarms && local.ec2_metrics_enabled ? 1 : 0
 
@@ -89,8 +89,8 @@ resource "aws_cloudwatch_metric_alarm" "ec2_cpu_scale_in" {
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = 2
   datapoints_to_alarm = 2
-  threshold           = 35
-  alarm_description   = "Scale-in: avg EC2 CPUUtilization < 35% (15 min) — 2 of 2; asg=${local.cw_app_asg_name}"
+  threshold           = 50
+  alarm_description   = "Scale-in: avg EC2 CPUUtilization < 50% (600s) — 2 of 2; asg=${local.cw_app_asg_name}"
   treat_missing_data  = "notBreaching"
 
   dynamic "metric_query" {
@@ -100,7 +100,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_cpu_scale_in" {
       metric {
         metric_name = "CPUUtilization"
         namespace   = "AWS/EC2"
-        period      = 900
+        period      = 600
         stat        = "Average"
         dimensions = {
           InstanceId = metric_query.value.id
@@ -114,7 +114,7 @@ resource "aws_cloudwatch_metric_alarm" "ec2_cpu_scale_in" {
     expression  = local.ec2_cpu_avg_expr
     label       = "AvgCPU"
     return_data = true
-    period      = 900
+    period      = 600
   }
 
   alarm_actions = local.alarm_actions_scale_in

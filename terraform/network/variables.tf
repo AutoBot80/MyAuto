@@ -108,6 +108,17 @@ variable "ec2_instance_type" {
   default     = "t3.medium"
 }
 
+variable "ec2_root_volume_size_gb" {
+  type        = number
+  description = "Root gp3 volume size (GiB) for app instances. AMI default (~8 GiB) is too small for user_data dnf (dev libs, CloudWatch agent, venv, pip)."
+  default     = 40
+
+  validation {
+    condition     = var.ec2_root_volume_size_gb >= 20 && var.ec2_root_volume_size_gb <= 500
+    error_message = "ec2_root_volume_size_gb must be between 20 and 500 GiB."
+  }
+}
+
 variable "asg_min_size" {
   type        = number
   description = "ASG minimum instances."

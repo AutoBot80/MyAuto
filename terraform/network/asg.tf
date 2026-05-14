@@ -26,10 +26,20 @@ locals {
     export AWS_DEFAULT_REGION="${var.aws_region}"
     export AWS_REGION="${var.aws_region}"
 
+    # ── 0. SSM first (minimal dnf) ───────────────────────────────────────
+    # If a later package step fails, Session Manager must still be able to register
+    # so you can read /var/log/user-data.log on the instance.
+    dnf install -y amazon-ssm-agent
+    systemctl enable amazon-ssm-agent
+    systemctl start amazon-ssm-agent || systemctl restart amazon-ssm-agent || true
+
     # ── 1. System packages ───────────────────────────────────────────────
     dnf install -y nginx amazon-cloudwatch-agent git \
       python3.11 python3.11-devel python3.11-pip \
       gcc pkg-config cairo-devel nano htop postgresql15
+
+    # SSM agent already enabled above; restart after large package set (optional refresh)
+    systemctl try-restart amazon-ssm-agent || true
 
     # Tesseract OCR (SPAL repo) — used by pre-OCR Aadhaar front/back split
     dnf install -y spal-release
@@ -216,6 +226,17 @@ resource "aws_launch_template" "app" {
   vpc_security_group_ids = [aws_security_group.app.id]
 
   user_data = base64encode(local.app_user_data)
+
+  block_device_mappings {
+    device_name = data.aws_ami.al2023_x86.root_device_name
+
+    ebs {
+      volume_size           = var.ec2_root_volume_size_gb
+      volume_type           = "gp3"
+      delete_on_termination = true
+      encrypted             = true
+    }
+  }
 
   metadata_options {
     http_endpoint               = "enabled"

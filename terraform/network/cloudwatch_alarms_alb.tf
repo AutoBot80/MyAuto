@@ -105,14 +105,14 @@ resource "aws_cloudwatch_metric_alarm" "alb_request_rate_warn" {
 
   alarm_name          = "${var.project_name}-alb-request-rate-warn"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  datapoints_to_alarm = 2
+  evaluation_periods  = 5
+  datapoints_to_alarm = 4
   metric_name         = "RequestCountPerTarget"
   namespace           = "AWS/ApplicationELB"
   period              = 60
   statistic           = "Sum"
-  threshold           = 60
-  alarm_description   = "WARNING: RequestCountPerTarget > 60 req/min — scale-out; 2 of 2"
+  threshold           = 200
+  alarm_description   = "WARNING: RequestCountPerTarget Sum > 200 per 60s (~200/min per target) — scale-out; 4 of 5"
   treat_missing_data  = "notBreaching"
 
   dimensions = {
@@ -130,14 +130,14 @@ resource "aws_cloudwatch_metric_alarm" "alb_request_rate_crit" {
 
   alarm_name          = "${var.project_name}-alb-request-rate-crit"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  datapoints_to_alarm = 2
+  evaluation_periods  = 5
+  datapoints_to_alarm = 4
   metric_name         = "RequestCountPerTarget"
   namespace           = "AWS/ApplicationELB"
   period              = 60
   statistic           = "Sum"
-  threshold           = 100
-  alarm_description   = "CRITICAL: RequestCountPerTarget > 100 req/min — scale-out; 2 of 2"
+  threshold           = 400
+  alarm_description   = "CRITICAL: RequestCountPerTarget Sum > 400 per 60s (~400/min per target) — scale-out; 4 of 5"
   treat_missing_data  = "notBreaching"
 
   dimensions = {

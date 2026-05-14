@@ -14,9 +14,9 @@ locals {
   # Count gate uses desired_capacity, not list length, so plan-time unknown ids do not break alarm count.
   ec2_metrics_enabled = var.asg_desired_capacity > 0
 
-  # Stack allows max 2 instances. MAX(m0, m1) must use a comma+space, not a tuple, or CloudWatch rejects it.
+  # Stack allows max 2 instances. MAX takes one TS or TS[] — use MAX([m0,m1]), not MAX(m0,m1) (PutMetricAlarm rejects the latter).
   _ec2_n           = length(local.app_instance_ids_sorted)
-  ec2_cpu_max_expr = local._ec2_n == 0 ? "0" : local._ec2_n == 1 ? "m0" : "MAX(m0, m1)"
+  ec2_cpu_max_expr = local._ec2_n == 0 ? "0" : local._ec2_n == 1 ? "m0" : "MAX([m0,m1])"
   ec2_cpu_avg_expr = local._ec2_n == 0 ? "0" : local._ec2_n == 1 ? "m0" : "(m0+m1)/2"
   # Same m0/m1 / MAX() shape as CPU for mem (separate resources with mem metrics on those ids).
   ec2_mem_max_expr = local.ec2_cpu_max_expr
