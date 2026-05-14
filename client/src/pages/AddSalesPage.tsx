@@ -14,6 +14,7 @@ import { UploadScansPanel } from "../components/UploadScansPanel";
 import { ManualFallbackSplitReview } from "../components/ManualFallbackSplitReview";
 import type { ManualFallbackPayload } from "../types";
 import { getExtractedDetails } from "../api/aiReaderQueue";
+import { ApiHttpError } from "../api/client";
 import { submitInfo } from "../api/submitInfo";
 import {
   dispatchPrintJobsFromApi,
@@ -44,6 +45,7 @@ import {
   sanitizeNomineeAgeInput,
   sanitizeOptionalFormField,
 } from "../utils/formFieldSanitize";
+import { AddSalesInProcessPanel } from "./AddSalesInProcessPanel";
 import { StatusMessage } from "../components/StatusMessage";
 import { usePageVisible } from "../hooks/usePageVisible";
 import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
@@ -353,8 +355,6 @@ interface AddSalesPageProps {
   siteUrlsError?: string | null;
   /** Increment to force the same behavior as pressing "New". */
   autoNewTrigger?: number;
-  /** When true, show “I want to upload individual files” (login_id shashank only). */
-  showIndividualFileUploadToggle?: boolean;
 }
 
 export function AddSalesPage({
@@ -365,7 +365,6 @@ export function AddSalesPage({
   siteUrlsLoading,
   siteUrlsError,
   autoNewTrigger,
-  showIndividualFileUploadToggle = false,
 }: AddSalesPageProps) {
   const pageVisible = usePageVisible();
   const [mobile, setMobile] = useState(() => getInitialForm().mobile);
@@ -454,6 +453,9 @@ export function AddSalesPage({
     );
   });
   const [formResetKey, setFormResetKey] = useState(0);
+  const [addSalesPageTab, setAddSalesPageTab] = useState<"add-sales" | "in-process">("add-sales");
+  const [inProcessActionStagingId, setInProcessActionStagingId] = useState<string | null>(null);
+  const [inProcessBadgeCount, setInProcessBadgeCount] = useState(0);
 
   /** User-facing message when warm-browser fails (sidecar or API). */
   const formatWarmBrowserFailure = useCallback((err: unknown, siteLabel: string): string => {
@@ -593,14 +595,7 @@ export function AddSalesPage({
     [triggerWarmBrowsers]
   );
 
-  const {
-    upload,
-    uploadV2,
-    uploadConsolidatedV2,
-    isUploading,
-    isMobileValid,
-    clearUploaded,
-  } = useUploadScans("", mobile, {
+  const { uploadConsolidatedV2, isUploading, isMobileValid, clearUploaded } = useUploadScans("", mobile, {
     savedTo,
     setSavedTo,
     uploadedFiles,
@@ -1666,17 +1661,22 @@ export function AddSalesPage({
                     ? "Configure site URLs in backend/.env"
                     : undefined;
 
-  /** Same disabled logic as each primary button — used for Print Forms gate. */
-  const newButtonDisabled =
+  const pageActionsBusy =
     isFillDmsLoading ||
     isFillInsuranceLoading ||
     isFillCpaInsuranceLoading ||
     isPrintFormsLoading ||
     isSubmitting ||
+    inProcessActionStagingId != null;
+
+  /** Same disabled logic as each primary button — used for Print Forms gate. */
+  const newButtonDisabled =
+    pageActionsBusy ||
     (submitInfoActionsComplete && !hasPrintedForms);
 
   const submitInfoPrimaryButtonDisabled =
     isSubmitting ||
+    pageActionsBusy ||
     !c ||
     (!manualFormOnly && !insuranceReadByTextract) ||
     section2ValidationErrors.length > 0 ||
@@ -1687,6 +1687,7 @@ export function AddSalesPage({
     isFillDmsLoading ||
     isPrintFormsLoading ||
     isSubmitting ||
+    pageActionsBusy ||
     !submitInfoActionsComplete ||
     createInvoiceEligibilityLoading ||
     createInvoiceCompleted ||
@@ -1700,6 +1701,7 @@ export function AddSalesPage({
     isFillCpaInsuranceLoading ||
     isPrintFormsLoading ||
     isSubmitting ||
+    pageActionsBusy ||
     !submitInfoActionsComplete ||
     !hasCommittedSaleIds ||
     createInvoiceEligibilityLoading ||
@@ -1716,6 +1718,7 @@ export function AddSalesPage({
     isFillCpaInsuranceLoading ||
     isPrintFormsLoading ||
     isSubmitting ||
+    pageActionsBusy ||
     !submitInfoActionsComplete ||
     !hasCommittedSaleIds ||
     createInvoiceEligibilityLoading ||
@@ -1729,6 +1732,7 @@ export function AddSalesPage({
   /** Print only when the other four actions are inactive; after first print, `hasPrintedForms` allows re-print while New is enabled again. */
   const printFormsButtonEnabled =
     submitInfoActionsComplete &&
+    !pageActionsBusy &&
     !isSubmitting &&
     !isPrintFormsLoading &&
     !createInvoiceEligibilityLoading &&
@@ -1752,23 +1756,63 @@ export function AddSalesPage({
     <UploadScansPanel
       key={formResetKey}
       isUploading={isUploading}
-      onUpload={upload}
       uploadStatus={uploadStatus}
       uploadedFiles={uploadedFiles}
       savedTo={savedTo}
-      mobile={mobile}
-      isMobileValid={isMobileValid}
-      onUploadV2={uploadV2}
       onUploadConsolidated={uploadConsolidatedV2}
       ocrCountdownSeconds={ocrWaitActive ? ocrCountdownSec : null}
-      showIndividualFileUploadToggle={showIndividualFileUploadToggle}
       dealerId={dealerId}
     />
   );
 
   return (
-    <div className="add-sales-v2">
-      <main className="add-sales-v2-main">
+    <div className={`add-sales-v2${addSalesPageTab === "in-process" ? " add-sales-v2--in-process-tab" : ""}`}>
+      <nav className="challans-subtabs" role="tablist" aria-label="New Sales and In-process tabs">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={addSalesPageTab === "add-sales"}
+          className={`challans-subtab ${addSalesPageTab === "add-sales" ? "active" : ""}`}
+          onClick={() => setAddSalesPageTab("add-sales")}
+        >
+          New Sales
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={addSalesPageTab === "in-process"}
+          className={`challans-subtab ${addSalesPageTab === "in-process" ? "active" : ""}`}
+          onClick={() => setAddSalesPageTab("in-process")}
+        >
+          In-process
+          {inProcessBadgeCount > 0 ? (
+            <span className="app-tab-badge app-tab-badge--danger">
+              {" "}
+              ({inProcessBadgeCount})
+            </span>
+          ) : null}
+        </button>
+      </nav>
+      <div
+        className={`add-sales-in-process-tab-panel${
+          addSalesPageTab !== "in-process" ? " add-sales-tab-panel--hidden" : ""
+        }`}
+      >
+        <AddSalesInProcessPanel
+          dealerId={dealerId}
+          dmsUrl={dmsUrl ?? ""}
+          siteUrlsLoading={siteUrlsLoading}
+          siteUrlsError={siteUrlsError ?? null}
+          preferInsurer={preferInsurer ?? null}
+          addSalesMainTabActive={addSalesPageTab === "add-sales"}
+          mainLastStagingId={lastStagingId}
+          pageActionsBusy={pageActionsBusy}
+          onRowActionStart={(id) => setInProcessActionStagingId(id)}
+          onRowActionEnd={() => setInProcessActionStagingId(null)}
+          onInProcessCountChange={setInProcessBadgeCount}
+        />
+      </div>
+      <main className={`add-sales-v2-main ${addSalesPageTab !== "add-sales" ? "add-sales-tab-panel--hidden" : ""}`}>
         <div className="add-sales-v2-three-col">
           <section className="add-sales-v2-box add-sales-v2-box-upload">
               <div className="add-sales-v2-box-title-row">
@@ -1779,7 +1823,7 @@ export function AddSalesPage({
                   disabled={newButtonDisabled}
                   onClick={handleNew}
                   title={
-                    isFillDmsLoading || isFillInsuranceLoading || isPrintFormsLoading || isSubmitting
+                    isFillDmsLoading || isFillInsuranceLoading || isPrintFormsLoading || isSubmitting || inProcessActionStagingId != null
                       ? "Wait for the current action to finish."
                       : submitInfoActionsComplete && !hasPrintedForms
                         ? "Use Print Forms and Queue RTO first to unlock New for this sale."
@@ -1877,7 +1921,12 @@ export function AddSalesPage({
                           }
                         }
                       } catch (err) {
-                        const msg = err instanceof Error ? err.message : "Submit failed";
+                        const msg =
+                          err instanceof ApiHttpError
+                            ? err.message
+                            : err instanceof Error
+                              ? err.message
+                              : "Submit failed";
                         setSubmitStatus(msg);
                       } finally {
                         setIsSubmitting(false);
@@ -2403,7 +2452,7 @@ export function AddSalesPage({
                   </div>
                   <div className="add-sales-v2-dl-row-group">
                     <div className="add-sales-v2-dl-row">
-                      <dt>Hero CPA Included</dt>
+                      <dt>Hero CPA</dt>
                       <dd>{heroCpi === "Y" ? "Yes" : heroCpi === "N" ? "No" : "—"}</dd>
                     </div>
                   </div>

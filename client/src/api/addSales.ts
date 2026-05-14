@@ -57,3 +57,38 @@ export async function fetchDealerCpaContext(dealerId: number): Promise<DealerCpa
   const q = new URLSearchParams({ dealer_id: String(dealerId) });
   return apiFetch<DealerCpaContextResponse>(`/add-sales/dealer-cpa-context?${q.toString()}`);
 }
+
+/** Row from ``GET /add-sales/in-process`` (staging_id for API only; not shown in grid). */
+export interface AddSalesInProcessRow {
+  staging_id: string;
+  updated_at: string;
+  status: string;
+  customer_name: string | null;
+  mobile: string | null;
+  chassis: string | null;
+  engine: string | null;
+  order_number: string | null;
+  sales_id_text?: string | null;
+  customer_id_text?: string | null;
+  vehicle_id_text?: string | null;
+  file_location?: string | null;
+  subfolder?: string | null;
+}
+
+export async function fetchAddSalesInProcess(
+  dealerId: number,
+  days = 7
+): Promise<{ count: number; rows: AddSalesInProcessRow[] }> {
+  const q = new URLSearchParams({ dealer_id: String(dealerId), days: String(days) });
+  return apiFetch<{ count: number; rows: AddSalesInProcessRow[] }>(`/add-sales/in-process?${q.toString()}`);
+}
+
+export async function fetchAddSalesStagingPayload(
+  stagingId: string,
+  dealerId: number
+): Promise<{ staging_id: string; payload_json: Record<string, unknown> }> {
+  const q = new URLSearchParams({ dealer_id: String(dealerId) });
+  return apiFetch<{ staging_id: string; payload_json: Record<string, unknown> }>(
+    `/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`
+  );
+}

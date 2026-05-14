@@ -53,7 +53,7 @@ class PageErrorBoundary extends Component<{ children: ReactNode }, { hasError: b
 
 type AppMode = "home" | "pos" | "service" | "rto" | "dealer" | "admin";
 
-/** Bulk Loads tab and Add Sales “individual files” upload toggle (see ``posPagesForSession`` / AddSalesPage). */
+/** Bulk Loads tab visibility for this login (see ``posPagesForSession``). */
 const BULK_LOADS_VISIBLE_LOGIN_ID = "shashank";
 
 function isShashankLogin(loginId: string | null): boolean {
@@ -301,7 +301,6 @@ function App() {
             siteUrlsError={siteUrlsError}
             siteUrlsLoading={!siteUrls && !siteUrlsError}
             autoNewTrigger={addSalesAutoNewTrigger}
-            showIndividualFileUploadToggle={isShashankLogin(sessionLoginId)}
           />
         );
       case "subdealer-challan":

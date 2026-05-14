@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+import uuid
+from datetime import datetime
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
+from app.repositories.add_sales_staging import fetch_staging_payload, list_in_process_staging_rows
 from app.repositories.master_ref import list_cpa_portals, list_portal_insurers
+from app.security.deps import get_principal, resolve_dealer_id
+from app.security.principal import Principal
 
 router = APIRouter(prefix="/add-sales", tags=["add-sales"])
 
@@ -72,6 +79,45 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         "cpa_alliance_portal_enabled": enabled,
         "portal_insurers": portal_insurers,
     }
+
+
+def _serialize_in_process_row(r: dict[str, Any]) -> dict[str, Any]:
+    out = dict(r)
+    u = out.get("updated_at")
+    if isinstance(u, datetime):
+        out["updated_at"] = u.isoformat()
+    return out
+
+
+@router.get("/in-process")
+def list_add_sales_in_process(
+    dealer_id: int | None = Query(None, ge=1),
+    days: int = Query(7, ge=1, le=365),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Open Add Sales staging rows (no RTO queue) in the last ``days`` IST calendar days for this dealer."""
+    did = resolve_dealer_id(principal, dealer_id)
+    rows = list_in_process_staging_rows(dealer_id=did, days=days)
+    ser = [_serialize_in_process_row(dict(x)) for x in rows]
+    return {"count": len(ser), "rows": ser}
+
+
+@router.get("/staging/{staging_id}/payload")
+def get_add_sales_staging_payload(
+    staging_id: str,
+    dealer_id: int | None = Query(None, ge=1),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Full ``payload_json`` for a staging row (draft or committed) when dealer matches."""
+    try:
+        uuid.UUID((staging_id or "").strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="staging_id must be a UUID") from e
+    did = resolve_dealer_id(principal, dealer_id)
+    payload = fetch_staging_payload(staging_id.strip(), did)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Staging not found or not accessible for this dealer.")
+    return {"staging_id": staging_id.strip(), "payload_json": payload}
 
 
 @router.get("/dealer-cpa-context")
