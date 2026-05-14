@@ -1807,7 +1807,7 @@ export function AddSalesPage({
           addSalesMainTabActive={addSalesPageTab === "add-sales"}
           mainLastStagingId={lastStagingId}
           pageActionsBusy={pageActionsBusy}
-          onRowActionStart={(id) => setInProcessActionStagingId(id)}
+          onRowActionStart={(stagingId: string) => setInProcessActionStagingId(stagingId)}
           onRowActionEnd={() => setInProcessActionStagingId(null)}
           onInProcessCountChange={setInProcessBadgeCount}
         />
