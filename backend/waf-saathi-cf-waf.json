@@ -1,0 +1,256 @@
+﻿{
+    "WebACL": {
+        "Name": "saathi-cf-waf",
+        "Id": "3d584372-40a7-443f-b835-2cf6f9b1555f",
+        "ARN": "arn:aws:wafv2:us-east-1:261399254938:global/webacl/saathi-cf-waf/3d584372-40a7-443f-b835-2cf6f9b1555f",
+        "DefaultAction": {
+            "Allow": {}
+        },
+        "Description": "",
+        "Rules": [
+            {
+                "Name": "AWSManagedRulesCommonRuleSet",
+                "Priority": 10,
+                "Statement": {
+                    "ManagedRuleGroupStatement": {
+                        "VendorName": "AWS",
+                        "Name": "AWSManagedRulesCommonRuleSet",
+                        "ScopeDownStatement": {
+                            "NotStatement": {
+                                "Statement": {
+                                    "OrStatement": {
+                                        "Statements": [
+                                            {
+                                                "ByteMatchStatement": {
+                                                    "SearchString": "L3VwbG9hZHM=",
+                                                    "FieldToMatch": {
+                                                        "UriPath": {}
+                                                    },
+                                                    "TextTransformations": [
+                                                        {
+                                                            "Priority": 0,
+                                                            "Type": "LOWERCASE"
+                                                        }
+                                                    ],
+                                                    "PositionalConstraint": "STARTS_WITH"
+                                                }
+                                            },
+                                            {
+                                                "ByteMatchStatement": {
+                                                    "SearchString": "L3RleHRyYWN0",
+                                                    "FieldToMatch": {
+                                                        "UriPath": {}
+                                                    },
+                                                    "TextTransformations": [
+                                                        {
+                                                            "Priority": 0,
+                                                            "Type": "LOWERCASE"
+                                                        }
+                                                    ],
+                                                    "PositionalConstraint": "STARTS_WITH"
+                                                }
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "OverrideAction": {
+                    "None": {}
+                },
+                "VisibilityConfig": {
+                    "SampledRequestsEnabled": true,
+                    "CloudWatchMetricsEnabled": true,
+                    "MetricName": "saathi-CommonRuleSet"
+                }
+            },
+            {
+                "Name": "CommonRuleSetUploadsExclusions",
+                "Priority": 11,
+                "Statement": {
+                    "ManagedRuleGroupStatement": {
+                        "VendorName": "AWS",
+                        "Name": "AWSManagedRulesCommonRuleSet",
+                        "ScopeDownStatement": {
+                            "OrStatement": {
+                                "Statements": [
+                                    {
+                                        "ByteMatchStatement": {
+                                            "SearchString": "L3VwbG9hZHM=",
+                                            "FieldToMatch": {
+                                                "UriPath": {}
+                                            },
+                                            "TextTransformations": [
+                                                {
+                                                    "Priority": 0,
+                                                    "Type": "LOWERCASE"
+                                                }
+                                            ],
+                                            "PositionalConstraint": "STARTS_WITH"
+                                        }
+                                    },
+                                    {
+                                        "ByteMatchStatement": {
+                                            "SearchString": "L3RleHRyYWN0",
+                                            "FieldToMatch": {
+                                                "UriPath": {}
+                                            },
+                                            "TextTransformations": [
+                                                {
+                                                    "Priority": 0,
+                                                    "Type": "LOWERCASE"
+                                                }
+                                            ],
+                                            "PositionalConstraint": "STARTS_WITH"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        "RuleActionOverrides": [
+                            {
+                                "Name": "SizeRestrictions_BODY",
+                                "ActionToUse": {
+                                    "Count": {}
+                                }
+                            },
+                            {
+                                "Name": "CrossSiteScripting_BODY",
+                                "ActionToUse": {
+                                    "Count": {}
+                                }
+                            },
+                            {
+                                "Name": "GenericRFI_BODY",
+                                "ActionToUse": {
+                                    "Count": {}
+                                }
+                            }
+                        ]
+                    }
+                },
+                "OverrideAction": {
+                    "None": {}
+                },
+                "VisibilityConfig": {
+                    "SampledRequestsEnabled": true,
+                    "CloudWatchMetricsEnabled": true,
+                    "MetricName": "saathi-CommonRuleSet-Uploads"
+                }
+            },
+            {
+                "Name": "AWSManagedRulesKnownBadInputsRuleSet",
+                "Priority": 20,
+                "Statement": {
+                    "ManagedRuleGroupStatement": {
+                        "VendorName": "AWS",
+                        "Name": "AWSManagedRulesKnownBadInputsRuleSet",
+                        "RuleActionOverrides": [
+                            {
+                                "Name": "Log4JRCE_BODY",
+                                "ActionToUse": {
+                                    "Count": {}
+                                }
+                            }
+                        ]
+                    }
+                },
+                "OverrideAction": {
+                    "None": {}
+                },
+                "VisibilityConfig": {
+                    "SampledRequestsEnabled": true,
+                    "CloudWatchMetricsEnabled": true,
+                    "MetricName": "saathi-KnownBadInputs"
+                }
+            },
+            {
+                "Name": "AWSManagedRulesAnonymousIpList",
+                "Priority": 30,
+                "Statement": {
+                    "ManagedRuleGroupStatement": {
+                        "VendorName": "AWS",
+                        "Name": "AWSManagedRulesAnonymousIpList"
+                    }
+                },
+                "OverrideAction": {
+                    "None": {}
+                },
+                "VisibilityConfig": {
+                    "SampledRequestsEnabled": true,
+                    "CloudWatchMetricsEnabled": true,
+                    "MetricName": "saathi-AnonymousIp"
+                }
+            },
+            {
+                "Name": "AWSManagedRulesAmazonIpReputationList",
+                "Priority": 40,
+                "Statement": {
+                    "ManagedRuleGroupStatement": {
+                        "VendorName": "AWS",
+                        "Name": "AWSManagedRulesAmazonIpReputationList"
+                    }
+                },
+                "OverrideAction": {
+                    "None": {}
+                },
+                "VisibilityConfig": {
+                    "SampledRequestsEnabled": true,
+                    "CloudWatchMetricsEnabled": true,
+                    "MetricName": "saathi-IpReputation"
+                }
+            },
+            {
+                "Name": "AWSManagedRulesLinuxRuleSet",
+                "Priority": 50,
+                "Statement": {
+                    "ManagedRuleGroupStatement": {
+                        "VendorName": "AWS",
+                        "Name": "AWSManagedRulesLinuxRuleSet"
+                    }
+                },
+                "OverrideAction": {
+                    "None": {}
+                },
+                "VisibilityConfig": {
+                    "SampledRequestsEnabled": true,
+                    "CloudWatchMetricsEnabled": true,
+                    "MetricName": "saathi-LinuxRuleSet"
+                }
+            },
+            {
+                "Name": "AWSManagedRulesUnixRuleSet",
+                "Priority": 60,
+                "Statement": {
+                    "ManagedRuleGroupStatement": {
+                        "VendorName": "AWS",
+                        "Name": "AWSManagedRulesUnixRuleSet"
+                    }
+                },
+                "OverrideAction": {
+                    "None": {}
+                },
+                "VisibilityConfig": {
+                    "SampledRequestsEnabled": true,
+                    "CloudWatchMetricsEnabled": true,
+                    "MetricName": "saathi-UnixRuleSet"
+                }
+            }
+        ],
+        "VisibilityConfig": {
+            "SampledRequestsEnabled": true,
+            "CloudWatchMetricsEnabled": true,
+            "MetricName": "saathi-cf-waf"
+        },
+        "Capacity": 1993,
+        "ManagedByFirewallManager": false,
+        "LabelNamespace": "awswaf:261399254938:webacl:saathi-cf-waf:",
+        "RetrofittedByFirewallManager": false,
+        "OnSourceDDoSProtectionConfig": {
+            "ALBLowReputationMode": "ACTIVE_UNDER_DDOS"
+        }
+    },
+    "LockToken": "6ffee40b-6302-408e-8112-cdf4765d4755"
+}
