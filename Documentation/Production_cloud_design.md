@@ -78,7 +78,7 @@ flowchart LR
 | Desired | 1 |
 | Max | 2 |
 
-- **Launch Template:** OS, instance type, IAM instance profile, **user-data** (bootstrap), security groups.
+- **Launch Template:** OS, instance type, IAM instance profile, **user-data** (bootstrap), security groups; **root EBS gp3** size from **`ec2_root_volume_size_gb`** (default **40 GiB**; avoids **`dnf` / CloudWatch agent** failing on the AMI’s small default root volume).
 - **Health check:** **ELB**-based; **grace period** 300s; **default cooldown** 300s; **scale-in protection** off unless changed.
 - **Step scaling (no target tracking):** scale-out **+1** (step policy, `estimated_instance_warmup` 300s) on load signals. **Per AWS and Terraform, `cooldown` is not valid on `StepScaling` policies**; spacing between *any* scaling activities on the group is governed by the ASG’s **`default_cooldown` (300s)**.
 - **Scale-in:** **Simple** scaling **−1**; policy **`cooldown` = 600s** by default (variable `asg_scale_in_cooldown_seconds`), so scale-in is slower than the group’s 300s default between activities. Triggers: sustained low CPU (see §7.4). **Max size capped at 2** in Terraform validation.
@@ -127,7 +127,7 @@ Source: `deploy/ec2/gunicorn.conf.py` (loaded by `deploy/ec2/saathi-api.service`
 
 - **CloudWatch Agent on EC2** (user_data): **`mem_used_percent`**, **`disk_used_percent`** → namespace **`CWAgent`**. **No** custom CW Agent CPU for alarms—EC2 **native** `AWS/EC2` **`CPUUtilization`** is used (see §7.4–7.5).
 - **Alarms** (where enabled): **EC2** (CPU, memory), **ALB** (latency, 5xx, request rate per target, healthy hosts), **RDS** (CPU, free memory, connections, **free disk**), **SQS** (optional, when `sqs_alarm_queue_names` is set in Terraform). **SNS** for notifications; **ASG** policies linked from scale-out/scale-in alarms as in §7.4.
-- **Resilience defaults (Terraform):** **`treat_missing_data = notBreaching`**, **`evaluation_periods = 2`**, **`datapoints_to_alarm = 2`** on all defined metric alarms, unless a resource requires an exception.
+- **Resilience defaults (Terraform):** **`treat_missing_data = notBreaching`**, **`evaluation_periods = 2`**, **`datapoints_to_alarm = 2`** on most metric alarms. **Exception:** ALB **`RequestCountPerTarget`** scale-out alarms use **4 of 5** (see §7.4).
 
 ### 2.11 Terraform
 
@@ -238,20 +238,20 @@ This section records **what we configured in Terraform and runtime**, not every 
 ### 7.4 CloudWatch alarms and Auto Scaling policies
 
 - **SNS:** Alarms use the topic for **alarm** and **OK** notifications (where configured for that resource). See §7.3.
-- **Alarm evaluation (stack default):** **`treat_missing_data = notBreaching`**, **`evaluation_periods = 2`**, **`datapoints_to_alarm = 2`**, so a breaching state generally requires two consecutive in-range periods (see each alarm’s **period** for wall-clock duration).
+- **Alarm evaluation:** **`treat_missing_data = notBreaching`** on these scaling-related alarms. **Most** alarms use **`evaluation_periods = 2`**, **`datapoints_to_alarm = 2`** (two consecutive in-range periods must breach or clear, depending on the alarm). **Exception:** ALB **`RequestCountPerTarget`** scale-out alarms use **`evaluation_periods = 5`**, **`datapoints_to_alarm = 4`** (four of the last five periods). See each alarm’s **`period`** for wall-clock length of one datapoint.
 - **EC2 application metrics (in `terraform/network/cloudwatch_alarms_ec2.tf`):**
   - **API limitation:** Standard CloudWatch **metric alarms** do **not** support **`SEARCH()`** in `PutMetricAlarm`. The stack therefore does **not** use metric-math `SEARCH` on these alarms.
-  - **CPU (`AWS/EC2`):** per **instance** `CPUUtilization` ( **`InstanceId`** in each metric). Terraform resolves current ASG instance IDs through **`data.aws_instances`** and builds metric math as **`m0`**, or **`MAX(m0, m1)`** / **`(m0+m1)/2`**, depending on in-service count (max 2 in this design). **Scale-out** alarms use a **5-minute** period (300s) on the underlying series; **scale-in** uses **15-minute** (900s) averages. **After instance replacement, run `terraform apply` again** so alarms point at the new `InstanceId`s; otherwise the alarm can reference stale or missing series.
-  - **Memory (`CWAgent`):** **`mem_used_percent`** with the same **`m0` / `MAX(m0, m1)`** pattern over per-instance **CWAgent** series. Dimensions must include **`InstanceId`** (and **AutoScalingGroupName** in agent `append_dimensions`; see §7.5).
-- **Scale-out (+1, step policy):** Fired (via shared ASG step policy) from **any** of the EC2 CPU high alarms (warn/crit), or ALB **TargetResponseTime** (warn/crit), **RequestCountPerTarget** (warn/crit), SQS **ApproximateNumberOfVisibleMessages** (warn/crit) when SQS is configured. **Not** target tracking. Step policy has no separate **`cooldown`**; ASG **`default_cooldown` 300s** still applies to follow-on activities.
-- **Scale-in (−1, simple policy, default cooldown 600s on the policy):** Fired from the EC2 **low average CPU** alarm (thresholds as in Terraform). Slower re-scale than scale-out by design.
+  - **CPU (`AWS/EC2`):** per **instance** `CPUUtilization` ( **`InstanceId`** in each metric). Terraform resolves current ASG instance IDs through **`data.aws_instances`** and builds metric math as **`m0`**, or **`MAX([m0,m1])`** / **`(m0+m1)/2`**, depending on in-service count (max 2 in this design). **Scale-out** alarms use a **5-minute** period (300s) on the underlying series; **scale-in** uses **10-minute** (600s) averages with **average CPU below 50%** (`(m0+m1)/2`), **2 of 2** evaluation. **After instance replacement, run `terraform apply` again** so alarms point at the new `InstanceId`s; otherwise the alarm can reference stale or missing series.
+  - **Memory (`CWAgent`):** **`mem_used_percent`** with the same **`m0` / `MAX([m0,m1])`** pattern over per-instance **CWAgent** series. Dimensions must include **`InstanceId`** (and **AutoScalingGroupName** in agent `append_dimensions`; see §7.5).
+- **Scale-out (+1, step policy):** Fired (via shared ASG step policy) from **any** of the EC2 CPU high alarms (warn/crit), or ALB **TargetResponseTime** (warn/crit), **RequestCountPerTarget** (warn/crit: **Sum** over **60s**, **> 200** warn / **> 400** crit per target, **4 of 5** periods), SQS **ApproximateNumberOfVisibleMessages** (warn/crit) when SQS is configured. **Not** target tracking. Step policy has no separate **`cooldown`**; ASG **`default_cooldown` 300s** still applies to follow-on activities.
+- **Scale-in (−1, simple policy, default cooldown 600s on the policy):** Fired from the EC2 **low average CPU** alarm (**&lt; 50%** over **600s** buckets, **2 of 2**). Slower re-scale than scale-out by design.
 - **Healthy hosts:** alarm when **`HealthyHostCount` &lt; 1** (with stack defaults above). A **degraded** alarm (exactly one healthy target) exists **only if** **`asg_min_size >= 2`**.
 - **RDS:** CPU, FreeableMemory, DatabaseConnections, **free disk** — **SNS only** (no ASG hooks).
 - **ALB HTTP 5xx:** SNS only (no ASG scaling from 5xx alone).
 
 ### 7.5 EC2 bootstrap and CloudWatch Agent
 
-- **User data** installs **`amazon-cloudwatch-agent`** alongside **Nginx** bootstrap.
+- **User data** installs **`amazon-ssm-agent` in a minimal `dnf` step first**, starts it, then installs **`amazon-cloudwatch-agent`**, **Nginx**, and the rest of bootstrap — so **Session Manager** can register even if a **later** package or script step fails (otherwise a failed first `dnf` transaction could leave the agent never installed/started).
 - **Config file:** `/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json` — namespace **`CWAgent`**, **`append_dimensions`:** **`InstanceId`** (`${aws:InstanceId}`) and **`AutoScalingGroupName`** (`${aws:AutoScalingGroupName}`). **Metrics:** **`mem_used_percent`**, **`disk_used_percent`** (all mounted filesystems via `resources: ["*"]`). **No** custom CW Agent CPU for alerting—**CPU** alarms use **`AWS/EC2` `CPUUtilization`**, not the agent.
 - **IAM:** **`CloudWatchAgentServerPolicy`** attached to the EC2 role (in addition to SSM, Secrets Manager, SSM parameters for JWT, etc.).
 - **Rollout:** **Rebooting** an instance does **not** re-run user data. **Launch template / new instance** (e.g. ASG **instance refresh**) is required to pick up a changed JSON; then **re-run Terraform** for EC2 alarms if instance **IDs** changed, so the alarm’s per-instance metric queries match the current fleet.
@@ -260,6 +260,7 @@ This section records **what we configured in Terraform and runtime**, not every 
 
 - **Primary:** **SSM Session Manager** (no inbound SSH required; **`AmazonSSMManagedInstanceCore`** on the role).
 - **SSH:** optional; would require SG rules + key on the launch template if introduced later.
+- **Session Manager “Ping status: Offline”:** allow **~5–10 minutes** after launch for first registration. If it stays offline: confirm the instance has the **app IAM instance profile**, **NAT gateway** is available, and the **private route table** sends **`0.0.0.0/0`** to that NAT (SSM needs **HTTPS** to regional endpoints). If **`cloud-init`/user data failed**, read **`/var/log/user-data.log`** on the box once you have any shell access. Organizations that block **internet egress** to AWS APIs need **VPC interface endpoints** for **`com.amazonaws.<region>.ssm`**, **`ssmmessages`**, and **`ec2messages`** (not created by default in this stack).
 
 ### 7.7 Deferred / backlog (not blocking current prod)
 
@@ -276,3 +277,7 @@ This section records **what we configured in Terraform and runtime**, not every 
 | 0.1 | 2026-04-15 | Initial production cloud design: CloudFront, WAF, ALB, ASG 1/1/2, Gunicorn settings, BR/deployment rules |
 | 0.2 | 2026-04-18 | §7 as-built: RDS t4g.micro + storage/autoscale/backups, SNS `autoscaling-notifications`, CW alarms + step scaling, CW Agent mem/disk, healthy-host logic, access model, pointers to deploy/RDS docs |
 | 0.3 | 2026-04-24 | Gunicorn **3** workers, keepalive/rotation settings (§2.5); **no** `SEARCH` in EC2 alarms, per-`InstanceId` CPU + CWAgent mem with **`data.aws_instances`**; alarm **2×2** resilience and **`notBreaching` everywhere**; **StepScaling** has no `cooldown`, ASG 300s + **scale-in** policy 600s; **CW Agent** `InstanceId` + `AutoScalingGroupName`; runbook: **apply after ASG instance churn**; §7.4–7.5 updated |
+| 0.4 | 2026-05-13 | §7.4: EC2 CPU **scale-in** **&lt; 50%** avg on **600s** (**2 of 2**); ALB **RequestCountPerTarget** scale-out **Sum/60s**, **200/400** warn/crit, **4 of 5** evaluation; alarm-evaluation bullet generalized; metric math **`MAX([m0,m1])`** for multi-instance max CPU/mem (PutMetricAlarm rejects **`MAX(m0,m1)`**) |
+| 0.4.1 | 2026-05-13 | §7.5 / launch `user_data`: explicit **`amazon-ssm-agent`** install + early **`systemctl`** so Session Manager is not stuck **Offline** during long bootstrap |
+| 0.4.3 | 2026-05-13 | App **launch template**: explicit **root gp3** volume (**`ec2_root_volume_size_gb`**, default **40 GiB**, encrypted) — fixes **`dnf` “needs … more space on /”** during user_data (CloudWatch agent + dev packages); §2.4 updated |
+| 0.4.2 | 2026-05-13 | Launch `user_data`: **`amazon-ssm-agent`** installed in a **dedicated early `dnf`** before the main package set (avoid SSM never starting if the large `dnf` fails); §7.5–7.6 updated |
