@@ -1366,6 +1366,17 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                 const a = tr.querySelector("a[name='Order Number'], a[name='Order #']");
                 if (a && vis(a)) row.order = (a.textContent || '').trim();
             }
+            if (!row.status) {
+                const stInp = tr.querySelector(
+                    'input[name="Status"], input[id*="Status"], input[id$="_Status"], '
+                    + 'input.siebui-list-ctrl[id*="Status"]'
+                );
+                if (stInp) {
+                    const sv = String(stInp.value || '').trim();
+                    if (sv) row.status = sv;
+                }
+            }
+            if (String(row.status || '').trim().toLowerCase() === 'cancelled') continue;
             out.push(row);
         }
     }
@@ -1561,6 +1572,19 @@ _JS_CLICK_MY_ORDERS_ORDER_LINK = """({ orderNeedle, mobileDigits }) => {
         if (!vis(tr)) continue;
         const rowText = tr.innerText || '';
         if (md && !rowText.replace(/\\D/g, '').includes(md)) continue;
+        let stLow = '';
+        const stTd0 = tr.querySelector('td[id*="_l_Status"]');
+        if (stTd0) {
+            stLow = ((stTd0.getAttribute('title') || '').trim() || (stTd0.textContent || '').trim()).toLowerCase();
+        }
+        if (!stLow) {
+            const stIn0 = tr.querySelector(
+                'input[name="Status"], input[id*="Status"], input[id$="_Status"], '
+                + 'input.siebui-list-ctrl[id*="Status"]'
+            );
+            stLow = String(stIn0 && stIn0.value || '').trim().toLowerCase();
+        }
+        if (stLow === 'cancelled') continue;
         const inp = tr.querySelector(
             'input[name="Order_Number"], input[name="Order Number"], '
             + 'input[id*="Order_Number"], input[id$="_Order_Number"], '
@@ -1620,6 +1644,19 @@ _JS_CLICK_MY_ORDERS_INVOICE_LINK = """({ invoiceNeedle, mobileDigits }) => {
         if (tr.classList.contains('jqgfirstrow')) continue;
         const rowText = tr.innerText || '';
         if (md && !rowText.replace(/\\D/g, '').includes(md)) continue;
+        let stLow = '';
+        const stTd0 = tr.querySelector('td[id*="_l_Status"]');
+        if (stTd0) {
+            stLow = ((stTd0.getAttribute('title') || '').trim() || (stTd0.textContent || '').trim()).toLowerCase();
+        }
+        if (!stLow) {
+            const stIn0 = tr.querySelector(
+                'input[name="Status"], input[id*="Status"], input[id$="_Status"], '
+                + 'input.siebui-list-ctrl[id*="Status"]'
+            );
+            stLow = String(stIn0 && stIn0.value || '').trim().toLowerCase();
+        }
+        if (stLow === 'cancelled') continue;
         let td = tr.querySelector('td[id$="_l_Invoice__"]')
             || tr.querySelector('td[id*="_l_Invoice__"]')
             || (() => {
@@ -5231,6 +5268,19 @@ def _create_order(
                     if (!vis(tr)) continue;
                     const digits = (tr.innerText || '').replace(/\\D/g, '');
                     if (!digits.includes(n)) continue;
+                    let stLow = '';
+                    const stTd0 = tr.querySelector('td[id*="_l_Status"]');
+                    if (stTd0) {
+                        stLow = ((stTd0.getAttribute('title') || '').trim() || (stTd0.textContent || '').trim()).toLowerCase();
+                    }
+                    if (!stLow) {
+                        const stIn0 = tr.querySelector(
+                            'input[name="Status"], input[id*="Status"], input[id$="_Status"], '
+                            + 'input.siebui-list-ctrl[id*="Status"]'
+                        );
+                        stLow = String(stIn0 && stIn0.value || '').trim().toLowerCase();
+                    }
+                    if (stLow === 'cancelled') continue;
                     const a = tr.querySelector(
                         "a[name='Order Number'], a[name='Order #'], td[aria-describedby*='Order_Number'] a, td[aria-describedby*='Order#'] a"
                     ) || tr.querySelector('td a');
