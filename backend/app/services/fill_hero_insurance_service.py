@@ -49,7 +49,6 @@ from app.config import (
     INSURER_PREFER_FUZZY_MIN_RATIO,
     MISP_KYC_POST_UPLOAD_STABLE_MS,
     MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS,
-    MISP_KYC_TO_VIN_URL_POLL_MS,
     get_uploads_dir,
 )
 from app.services.add_sales_commit_service import (
@@ -981,7 +980,7 @@ def _kyc_banner_already_verified_aadhaar_visible(page) -> bool:
     is entered (and the primary button label changes from **KYC Verification** to **Proceed**).
 
     If **not** present, the portal typically shows three **file** inputs (Aadhaar front, back, photo)
-    — handled by ``_kyc_proceed_or_upload`` (upload then **Proceed**).
+    — file attach via ``_kyc_proceed_or_upload`` then shared CTA tail.
     """
     kyc_fr = _kyc_preferred_kyc_frame(page)
     t = _kyc_body_text_lower(kyc_fr)
@@ -994,66 +993,108 @@ def _kyc_banner_already_verified_aadhaar_visible(page) -> bool:
     return _kyc_text_is_verified_aadhaar_proceed_policy_issuance_banner(pt)
 
 
-def _kyc_click_proceed_after_already_verified_banner(
+def _kyc_shared_consent_joint_cta_then_settle_before_vin(
     page,
     kyc_fr,
     *,
     timeout_ms: int,
 ) -> str | None:
     """
-    Verified-banner path: consent checkbox, then **Proceed** (or equivalent CTA).
-    Does not upload documents — uploads run only when this banner is absent (see ``_kyc_proceed_or_upload``).
+    Shared post-prep KYC tail for **verified-banner** and **upload** branches: consent checkbox, then **one**
+    primary CTA using the **joint** label set from the former verified-only and post-upload clickers (only one
+    control; copy differs by branch), then the same **25s-class** load settle as the working mobile path.
     """
     _kyc_ensure_consent_checked_before_kyc_cta(page)
     to = min(int(timeout_ms), 45_000)
-    # After mobile, portal shows **Proceed** (not **KYC Verification**). Prefer Proceed / policy issuance.
+    roots = _kyc_roots_for_post_upload_cta(page, kyc_fr)
+    # Deduped union: verified-mobile order first (Proceed, policy issuance, …), then post-upload labels.
     name_patterns = (
         re.compile(r"^\s*Proceed\s*$", re.I),
         re.compile(r"policy\s*issuance", re.I),
         re.compile(r"^\s*Continue\s*$", re.I),
         re.compile(r"^\s*Submit\s*$", re.I),
+        re.compile(r"^\s*KYC\s*Verification\s*$", re.I),
+        re.compile(r"^\s*Verify\s*$", re.I),
+        re.compile(r"^\s*Next\s*$", re.I),
+        re.compile(r"^\s*OK\s*$", re.I),
+        re.compile(r"^\s*Save(\s+and\s+Continue)?\s*$", re.I),
     )
-    for root in (kyc_fr, page):
+    for root in roots:
         for pat in name_patterns:
             try:
                 b = root.get_by_role("button", name=pat)
                 if b.count() > 0 and b.first.is_visible(timeout=2_000):
                     b.first.click(timeout=to)
                     logger.info(
-                        "Hero Insurance: already-verified branch — clicked button (%s).",
+                        "Hero Insurance: KYC shared tail — clicked button (%s).",
                         pat.pattern[:80],
                     )
                     _wait_load_optional(page, min(25_000, to))
                     _t(page, 400)
                     return None
             except Exception:
-                continue
+                pass
             try:
                 ln = root.get_by_role("link", name=pat)
                 if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
                     ln.first.click(timeout=to)
                     logger.info(
-                        "Hero Insurance: already-verified branch — clicked link (%s).",
+                        "Hero Insurance: KYC shared tail — clicked link (%s).",
                         pat.pattern[:80],
                     )
                     _wait_load_optional(page, min(25_000, to))
                     _t(page, 400)
                     return None
             except Exception:
-                continue
-    try:
-        inp = kyc_fr.locator(
-            'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i]'
-        )
-        if inp.count() > 0 and inp.first.is_visible(timeout=1_500):
-            inp.first.click(timeout=to)
-            logger.info("Hero Insurance: already-verified branch — clicked input Proceed.")
+                pass
+    for root in roots:
+        try:
+            ln = root.get_by_role(
+                "link",
+                name=re.compile(
+                    r"Proceed|policy\s*issuance|Verification|Submit|Continue|Next|Save(\s+and\s+Continue)?",
+                    re.I,
+                ),
+            )
+            if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
+                ln.first.click(timeout=to)
+                logger.info("Hero Insurance: KYC shared tail — clicked link CTA (broad match).")
+                _wait_load_optional(page, min(25_000, to))
+                _t(page, 400)
+                return None
+        except Exception:
+            pass
+    for root in roots:
+        try:
+            inp = root.locator(
+                'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i], '
+                'input[type="submit"][value*="policy" i], input[type="button"][value*="policy" i], '
+                'input[type="submit"][value*="issuance" i], input[type="button"][value*="issuance" i], '
+                'input[type="submit"][value*="Verification" i], input[type="button"][value*="Verification" i], '
+                'input[type="submit"][value*="KYC" i], input[type="button"][value*="KYC" i], '
+                'input[type="submit"][value*="Submit" i], input[type="button"][value*="Submit" i], '
+                'input[type="submit"][value*="Continue" i], input[type="button"][value*="Continue" i], '
+                'input[type="submit"][value*="Verify" i], input[type="button"][value*="Verify" i], '
+                'input[type="submit"][value*="Next" i], input[type="button"][value*="Next" i], '
+                'input[type="submit"][value*="Save" i], input[type="button"][value*="Save" i]'
+            )
+            if inp.count() > 0 and inp.first.is_visible(timeout=2_000):
+                inp.first.click(timeout=to)
+                logger.info("Hero Insurance: KYC shared tail — clicked input[type=submit|button] CTA.")
+                _wait_load_optional(page, min(25_000, to))
+                _t(page, 400)
+                return None
+        except Exception:
+            pass
+    for root in roots:
+        if _kyc_js_click_primary_cta_in_document(root):
+            logger.info("Hero Insurance: KYC shared tail — clicked CTA via JS scan.")
+            _wait_load_optional(page, min(25_000, to))
+            _t(page, 400)
             return None
-    except Exception:
-        pass
     return (
-        "KYC already verified (AADHAAR) banner visible but no Proceed / policy issuance / "
-        "Continue / Submit control found."
+        "KYC: no primary CTA (Proceed / policy issuance / KYC Verification / …) found after consent. "
+        "Complete KYC manually or check CTA visibility."
     )
 
 
@@ -1071,10 +1112,9 @@ def _kyc_post_mobile_entry_branch(
     Run **after** the **first** KYC attempt (OVD = **AADHAAR CARD** only — set upstream), mobile filled,
     blur / short ``domcontentloaded`` so postback can run.
 
-    - If the **verified Aadhaar / policy issuance** banner appears → **consent + Proceed** (no uploads).
-    - If that message **does not** appear → optional ``post_mobile_recovery_digits`` runs the **second**
-      branch: switch OVD to **AADHAAR EXTRACTION**, re-fill mobile, wait for uploads, then merge with the
-      common tail: ``_kyc_proceed_or_upload`` (**three files + consent + Proceed**).
+    - If the **verified Aadhaar / policy issuance** banner appears → shared tail (consent + joint CTA + 25s settle).
+    - If that message **does not** appear → optional ``post_mobile_recovery_digits`` runs **AADHAAR EXTRACTION**,
+      then ``_kyc_proceed_or_upload`` (**files / already-done only**), then the **same** shared tail.
 
     Uses ``INSURANCE_KYC_POST_MOBILE_DOM_MS`` (default **2000** ms) — not ``networkidle``.
     """
@@ -1094,7 +1134,7 @@ def _kyc_post_mobile_entry_branch(
             "Hero Insurance: post-mobile — verified AADHAAR / policy issuance banner; "
             "consent then Proceed (CTA should read Proceed after mobile)."
         )
-        return _kyc_click_proceed_after_already_verified_banner(page, kyc_fr, timeout_ms=to)
+        return _kyc_shared_consent_joint_cta_then_settle_before_vin(page, kyc_fr, timeout_ms=to)
 
     logger.info(
         "Hero Insurance: post-mobile — first pass (AADHAAR CARD) did not show verified message; "
@@ -1124,12 +1164,17 @@ def _kyc_post_mobile_entry_branch(
             "Hero Insurance: post-mobile — no recovery digits for EXTRACTION branch; "
             "upload step may fail."
         )
-    return _kyc_proceed_or_upload(
+    err_upload = _kyc_proceed_or_upload(
         page,
         timeout_ms=to,
         kyc_local_scan_paths=kyc_local_scan_paths,
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
+    )
+    if err_upload:
+        return err_upload
+    return _kyc_shared_consent_joint_cta_then_settle_before_vin(
+        page, _kyc_preferred_kyc_frame(page), timeout_ms=to
     )
 
 
@@ -3781,84 +3826,6 @@ def _kyc_roots_for_post_upload_cta(page, kyc_fr) -> list:
     return out
 
 
-def _kyc_click_proceed_submit_after_kyc_upload(
-    page,
-    kyc_fr,
-    *,
-    timeout_ms: int,
-) -> str | None:
-    """
-    Click KYC primary CTA after uploads. MISP labels vary: **Proceed**, **Next**, **KYC Verification**,
-    **Submit**, **Continue**, **Verify**; also ``<input>`` ``value=``. Scans **all** frames — CTA is
-    often outside the KYC file iframe.
-    """
-    to = min(int(timeout_ms), 45_000)
-    name_patterns = (
-        re.compile(r"^\s*Proceed\s*$", re.I),
-        re.compile(r"^\s*KYC\s*Verification\s*$", re.I),
-        re.compile(r"^\s*Submit\s*$", re.I),
-        re.compile(r"^\s*Continue\s*$", re.I),
-        re.compile(r"^\s*Verify\s*$", re.I),
-        re.compile(r"^\s*Next\s*$", re.I),
-        re.compile(r"^\s*OK\s*$", re.I),
-        re.compile(r"^\s*Save(\s+and\s+Continue)?\s*$", re.I),
-    )
-    roots = _kyc_roots_for_post_upload_cta(page, kyc_fr)
-    for root in roots:
-        for pat in name_patterns:
-            try:
-                b = root.get_by_role("button", name=pat)
-                if b.count() > 0 and b.first.is_visible(timeout=2_000):
-                    b.first.click(timeout=to)
-                    logger.info(
-                        "Hero Insurance: post-KYC-upload clicked button (%s).",
-                        pat.pattern[:60],
-                    )
-                    return None
-            except Exception:
-                continue
-    for root in roots:
-        try:
-            ln = root.get_by_role(
-                "link",
-                name=re.compile(
-                    r"Proceed|Verification|Submit|Continue|Next|Save(\s+and\s+Continue)?", re.I
-                ),
-            )
-            if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
-                ln.first.click(timeout=to)
-                logger.info("Hero Insurance: post-KYC-upload clicked link CTA.")
-                return None
-        except Exception:
-            pass
-    for root in roots:
-        try:
-            inp = root.locator(
-                'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i], '
-                'input[type="submit"][value*="Verification" i], input[type="button"][value*="Verification" i], '
-                'input[type="submit"][value*="KYC" i], input[type="button"][value*="KYC" i], '
-                'input[type="submit"][value*="Submit" i], input[type="button"][value*="Submit" i], '
-                'input[type="submit"][value*="Continue" i], input[type="button"][value*="Continue" i], '
-                'input[type="submit"][value*="Verify" i], input[type="button"][value*="Verify" i], '
-                'input[type="submit"][value*="Next" i], input[type="button"][value*="Next" i], '
-                'input[type="submit"][value*="Save" i], input[type="button"][value*="Save" i]'
-            )
-            if inp.count() > 0 and inp.first.is_visible(timeout=2_000):
-                inp.first.click(timeout=to)
-                logger.info("Hero Insurance: post-KYC-upload clicked input[type=submit|button] CTA.")
-                return None
-        except Exception:
-            pass
-    for root in roots:
-        if _kyc_js_click_primary_cta_in_document(root):
-            logger.info("Hero Insurance: post-KYC-upload clicked CTA via JS scan.")
-            return None
-    return (
-        "KYC uploads done but no Proceed / Submit / Continue / KYC Verification control was clicked — "
-        "complete KYC manually or check CTA visibility."
-    )
-
-
 def _kyc_set_ovd_aadhaar_extraction_in_frame(kyc_fr, *, timeout_ms: int) -> bool:
     """
     Set OVD to **AADHAAR EXTRACTION** in the KYC frame.
@@ -4934,9 +4901,12 @@ def _kyc_proceed_or_upload(
     Invoked from ``_kyc_post_mobile_entry_branch`` when the verified-banner text is **not** shown
     after mobile entry (same page step where three ``input[type=file]`` typically appear).
 
-    - If legacy "already done" body text matches, consent + **Proceed**.
+    **Files / early-exit only** — consent, primary CTA, and the **25s-class** settle run in
+    ``_kyc_shared_consent_joint_cta_then_settle_before_vin`` after this returns ``None``.
+
+    - If legacy "already done" body text matches → return ``None`` (no uploads; caller runs shared tail).
     - Else attach three files: prefer paths from **Uploaded scans** (``kyc_local_scan_paths``: front, rear,
-      front again for customer photo), else minimal placeholder PNGs; then consent + **Proceed** / Submit / Continue.
+      front again for customer photo), else minimal placeholder PNGs; short post-attach stability sleep; return ``None``.
 
     File inputs are resolved by scraping **id** / **name** / label text in the KYC frame after **AADHAAR EXTRACTION**
     (see ``_kyc_scrape_file_inputs_metadata`` / ``_kyc_resolve_upload_nth_order``); order is logged to
@@ -4949,23 +4919,8 @@ def _kyc_proceed_or_upload(
         txt = ""
 
     if re.search(r"kyc\s+is\s+already|already\s+done|kyc\s+already\s+complete", txt):
-        _kyc_ensure_consent_checked_before_kyc_cta(page)
-        try:
-            page.get_by_role("button", name=re.compile(r"^\s*Proceed\s*$", re.I)).first.click(
-                timeout=timeout_ms
-            )
-            logger.info("Hero Insurance: KYC already done — clicked Proceed.")
-            _wait_load_optional(page, min(25_000, timeout_ms * 4))
-            _t(page, 500)
-            return None
-        except Exception:
-            try:
-                page.get_by_text(re.compile(r"^\s*Proceed\s*$", re.I)).first.click(timeout=timeout_ms)
-                _wait_load_optional(page, min(25_000, timeout_ms * 4))
-                _t(page, 500)
-                return None
-            except Exception as exc:
-                return f"KYC already done but Proceed click failed: {exc!s}"
+        logger.info("Hero Insurance: KYC already done (body text) — caller will run shared CTA tail.")
+        return None
 
     payloads = insurance_kyc_png_payloads()
     kyc_fr = _kyc_preferred_kyc_frame(page)
@@ -5026,54 +4981,12 @@ def _kyc_proceed_or_upload(
             "Uploaded scans" if use_local else "placeholder PNG",
         )
 
-    kyc_wmax_ms = 2_000  # post-upload / autonav / interstitial: cap at 2s
     try:
         page.wait_for_timeout(
-            min(MISP_KYC_POST_UPLOAD_STABLE_MS, int(timeout_ms), kyc_wmax_ms)
+            min(int(MISP_KYC_POST_UPLOAD_STABLE_MS), int(timeout_ms), 8_000)
         )
     except Exception:
         pass
-    poll_ms = min(MISP_KYC_TO_VIN_URL_POLL_MS, int(timeout_ms), kyc_wmax_ms)
-    if _kyc_post_upload_wait_for_mispdms_url_autonav(
-        page,
-        max_ms=poll_ms,
-        ocr_output_dir=ocr_output_dir,
-        subfolder=subfolder,
-    ):
-        _wait_load_optional(page, kyc_wmax_ms)
-        _t(page, 400)
-        return None
-    _t(page, 400)
-    _kyc_ensure_consent_checked_before_kyc_cta(page)
-    proceed_err = _kyc_click_proceed_submit_after_kyc_upload(
-        page, kyc_fr, timeout_ms=timeout_ms
-    )
-    if proceed_err:
-        if _kyc_post_upload_wait_for_mispdms_url_autonav(
-            page,
-            max_ms=min(int(timeout_ms), kyc_wmax_ms),
-            ocr_output_dir=ocr_output_dir,
-            subfolder=subfolder,
-        ):
-            append_playwright_insurance_line_or_dealer_fallback(
-                ocr_output_dir,
-                subfolder,
-                "NOTE",
-                "KYC: reached MispDms.aspx (VIN) after CTA error path — auto-nav or delayed postback.",
-            )
-            _wait_load_optional(page, kyc_wmax_ms)
-            _t(page, 400)
-            return None
-        return proceed_err
-    _wait_load_optional(page, min(25_000, timeout_ms * 4))
-    if not _kyc_url_is_mispdms_vin(page.url or ""):
-        _kyc_post_upload_wait_for_mispdms_url_autonav(
-            page,
-            max_ms=min(int(timeout_ms), kyc_wmax_ms),
-            ocr_output_dir=ocr_output_dir,
-            subfolder=subfolder,
-        )
-    _t(page, 400)
     return None
 
 
