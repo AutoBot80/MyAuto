@@ -1,19 +1,23 @@
 """
 Shared Playwright browser lifecycle: CDP attach to existing Edge/Chrome, optional **native**
-Playwright Chromium (``launch_persistent_context``), or launch managed Edge/Chrome; tab matching by
-site base URL; optional auto-login when credentials are pre-filled.
+Playwright ``launch_persistent_context`` for **DMS, CPAInsurance, and Vahan** when
+``USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS`` is true; **Insurance (MISP / Generate Insurance) always**
+uses **managed Edge/Chrome + CDP** (same as v0.7.00 — stable ``.browser-profile`` and
+``--remote-debugging-port`` / ``PLAYWRIGHT_CDP_URL``), not native persistent Chromium.
 
 Used by Fill DMS, Vahan, Insurance, and CPA third-party portals — independent of Siebel/DMS business logic.
 
-**Native Playwright Chromium (default):** When ``USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS`` is true,
-``site_label="DMS"``, ``site_label="Insurance"``, ``site_label="CPAInsurance"``, and ``site_label="Vahan"`` each use Playwright-bundled
+**Native Playwright (optional):** When ``USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS`` is true,
+``site_label="DMS"``, ``site_label="CPAInsurance"``, and ``site_label="Vahan"`` use Playwright-bundled
 Chromium with ``launch_persistent_context`` — DMS under ``browser-profile-playwright-chromium``,
-Insurance under ``browser-profile-playwright-chromium-insurance``, CPA (Alliance-style portals) under
-``browser-profile-playwright-chromium-cpa-insurance``, Vahan under
-``browser-profile-playwright-chromium-vahan`` (siblings of the Edge/Chrome profile dir). No CDP
-attach for those paths. Set the env var to ``false`` to restore CDP + managed Edge/Chrome for DMS,
-Insurance, CPAInsurance, and Vahan.
-The DMS profile is **not** Edge's saved-password vault: Windows Hello / PIN prompts when picking
+CPA under ``browser-profile-playwright-chromium-cpa-insurance``, Vahan under
+``browser-profile-playwright-chromium-vahan``. Set the env var to ``false`` to use CDP + managed
+Edge/Chrome for those portals too. **Insurance is unaffected by this flag** (always CDP/managed).
+
+Unused helpers for native Insurance (``launch_persistent_context`` + Edge channel) remain in this
+module for easier revert; ``get_or_open_site_page`` does not call them.
+
+The DMS native profile is **not** Edge's saved-password vault: Windows Hello / PIN prompts when picking
 stored passwords in Edge do not apply; automation uses ``DMS_LOGIN_USER`` / ``DMS_LOGIN_PASSWORD``
 or ``operator_dms_login.json`` (written after a successful programmatic or snapshotted login).
 Siebel login: ``get_or_open_site_page`` may fill those creds (non-demo),
@@ -21,13 +25,13 @@ reuse the JSON cache under that profile after a successful manual login, poll fo
 (Chrome saved password) up to ``DMS_BROWSER_AUTOFILL_LOGIN_MAX_MS`` (default 14s) and click **Login** when
 both fields are populated, and wait up to ``DMS_LOGIN_MANUAL_WAIT_MS`` for the operator to finish typing before failing.
 
-**Browser persistence policy (CDP / managed Edge):** When native Chromium is off for a portal, the
-browser is launched as an independent OS process with a *stable* user-data-dir
-(``<project>/.browser-profile``) and ``--remote-debugging-port``. It survives backend restarts,
+**Browser persistence policy (CDP / managed Edge):** Insurance and (when the flag is false) DMS/CPA/Vahan
+use an independent OS process with a *stable* user-data-dir (``<project>/.browser-profile``) and
+``--remote-debugging-port``. It survives backend restarts,
 retries, and frontend reloads. On next startup the CDP reconnection logic in ``_refresh_cdp_browsers``
 re-attaches to the same process (session cookies, Vahan login, captcha/OTP state all survive). When
-native Chromium is on, Vahan uses ``browser-profile-playwright-chromium-vahan`` the same way as DMS
-and Insurance. Normal flows do not call ``Browser.close()``; Electron quit sends a
+native Chromium is on for DMS/CPA/Vahan, those portals use their persistent profile dirs above.
+Normal flows do not call ``Browser.close()``; Electron quit sends a
 ``teardown_local_browsers`` sidecar job that disconnects CDP / closes native context and terminates
 the managed debug-port process when applicable.
 
@@ -190,19 +194,13 @@ def _remove_dms_login_window_capture(page) -> None:
 
 
 def _capture_login_main_page_snapshot(page, log_path: Path | str | None, tag: str) -> None:
-    """Screenshot main tab + ``#statusBar`` text after login submit (flash errors)."""
+    """Log ``#statusBar`` text after login submit (flash errors). Full-page screenshots removed."""
     if not log_path:
         return
     lp = Path(str(log_path))
     bar = _read_siebel_login_status_bar_any_frame(page)
     if bar:
         _append_playwright_dms_capture_line(lp, f"LOGIN_STATUSBAR_{tag}", bar, also_logger=True)
-    try:
-        shot = lp.parent / f"Playwright_DMS_login_main_{tag}_{int(time.time() * 1000) % 10_000_000}.png"
-        page.screenshot(path=str(shot), full_page=True, timeout=12_000)
-        _append_playwright_dms_capture_line(lp, f"LOGIN_MAIN_SCREENSHOT_{tag}", str(shot))
-    except Exception as exc:
-        _append_playwright_dms_capture_line(lp, f"LOGIN_MAIN_SCREENSHOT_{tag}_ERR", str(exc))
 
 # Poll Siebel login for Chrome / password-manager autofill before env/json fill (clamped 3s–10m).
 _DMS_BROWSER_AUTOFILL_LOGIN_MAX_SEC = max(
@@ -418,6 +416,36 @@ def _hostname_for_site_match(url_or_base: str) -> str:
     except Exception:
         return ""
 
+
+def _cpa_alliance_family_registrable(host: str) -> str | None:
+    """If ``host`` is any Alliance Assure host, return one shared key for CPA tab matching."""
+    h = (host or "").strip().lower()
+    if not h:
+        return None
+    if h == "allianceassure.in" or h.endswith(".allianceassure.in"):
+        return "allianceassure.in"
+    return None
+
+
+def _cpa_alliance_hosts_equivalent(host_a: str, host_b: str) -> bool:
+    """``app.`` vs ``partner.`` (etc.) share one SSO cookie jar for Alliance Assure."""
+    fa = _cpa_alliance_family_registrable(host_a)
+    fb = _cpa_alliance_family_registrable(host_b)
+    return fa is not None and fa == fb
+
+
+def _cpa_alliance_skip_goto_logged_in_surface(current_url: str) -> bool:
+    """Non-login Alliance URL in CPA profile — avoid ``goto`` that would reload a warm session."""
+    u = (current_url or "").strip().lower()
+    if "allianceassure.in" not in u:
+        return False
+    if "/login" in u or u.rstrip("/").endswith("/login"):
+        return False
+    if "blank" in u or u.startswith("chrome://") or u.startswith("about:") or u.startswith("edge://"):
+        return False
+    return True
+
+
 _PW = None
 _PW_THREAD_ID: int | None = None
 _KEEP_OPEN_BROWSERS: list = []
@@ -441,8 +469,14 @@ def _playwright_chromium_profile_dir() -> Path:
 
 
 def _playwright_chromium_insurance_profile_dir() -> Path:
-    """Separate user-data-dir from DMS so MISP cookies/session do not mix with Siebel."""
-    return _browser_profile_dir().resolve().parent / "browser-profile-playwright-chromium-insurance"
+    """Separate user-data-dir for MISP (Generate Insurance) — Edge channel, not DMS/Siebel.
+
+    Uses ``…-msedge-insurance`` so a profile that was ever opened with **bundled Chromium** is not
+    reused by **Microsoft Edge** (mixed engines in one dir can break login / cookies).
+    """
+    return (
+        _browser_profile_dir().resolve().parent / "browser-profile-playwright-msedge-insurance"
+    )
 
 
 def _playwright_chromium_cpa_insurance_profile_dir() -> Path:
@@ -978,11 +1012,11 @@ def _try_fill_siebel_login_and_submit(
 
 
 def _use_native_pw_chromium_for_site(site_label: str) -> bool:
-    """True when native Playwright Chromium is enabled for this portal (DMS, Insurance, and/or Vahan)."""
+    """True when native Playwright Chromium is enabled for this portal (DMS, CPAInsurance, Vahan — not Insurance)."""
     if not bool(USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS):
         return False
     sl = (site_label or "").strip()
-    return sl in ("DMS", "Insurance", "CPAInsurance", "Vahan")
+    return sl in ("DMS", "CPAInsurance", "Vahan")
 
 
 def _host_matched_portal_skips_dms_siebel(site_label: str) -> bool:
@@ -1871,8 +1905,9 @@ def _page_matches_site_for_reuse(page_url: str, site_base_url: str, site_label: 
     """Match an open browser tab to the configured site URL.
 
     **Vahan** and **Insurance** / **CPAInsurance** use hostname-only matching so tabs still match after login
-    (paths move away from ``login.xhtml`` / partner-login into SPAs like ``/ekycpage``). Other
-    sites keep path-prefix matching via :func:`_playwright_page_url_matches_site_base`.
+    (paths move away from ``login.xhtml`` / partner-login into SPAs like ``/ekycpage``).
+    **CPAInsurance** also treats all ``*.allianceassure.in`` hosts as one portal for tab reuse.
+    Other sites keep path-prefix matching via :func:`_playwright_page_url_matches_site_base`.
     """
     sl = (site_label or "").strip()
     if sl == "Vahan":
@@ -1887,6 +1922,8 @@ def _page_matches_site_for_reuse(page_url: str, site_base_url: str, site_label: 
             return False
         ph = _hostname_for_site_match(page_url)
         bh = _hostname_for_site_match(site_base_url)
+        if sl == "CPAInsurance" and ph and bh and _cpa_alliance_hosts_equivalent(ph, bh):
+            return True
         return bool(ph and bh and ph == bh)
     return _playwright_page_url_matches_site_base(page_url, site_base_url)
 
@@ -2591,6 +2628,28 @@ def _navigate_native_site_persistent_to(target_url: str, site_label: str) -> obj
                 except Exception:
                     continue
         pg = target_page or ctx.new_page()
+        if (
+            sl == "CPAInsurance"
+            and target_page is not None
+            and pg is target_page
+        ):
+            try:
+                cur_u = (target_page.url or "").strip()
+            except Exception:
+                cur_u = ""
+            if (
+                cur_u
+                and _cpa_alliance_skip_goto_logged_in_surface(cur_u)
+                and _cpa_alliance_hosts_equivalent(
+                    _hostname_for_site_match(cur_u),
+                    _hostname_for_site_match(t),
+                )
+            ):
+                logger.info(
+                    "handle_browser_opening: CPAInsurance reusing logged-in Alliance tab; skip goto to %r",
+                    (t or "")[:120],
+                )
+                return target_page
         pg.goto(t, wait_until="domcontentloaded", timeout=20_000)
         logger.info(
             "handle_browser_opening: navigated native %s Chromium tab to target.", sl or "site"
@@ -2616,10 +2675,20 @@ def _native_persistent_launch_common_args(*, launch_background: bool) -> list[st
     ]
     if os.name == "nt":
         args.append("--start-maximized")
-    return args + [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-infobars",
-    ]
+    # Do not pass ``--disable-blink-features=AutomationControlled`` or ``--disable-infobars``:
+    # Chromium-based Edge shows an "unsupported command-line flag" infobar for them, which alarms
+    # dealers. ``ignore_default_args`` still drops ``--enable-automation`` (and ``--no-sandbox`` on Windows).
+    return args
+
+
+def _native_persistent_ignore_default_args() -> list[str]:
+    """Defaults Playwright strips from Chromium/Edge launches for operator portals."""
+    out: list[str] = ["--enable-automation"]
+    # Playwright often injects ``--no-sandbox``; Edge/Chrome then show an infobar ("unsupported
+    # command-line flag"). Windows desktops do not need it (unlike many Linux/Docker CI images).
+    if os.name == "nt":
+        out.append("--no-sandbox")
+    return out
 
 
 def _launch_native_site_persistent_context(
@@ -2629,7 +2698,7 @@ def _launch_native_site_persistent_context(
     site_label: str,
     profile_dir: Path,
 ) -> tuple[object | None, str]:
-    """Launch or reuse Playwright Chromium ``launch_persistent_context`` for DMS, Insurance, CPA, or Vahan."""
+    """Launch or reuse ``launch_persistent_context`` for DMS, Insurance, CPA, or Vahan (Insurance: Microsoft Edge channel)."""
     global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
     sl = (site_label or "").strip()
     _refresh_native_context_liveness_for_site(sl)
@@ -2670,21 +2739,24 @@ def _launch_native_site_persistent_context(
                 user_data_dir=str(profile_dir),
                 headless=False,
                 args=args,
-                ignore_default_args=["--enable-automation"],
+                ignore_default_args=_native_persistent_ignore_default_args(),
             )
             logger.info(
                 "handle_browser_opening: launched Playwright Chromium (persistent) profile=%s",
                 profile_dir,
             )
         elif sl == "Insurance" and _INSURANCE_NATIVE_PERSISTENT_CONTEXT is None:
+            # Generate Insurance / MISP: installed Microsoft Edge (not bundled Chromium) for vendor
+            # bot / API parity with a typical dealer Windows default browser.
             _INSURANCE_NATIVE_PERSISTENT_CONTEXT = pw.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),
                 headless=False,
+                channel="msedge",
                 args=args,
-                ignore_default_args=["--enable-automation"],
+                ignore_default_args=_native_persistent_ignore_default_args(),
             )
             logger.info(
-                "handle_browser_opening: launched Playwright Chromium Insurance profile=%s",
+                "handle_browser_opening: launched Microsoft Edge (Playwright channel) Insurance profile=%s",
                 profile_dir,
             )
         elif sl == "CPAInsurance" and _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT is None:
@@ -2692,7 +2764,7 @@ def _launch_native_site_persistent_context(
                 user_data_dir=str(profile_dir),
                 headless=False,
                 args=args,
-                ignore_default_args=["--enable-automation"],
+                ignore_default_args=_native_persistent_ignore_default_args(),
             )
             logger.info(
                 "handle_browser_opening: launched Playwright Chromium CPAInsurance profile=%s",
@@ -2703,7 +2775,7 @@ def _launch_native_site_persistent_context(
                 user_data_dir=str(profile_dir),
                 headless=False,
                 args=args,
-                ignore_default_args=["--enable-automation"],
+                ignore_default_args=_native_persistent_ignore_default_args(),
             )
             logger.info(
                 "handle_browser_opening: launched Playwright Chromium Vahan profile=%s",
@@ -2720,6 +2792,7 @@ def _launch_native_site_persistent_context(
             ctx = _VAHAN_NATIVE_PERSISTENT_CONTEXT
         else:
             return None, ""
+        native_launch_tag = "microsoft-edge" if sl == "Insurance" else "playwright-chromium"
         matched = None
         for p in list(ctx.pages):
             try:
@@ -2731,7 +2804,7 @@ def _launch_native_site_persistent_context(
                 break
         if matched is not None:
             _try_cdp_maximize_browser_window(matched)
-            return matched, "playwright-chromium"
+            return matched, native_launch_tag
         if ctx.pages:
             pg0 = ctx.pages[0]
         else:
@@ -2753,7 +2826,7 @@ def _launch_native_site_persistent_context(
         # Immediately after goto + maximize, focus the page to move away from omnibox.
         _try_cdp_focus_page(pg0)
         _try_js_click_body_for_focus(pg0)
-        return pg0, "playwright-chromium"
+        return pg0, native_launch_tag
     except Exception as exc:
         logger.warning(
             "handle_browser_opening: native %s persistent launch failed: %s", sl, exc
@@ -2776,7 +2849,7 @@ def _launch_native_dms_persistent_context(
 def _launch_native_insurance_persistent_context(
     open_target: str, *, launch_background: bool
 ) -> tuple[object | None, str]:
-    """Launch or reuse Playwright-bundled Chromium for MISP (Insurance), separate profile from DMS."""
+    """Launch or reuse **Microsoft Edge** (Playwright ``channel='msedge'``) for MISP (Insurance); separate profile from DMS."""
     return _launch_native_site_persistent_context(
         open_target,
         launch_background=launch_background,
@@ -2999,7 +3072,8 @@ def get_or_open_site_page(
     like Vahan would invalidate the running session.
 
     ``launch_background`` (Windows): start edge/chrome or native Chromium **maximized** without
-    activating the window so the operator SPA keeps focus (DMS/Insurance **warm-browser**). When true, the
+    activating the window so the operator SPA keeps focus (warm-browser for DMS/CPA/Vahan native,
+    Insurance, and other CDP paths). When true, the
     **navigate** step (``_navigate_existing_tab_to_site``) is **skipped** because ``page.goto`` on a
     connected CDP browser often steals focus; warm-browser may then open a second warm process
     in edge cases (acceptable trade for silent warm). Vahan and other flows use the default
@@ -3043,11 +3117,7 @@ def get_or_open_site_page(
 
     if _use_native_pw_chromium_for_site(site_label):
         sl_open = (site_label or "").strip()
-        if sl_open == "Insurance":
-            opened_page, channel = _launch_native_insurance_persistent_context(
-                open_target, launch_background=launch_background
-            )
-        elif sl_open == "CPAInsurance":
+        if sl_open == "CPAInsurance":
             opened_page, channel = _launch_native_cpa_insurance_persistent_context(
                 open_target, launch_background=launch_background
             )
@@ -3103,7 +3173,7 @@ def find_open_site_page(base_url: str, site_label: str = ""):
         pg = _find_matching_page_on_native_site_context(base_url, site_label)
         if pg is not None:
             logger.info(
-                "handle_browser_opening: reusing native Chromium tab for %s base_url=%r",
+                "handle_browser_opening: reusing native portal tab for %s base_url=%r",
                 (site_label or "").strip() or "site",
                 (base_url or "")[:120],
             )

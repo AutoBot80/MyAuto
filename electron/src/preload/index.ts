@@ -28,6 +28,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
       subfolder: string;
       items: { sourcePath: string; destFileName: string }[];
     }) => ipcRenderer.invoke("file:copyUploadScanArtifacts", payload),
+    copyChallanScanArtifacts: (payload: {
+      artifactLeaf: string;
+      items: { sourcePath: string; destFileName: string }[];
+    }) => ipcRenderer.invoke("file:copyChallanScanArtifacts", payload),
   },
   config: {
     getSiteUrls: () => ipcRenderer.invoke("config:siteUrls"),

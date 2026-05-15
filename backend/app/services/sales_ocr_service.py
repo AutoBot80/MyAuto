@@ -20,6 +20,7 @@ from app.services.utility_functions import (
     fuzzy_best_option_label,
     normalize_address_dedupe_repetition,
     normalize_for_fuzzy_match,
+    derive_nominee_gender_from_relationship,
     normalize_nominee_relationship_value,
     sanitize_details_sheet_insurer_value,
 )
@@ -31,6 +32,9 @@ from app.services.customer_address_infer import (
 from app.services.ocr_extraction_log import append_ocr_extraction_log
 from app.placeholder_mobile import is_placeholder_indian_mobile
 from app.services.ocr_sale_artifacts import (
+    LEGACY_PRE_OCR_TEXT_TXT,
+    LEGACY_PRE_OCR_TESSERACT_TEXT_TXT,
+    PRE_OCR_DDT_TEXT_TXT,
     merged_text_artifact_path,
     ocr_text_filename,
     parse_sale_subfolder_leaf,
@@ -785,6 +789,63 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
     return out
 
 
+def _read_pre_ocr_ddt_combined_text(ocr_output_dir: Path, subfolder: str) -> str:
+    """Read ``pre_ocr_ddt_text.txt`` (or legacy pre-OCR text names) from the sale OCR artifact folder."""
+    base = _ocr_subfolder_path(ocr_output_dir, subfolder)
+    for name in (PRE_OCR_DDT_TEXT_TXT, LEGACY_PRE_OCR_TESSERACT_TEXT_TXT, LEGACY_PRE_OCR_TEXT_TXT):
+        p = base / name
+        if p.is_file():
+            try:
+                return p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+    return ""
+
+
+def _extract_dob_hail_mary_from_pre_ocr_ddt_blob(blob: str) -> str | None:
+    """
+    Last-resort DOB from pre-OCR DDT dump when Textract front parse missed it.
+
+    Handles garbage-prefixed OCR like ``- BRIDOB: 12/12/1999`` (``DOB:`` as a substring before the date).
+    """
+    if not blob or not str(blob).strip():
+        return None
+    t = str(blob).replace("\r\n", "\n")
+    patterns = (
+        # Clean labels (word boundary before DOB).
+        r"(?i)\b(?:DOB|Date\s+of\s+Birth|D\.?\s*O\.?\s*B\.?)\s*[:：]\s*-?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-]((19|20)\d{2})\b",
+        # Substring ``DOB:`` (e.g. ``BRIDOB:``) then optional dash/spaces and dd/mm/yyyy.
+        r"(?i)DOB\s*[:：]\s*-?\s*(\d{1,2})[/.\-](\d{1,2})[/.\-]((19|20)\d{2})\b",
+    )
+    for pat in patterns:
+        m = re.search(pat, t)
+        if not m:
+            continue
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        norm = _aadhar_normalize_dob_triplet(d, mo, y)
+        if norm:
+            return norm
+    return None
+
+
+def _maybe_fill_dob_from_pre_ocr_ddt_file(
+    ocr_output_dir: Path,
+    subfolder: str,
+    customer: dict[str, Any],
+) -> None:
+    """If ``date_of_birth`` is still blank, try ``pre_ocr_ddt_text.txt`` under the OCR sale folder."""
+    if (customer.get("date_of_birth") or "").strip():
+        return
+    blob = _read_pre_ocr_ddt_combined_text(ocr_output_dir, subfolder)
+    got = _extract_dob_hail_mary_from_pre_ocr_ddt_blob(blob)
+    if not got:
+        return
+    customer["date_of_birth"] = got
+    parts = got.split("/")
+    if len(parts) >= 3 and parts[2].strip().isdigit():
+        customer["year_of_birth"] = parts[2].strip()
+
+
 _AADHAR_TEXTRACT_NAME_TITLE_WORD = re.compile(r"^[A-Z][a-z]+(?:['-][A-Z][a-z]+)?$")
 
 
@@ -1281,6 +1342,8 @@ def _apply_aadhar_textract_fallbacks_from_parts(
         if reconciled:
             customer["name"] = reconciled
 
+    _maybe_fill_dob_from_pre_ocr_ddt_file(ocr_output_dir, subfolder, customer)
+
     data["customer"] = customer
     try:
         json_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -1748,12 +1811,10 @@ def _refine_nominee_relationship_with_gender(rel: str | None, gender: str | None
     g = _normalize_nominee_gender_sheet_value(gender) if gender else None
     if g not in ("Male", "Female"):
         return str(rel).strip()
-    raw = str(rel).strip()
-    r = normalize_nominee_relationship_value(raw) or raw
-    r = r.rstrip(".")
-    m = re.match(r"(?i)^\s*([A-Za-z]+)\s*/\s*([A-Za-z]+)\s*$", r)
+    raw = str(rel).strip().rstrip(".")
+    m = re.match(r"(?i)^\s*([A-Za-z]+)\s*/\s*([A-Za-z]+)\s*$", raw)
     if not m:
-        return r
+        return normalize_nominee_relationship_value(raw) or raw
     a, b = m.group(1).lower(), m.group(2).lower()
     pair = frozenset((a, b))
     if pair == frozenset(("father", "mother")):
@@ -1762,7 +1823,34 @@ def _refine_nominee_relationship_with_gender(rel: str | None, gender: str | None
         return "Daughter" if g == "Female" else "Son"
     if pair == frozenset(("wife", "husband")):
         return "Wife" if g == "Female" else "Husband"
-    return r
+    return raw
+
+
+def _apply_nominee_relationship_gender_to_mapping(out: dict[str, str]) -> None:
+    """
+    Canonicalize relation, derive gender from a specific relation (**Wife** -> **Female**), then
+    resolve slash checkbox rows (**Wife/Husband** + gender) and re-derive when the relation becomes specific.
+    """
+    rel = (out.get("nominee_relationship") or "").strip()
+    gender = out.get("nominee_gender")
+    if not rel and not gender:
+        return
+    if rel:
+        canon = normalize_nominee_relationship_value(rel)
+        if canon:
+            out["nominee_relationship"] = canon
+            rel = canon
+        implied = derive_nominee_gender_from_relationship(rel)
+        if implied:
+            out["nominee_gender"] = implied
+            gender = implied
+        rfn = _refine_nominee_relationship_with_gender(rel, out.get("nominee_gender"))
+        if rfn:
+            out["nominee_relationship"] = rfn
+            rel = rfn
+    derived = derive_nominee_gender_from_relationship(out.get("nominee_relationship"))
+    if derived:
+        out["nominee_gender"] = derived
 
 
 def _sync_nominee_relation_with_gender_across_fragments(
@@ -1771,18 +1859,26 @@ def _sync_nominee_relation_with_gender_across_fragments(
 ) -> None:
     """
     Relation may land in ``insurance`` and gender in ``details_customer`` (or vice versa).
-    Apply combined-label -> specific relation using the best available gender + relation pair.
+    Merge, apply slash-label refinement and relationship->gender derivation, write back to both.
     """
     rel = (insurance.get("nominee_relationship") or details_customer.get("nominee_relationship") or "").strip()
     gender = (insurance.get("nominee_gender") or details_customer.get("nominee_gender") or "").strip()
-    if not rel or not gender:
+    if not rel and not gender:
         return
-    refined = _refine_nominee_relationship_with_gender(rel, gender)
-    if not refined or refined.strip() == rel.strip():
-        return
-    insurance["nominee_relationship"] = refined
-    if details_customer.get("nominee_relationship"):
-        details_customer["nominee_relationship"] = refined
+    merged: dict[str, str] = {}
+    if rel:
+        merged["nominee_relationship"] = rel
+    if gender:
+        merged["nominee_gender"] = gender
+    _apply_nominee_relationship_gender_to_mapping(merged)
+    new_rel = merged.get("nominee_relationship")
+    new_gender = merged.get("nominee_gender")
+    if new_rel:
+        insurance["nominee_relationship"] = new_rel
+        details_customer["nominee_relationship"] = new_rel
+    if new_gender:
+        insurance["nominee_gender"] = new_gender
+        details_customer["nominee_gender"] = new_gender
 
 
 def _details_input_format(path: Path) -> str:
@@ -1855,6 +1951,7 @@ def details_fragment_to_api_payload(frag_d: dict[str, Any]) -> dict[str, Any]:
         sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
         insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
 
+    _apply_nominee_relationship_gender_to_mapping(insurance_merged)
     customer = enrich_customer_address_from_freeform(customer)
     return {"vehicle": vehicle, "customer": customer, "insurance": insurance_merged}
 
@@ -2268,6 +2365,7 @@ def _apply_initcap_on_read(
                 insurance["nominee_relationship"] = _initcap_words(nr)
             else:
                 insurance.pop("nominee_relationship", None)
+        _apply_nominee_relationship_gender_to_mapping(insurance)
         if insurance.get("payment_mode"):
             pm = _normalize_payment_mode_sheet_value(insurance.get("payment_mode"))
             if pm:
@@ -2409,6 +2507,9 @@ def _map_key_value_pairs_to_vehicle(pairs: list[dict]) -> dict[str, str]:
         if val and re.search(r"(?i)\b(nominee|payment|insurance|details|customer|vehicle)\b", val):
             out.pop(fld, None)
 
+    if out.get("battery_no"):
+        out["battery_no"] = _normalize_dedupe_battery_no_ocr(out["battery_no"])
+
     return out
 
 
@@ -2420,6 +2521,20 @@ def _clean_sales_sheet_scalar(value: str) -> str:
     if re.match(r"^[\s_.,-]+$", s):
         return ""
     return s.strip()
+
+
+def _normalize_dedupe_battery_no_ocr(raw: str) -> str:
+    """
+    Collapse OCR/Textract duplicates like ``M7A6N415257 M7A6N 415257`` (same alnum twice with spacing).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    alnum = re.sub(r"[^A-Za-z0-9]", "", s)
+    n = len(alnum)
+    if n >= 10 and n % 2 == 0 and alnum[: n // 2].lower() == alnum[n // 2 :].lower():
+        return alnum[: n // 2]
+    return s
 
 
 def _canonical_marital_status_from_text(s: str) -> str | None:
@@ -2668,7 +2783,7 @@ def _parse_vehicle_from_full_text(full_text: str) -> dict[str, str]:
     if m:
         bv = _clean_sales_sheet_scalar(m.group(1))
         if bv and not re.search(r"(?i)\b(nominee|payment|insurance|details|customer|vehicle)\b", bv):
-            out["battery_no"] = bv
+            out["battery_no"] = _normalize_dedupe_battery_no_ocr(bv)
 
     # Nearby-number rescue for scratched/blank fields in Details sheet.
     # Scratch-correction pass (override): prefer corrected numbers written below labels.
@@ -2836,11 +2951,7 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             out["insurer"] = ins
         else:
             out.pop("insurer", None)
-    if out.get("nominee_relationship"):
-        out["nominee_relationship"] = normalize_nominee_relationship_value(out["nominee_relationship"])
-    rfn = _refine_nominee_relationship_with_gender(out.get("nominee_relationship"), out.get("nominee_gender"))
-    if rfn:
-        out["nominee_relationship"] = rfn
+    _apply_nominee_relationship_gender_to_mapping(out)
     return out
 
 
@@ -2908,11 +3019,7 @@ def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str
             out["payment_mode"] = pm
         else:
             out.pop("payment_mode", None)
-    if out.get("nominee_relationship"):
-        out["nominee_relationship"] = normalize_nominee_relationship_value(out["nominee_relationship"])
-    rfn = _refine_nominee_relationship_with_gender(out.get("nominee_relationship"), out.get("nominee_gender"))
-    if rfn:
-        out["nominee_relationship"] = rfn
+    _apply_nominee_relationship_gender_to_mapping(out)
     return out
 
 
@@ -3069,6 +3176,7 @@ def _apply_sales_detail_checkbox_scan(
             continue
         insurance[field] = norm
         details_customer[field] = norm
+    _apply_nominee_relationship_gender_to_mapping(insurance)
 
 
 def _merge_textract_details_fallbacks(
@@ -3302,9 +3410,7 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                     out[key] = cand
             break
 
-    rfn = _refine_nominee_relationship_with_gender(out.get("nominee_relationship"), out.get("nominee_gender"))
-    if rfn:
-        out["nominee_relationship"] = rfn
+    _apply_nominee_relationship_gender_to_mapping(out)
     return out
 
 
@@ -3615,6 +3721,8 @@ class OcrService:
                 sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
                 insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
 
+            _apply_nominee_relationship_gender_to_mapping(insurance_merged)
+
             if details_customer_name and frag_a and frag_a.get("raw_parts"):
                 blob = _concat_aadhar_scan_ocr_text(frag_a["raw_parts"])
                 if blob.strip():
@@ -3627,6 +3735,7 @@ class OcrService:
                         customer["name"] = reconciled
 
         customer = enrich_customer_address_from_freeform(customer)
+        _maybe_fill_dob_from_pre_ocr_ddt_file(self.ocr_output_dir, subfolder, customer)
 
         extraction_error = None
         if not _aadhar_identity_ok(customer):

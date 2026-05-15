@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import secrets
+import string
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +25,14 @@ from app.services.subdealer_challan_textract import extract_challan_textract
 logger = logging.getLogger(__name__)
 
 OCR_JSON_STEM = "OCR_To_be_Used"
+_DEFAULT_CHALLAN_ALPHABET = string.ascii_uppercase + string.digits
+
+
+def generate_default_challan_no(dealer_id: int) -> str:
+    """Last 4 digits of ``dealer_id`` + 4 random alphanumerics (A-Z, 0-9)."""
+    prefix = str(int(dealer_id))[-4:].zfill(4)
+    suffix = "".join(secrets.choice(_DEFAULT_CHALLAN_ALPHABET) for _ in range(4))
+    return f"{prefix}{suffix}"
 
 
 def sanitize_challan_line_field(value: str | None) -> str:
@@ -632,6 +642,8 @@ def parse_subdealer_challan(
     challans_base: Path | None = None,
     write_artifacts: bool = True,
     include_artifact_bodies: bool = False,
+    dealer_id: int | None = None,
+    assign_default_challan_no: bool = True,
 ) -> dict[str, Any]:
     """
     Textract + parse Daily Delivery Report. Optionally writes under ``challans_base/<challan>_<ddmmyyyy>/``.
@@ -732,7 +744,13 @@ def parse_subdealer_challan(
         )
 
     if not challan_no:
-        out["warnings"].append("Challan number not detected.")
+        if dealer_id is not None and assign_default_challan_no:
+            challan_no = generate_default_challan_no(dealer_id)
+            out["warnings"].append(
+                f"Challan number not detected; assigned default {challan_no}."
+            )
+        else:
+            out["warnings"].append("Challan number not detected.")
     if ocr_date_missing:
         out["warnings"].append(
             "Challan date not detected on scan; using today (IST) for folder name and pre-fill."
@@ -759,6 +777,7 @@ def parse_subdealer_challan(
     }
 
     leaf_name = _challan_folder_name(challan_no, ddmmyyyy)
+    out["artifact_leaf"] = leaf_name
     raw_file_body = _build_raw_ocr_text(full_text, kvp, tables)
     json_file_body = json.dumps(payload, indent=2, ensure_ascii=False)
 
@@ -790,3 +809,19 @@ def parse_subdealer_challan(
             out["warnings"].append(f"Could not write artifacts: {e}")
 
     return out
+
+
+def save_challan_scan_file(
+    artifact_dir: str | Path,
+    scan_bytes: bytes,
+    original_filename: str | None,
+) -> Path:
+    """Write uploaded scan bytes under an existing challan artifact folder."""
+    from app.services.upload_file_validation import sanitize_legacy_upload_filename
+
+    dest_dir = Path(artifact_dir)
+    safe_name = sanitize_legacy_upload_filename(original_filename)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    scan_path = dest_dir / safe_name
+    scan_path.write_bytes(scan_bytes)
+    return scan_path

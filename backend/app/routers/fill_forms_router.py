@@ -25,6 +25,7 @@ from app.services.add_sales_natural_key_resolve import (
     natural_keys_from_staging_payload,
     resolve_customer_vehicle_ids_by_natural_keys,
 )
+from app.services.cpa_form_values import prepare_cpa_alliance_fill
 from app.services.fill_hero_dms_service import (
     run_fill_dms,
     run_fill_dms_only,
@@ -238,6 +239,33 @@ class FillHeroInsuranceResponse(BaseModel):
     )
 
 
+class FillCpaAllianceInsuranceRequest(BaseModel):
+    """CPA Alliance portal — values from ``form_cpa_insurance_view`` + optional staging overlay."""
+
+    dealer_id: int | None = None
+    subfolder: str | None = Field(
+        None,
+        description="OCR/upload sale subfolder; optional when staging_id is set (resolved from staging).",
+    )
+    portal_url: str | None = Field(None, description="Insurer portal URL from master_ref; env ALLIANCE_CPA_PORTAL_URL overrides.")
+    customer_id: int | None = None
+    vehicle_id: int | None = None
+    staging_id: str | None = Field(
+        None,
+        description=(
+            "add_sales_staging UUID; merges OCR/Submit snapshot when form_cpa_insurance_view is sparse. "
+            "If the row is missing or not draft/committed, pass customer_id and vehicle_id together."
+        ),
+    )
+
+
+class FillCpaAllianceInsuranceResponse(BaseModel):
+    success: bool
+    error: str | None = None
+    page_url: str | None = None
+    playwright_log: str | None = None
+
+
 class PrintForm20Request(BaseModel):
     subfolder: str
     customer: FillDmsCustomer = FillDmsCustomer()
@@ -333,6 +361,29 @@ def _record_failure_insurance_cloud(
     record_safe(
         dealer_id=int(dealer_id),
         process_label="Generate Insurance",
+        entity_dedupe_key=ek,
+        error_text=error_text,
+        customer_mobile=disp,
+    )
+
+
+def _record_failure_cpa_alliance_cloud(
+    dealer_id: int,
+    subfolder: str,
+    mobile: str | None,
+    error_text: str | None,
+) -> None:
+    if not error_text:
+        return
+    from app.services.process_failure_log_service import digits_only_mobile, entity_key_print_forms, record_safe
+
+    mob_raw = (mobile or "").strip()
+    md = digits_only_mobile(mob_raw)
+    ek = entity_key_print_forms(subfolder=subfolder or "default", mobile_digits=md, suffix="cpa")
+    disp = md if md else ((mob_raw or "")[:32] or None)
+    record_safe(
+        dealer_id=int(dealer_id),
+        process_label="CPA Insurance",
         entity_dedupe_key=ek,
         error_text=error_text,
         customer_mobile=disp,
@@ -1147,6 +1198,68 @@ async def fill_hero_insurance(
         match_base=result.get("match_base"),
         print_jobs=print_jobs,
         hero_insure_reports=dict(result.get("hero_insure_reports") or {}),
+    )
+
+
+@router.post("/insurance/cpa-alliance", response_model=FillCpaAllianceInsuranceResponse)
+async def fill_cpa_alliance_insurance(
+    req: FillCpaAllianceInsuranceRequest,
+    principal: Principal = Depends(get_principal),
+) -> FillCpaAllianceInsuranceResponse:
+    """
+    CPA Alliance portal: opens native **CPAInsurance** profile on the **API host** (same as sidecar logic).
+    Fill values are loaded from ``form_cpa_insurance_view`` merged with ``add_sales_staging.payload_json``
+    when ``staging_id`` is set (same pattern as Generate Insurance).
+    """
+    enforce_max_text_depth(req.model_dump())
+    did = resolve_dealer_id(principal, req.dealer_id)
+    ocr_dir = Path(get_ocr_output_dir(did))
+    portal_url = (req.portal_url or "").strip() or None
+
+    try:
+        alliance_kwargs, full_values, subfolder = prepare_cpa_alliance_fill(
+            dealer_id=did,
+            subfolder=(req.subfolder or "").strip() or None,
+            staging_id=(req.staging_id or "").strip() or None,
+            customer_id=req.customer_id,
+            vehicle_id=req.vehicle_id,
+            ocr_output_dir=ocr_dir,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "staging_id must be" in msg:
+            raise HTTPException(status_code=400, detail=msg) from exc
+        if "Staging not found" in msg:
+            raise HTTPException(status_code=404, detail=msg) from exc
+        raise HTTPException(status_code=400, detail=msg) from exc
+
+    def _cpa_run() -> dict:
+        from app.services.add_alliance_cpa_insurance import add_alliance_cpa_insurance
+
+        return add_alliance_cpa_insurance(
+            dealer_id=did,
+            subfolder=subfolder,
+            portal_url=portal_url,
+            **alliance_kwargs,
+        )
+
+    result = await _run_playwright_work(_cpa_run)
+    err_cpa = (
+        None
+        if bool(result.get("success")) and not result.get("error")
+        else str(result.get("error") or "CPA Insurance failed")
+    )
+    _record_failure_cpa_alliance_cloud(
+        did,
+        subfolder,
+        full_values.get("mobile_number"),
+        err_cpa,
+    )
+    return FillCpaAllianceInsuranceResponse(
+        success=bool(result.get("success")),
+        error=result.get("error"),
+        page_url=result.get("page_url"),
+        playwright_log=result.get("playwright_log"),
     )
 
 

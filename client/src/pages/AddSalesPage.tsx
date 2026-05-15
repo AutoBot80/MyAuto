@@ -17,6 +17,7 @@ import { getExtractedDetails } from "../api/aiReaderQueue";
 import { ApiHttpError } from "../api/client";
 import { submitInfo } from "../api/submitInfo";
 import {
+  buildFillCpaAllianceInsuranceRequest,
   dispatchPrintJobsFromApi,
   fillCpaAllianceInsuranceLocal,
   fillDmsLocal,
@@ -1387,19 +1388,16 @@ export function AddSalesPage({
         ) {
           const portal = pickCpaPortalRow(cpaInsurers, dealerCpaInsurer);
           if (portal?.login_url) {
-            const ocrVeh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
-            const dmsVeh = normalizeVehicleDetails(dmsScrapedVehicle) ?? dmsScrapedVehicle;
-            const frame = String(dmsVeh?.frame_no ?? ocrVeh?.frame_no ?? "").trim();
-            const eng = String(dmsVeh?.engine_no ?? ocrVeh?.engine_no ?? "").trim();
-            void fillCpaAllianceInsuranceLocal({
-              dealer_id: dealerId,
-              subfolder: savedTo,
-              portal_url: portal.login_url,
-              customer_name: extractedCustomer?.name?.trim() || undefined,
-              mobile: mobile.trim() || undefined,
-              frame_no: frame || undefined,
-              engine_no: eng || undefined,
-            }).catch(() => {});
+            void fillCpaAllianceInsuranceLocal(
+              buildFillCpaAllianceInsuranceRequest({
+                dealerId,
+                subfolder: savedTo,
+                portalUrl: portal.login_url,
+                stagingId: lastStagingId ?? undefined,
+                customerId: lastSubmittedCustomerId ?? undefined,
+                vehicleId: lastSubmittedVehicleId ?? undefined,
+              })
+            ).catch(() => {});
           }
         }
       }
@@ -1451,24 +1449,21 @@ export function AddSalesPage({
     setIsFillCpaInsuranceLoading(true);
     setFillInsuranceStatus(null);
     try {
-      const ocrVeh = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
-      const dmsVeh = normalizeVehicleDetails(dmsScrapedVehicle) ?? dmsScrapedVehicle;
-      const frame = String(dmsVeh?.frame_no ?? ocrVeh?.frame_no ?? "").trim();
-      const eng = String(dmsVeh?.engine_no ?? ocrVeh?.engine_no ?? "").trim();
-      const cpaRes = await fillCpaAllianceInsuranceLocal({
-        dealer_id: dealerId,
-        subfolder: savedTo,
-        portal_url: portal.login_url,
-        customer_name: extractedCustomer?.name?.trim() || undefined,
-        mobile: mobile.trim() || undefined,
-        frame_no: frame || undefined,
-        engine_no: eng || undefined,
-      });
+      const cpaRes = await fillCpaAllianceInsuranceLocal(
+        buildFillCpaAllianceInsuranceRequest({
+          dealerId,
+          subfolder: savedTo,
+          portalUrl: portal.login_url,
+          stagingId: lastStagingId ?? undefined,
+          customerId: lastSubmittedCustomerId ?? undefined,
+          vehicleId: lastSubmittedVehicleId ?? undefined,
+        })
+      );
       if (!cpaRes.success) {
         setFillInsuranceStatus(cpaRes.error ?? "CPA Insurance failed.");
       } else {
         setFillInsuranceStatus(
-          "CPA portal session started. Finish the flow in the browser; Playwright trace is under ocr_logs for this sale."
+          "CPA portal: fields filled. Finish any remaining steps in the browser; trace is under ocr_output (playwright_cpa_*.txt)."
         );
       }
     } catch (e) {

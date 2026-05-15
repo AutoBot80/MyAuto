@@ -9,6 +9,7 @@ import {
 } from "../api/addSales";
 import {
   dispatchPrintJobsFromApi,
+  buildFillCpaAllianceInsuranceRequest,
   fillCpaAllianceInsuranceLocal,
   fillDmsLocal,
   fillHeroInsuranceLocal,
@@ -18,7 +19,6 @@ import {
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { buildDisplayAddress } from "../types";
 import type { ExtractedCustomerDetails, ExtractedInsuranceDetails, ExtractedVehicleDetails } from "../types";
-import { normalizeVehicleDetails } from "../utils/vehicleDetails";
 
 function formatTenDigitSegment(raw: unknown): string {
   const d = String(raw ?? "").replace(/\D/g, "").slice(-10);
@@ -464,19 +464,15 @@ export function AddSalesInProcessPanel({
                             void wrapRowAction(r.staging_id, async () => {
                               const portal = pickCpaPortalRow(cpaInsurersFromElig ?? [], dealerCpaFromElig ?? null);
                               if (!portal?.login_url) throw new Error("No CPA portal URL.");
-                              const ocrV = normalizeVehicleDetails(veh) ?? veh;
-                              const frame = String(ocrV?.frame_no ?? "").trim();
-                              const eng = String(ocrV?.engine_no ?? "").trim();
                               const sf = subfolder || "default";
-                              const res = await fillCpaAllianceInsuranceLocal({
-                                dealer_id: dealerId,
-                                subfolder: sf,
-                                portal_url: portal.login_url,
-                                customer_name: cust?.name?.trim() || undefined,
-                                mobile: mobileDigits || undefined,
-                                frame_no: frame || undefined,
-                                engine_no: eng || undefined,
-                              });
+                              const res = await fillCpaAllianceInsuranceLocal(
+                                buildFillCpaAllianceInsuranceRequest({
+                                  dealerId,
+                                  subfolder: sf,
+                                  portalUrl: portal.login_url,
+                                  stagingId: r.staging_id,
+                                })
+                              );
                               if (!res.success) throw new Error(res.error ?? "CPA Insurance failed.");
                             });
                           }}

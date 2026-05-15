@@ -1,13 +1,14 @@
 """
 Infer customer_master / DMS fields from a single free-form address line (Aadhaar OCR, Textract).
 
-- C/O, S/o, W/o, D/o → ``care_of`` as **``C/o Name``** / **``S/o Name``** / **``W/o Name``** / **``D/o Name``**; that clause is stripped from the body and **prepended** back to the composed ``address`` (``S/o Name, rest…``).
+- C/O, S/o, W/o, D/o → ``care_of`` as **``C/o Name``** / **``S/o Name``** / **``W/o Name``** / **``D/o Name``**; that clause is stripped from the body. The composed ``address`` is the **remainder only** (locality / district / state / PIN) so it does not repeat the care-of line when ``care_of`` is set separately.
 - UIDAI-style suffix: ``DIST: <District>, <State> - <PIN>`` → district/city, state, pin; text after PIN dropped.
 """
 
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 from typing import Any
 
 from app.services.utility_functions import normalize_address_dedupe_repetition
@@ -50,8 +51,120 @@ _INDIA_REGIONS: tuple[str, ...] = (
     "Ladakh",
 )
 
+_INDIA_REGION_BY_LOWER: dict[str, str] = {r.lower(): r for r in _INDIA_REGIONS}
+
+# Standard two-letter codes (vehicle / forms) → exact spelling in ``_INDIA_REGIONS``.
+_INDIAN_STATE_TWO_LETTER: dict[str, str] = {
+    "AP": "Andhra Pradesh",
+    "AR": "Arunachal Pradesh",
+    "AS": "Assam",
+    "BR": "Bihar",
+    "CG": "Chhattisgarh",
+    "GA": "Goa",
+    "GJ": "Gujarat",
+    "HR": "Haryana",
+    "HP": "Himachal Pradesh",
+    "JK": "Jammu and Kashmir",
+    "KA": "Karnataka",
+    "KL": "Kerala",
+    "LD": "Lakshadweep",
+    "MP": "Madhya Pradesh",
+    "MH": "Maharashtra",
+    "MN": "Manipur",
+    "ML": "Meghalaya",
+    "MZ": "Mizoram",
+    "NL": "Nagaland",
+    "OD": "Odisha",
+    "OR": "Odisha",
+    "PB": "Punjab",
+    "RJ": "Rajasthan",
+    "SK": "Sikkim",
+    "TN": "Tamil Nadu",
+    "TS": "Telangana",
+    "TR": "Tripura",
+    "UP": "Uttar Pradesh",
+    "UK": "Uttarakhand",
+    "WB": "West Bengal",
+    "AN": "Andaman and Nicobar Islands",
+    "DL": "Delhi",
+    "PY": "Puducherry",
+    "LA": "Ladakh",
+    "DD": "Dadra and Nagar Haveli and Daman and Diu",
+}
+
+# Curated OCR / shorthand → canonical (must match ``_INDIA_REGIONS`` spelling).
+_STATE_OCR_SYNONYMS: dict[str, str] = {
+    "rajashan": "Rajasthan",
+    "orissa": "Odisha",
+}
+
+_FUZZY_STATE_MIN_RATIO = 0.86
+
 _REGION_ALT = "|".join(re.escape(r) for r in _INDIA_REGIONS)
 _REGION_RE = re.compile(rf"(?i)\b({_REGION_ALT})\b")
+
+
+def _canonical_region_spelling(name: str) -> str:
+    """Return canonical spelling from ``_INDIA_REGIONS`` when case-insensitive match."""
+    t = (name or "").strip()
+    if not t:
+        return t
+    got = _INDIA_REGION_BY_LOWER.get(t.lower())
+    return got if got else t
+
+
+def resolve_indian_state_name(
+    ocr_token: str | None,
+    *,
+    allow_la_ladakh: bool = False,
+) -> str | None:
+    """
+    Map OCR / shorthand / two-letter codes to a canonical state or UT name in ``_INDIA_REGIONS``.
+
+    ``allow_la_ladakh``: when False, ``LA`` is not resolved via the two-letter table (avoids
+    false positives); fuzzy may still match ``Ladakh`` on longer tokens.
+    """
+    if not ocr_token or not str(ocr_token).strip():
+        return None
+    s = re.sub(r"\s+", " ", str(ocr_token).strip())
+    s = re.sub(r"(?:\s*[-–—])+\s*$", "", s).strip()
+    s = s.rstrip(".,;:")
+    if not s:
+        return None
+
+    syn = _STATE_OCR_SYNONYMS.get(s.lower())
+    if syn:
+        return syn
+
+    canon = _INDIA_REGION_BY_LOWER.get(s.lower())
+    if canon:
+        return canon
+
+    letters_only = re.sub(r"[^A-Za-z]", "", s)
+    if len(letters_only) == 2:
+        code = letters_only.upper()
+        if code == "LA" and not allow_la_ladakh:
+            pass
+        else:
+            hit = _INDIAN_STATE_TWO_LETTER.get(code)
+            if hit:
+                return hit
+
+    if re.match(r"(?i)raj\.?$", s):
+        return "Rajasthan"
+
+    best: str | None = None
+    best_score = 0.0
+    low = s.lower()
+    for region in _INDIA_REGIONS:
+        rlow = region.lower()
+        score = SequenceMatcher(None, low, rlow).ratio()
+        if score > best_score:
+            best_score = score
+            best = region
+    if best and best_score >= _FUZZY_STATE_MIN_RATIO:
+        return best
+    return None
 
 
 def strip_junk_between_last_indian_state_and_pin(text: str) -> str:
@@ -75,10 +188,29 @@ def strip_junk_between_last_indian_state_and_pin(text: str) -> str:
     pin = last_pin_m.group(1)
     head = s[: last_pin_m.start()]
     matches = list(_REGION_RE.finditer(head))
-    if not matches:
-        return s
-    st_m = matches[-1]
-    prefix = s[: st_m.end()].rstrip(" ,.;:-–—")
+    if matches:
+        st_m = matches[-1]
+        canon = _canonical_region_spelling(st_m.group(1))
+        lead = head[: st_m.start()].rstrip(" ,.;:-–—")
+        prefix = f"{lead}, {canon}" if lead else canon
+    else:
+        comma_parts = [p.strip() for p in head.split(",") if p.strip()]
+        prefix = None
+        for i in range(len(comma_parts) - 1, -1, -1):
+            seg = comma_parts[i]
+            state_raw = re.sub(r"(?:\s*[-–—])+\s*$", "", seg).strip()
+            got = resolve_indian_state_name(state_raw, allow_la_ladakh=True)
+            if not got:
+                continue
+            idx = head.rfind(comma_parts[i])
+            if idx < 0:
+                prefix = ", ".join(comma_parts[: i + 1]).rstrip(" ,.;:-–—")
+            else:
+                head_before = head[:idx].rstrip(" ,.;:-–—")
+                prefix = f"{head_before}, {got}" if head_before else got
+            break
+        if prefix is None:
+            return s
     out = f"{prefix}, {pin}"
     out = re.sub(r"\s+", " ", out)
     out = re.sub(r",\s*,+", ", ", out)
@@ -91,15 +223,18 @@ def _indian_state_field_trustworthy(state_val: str) -> bool:
     if not s or len(s) > 48:
         return False
     m = _REGION_RE.search(s)
-    if not m:
-        return False
-    start, end = m.span()
-    if start > 4:
-        return False
-    after = s[end:].strip()
-    if len(after) > 2:
-        return False
-    return True
+    if m:
+        start, end = m.span()
+        if start > 4:
+            return False
+        after = s[end:].strip()
+        if len(after) > 2:
+            return False
+        return True
+    r = resolve_indian_state_name(s, allow_la_ladakh=False)
+    if r and len(s) <= 3:
+        return True
+    return False
 
 
 def _squish_spaces(s: str) -> str:
@@ -121,11 +256,101 @@ def _canonical_care_of_prefix(marker_raw: str) -> str:
     return "C/O"
 
 
+def _relation_segment_key(segment: str) -> str | None:
+    """Stable key for C/O · S/O · W/O · D/O + name (dedupe repeated relation clauses)."""
+    s = _normalize_typographic_slashes(segment.strip())
+    if not s:
+        return None
+    m = re.match(
+        r"(?i)^\s*(C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:?\s*(.+)$",
+        s,
+    )
+    if not m:
+        return None
+    letter = _canonical_care_of_prefix(m.group(1))[0]
+    name = re.sub(r"\s+", " ", m.group(2).strip().lower())
+    if not name:
+        return None
+    return f"{letter}:{name}"
+
+
+def _normalize_typographic_slashes(s: str) -> str:
+    """Map common OCR Unicode slashes to ASCII so relation regexes match."""
+    if not s:
+        return s
+    return (
+        str(s)
+        .replace("／", "/")
+        .replace("∕", "/")
+        .replace("⁄", "/")
+    )
+
+
+def _strip_leading_care_of_duplicate_from_work(work: str, co_full: str) -> str:
+    """
+    Remove a leading relation clause that is the same care-of as ``co_full`` (ignores S/o vs S/O,
+    spacing). Complements :func:`_strip_care_of_clause` when regex strip misses a variant.
+    """
+    if not co_full or not work:
+        return work or ""
+    w = _squish_spaces(_normalize_typographic_slashes(work))
+    co = _squish_spaces(_normalize_typographic_slashes(co_full))
+    for _ in range(4):
+        prev = w
+        if "," in w:
+            first, rest = w.split(",", 1)
+            first, rest = first.strip(), rest.strip()
+        else:
+            first, rest = w, ""
+        k1 = _relation_segment_key(first)
+        k2 = _relation_segment_key(co)
+        if k1 and k2 and k1 == k2:
+            w = _squish_spaces(rest)
+        else:
+            m = re.match(re.escape(co) + r"\s*,\s*", w, re.I)
+            if m:
+                w = _squish_spaces(w[m.end() :])
+            elif w.lower() == co.lower():
+                w = ""
+            else:
+                break
+        if w == prev:
+            break
+    return w
+
+
+def _strip_gender_bleed_segments(s: str) -> str:
+    """Remove UIDAI-style ``gen/ MALE`` / ``gen/ FEMALE`` fragments merged into the English line."""
+    t = re.sub(r"(?i)\s*,\s*gen\s*/\s*(male|female)\b\s*", ", ", s)
+    t = re.sub(r"(?i)^gen\s*/\s*(male|female)\b\s*,?\s*", "", t)
+    t = re.sub(r"\s+,+", ", ", t)
+    t = re.sub(r",\s*,+", ", ", t)
+    return t.strip(" ,")
+
+
+def _dedupe_comma_relation_clauses(s: str) -> str:
+    """Drop later comma segments that repeat the same S/O · W/O · D/O · C/O + name as an earlier one."""
+    if "," not in s:
+        return s
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        rk = _relation_segment_key(p)
+        if rk:
+            if rk in seen:
+                continue
+            seen.add(rk)
+        out.append(p)
+    return ", ".join(out)
+
+
 def _extract_care_of_from_text(text: str) -> str | None:
-    """C/O, S/O, W/O, D/O → ``S/o Name`` style (relation kept) up to first comma or newline."""
+    """C/O, S/O, W/O, D/O → ``S/O Name`` style (relation kept) up to first comma or newline."""
     if not text:
         return None
-    m = _CARE_OF_MARKERS_RE.search(text)
+    t = _normalize_typographic_slashes(text)
+    m = _CARE_OF_MARKERS_RE.search(t)
     if not m:
         return None
     prefix = _canonical_care_of_prefix(m.group(1))
@@ -139,11 +364,12 @@ def _strip_care_of_clause(text: str) -> str:
     """Remove ``C/O...`` / ``S/O...`` segments from the free-form line (care_of stored separately)."""
     if not text:
         return text
+    t = _normalize_typographic_slashes(text)
     return _squish_spaces(
         re.sub(
             r"(?i)\b(?:C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*:?\s*[^,\n]+,?\s*",
             " ",
-            text,
+            t,
         )
     )
 
@@ -177,7 +403,11 @@ def _parse_dist_state_pin_line(text: str) -> tuple[str | None, str | None, str |
     state_seg = re.sub(r"[-–—\s]+$", "", m.group(2).strip()).strip()
     pin = m.group(3).strip()
     rm = _REGION_RE.search(state_seg)
-    state_name = rm.group(1).strip().title() if rm else _squish_spaces(state_seg).title()
+    if rm:
+        state_name = _canonical_region_spelling(rm.group(1))
+    else:
+        resolved = resolve_indian_state_name(state_seg, allow_la_ladakh=True)
+        state_name = resolved if resolved else _squish_spaces(state_seg).title()
     if len(district) < 2 or len(district) > 80:
         district = None
     return district, state_name, pin
@@ -233,10 +463,13 @@ def _parse_state_pin_comma_dash_heuristic(text: str) -> tuple[str | None, str | 
     state_raw = re.sub(r"(?:\s*[-–—])+\s*$", "", tail).strip()
     rm = _REGION_RE.search(state_raw)
     if rm:
-        return rm.group(1).strip().title(), pin
+        return _canonical_region_spelling(rm.group(1)), pin
     rm2 = _REGION_RE.search(tail)
     if rm2:
-        return rm2.group(1).strip().title(), pin
+        return _canonical_region_spelling(rm2.group(1)), pin
+    resolved = resolve_indian_state_name(state_raw, allow_la_ladakh=True)
+    if resolved:
+        return resolved, pin
     return None, pin
 
 
@@ -249,10 +482,22 @@ def _parse_trailing_state_pin_freeform(text: str) -> tuple[str | None, str | Non
     if not text:
         return None, None
     matches = list(_TRAILING_STATE_PIN_RE.finditer(text))
-    if not matches:
+    if matches:
+        m = matches[-1]
+        return _canonical_region_spelling(m.group(1)), m.group(2).strip()
+    pin_matches = list(re.finditer(r"(?<!\d)(\d{6})(?!\d)", text))
+    if not pin_matches:
         return None, None
-    m = matches[-1]
-    return m.group(1).strip().title(), m.group(2).strip()
+    pin = pin_matches[-1].group(1)
+    before = text[: pin_matches[-1].start()].rstrip()
+    comma_parts = [p.strip() for p in before.split(",") if p.strip()]
+    if not comma_parts:
+        st = resolve_indian_state_name(before, allow_la_ladakh=True)
+        return (st, pin) if st else (None, pin)
+    tail = comma_parts[-1]
+    state_raw = re.sub(r"(?:\s*[-–—])+\s*$", "", tail).strip()
+    st = resolve_indian_state_name(state_raw, allow_la_ladakh=True)
+    return (st, pin) if st else (None, pin)
 
 
 def _extract_pin_from_text(text: str) -> str | None:
@@ -276,9 +521,22 @@ def _extract_state_last_from_text(text: str) -> str | None:
     if not text:
         return None
     matches = list(_REGION_RE.finditer(text))
-    if not matches:
-        return None
-    return matches[-1].group(1).strip().title()
+    if matches:
+        return _canonical_region_spelling(matches[-1].group(1))
+    flat = _squish_spaces(text.replace("\n", " ").replace("\r", " "))
+    pin_matches = list(re.finditer(r"(?<!\d)(\d{6})(?!\d)", flat))
+    if pin_matches:
+        before = flat[: pin_matches[-1].start()].rstrip()
+        comma_parts = [p.strip() for p in before.split(",") if p.strip()]
+        for seg in reversed(comma_parts):
+            state_raw = re.sub(r"(?:\s*[-–—])+\s*$", "", seg).strip()
+            got = resolve_indian_state_name(state_raw, allow_la_ladakh=True)
+            if got:
+                return got
+        got2 = resolve_indian_state_name(before, allow_la_ladakh=True)
+        if got2:
+            return got2
+    return None
 
 
 def _extract_city_from_text(text: str, state: str | None) -> str | None:
@@ -334,13 +592,16 @@ def _extract_city_from_text(text: str, state: str | None) -> str | None:
 def normalize_address_freeform(address_line: str) -> dict[str, str]:
     """
     Parse one address string: ``care_of`` (``C/o``/``S/o``/``W/o``/``D/o`` + name), ``DIST:`` …,
-    strip relation clause from the body, truncate after PIN, then **prepend** ``care_of`` to
-    ``address`` when present (``S/o Name, Gandhi Nagar, …``).
+    strip relation clause from the body, truncate after PIN. ``address`` is the **remainder only**
+    (no leading care-of repeat when ``care_of`` is populated).
     """
     out: dict[str, str] = {}
     if not address_line or not str(address_line).strip():
         return out
     text = normalize_address_dedupe_repetition(str(address_line).strip())
+    text = _normalize_typographic_slashes(text)
+    text = _strip_gender_bleed_segments(text)
+    text = _dedupe_comma_relation_clauses(text)
 
     co = _extract_care_of_from_text(text)
     if co:
@@ -384,16 +645,12 @@ def normalize_address_freeform(address_line: str) -> dict[str, str]:
     work = _truncate_after_last_pin(work)
     work = _squish_spaces(work)
     co_full = (out.get("care_of") or "").strip()
+    if co_full:
+        work = _strip_leading_care_of_duplicate_from_work(work, co_full)
     if work:
-        if co_full:
-            wn = work.lower()
-            cn = co_full.lower()
-            if wn.startswith(cn):
-                out["address"] = work
-            else:
-                out["address"] = _squish_spaces(f"{co_full}, {work}")
-        else:
-            out["address"] = work
+        out["address"] = work
+    elif co_full:
+        out["address"] = co_full
 
     return out
 
@@ -450,5 +707,11 @@ def enrich_customer_address_from_freeform(customer: dict[str, Any]) -> dict[str,
     city_fb = _extract_city_from_text(addr2, (out.get("state") or "").strip() or None)
     if city_fb and not (out.get("city") or "").strip():
         out["city"] = city_fb
+
+    state_cur = (out.get("state") or "").strip()
+    if state_cur and not _indian_state_field_trustworthy(state_cur):
+        fixed = resolve_indian_state_name(state_cur, allow_la_ladakh=False)
+        if fixed:
+            out["state"] = fixed
 
     return out

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import {
   searchCustomer,
   getFormVahanView,
-  getDocumentFileUrl,
+  openDocumentFileInNewTab,
   type CustomerSearchResult,
   type FormVahanViewResult,
 } from "../api/customerSearch";
@@ -40,6 +40,7 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
   const [documentsOpen, setDocumentsOpen] = useState(false);
   const [docFiles, setDocFiles] = useState<{ name: string; size: number }[]>([]);
   const [docLoading, setDocLoading] = useState(false);
+  const [docOpenErr, setDocOpenErr] = useState<string | null>(null);
   const [formVahan, setFormVahan] = useState<FormVahanViewResult | null>(null);
   const [formVahanLoading, setFormVahanLoading] = useState(false);
 
@@ -75,6 +76,7 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
   const openDocuments = async (subfolder: string) => {
     if (!subfolder?.trim()) return;
     setDocumentsOpen(true);
+    setDocOpenErr(null);
     setDocLoading(true);
     setDocFiles([]);
     try {
@@ -321,8 +323,16 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
       {documentsOpen && (
         <div
           className="view-customer-modal-backdrop"
-          onClick={() => setDocumentsOpen(false)}
-          onKeyDown={(e) => e.key === "Escape" && setDocumentsOpen(false)}
+          onClick={() => {
+            setDocOpenErr(null);
+            setDocumentsOpen(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setDocOpenErr(null);
+              setDocumentsOpen(false);
+            }
+          }}
           role="button"
           tabIndex={0}
           aria-label="Close"
@@ -336,7 +346,10 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
               <button
                 type="button"
                 className="view-customer-modal-close"
-                onClick={() => setDocumentsOpen(false)}
+                onClick={() => {
+                  setDocOpenErr(null);
+                  setDocumentsOpen(false);
+                }}
                 aria-label="Close"
               >
                 ×
@@ -348,22 +361,36 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
               ) : docFiles.length === 0 ? (
                 <p>No documents found.</p>
               ) : (
-                <ul className="view-customer-doc-list">
-                  {docFiles.map((f) => (
-                    <li key={f.name}>
-                      <a
-                        href={selectedFileLocation ? getDocumentFileUrl(selectedFileLocation, f.name, dealerId) : "#"}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {f.name}
-                      </a>
-                      <span className="vc-doc-size">
-                        ({(f.size / 1024).toFixed(1)} KB)
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="view-customer-doc-list">
+                    {docFiles.map((f) => (
+                      <li key={f.name}>
+                        <button
+                          type="button"
+                          className="doc-open-link"
+                          disabled={!selectedFileLocation}
+                          onClick={() => {
+                            if (!selectedFileLocation) return;
+                            setDocOpenErr(null);
+                            void openDocumentFileInNewTab(selectedFileLocation, f.name, dealerId).catch((e) => {
+                              setDocOpenErr(e instanceof Error ? e.message : "Could not open document");
+                            });
+                          }}
+                        >
+                          {f.name}
+                        </button>
+                        <span className="vc-doc-size">
+                          ({(f.size / 1024).toFixed(1)} KB)
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  {docOpenErr ? (
+                    <p className="view-customer-doc-open-error" role="alert">
+                      {docOpenErr}
+                    </p>
+                  ) : null}
+                </>
               )}
             </div>
           </div>

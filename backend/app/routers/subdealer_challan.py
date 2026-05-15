@@ -23,7 +23,7 @@ from app.services.add_subdealer_challan_service import (
 )
 from app.services.playwright_executor import run_playwright_callable_sync
 from app.services.dealer_storage import sync_challans_file_to_s3
-from app.services.subdealer_challan_ocr_service import dedupe_raw_challan_lines, parse_subdealer_challan
+from app.services.subdealer_challan_ocr_service import dedupe_raw_challan_lines, parse_subdealer_challan, save_challan_scan_file
 from app.services.upload_file_validation import read_upload_capped, validate_magic_jpeg_png_or_pdf
 from app.validation.text_limits import enforce_max_text_depth
 
@@ -371,6 +371,14 @@ async def parse_scan(
         False,
         description="When true, include raw_ocr_text / ocr_json_text / local_artifact_leaf for dealer PC mirror.",
     ),
+    assign_default_challan_no: bool = Query(
+        True,
+        description="When true and OCR finds no challan number, assign last-4 dealer digits + 4 random alphanumerics.",
+    ),
+    save_scan_file: bool = Query(
+        True,
+        description="When true, save the uploaded scan under CHALLANS_DIR/<leaf>/ alongside OCR artifacts.",
+    ),
     dealer_id: int | None = Query(None, description="Defaults to token dealer (JWT required for parse-scan)"),
     principal: Principal = Depends(get_principal),
 ) -> dict:
@@ -396,10 +404,20 @@ async def parse_scan(
         write_artifacts=True,
         include_artifact_bodies=bool(mirror_bodies),
         challans_base=challans_base,
+        dealer_id=did,
+        assign_default_challan_no=assign_default_challan_no,
     )
     if result.get("error"):
         raise HTTPException(status_code=502, detail=result["error"])
-    for key in ("raw_ocr_path", "ocr_json_path"):
+    if save_scan_file and result.get("artifact_dir"):
+        try:
+            scan_path = save_challan_scan_file(result["artifact_dir"], raw, file.filename)
+            result["scan_path"] = str(scan_path)
+            result["scan_filename"] = scan_path.name
+        except (OSError, ValueError) as e:
+            logger.exception("subdealer_challan parse-scan: scan save failed")
+            result.setdefault("warnings", []).append(f"Could not save uploaded scan: {e}")
+    for key in ("raw_ocr_path", "ocr_json_path", "scan_path"):
         p = result.get(key)
         if not p:
             continue

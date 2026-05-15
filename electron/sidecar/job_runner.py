@@ -998,28 +998,43 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
 
 
 def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
-    """CPA Alliance portal — local Playwright only; uploads + ocr_logs mirrored like other sale jobs."""
+    """CPA Alliance portal — local Playwright only; uploads + ocr_output mirrored like other sale jobs."""
     api_url, jwt = _require_api_credentials(params)
 
     from app.config import get_ocr_output_dir, get_uploads_dir
     from app.services.add_alliance_cpa_insurance import add_alliance_cpa_insurance
+    from app.services.cpa_form_values import prepare_cpa_alliance_fill
 
     dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
-    subfolder = (params.get("subfolder") or "").strip()
     portal_url = (params.get("portal_url") or "").strip() or None
-    customer_name = (params.get("customer_name") or "").strip() or None
-    mobile = (params.get("mobile") or "").strip() or None
-    frame_no = (params.get("frame_no") or "").strip() or None
-    engine_no = (params.get("engine_no") or "").strip() or None
+
+    def _opt_int(key: str) -> int | None:
+        v = params.get(key)
+        if v is None or v == "":
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    ocr_dir = Path(get_ocr_output_dir(dealer_id))
+    try:
+        alliance_kwargs, full_values, subfolder = prepare_cpa_alliance_fill(
+            dealer_id=dealer_id,
+            subfolder=(params.get("subfolder") or "").strip() or None,
+            staging_id=(params.get("staging_id") or "").strip() or None,
+            customer_id=_opt_int("customer_id"),
+            vehicle_id=_opt_int("vehicle_id"),
+            ocr_output_dir=ocr_dir,
+        )
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
 
     result = add_alliance_cpa_insurance(
         dealer_id=dealer_id,
         subfolder=subfolder,
         portal_url=portal_url,
-        customer_name=customer_name,
-        mobile=mobile,
-        frame_no=frame_no,
-        engine_no=engine_no,
+        **alliance_kwargs,
     )
 
     uploads_dir = get_uploads_dir(dealer_id)
@@ -1035,9 +1050,10 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
         try:
             from app.services.process_failure_log_service import digits_only_mobile, entity_key_print_forms
 
-            md = digits_only_mobile(mobile)
+            mob_raw = str(full_values.get("mobile_number") or "").strip()
+            md = digits_only_mobile(mob_raw)
             ek = entity_key_print_forms(subfolder=subfolder or "default", mobile_digits=md, suffix="cpa")
-            disp = md if md else ((mobile or "")[:32] or None)
+            disp = md if md else (mob_raw[:32] or None)
             _record_process_failure_via_api(
                 api_url,
                 jwt,

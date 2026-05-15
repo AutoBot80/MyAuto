@@ -13,6 +13,58 @@ def normalize_for_fuzzy_match(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").lower().strip())
 
 
+def normalize_for_alliance_model_match(s: str) -> str:
+    """
+    Normalize model strings for Alliance dropdown fuzzy match.
+
+    Portal options often abbreviate **Splendor** as ``SPL +`` / ``SPL+`` while our DB uses
+    ``Splendor +`` — align both sides before scoring.
+    """
+    t = normalize_for_fuzzy_match(s)
+    if not t:
+        return t
+    t = re.sub(r"\bsplendor\s*\+\s*", "splendor + ", t)
+    t = re.sub(r"\bspl\s*\+\s*", "splendor + ", t)
+    t = re.sub(r"\bspl\b(?!endor)", "splendor", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def fuzzy_best_alliance_model_label(
+    query: str,
+    candidates: list[str],
+    *,
+    min_score: float = 0.70,
+) -> str | None:
+    """Best-scoring Alliance **model** option at or above ``min_score`` (not first in DOM order)."""
+    if not candidates:
+        return None
+    q = normalize_for_alliance_model_match(query)
+    if not q:
+        return None
+    best_label: str | None = None
+    best_score = 0.0
+    for raw in candidates:
+        c = (raw or "").strip()
+        if not c:
+            continue
+        cn = normalize_for_alliance_model_match(c)
+        score = _fuzzy_composite_pair_strength(q, cn)
+        if score > best_score:
+            best_score = score
+            best_label = c
+    if best_score < min_score:
+        return None
+    return best_label
+
+
+def alliance_model_match_score(query: str, candidate: str) -> float:
+    return _fuzzy_composite_pair_strength(
+        normalize_for_alliance_model_match(query),
+        normalize_for_alliance_model_match(candidate),
+    )
+
+
 def strip_leading_the_for_master_ref(s: str) -> str:
     """
     After :func:`normalize_for_fuzzy_match`, drop a single leading article **the** so
@@ -141,6 +193,32 @@ def normalize_nominee_relationship_value(val: str | None) -> str:
     if matched:
         return matched
     return s
+
+
+_NOMINEE_RELATIONSHIP_FEMALE = frozenset({"Wife", "Mother", "Daughter", "Sister", "Niece"})
+_NOMINEE_RELATIONSHIP_MALE = frozenset(
+    {"Husband", "Father", "Son", "Brother", "Nephew", "Uncle"}
+)
+
+
+def derive_nominee_gender_from_relationship(val: str | None) -> str | None:
+    """
+    When the nominee relation is a specific canonical label (not a slash pair like **Wife/Husband**),
+    return **Female** or **Male**. Used by Add Sales OCR to correct mis-read gender checkboxes.
+    """
+    if val is None or not str(val).strip():
+        return None
+    raw = " ".join(str(val).strip().split()).rstrip(".")
+    if "/" in raw:
+        return None
+    rel = normalize_nominee_relationship_value(raw)
+    if not rel:
+        return None
+    if rel in _NOMINEE_RELATIONSHIP_FEMALE:
+        return "Female"
+    if rel in _NOMINEE_RELATIONSHIP_MALE:
+        return "Male"
+    return None
 
 
 def _fuzzy_composite_pair_strength(q: str, c: str) -> float:
@@ -283,6 +361,41 @@ def fuzzy_best_option_label(query: str, candidates: list[str], *, min_score: flo
         # Do not fall back to the first option — wrong insurer/OEM is worse than no selection.
         return None
     return best_label
+
+
+def fuzzy_first_option_label_at_or_above(
+    query: str,
+    candidates: list[str],
+    *,
+    min_score: float = 0.70,
+) -> str | None:
+    """
+    First dropdown option (DOM / list order) whose fuzzy score vs ``query`` is >= ``min_score``.
+
+    Unlike :func:`fuzzy_best_option_label`, does not pick the global best scorer — use when the
+    portal only accepts real ``<option>`` labels (e.g. Alliance model list with long trailing text).
+    """
+    if not candidates:
+        return None
+    q = normalize_for_fuzzy_match(query)
+    if not q:
+        return None
+    for raw in candidates:
+        c = (raw or "").strip()
+        if not c:
+            continue
+        cn = normalize_for_fuzzy_match(c)
+        if _fuzzy_composite_pair_strength(q, cn) >= min_score:
+            return c
+    return None
+
+
+def fuzzy_option_match_score(query: str, candidate: str) -> float:
+    """Fuzzy score in ``[0, 1]`` between ``query`` and a dropdown option label."""
+    return _fuzzy_composite_pair_strength(
+        normalize_for_fuzzy_match(query),
+        normalize_for_fuzzy_match(candidate),
+    )
 
 
 def clean_text(value: object | None) -> str:

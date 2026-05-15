@@ -333,6 +333,11 @@ def prepare_customer(
             care_of=care_of,
         )
     _prof = (dms_values.get("profession") or dms_values.get("occupation") or "").strip() or None
+    _b2_home = (
+        (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()
+        or mobile
+    )
+    _b2_email = (dms_values.get("branch2_contact_email") or "NA").strip()
     if not _siebel_video_path_after_find_go_to_all_enquiries(
         page,
         mobile=mobile,
@@ -346,6 +351,8 @@ def prepare_customer(
         customer_profession=_prof,
         gender=(dms_values.get("gender") or "").strip() or None,
         relation_prefix=(dms_values.get("relation_prefix") or "").strip() or None,
+        home_phone=_b2_home,
+        contact_email=_b2_email,
     ):
         step("Stopped: video SOP failed while opening customer record or filling Relation's Name.")
         out["error"] = (
@@ -355,11 +362,6 @@ def prepare_customer(
         return False
 
     if not sweep_has_open:
-        _b2_home = (
-            (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()
-            or mobile
-        )
-        _b2_email = (dms_values.get("branch2_contact_email") or "NA").strip()
         _b2_city = (dms_values.get("city") or dms_values.get("district") or "").strip()
         # Branch (2): Tehsil + Enter + Tab×3 to pin; Esc retry + td click; fallback jqGrid postal fill.
         if not _siebel_video_branch2_address_postal_and_save(
@@ -368,8 +370,6 @@ def prepare_customer(
             action_timeout_ms=action_timeout_ms,
             content_frame_selector=content_frame_selector,
             note=note,
-            home_phone=_b2_home,
-            contact_email=_b2_email,
             city=_b2_city or None,
         ):
             step("Stopped: video branch (2) Address tab Save failed (Ctrl+S / Save toolbar).")

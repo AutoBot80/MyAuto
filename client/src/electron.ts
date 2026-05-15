@@ -49,6 +49,13 @@ export interface ElectronAPI {
       | { ok: true; copied: string[]; destDir: string }
       | { ok: false; message: string }
     >;
+    copyChallanScanArtifacts: (payload: {
+      artifactLeaf: string;
+      items: { sourcePath: string; destFileName: string }[];
+    }) => Promise<
+      | { ok: true; copied: string[]; destDir: string }
+      | { ok: false; message: string }
+    >;
   };
   config: {
     getSiteUrls: () => Promise<{

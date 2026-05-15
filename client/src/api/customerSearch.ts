@@ -1,3 +1,4 @@
+import { getAccessToken } from "../auth/token";
 import { apiFetch, getBaseUrl } from "./client";
 import { DEALER_ID } from "./dealerId";
 
@@ -81,4 +82,48 @@ export function getDocumentsListUrl(subfolder: string, dealerId?: number): strin
 export function getDocumentFileUrl(subfolder: string, filename: string, dealerId?: number): string {
   const base = getBaseUrl().replace(/\/$/, "");
   return `${base}/documents/${encodeURIComponent(subfolder)}/${encodeURIComponent(filename)}?dealer_id=${dealerId ?? DEALER_ID}`;
+}
+
+/**
+ * Open a stored scan in a new tab. A raw anchor to getDocumentFileUrl() gets "Not authenticated"
+ * because top-level navigation does not send the Bearer token; this fetches with Authorization
+ * then opens a blob URL (same approach as openCreateInvoicePdfs.ts).
+ */
+export async function openDocumentFileInNewTab(
+  subfolder: string,
+  filename: string,
+  dealerId?: number
+): Promise<void> {
+  const base = getBaseUrl().replace(/\/$/, "");
+  const params = new URLSearchParams({ dealer_id: String(dealerId ?? DEALER_ID) });
+  const url = `${base}/documents/${encodeURIComponent(subfolder)}/${encodeURIComponent(filename)}?${params}`;
+  const headers = new Headers();
+  const token = getAccessToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const ct = res.headers.get("content-type") ?? "";
+      if (ct.includes("application/json")) {
+        const j = (await res.json()) as { detail?: unknown };
+        if (typeof j.detail === "string") detail = j.detail;
+        else if (Array.isArray(j.detail)) detail = JSON.stringify(j.detail);
+      } else {
+        const t = (await res.text()).trim();
+        if (t) detail = t.length > 200 ? `${t.slice(0, 200)}…` : t;
+      }
+    } catch {
+      /* keep detail */
+    }
+    throw new Error(detail);
+  }
+  const blob = await res.blob();
+  const objUrl = URL.createObjectURL(blob);
+  const w = window.open(objUrl, "_blank", "noopener,noreferrer");
+  if (!w) {
+    URL.revokeObjectURL(objUrl);
+    throw new Error("Popup blocked — allow popups for this site to view documents.");
+  }
+  window.setTimeout(() => URL.revokeObjectURL(objUrl), 120_000);
 }

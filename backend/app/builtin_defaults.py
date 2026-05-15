@@ -11,7 +11,8 @@ OCR_UPLOAD_PARALLEL_TEXTRACT: bool = True
 # DMS Playwright: run the browser headed so the operator sees the page.
 DMS_PLAYWRIGHT_HEADED: bool = True
 
-# DMS + Insurance (MISP) + Vahan: Playwright-bundled Chromium with launch_persistent_context (no CDP Edge).
+# DMS + CPAInsurance + Vahan: native path uses Playwright-bundled Chromium (launch_persistent_context).
+# Insurance (MISP) always uses CDP + managed Edge/Chrome; see handle_browser_opening._use_native_pw_chromium_for_site.
 USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS: bool = True
 
 # DMS Siebel login: max ms to wait for the operator to finish manual login before failing Create Invoice.

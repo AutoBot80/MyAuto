@@ -402,8 +402,9 @@ DMS_LOGIN_MANUAL_WAIT_MS = (
 )
 # Run browser visible (headed) so user sees DMS page and automation. Default: ``builtin_defaults``.
 DMS_PLAYWRIGHT_HEADED = _bool_env("DMS_PLAYWRIGHT_HEADED", _DEFAULT_DMS_PLAYWRIGHT_HEADED)
-# When true (default), DMS, Insurance, and Vahan ``get_or_open_site_page`` use Playwright bundled Chromium
-# with ``launch_persistent_context`` (separate profiles) instead of CDP-attaching to Edge/Chrome.
+# When true (default), DMS, CPAInsurance, and Vahan ``get_or_open_site_page`` use Playwright bundled Chromium
+# with ``launch_persistent_context`` (separate profiles). Insurance (MISP) always uses CDP + managed
+# Edge/Chrome (v0.7.00 behavior); this flag does not apply to Insurance. When false, those three use CDP too.
 USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS = _bool_env(
     "USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS", _DEFAULT_USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS
 )

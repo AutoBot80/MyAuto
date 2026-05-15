@@ -25,8 +25,12 @@ export type ParseSubdealerChallanResponse = {
   challan_ddmmyyyy: string | null;
   lines: SubdealerChallanLine[];
   artifact_dir: string | null;
+  /** Folder leaf under ``Challans/<leaf>/`` (``{challan_no}_{ddmmyyyy}``). */
+  artifact_leaf?: string | null;
   raw_ocr_path: string | null;
   ocr_json_path: string | null;
+  scan_path?: string | null;
+  scan_filename?: string | null;
   /** Present when ``?mirror_bodies=true`` (Electron): folder leaf under ``Challans/<leaf>/`` on dealer PC (same as ``CHALLANS_DIR`` on server). */
   local_artifact_leaf?: string | null;
   raw_ocr_text?: string | null;
@@ -85,6 +89,85 @@ export function computeLocalChallanArtifactLeaf(r: ParseSubdealerChallanResponse
   return `${cn}_${ddmmyyyy}`;
 }
 
+type FileWithPath = File & { path?: string };
+
+function sourcePathFromFile(file: File): string | null {
+  const p = (file as FileWithPath).path;
+  return typeof p === "string" && p.trim() ? p.trim() : null;
+}
+
+function safeChallanScanFileName(fileName: string): string | null {
+  const base = (fileName || "").trim().split(/[/\\]/).pop()?.trim() || "";
+  if (!base || base.length > 240) return null;
+  if (/[<>:"|?*]/.test(base)) return null;
+  const ext = base.includes(".") ? base.slice(base.lastIndexOf(".")).toLowerCase() : "";
+  if (![".pdf", ".jpg", ".jpeg", ".png"].includes(ext)) return null;
+  return base;
+}
+
+function challanScanRelPath(artifactLeaf: string, fileName: string): string | null {
+  const leaf = artifactLeaf.trim().replace(/\\/g, "/").split("/").pop()?.trim() || "";
+  const name = safeChallanScanFileName(fileName);
+  if (!leaf || leaf.includes("..") || !name) return null;
+  return `${leaf}/${name}`;
+}
+
+async function uploadChallanScanToServer(
+  file: File,
+  artifactLeaf: string,
+  dealerId: number
+): Promise<void> {
+  const rel = challanScanRelPath(artifactLeaf, file.name);
+  if (!rel) return;
+  const body = new FormData();
+  body.append("dealer_id", String(dealerId));
+  body.append("tree", "challans");
+  body.append("rel_path", rel);
+  body.append("file", file, safeChallanScanFileName(file.name) || file.name);
+  await apiFetch<{ ok: boolean }>("/sidecar/upload-artifacts", {
+    method: "POST",
+    body,
+  });
+}
+
+async function mirrorChallanScansToLocalDisk(artifactLeaf: string, files: File[]): Promise<void> {
+  if (!isElectron() || !window.electronAPI?.file?.copyChallanScanArtifacts) return;
+  const items: { sourcePath: string; destFileName: string }[] = [];
+  for (const f of files) {
+    const src = sourcePathFromFile(f);
+    const destFileName = safeChallanScanFileName(f.name || "");
+    if (!src || !destFileName) continue;
+    items.push({ sourcePath: src, destFileName });
+  }
+  if (items.length === 0) return;
+  try {
+    await window.electronAPI.file.copyChallanScanArtifacts({ artifactLeaf, items });
+  } catch {
+    /* non-fatal */
+  }
+}
+
+async function persistChallanScans(
+  files: File[],
+  merged: ParseSubdealerChallanResponse,
+  dealerId: number,
+  options: { uploadToServer: boolean; copyLocal: boolean }
+): Promise<void> {
+  if (files.length === 0) return;
+  const leaf = (merged.artifact_leaf || "").trim() || computeLocalChallanArtifactLeaf(merged);
+  if (options.copyLocal) {
+    await mirrorChallanScansToLocalDisk(leaf, files);
+  }
+  if (!options.uploadToServer) return;
+  for (const f of files) {
+    try {
+      await uploadChallanScanToServer(f, leaf, dealerId);
+    } catch {
+      /* non-fatal: OCR parse already succeeded */
+    }
+  }
+}
+
 async function mirrorChallanParseArtifactsToDealerPc(
   merged: ParseSubdealerChallanResponse,
   pages: ParseSubdealerChallanResponse[],
@@ -132,15 +215,44 @@ async function mirrorChallanParseArtifactsToDealerPc(
   }
 }
 
+/** Last 4 digits of dealer id + 4 random alphanumerics (A-Z, 0-9). Matches backend ``generate_default_challan_no``. */
+export function generateDefaultChallanNo(dealerId: number): string {
+  const prefix = String(Math.trunc(dealerId)).slice(-4).padStart(4, "0");
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let suffix = "";
+  for (let i = 0; i < 4; i++) {
+    suffix += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return `${prefix}${suffix}`;
+}
+
+function assignDefaultChallanNoIfMissing(
+  res: ParseSubdealerChallanResponse,
+  dealerId: number
+): ParseSubdealerChallanResponse {
+  if ((res.challan_no || "").trim()) return res;
+  const no = generateDefaultChallanNo(dealerId);
+  const warnings = [...(res.warnings || [])];
+  const undetected = "Challan number not detected.";
+  const filtered = warnings.filter((w) => (w || "").trim() !== undetected);
+  filtered.push(`Challan number not detected; assigned default ${no}.`);
+  return { ...res, challan_no: no, warnings: filtered };
+}
+
 /**
  * POST /subdealer-challan/parse-scan — multipart image/PDF (one file per request).
  */
 export async function parseSubdealerChallanScan(
-  file: File
+  file: File,
+  options?: { assignDefaultChallanNo?: boolean; saveScanFile?: boolean }
 ): Promise<ParseSubdealerChallanResponse> {
   const body = new FormData();
   body.append("file", file);
-  const q = isElectron() ? "?mirror_bodies=true" : "";
+  const params = new URLSearchParams();
+  if (isElectron()) params.set("mirror_bodies", "true");
+  if (options?.assignDefaultChallanNo === false) params.set("assign_default_challan_no", "false");
+  if (options?.saveScanFile === false) params.set("save_scan_file", "false");
+  const q = params.toString() ? `?${params.toString()}` : "";
   return apiFetch<ParseSubdealerChallanResponse>(`/subdealer-challan/parse-scan${q}`, {
     method: "POST",
     body,
@@ -273,7 +385,8 @@ export function mergeSubdealerChallanParseResults(
  */
 export async function parseSubdealerChallanScans(
   files: File[],
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  dealerId: number = DEALER_ID
 ): Promise<ParseSubdealerChallanResponse> {
   if (files.length === 0) {
     return mergeSubdealerChallanParseResults([]);
@@ -281,8 +394,11 @@ export async function parseSubdealerChallanScans(
   if (files.length === 1) {
     onProgress?.(1, 1);
     const single = await parseSubdealerChallanScan(files[0]);
-    if (isElectron() && !(single.error || "").trim()) {
-      await mirrorChallanParseArtifactsToDealerPc(single, [single], [files[0].name]);
+    if (!(single.error || "").trim()) {
+      if (isElectron()) {
+        await mirrorChallanParseArtifactsToDealerPc(single, [single], [files[0].name]);
+        await persistChallanScans(files, single, dealerId, { uploadToServer: false, copyLocal: true });
+      }
     }
     return single;
   }
@@ -293,15 +409,26 @@ export async function parseSubdealerChallanScans(
     const f = files[i];
     names.push(f.name);
     try {
-      results.push(await parseSubdealerChallanScan(f));
+      results.push(
+        await parseSubdealerChallanScan(f, { assignDefaultChallanNo: false, saveScanFile: false })
+      );
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new Error(`OCR failed on "${f.name}": ${msg}`);
     }
   }
-  const merged = mergeSubdealerChallanParseResults(results, names);
-  if (isElectron() && !(merged.error || "").trim()) {
-    await mirrorChallanParseArtifactsToDealerPc(merged, results, names);
+  const merged = assignDefaultChallanNoIfMissing(
+    mergeSubdealerChallanParseResults(results, names),
+    dealerId
+  );
+  if (!(merged.error || "").trim()) {
+    if (isElectron()) {
+      await mirrorChallanParseArtifactsToDealerPc(merged, results, names);
+    }
+    await persistChallanScans(files, merged, dealerId, {
+      uploadToServer: true,
+      copyLocal: isElectron(),
+    });
   }
   return merged;
 }

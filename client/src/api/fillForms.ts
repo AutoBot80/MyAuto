@@ -437,13 +437,32 @@ export async function fillHeroInsuranceLocal(req: FillHeroInsuranceRequest): Pro
 }
 
 export interface FillCpaAllianceInsuranceRequest {
-  dealer_id: number;
-  subfolder: string;
+  dealer_id?: number | null;
+  /** Optional when staging_id is set (resolved from staging after Submit Info). */
+  subfolder?: string | null;
   portal_url: string;
-  customer_name?: string | null;
-  mobile?: string | null;
-  frame_no?: string | null;
-  engine_no?: string | null;
+  staging_id?: string | null;
+  customer_id?: number | null;
+  vehicle_id?: number | null;
+}
+
+/** Build CPA Alliance request — server loads fill values from form_cpa_insurance_view + staging. */
+export function buildFillCpaAllianceInsuranceRequest(params: {
+  dealerId: number;
+  portalUrl: string;
+  subfolder?: string | null;
+  stagingId?: string | null;
+  customerId?: number | null;
+  vehicleId?: number | null;
+}): FillCpaAllianceInsuranceRequest {
+  return {
+    dealer_id: params.dealerId,
+    portal_url: params.portalUrl,
+    subfolder: params.subfolder?.trim() || undefined,
+    staging_id: params.stagingId?.trim() || undefined,
+    customer_id: params.customerId ?? undefined,
+    vehicle_id: params.vehicleId ?? undefined,
+  };
 }
 
 export interface FillCpaAllianceInsuranceResponse {
@@ -453,15 +472,32 @@ export interface FillCpaAllianceInsuranceResponse {
   playwright_log?: string | null;
 }
 
+/** CPA Alliance portal on the API host (browser dev / cloud worker). Same automation as the Electron sidecar. */
+export async function fillCpaAllianceInsurance(
+  req: FillCpaAllianceInsuranceRequest
+): Promise<FillCpaAllianceInsuranceResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FILL_HERO_INSURANCE_TIMEOUT_MS);
+  try {
+    return await apiFetch<FillCpaAllianceInsuranceResponse>("/fill-forms/insurance/cpa-alliance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /**
- * CPA Alliance third-party portal (native Chromium profile). Desktop sidecar only.
+ * CPA Alliance: routes through the local sidecar in Electron; otherwise POSTs to the API
+ * (Playwright runs on the machine hosting the backend — same pattern as Generate Insurance / Vahan warm).
  */
 export async function fillCpaAllianceInsuranceLocal(
   req: FillCpaAllianceInsuranceRequest
 ): Promise<FillCpaAllianceInsuranceResponse> {
-  if (!isElectron()) {
-    return { success: false, error: "CPA Insurance runs in the Saathi desktop app (Electron) only." };
-  }
+  if (!isElectron()) return fillCpaAllianceInsurance(req);
   try {
     const result = await window.electronAPI!.sidecar.runJob({
       type: "fill_cpa_alliance_insurance",
@@ -469,12 +505,11 @@ export async function fillCpaAllianceInsuranceLocal(
       jwt: getAccessToken() ?? "",
       params: {
         dealer_id: req.dealer_id,
-        subfolder: req.subfolder,
+        subfolder: req.subfolder ?? undefined,
         portal_url: req.portal_url,
-        customer_name: req.customer_name ?? undefined,
-        mobile: req.mobile ?? undefined,
-        frame_no: req.frame_no ?? undefined,
-        engine_no: req.engine_no ?? undefined,
+        staging_id: req.staging_id ?? undefined,
+        customer_id: req.customer_id ?? undefined,
+        vehicle_id: req.vehicle_id ?? undefined,
       },
       timeoutMs: FILL_HERO_INSURANCE_TIMEOUT_MS,
     });

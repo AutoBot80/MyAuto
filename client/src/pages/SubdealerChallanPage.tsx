@@ -671,7 +671,8 @@ export function SubdealerChallanPage({
     try {
       const res = await parseSubdealerChallanScans(
         files,
-        files.length > 1 ? (c, t) => setParseOcrProgress({ current: c, total: t }) : undefined
+        files.length > 1 ? (c, t) => setParseOcrProgress({ current: c, total: t }) : undefined,
+        dealerId
       );
       setChallanNo(res.challan_no);
       setChallanDateRaw(res.challan_date_raw);

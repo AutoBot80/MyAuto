@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { getDocumentFileUrl } from "../api/customerSearch";
+import { openDocumentFileInNewTab } from "../api/customerSearch";
 import { DEALER_ID } from "../api/dealerId";
 import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
 
@@ -64,6 +64,7 @@ export function UploadScansPanel({
 }: UploadScansPanelProps) {
   const isPreUploaded = Boolean(savedTo && uploadedFiles.length > 0);
   const [selectedConsolidatedFiles, setSelectedConsolidatedFiles] = useState<File[]>([]);
+  const [docOpenErr, setDocOpenErr] = useState<string | null>(null);
   const consolidatedInputRef = useRef<HTMLInputElement | null>(null);
 
   const canUploadConsolidated = selectedConsolidatedFiles.length > 0 && !isUploading;
@@ -148,17 +149,27 @@ export function UploadScansPanel({
           <ul className="app-panel-identified-docs-list">
             {identifiedDocLinks.map(({ label, filename }) => (
               <li key={`${label}:${filename}`}>
-                <a
-                  href={getDocumentFileUrl(savedTo, filename, dealerId ?? DEALER_ID)}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
+                  type="button"
+                  className="doc-open-link"
+                  onClick={() => {
+                    setDocOpenErr(null);
+                    void openDocumentFileInNewTab(savedTo, filename, dealerId ?? DEALER_ID).catch((e) => {
+                      setDocOpenErr(e instanceof Error ? e.message : "Could not open document");
+                    });
+                  }}
                 >
                   {label}
-                </a>
+                </button>
                 <span className="app-panel-identified-docs-filename">{filename}</span>
               </li>
             ))}
           </ul>
+          {docOpenErr ? (
+            <div className="app-panel-identified-docs-error" role="alert">
+              {docOpenErr}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {uploadStatus ? <div className="app-panel-status">{uploadStatus}</div> : null}

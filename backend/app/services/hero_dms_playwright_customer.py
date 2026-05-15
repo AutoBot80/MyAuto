@@ -4139,21 +4139,19 @@ def _siebel_video_branch2_address_postal_and_save(
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note,
-    home_phone: str | None = None,
-    contact_email: str | None = None,
     city: str | None = None,
 ) -> bool:
     """
-    Video branch **(2)** (no Open enquiry): after Relation's Name path, fill **Home Phone #** and **Email**,
-    open **Address**, then **Postal Code** (jqGrid ``1_s_1_l_Postal_Code`` / ``name=Postal_Code`` /
-    ``1_Postal_Code``). When ``city`` is set, fill Tehsil/Taluka (``HHML_Tehsil_Taluka``), **Enter** to commit
-    the combo, **Tab** three times to Pincode, then type the pin (with Esc + retry and jqGrid ``td`` click
-    fallbacks if focus stalls); otherwise use scoped / union postal fills only.
+    Video branch **(2)** (no Open enquiry): open **Address**, then **Postal Code** (jqGrid ``1_s_1_l_Postal_Code`` /
+    ``name=Postal_Code`` / ``1_Postal_Code``). When ``city`` is set, fill Tehsil/Taluka (``HHML_Tehsil_Taluka``),
+    **Enter** to commit the combo, **Tab** three times to Pincode, then type the pin (with Esc + retry and
+    jqGrid ``td`` click fallbacks if focus stalls); otherwise use scoped / union postal fills only.
     Prefer **main document** / **div#S_A1** (Hero often has no ``iframe#S_A1``), then **iframe#S_A1**,
     **#SWEApplet1** / **form SWE_Form1_0**, then **Ctrl+S** (Save toolbar fallback).
 
-    ``home_phone`` defaults from DMS landline / alternate phone at the caller; ``contact_email`` defaults
-    to ``NA`` when the caller passes None. ``city`` from DMS (e.g. city or district).
+    **Home Phone #** and **Email** are filled in ``_siebel_video_path_after_find_go_to_all_enquiries``.
+
+    ``city`` from DMS (e.g. city or district).
 
     Postal Code fill is **best-effort**; automation still attempts **Save** even when the pin field is not filled.
     """
@@ -4162,47 +4160,7 @@ def _siebel_video_branch2_address_postal_and_save(
         note("Branch (2) Address: pin_code empty — skipping Address tab / Postal Code fill.")
         return False
     t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
-    hp = (home_phone or "").strip()
-    em = (contact_email if contact_email is not None else "NA").strip()
-    if not em:
-        em = "NA"
 
-    _branch2_try_fill_contact_input(
-        page,
-        selectors=(
-            'input[name="s_4_1_159_0"]',
-            '[aria-label="Home Phone #"]',
-            'input[aria-label*="Home Phone" i]',
-        ),
-        value=hp,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-        log_label="Home Phone #",
-    )
-    # v0.7.06: short settle before Email (Siebel re-renders header fields).
-    _safe_page_wait(page, 280, log_label="after_branch2_home_phone")
-    _branch2_wait_union_visible_across_roots(
-        page,
-        content_frame_selector=content_frame_selector,
-        parts=_BRANCH2_EMAIL_WAIT_SELECTORS,
-        timeout_ms=2600,
-    )
-    _branch2_try_fill_contact_input(
-        page,
-        selectors=(
-            'input[name="s_4_1_225_0"][aria-labelledby="EmailAddress_Label_4"]',
-            'input[name="s_4_1_225_0"]',
-            'input[aria-label="Email" i]',
-            '[aria-label="Email"]',
-        ),
-        value=em,
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-        log_label="Email",
-    )
-    _safe_page_wait(page, 280, log_label="after_branch2_email")
     _branch2_wait_union_visible_across_roots(
         page,
         content_frame_selector=content_frame_selector,
@@ -4379,12 +4337,18 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     customer_profession: str | None = None,
     gender: str | None = None,
     relation_prefix: str | None = None,
+    home_phone: str | None = None,
+    contact_email: str | None = None,
 ) -> bool:
     """
     Steps after **Find + Go** from operator recording *Find Contact Enquiry*:
     optional **Siebel Find** tab → click the **Search Results** mobile drill-in → **Contacts** →
     **Contact_Enquiry** (Contacts + Enquiries tables, Enquiry# link) → **Enquiry** → **All Enquiries**.
     If *skip_search_hit_click* is True, the left-pane drilldown click is skipped (already done by caller).
+
+    After the contact detail form is open: fill **Email** (``contact_email`` or ``NA``) and optional
+    **Home Phone #** (``home_phone``). When ``care_of`` is set, continue with relation type / occupation /
+    Relation's Name / Address Line 1. Branch **(2)** Address+postal step no longer fills phone/email.
     """
     if not skip_search_hit_click:
         if not _wait_for_mobile_search_hit_ready(
@@ -4452,6 +4416,39 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
     ):
         _safe_page_wait(page, 120, log_label="after_first_name_click_before_relation_fill_fallback")
 
+    em_use = (contact_email if contact_email is not None else "NA").strip() or "NA"
+    _branch2_try_fill_contact_input(
+        page,
+        selectors=(
+            'input[name="s_4_1_225_0"][aria-labelledby="EmailAddress_Label_4"]',
+            'input[name="s_4_1_225_0"]',
+            'input[aria-label="Email" i]',
+            '[aria-label="Email"]',
+        ),
+        value=em_use,
+        action_timeout_ms=action_timeout_ms,
+        content_frame_selector=content_frame_selector,
+        note=note,
+        log_label="Email (branch 2 header)",
+    )
+    _safe_page_wait(page, 200, log_label="after_branch2_header_email")
+    hp_head = (home_phone or "").strip()
+    if hp_head:
+        _branch2_try_fill_contact_input(
+            page,
+            selectors=(
+                'input[name="s_4_1_159_0"]',
+                '[aria-label="Home Phone #"]',
+                'input[aria-label*="Home Phone" i]',
+            ),
+            value=hp_head,
+            action_timeout_ms=action_timeout_ms,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            log_label="Home Phone #",
+        )
+        _safe_page_wait(page, 280, log_label="after_branch2_header_home_phone")
+
     if not care_val:
         note("No care_of from DB — skipping Relation's Name / Address Line 1 fill after First Name drilldown.")
         return True
@@ -4469,19 +4466,6 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         f"profession_src={customer_profession!r}, occ_label={occ_label!r}."
     )
 
-    _branch2_try_fill_contact_input(
-        page,
-        selectors=(
-            'input[name="s_4_1_225_0"][aria-labelledby="EmailAddress_Label_4"]',
-            'input[name="s_4_1_225_0"]',
-        ),
-        value="NA",
-        action_timeout_ms=action_timeout_ms,
-        content_frame_selector=content_frame_selector,
-        note=note,
-        log_label="Email (NA, relation path)",
-    )
-    _safe_page_wait(page, 200, log_label="after_relation_path_email_na")
     if rel_type:
         _pick_relation_type_from_dropdown(
             page,
@@ -5959,6 +5943,102 @@ def _poll_payment_lines_transaction_verified(
     return False
 
 
+_PAYMENT_LINES_POST_PLUS_EDIT_STATE_JS = """() => {
+  const vis = (el) => {
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 2 && r.height >= 2;
+  };
+  const saveDisabledLike = (el) => {
+    if (!el) return true;
+    if (el.disabled === true) return true;
+    const d = el.getAttribute('disabled');
+    if (d !== null && String(d).toLowerCase() !== 'false') return true;
+    const cls = String(el.className || '');
+    if (/appletbuttondis/i.test(cls)) return true;
+    return false;
+  };
+  const saveSels = [
+    "button[aria-label='Payment Lines List:Save']",
+    "a[aria-label='Payment Lines List:Save']",
+    "button[title='Payment Lines List:Save']",
+    "a[title='Payment Lines List:Save']",
+    "button[aria-label='Payment Lines List: Save']",
+    "a[aria-label='Payment Lines List: Save']",
+    "button[title='Payment Lines List: Save']",
+    "a[title='Payment Lines List: Save']",
+  ];
+  for (const s of saveSels) {
+    const el = document.querySelector(s);
+    if (!vis(el)) continue;
+    if (!saveDisabledLike(el)) return true;
+  }
+  const fldSels = [
+    "[id='1_s_2_1_Transaction_Amount']",
+    "[name='1_s_2_1_Transaction_Amount']",
+    "[title_id='1_s_2_1_Transaction_Amount']",
+    "[title-id='1_s_2_1_Transaction_Amount']",
+    "[name='Transaction_Type']",
+    "[name='Transaction_Type_New']",
+    "[id='Transaction_Type']",
+    "input[name*='Transaction_Type' i]",
+    "input[id*='Transaction_Type' i]",
+    "[name='Transaction_Amount']",
+  ];
+  for (const s of fldSels) {
+    const el = document.querySelector(s);
+    if (vis(el)) return true;
+  }
+  return false;
+}"""
+
+
+def _payment_lines_edit_row_evidence_in_frame(frame: Frame) -> bool:
+    try:
+        return bool(frame.evaluate(_PAYMENT_LINES_POST_PLUS_EDIT_STATE_JS))
+    except Exception:
+        return False
+
+
+def _payment_lines_frame_url_looks_contact_site_payments(frame: Frame) -> bool:
+    try:
+        u = (frame.url or "").strip()
+    except Exception:
+        u = ""
+    ul = u.lower()
+    return "contact+site+payments" in ul or "contact%2bsite%2bpayments" in ul
+
+
+def _payment_lines_frame_has_hhml_payment_grid_marker(frame: Frame) -> bool:
+    js = """() => {
+      return !!document.querySelector(
+        'th[id*="HHML_Transaction_No"], [id*="HHML_Transaction_No"], [id*="s_2_l"]'
+      );
+    }"""
+    try:
+        return bool(frame.evaluate(js))
+    except Exception:
+        return False
+
+
+def _poll_payment_lines_after_plus_click(
+    page: Page,
+    *,
+    action_timeout_ms: int,
+) -> bool:
+    total_ms = int(min(4500, max(2000, min(action_timeout_ms, 12000) // 3)))
+    step_ms = 380
+    t0 = time.monotonic()
+    while (time.monotonic() - t0) * 1000.0 < total_ms:
+        for frame in _ordered_frames(page):
+            if _payment_lines_edit_row_evidence_in_frame(frame):
+                return True
+        _safe_page_wait(page, step_ms, log_label="payment_lines_post_plus_poll")
+    return False
+
+
 def _add_customer_payment(
     page: Page,
     *,
@@ -6097,48 +6177,57 @@ def _add_customer_payment(
         except Exception:
             continue
 
-    plus_selectors = (
+    plus_selectors_strict = (
+        "button.siebui-icon-newrecord[aria-label='Payment Lines List:New']",
+        "button.siebui-icon-newrecord[title='Payment Lines List:New']",
         "a[aria-label='Payment Lines List:New']",
         "button[aria-label='Payment Lines List:New']",
         "a[title='Payment Lines List:New']",
         "button[title='Payment Lines List:New']",
-        "button[title='+']",
-        "a[title='+']",
-        "[role='button'][aria-label='+']",
-        "button[aria-label*='new' i]",
-        "a[aria-label*='new' i]",
-        "button[title*='new' i]",
-        "a[title*='new' i]",
-        "button[title*='add' i]",
-        "a[title*='add' i]",
-        "button.siebui-icon-new",
-        "a.siebui-icon-new",
+        "#S_A2 button.siebui-icon-newrecord",
+        "div#S_A2 button[data-display='New']",
     )
 
-    def _click_plus_in_root(root) -> bool:
-        # Avoid ``page`` default timeouts (often 60s+) on buried iframes; cap interaction waits.
+    def _click_plus_in_root_strict(root) -> bool:
         _plus_to = int(min(12_000, max(2_500, action_timeout_ms // 5)))
         _vis_ms = int(min(2_000, max(400, _plus_to // 4)))
-        for css in plus_selectors:
+        for css in plus_selectors_strict:
             try:
                 c = root.locator(css).first
                 if c.count() > 0 and c.is_visible(timeout=_vis_ms):
                     try:
                         c.click(timeout=_plus_to)
                     except Exception:
-                        c.click(timeout=_plus_to, force=True)
+                        try:
+                            c.click(timeout=_plus_to, force=True)
+                        except Exception:
+                            continue
                     return True
             except Exception:
                 continue
         return False
 
+    def _try_plus_click_and_verify_on_root(root) -> bool:
+        if not _click_plus_in_root_strict(root):
+            return False
+        if _poll_payment_lines_after_plus_click(page, action_timeout_ms=action_timeout_ms):
+            return True
+        note(
+            "Payments: Payment Lines List:New clicked but edit row not detected yet — "
+            "one retry after settle."
+        )
+        _safe_page_wait(page, 500, log_label="before_payments_plus_retry")
+        if not _click_plus_in_root_strict(root):
+            return False
+        return _poll_payment_lines_after_plus_click(page, action_timeout_ms=action_timeout_ms)
+
     root_candidates = payment_toolbar_roots
 
     for root in root_candidates:
         try:
-            if _click_plus_in_root(root):
-                note("Clicked '+' icon on Payments tab.")
-                _safe_page_wait(page, 500, log_label="after_payments_plus_click")
+            if _try_plus_click_and_verify_on_root(root):
+                note("Payment Lines New: edit row detected after '+' (verified).")
+                _safe_page_wait(page, 400, log_label="after_payments_plus_click")
                 note("Payment sequence: '+' -> Transaction Amount -> Transaction Type -> Payment Lines Save icon.")
 
                 # Lock to the frame containing Payment Lines editable row fields.
@@ -6192,6 +6281,12 @@ def _add_customer_payment(
                     note("Payment lines scoped frame not detected by strict markers; trying relaxed visible-input scan.")
                     for frame in _ordered_frames(page):
                         try:
+                            if (
+                                _payment_lines_frame_url_looks_contact_site_payments(frame)
+                                and _payment_lines_frame_has_hhml_payment_grid_marker(frame)
+                                and not _payment_lines_edit_row_evidence_in_frame(frame)
+                            ):
+                                continue
                             maybe_data_frame = bool(
                                 frame.evaluate(
                                     """() => {
@@ -6685,7 +6780,10 @@ def _add_customer_payment(
         except Exception as e:
             note(f"Add customer payment flow failed after '+' click attempt: {e}")
             return False, "payment_exception"
-    note("Could not click '+' icon on Payments tab (Payment Lines List:New not visible).")
+    note(
+        "Could not open Payment Lines new row: List:New not effective or edit state not detected "
+        "(strict selectors + post-click verify)."
+    )
     return False, "payment_plus"
 
 
@@ -8026,11 +8124,11 @@ def _add_enquiry_opportunity(
     ``vehicle_merge`` (typically ``prepare_vehicle``).
 
     Then **Opportunity Form:New**, fill opportunity fields from DB + vehicle model/color (**Financier**
-    fields are skipped), then **Ctrl+S**.
+    fields are skipped), then **Ctrl+S**, then **Generate Booking** (toolbar), then timed Enquiry# polls.
 
     **Contact First Name** comes from ``dms_values["first_name"]`` (caller passes base or dotted name).
 
-    After **Ctrl+S**, Enquiry# must **differ** from the pre-save scrape at **0.5s, 2.5s, and 3.5s**
+    After **Ctrl+S** and **Generate Booking**, Enquiry# must **differ** from the pre-save scrape at **0.5s, 2.5s, and 3.5s**
     post-save; otherwise **hard fail**.
 
     Returns ``(success, error_detail, enquiry_number)`` — ``error_detail`` is a short operator-facing
@@ -8583,6 +8681,14 @@ def _add_enquiry_opportunity(
     if _save_err_immediate:
         note(f"Add Enquiry: immediate Siebel error after Ctrl+S → {_save_err_immediate!r:.300}")
         return False, f"Siebel error after Ctrl+S: {_save_err_immediate[:200]}", ""
+
+    if not _try_click_generate_booking(
+        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    ):
+        note("Add Enquiry: Generate Booking control not found after Ctrl+S.")
+        return False, "Generate Booking control not found after saving new opportunity.", ""
+    note("Add Enquiry: clicked Generate Booking after Ctrl+S.")
+    _safe_page_wait(page, 500, log_label="add_enquiry_after_generate_booking")
 
     note(f"Add Enquiry: pre_save Enquiry# gate baseline → {pre_save_enquiry_no!r}.")
     pre_norm = (pre_save_enquiry_no or "").strip()

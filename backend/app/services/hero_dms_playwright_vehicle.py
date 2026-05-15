@@ -6652,10 +6652,14 @@ def _siebel_goto_vehicle_list_and_search(
                 note=note,
             )
             _hint = "find applet not ready/visible" if not final_ready else "query submit did not complete"
+            if callable(note):
+                note(
+                    "prepare_vehicle: Find→Vehicles VIN/Engine query failed (technical): "
+                    f"frame_partial present; final_ready={final_ready}; {_hint}; "
+                    "if controls live in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR."
+                )
             return _log_phase_outcome(
-                "Siebel: Find→Vehicles VIN/Engine query failed even with frame_partial present "
-                "(and engine_partial or Engine# wildcard); "
-                f"likely {_hint}. If applet is in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR."
+                "DMS site is not open. Please log in to DMS and try again."
             )
 
     try:
