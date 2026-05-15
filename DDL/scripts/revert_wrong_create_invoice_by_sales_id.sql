@@ -2,7 +2,8 @@
 -- Input: set p_sales_id in the DO block below. Run as a user with DELETE/UPDATE rights.
 --
 -- Does:
---   - Deletes child rows keyed by sales_id (RTO / reminders / SMS / payment details).
+--   - Deletes child rows keyed by sales_id where those tables exist (RTO / reminders / SMS /
+--     payment details — skips missing relations for older or partial DBs).
 --   - Deletes insurance_master rows for that sale's (customer_id, vehicle_id).
 --   - Deletes the sales_master row.
 --   - Deletes customer_master / vehicle_master only when nothing else references them
@@ -46,7 +47,8 @@ BEGIN
     p_sales_id, v_customer_id, v_vehicle_id, v_dealer_id, v_invoice;
 
   -- Optional: break diagnostic links to RTO rows we are about to remove
-  IF to_regclass('public.process_failure_log') IS NOT NULL THEN
+  IF to_regclass('public.process_failure_log') IS NOT NULL
+     AND to_regclass('public.rto_queue') IS NOT NULL THEN
     UPDATE process_failure_log pfl
     SET rto_queue_id = NULL
     WHERE pfl.rto_queue_id IN (
@@ -54,17 +56,25 @@ BEGIN
     );
   END IF;
 
-  DELETE FROM rc_status_sms_queue WHERE sales_id = p_sales_id;
-  GET DIAGNOSTICS n_rc = ROW_COUNT;
+  IF to_regclass('public.rc_status_sms_queue') IS NOT NULL THEN
+    DELETE FROM rc_status_sms_queue WHERE sales_id = p_sales_id;
+    GET DIAGNOSTICS n_rc = ROW_COUNT;
+  END IF;
 
-  DELETE FROM service_reminders_queue WHERE sales_id = p_sales_id;
-  GET DIAGNOSTICS n_srq = ROW_COUNT;
+  IF to_regclass('public.service_reminders_queue') IS NOT NULL THEN
+    DELETE FROM service_reminders_queue WHERE sales_id = p_sales_id;
+    GET DIAGNOSTICS n_srq = ROW_COUNT;
+  END IF;
 
-  DELETE FROM rto_payment_details WHERE sales_id = p_sales_id;
-  GET DIAGNOSTICS n_rpd = ROW_COUNT;
+  IF to_regclass('public.rto_payment_details') IS NOT NULL THEN
+    DELETE FROM rto_payment_details WHERE sales_id = p_sales_id;
+    GET DIAGNOSTICS n_rpd = ROW_COUNT;
+  END IF;
 
-  DELETE FROM rto_queue WHERE sales_id = p_sales_id;
-  GET DIAGNOSTICS n_rq = ROW_COUNT;
+  IF to_regclass('public.rto_queue') IS NOT NULL THEN
+    DELETE FROM rto_queue WHERE sales_id = p_sales_id;
+    GET DIAGNOSTICS n_rq = ROW_COUNT;
+  END IF;
 
   DELETE FROM insurance_master
   WHERE customer_id = v_customer_id AND vehicle_id = v_vehicle_id;
