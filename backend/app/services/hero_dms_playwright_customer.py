@@ -8123,12 +8123,13 @@ def _add_enquiry_opportunity(
     where **Enquiry → Opportunity Form:New** applies, and take model / YYYY ``year_of_mfg`` / color from
     ``vehicle_merge`` (typically ``prepare_vehicle``).
 
-    Then **Opportunity Form:New**, fill opportunity fields from DB + vehicle model/color (**Financier**
-    fields are skipped), then **Ctrl+S**, then **Generate Booking** (toolbar), then timed Enquiry# polls.
+    Then **Opportunity Form:New**, fill opportunity fields from DB + vehicle model (**Financier** fields
+    are skipped; **Variant** / **Color** form fills are commented out in code), then **Ctrl+S**, then timed
+    Enquiry# polls. **Generate Booking** (toolbar) is commented out in code.
 
     **Contact First Name** comes from ``dms_values["first_name"]`` (caller passes base or dotted name).
 
-    After **Ctrl+S** and **Generate Booking**, Enquiry# must **differ** from the pre-save scrape at **0.5s, 2.5s, and 3.5s**
+    After **Ctrl+S**, Enquiry# must **differ** from the pre-save scrape at **0.5s, 2.5s, and 3.5s**
     post-save; otherwise **hard fail**.
 
     Returns ``(success, error_detail, enquiry_number)`` — ``error_detail`` is a short operator-facing
@@ -8259,7 +8260,7 @@ def _add_enquiry_opportunity(
 
     def _scrape_enquiry_number_from_frame(frame: Frame) -> str:
         """
-        Best-effort read of saved Enquiry# from Opportunity form after Ctrl+S.
+        Best-effort read of saved Enquiry# from the Opportunity form after Ctrl+S (during gate polls).
         """
         # 1) Label-based input extraction
         for pat in (
@@ -8628,20 +8629,20 @@ def _add_enquiry_opportunity(
         required=True,
     ):
         return False, "Could not set Model Interested In (from vehicle scrape).", ""
-    if not try_field(("Color", "Colour"), color_i, required=True):
-        return False, "Could not set Color (from vehicle scrape).", ""
+    # if not try_field(("Color", "Colour"), color_i, required=True):
+    #     return False, "Could not set Color (from vehicle scrape).", ""
 
     if not try_field(("Finance Required",), finance_required, required=True):
         return False, "Could not set Finance Required.", ""
     if not try_field(("Booking Order Type",), "Normal Booking", required=True):
         return False, "Could not set Booking Order Type.", ""
-    sku_hint = (scraped_v.get("sku") or "").strip()
-    if not _select_variant_first_value(enq_frame, variant_hint=sku_hint):
-        note("Add Enquiry: Variant auto-select with SKU/pick failed — will try Tab selection after Model.")
-        if not _fill_by_label_on_frame(enq_frame, "Variant", " ", action_timeout_ms=action_timeout_ms):
-            note("Add Enquiry: Variant field could not be activated for Tab-pick.")
-    else:
-        note("Add Enquiry: Variant selected successfully.")
+    # sku_hint = (scraped_v.get("sku") or "").strip()
+    # if not _select_variant_first_value(enq_frame, variant_hint=sku_hint):
+    #     note("Add Enquiry: Variant auto-select with SKU/pick failed — will try Tab selection after Model.")
+    #     if not _fill_by_label_on_frame(enq_frame, "Variant", " ", action_timeout_ms=action_timeout_ms):
+    #         note("Add Enquiry: Variant field could not be activated for Tab-pick.")
+    # else:
+    #     note("Add Enquiry: Variant selected successfully.")
 
     # Age & Gender filled AFTER Model/Variant — Siebel form resets these fields
     # on Model/Variant server round-trip, so they must go last.
@@ -8682,13 +8683,13 @@ def _add_enquiry_opportunity(
         note(f"Add Enquiry: immediate Siebel error after Ctrl+S → {_save_err_immediate!r:.300}")
         return False, f"Siebel error after Ctrl+S: {_save_err_immediate[:200]}", ""
 
-    if not _try_click_generate_booking(
-        page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
-    ):
-        note("Add Enquiry: Generate Booking control not found after Ctrl+S.")
-        return False, "Generate Booking control not found after saving new opportunity.", ""
-    note("Add Enquiry: clicked Generate Booking after Ctrl+S.")
-    _safe_page_wait(page, 500, log_label="add_enquiry_after_generate_booking")
+    # if not _try_click_generate_booking(
+    #     page, timeout_ms=action_timeout_ms, content_frame_selector=content_frame_selector
+    # ):
+    #     note("Add Enquiry: Generate Booking control not found after Ctrl+S.")
+    #     return False, "Generate Booking control not found after saving new opportunity.", ""
+    # note("Add Enquiry: clicked Generate Booking after Ctrl+S.")
+    # _safe_page_wait(page, 500, log_label="add_enquiry_after_generate_booking")
 
     note(f"Add Enquiry: pre_save Enquiry# gate baseline → {pre_save_enquiry_no!r}.")
     pre_norm = (pre_save_enquiry_no or "").strip()
@@ -8721,7 +8722,7 @@ def _add_enquiry_opportunity(
     if not enquiry_no or pre_norm == (enquiry_no or "").strip():
         note(
             "Add Enquiry: HARD FAIL — Enquiry# unchanged vs pre-save after timed polls "
-            f"(0.5s / 2.5s / 3.5s). pre={pre_norm!r} readings={poll_readings!r}."
+            f"(post-Ctrl+S; 0.5s / 2.5s / 3.5s). pre={pre_norm!r} readings={poll_readings!r}."
         )
         return (
             False,

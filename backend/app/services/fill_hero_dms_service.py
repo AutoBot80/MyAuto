@@ -1938,6 +1938,28 @@ def collate_customer_master_from_dms_siebel_inputs(
     return {"fields": fields, "notes": notes, "mapping_unclear": unclear}
 
 
+_PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS = 3
+_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS = 500
+
+
+def _is_prepare_vehicle_precheck_pdi_transient(err: str | None) -> bool:
+    """
+    True when ``prepare_vehicle`` failed on a flaky Pre-check/PDI UI state (List:New ``+`` or tab not ready).
+
+    Closed allowlist — do not match bare ``Could not find`` (too broad).
+    """
+    s = (err or "").strip().casefold()
+    if not s:
+        return False
+    if "could not find + button" in s and ("pre-check tab" in s or "pdi tab" in s):
+        return True
+    if "could not find pre-check tab" in s:
+        return True
+    if "could not find pdi tab" in s:
+        return True
+    return False
+
+
 def _run_fill_dms_real_siebel_playwright(
     page,
     dms_values: dict,
@@ -2678,19 +2700,44 @@ def Playwright_Hero_DMS_fill(
         in_transit_state = False
 
         step("Pre-step: preparing vehicle before contact find (video path).")
-        _pv_ok, _pv_err, _pv_scraped, in_transit_state, _pv_crit, _pv_info = prepare_vehicle(
-            page,
-            dms_values,
-            urls,
-            nav_timeout_ms=nav_timeout_ms,
-            action_timeout_ms=action_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            note=note,
-            form_trace=form_trace,
-            ms_done=ms_done,
-            step=step,
-            debug_dump_dir=_exec_log_path.parent if _exec_log_path else None,
-        )
+        _pv_ok = False
+        _pv_err: str | None = None
+        _pv_scraped: dict[str, Any] = {}
+        _pv_crit: list[str] = []
+        _pv_info: list[str] = []
+        for _pv_attempt in range(1, _PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS + 1):
+            _pv_ok, _pv_err, _pv_scraped, in_transit_state, _pv_crit, _pv_info = prepare_vehicle(
+                page,
+                dms_values,
+                urls,
+                nav_timeout_ms=nav_timeout_ms,
+                action_timeout_ms=action_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                form_trace=form_trace,
+                ms_done=ms_done,
+                step=step,
+                debug_dump_dir=_exec_log_path.parent if _exec_log_path else None,
+            )
+            if _pv_ok:
+                break
+            if (
+                _pv_attempt < _PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS
+                and _is_prepare_vehicle_precheck_pdi_transient(_pv_err)
+            ):
+                note(
+                    "prepare_vehicle "
+                    f"attempt {_pv_attempt}/{_PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS} failed "
+                    f"(transient Pre-check/PDI): {_pv_err!r} — "
+                    f"retrying after {_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS}ms settle."
+                )
+                try:
+                    page.wait_for_timeout(_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS)
+                except Exception:
+                    time.sleep(_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS / 1000.0)
+                continue
+            break
+
         if not _pv_ok:
             out["error"] = _pv_err or "prepare_vehicle failed before contact find."
             return out
