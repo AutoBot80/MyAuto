@@ -333,6 +333,31 @@ def _bootstrap_imports(saathi_base: str, *, api_url: str = "", jwt: str = "") ->
 # ---------------------------------------------------------------------------
 
 
+def _api_get(api_url: str, jwt: str, path: str, timeout: int = 120) -> dict:
+    """GET JSON from the cloud API and return the parsed response dict."""
+    url = f"{api_url.rstrip('/')}{path}"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {jwt}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body_text = ""
+        try:
+            body_text = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        detail = ""
+        try:
+            detail = json.loads(body_text).get("detail", "")
+        except Exception:
+            detail = body_text[:500]
+        raise RuntimeError(f"API {path} returned {exc.code}: {detail}") from exc
+
+
 def _api_post(api_url: str, jwt: str, path: str, body: dict, timeout: int = 120) -> dict:
     """POST JSON to the cloud API and return the parsed response dict."""
     url = f"{api_url.rstrip('/')}{path}"
@@ -475,10 +500,13 @@ def _upload_tree_under(
     tree: str,
     folder: Path,
     anchor: Path,
-) -> None:
+) -> tuple[int, int]:
+    """Return ``(files_uploaded, files_failed)``."""
     if not folder.is_dir():
-        return
+        return 0, 0
     anchor_res = anchor.resolve()
+    uploaded = 0
+    failed = 0
     for f in folder.rglob("*"):
         if not f.is_file():
             continue
@@ -488,8 +516,11 @@ def _upload_tree_under(
             continue
         try:
             _multipart_upload_file(api_url, jwt, dealer_id, tree, rel, f)
+            uploaded += 1
         except Exception as exc:
+            failed += 1
             logging.warning("sidecar upload %s/%s: %s", tree, rel, exc)
+    return uploaded, failed
 
 
 def _upload_rto_row_log_if_present(api_url: str, jwt: str, dealer_id: int, row: dict) -> None:
@@ -514,6 +545,147 @@ def _upload_rto_row_log_if_present(api_url: str, jwt: str, dealer_id: int, row: 
         logging.warning("vahan RTO log upload: %s", exc)
 
 
+def _should_pull_scan_asset_from_server(filename: str) -> bool:
+    """Aadhaar scans, sales detail sheet, and pencil mark — often on EC2 from Submit only."""
+    low = (filename or "").lower().replace(" ", "_")
+    if not low:
+        return False
+    if "pencil_mark" in low or low.startswith("pencil."):
+        return True
+    if "detail_sheet" in low or "sales_detail" in low:
+        return True
+    if "aadhar_back" in low or "aadhaar_back" in low or low.endswith("_back.jpg") or low.endswith("_back.jpeg"):
+        return True
+    if "aadhar_front" in low or "aadhaar_front" in low:
+        return True
+    if low in ("aadhar.jpg", "aadhaar.jpg", "aadhar.jpeg", "aadhaar.jpeg"):
+        return True
+    if ("aadhar" in low or "aadhaar" in low) and "front" in low:
+        return True
+    return False
+
+
+def _api_download_uploads_file(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    subfolder: str,
+    filename: str,
+    dest: Path,
+    timeout: int = 180,
+) -> None:
+    """GET ``/documents/{subfolder}/{filename}`` (follows S3 presigned redirect when configured)."""
+    from urllib.parse import quote
+
+    safe_sub = quote((subfolder or "").strip(), safe="")
+    safe_fn = quote(Path(filename).name, safe="")
+    url = f"{api_url.rstrip('/')}/documents/{safe_sub}/{safe_fn}?dealer_id={int(dealer_id)}"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {jwt}"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(resp.read())
+
+
+def _pull_scan_assets_from_server(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    subfolder: str,
+    uploads_dir: Path,
+    *,
+    ocr_dir: Path | None = None,
+) -> dict[str, int]:
+    """
+    Download scan assets present on the API host (EC2 / S3) into local ``Uploaded scans/{dealer}/{subfolder}``.
+    """
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
+
+    safe = _safe_subfolder_name(subfolder)
+    local_dir = uploads_dir / safe
+    local_dir.mkdir(parents=True, exist_ok=True)
+    downloaded = 0
+    failed = 0
+    skipped = 0
+    pulled_names: list[str] = []
+    failed_names: list[str] = []
+    try:
+        listing = _api_get(
+            api_url,
+            jwt,
+            f"/documents/{safe}/list?dealer_id={int(dealer_id)}",
+            timeout=60,
+        )
+    except Exception as exc:
+        logging.warning("pull scan assets: list documents failed: %s", exc)
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe,
+            "PULL",
+            f"list documents failed: {exc}",
+        )
+        return {"downloads_uploaded": 0, "downloads_failed": 0, "downloads_skipped": 0}
+
+    server_names = [
+        str(ent.get("name") or "").strip()
+        for ent in (listing.get("files") or [])
+        if str(ent.get("name") or "").strip()
+    ]
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "PULL",
+        f"server folder list: {len(server_names)} file(s) under uploads/{safe}",
+    )
+
+    for ent in listing.get("files") or []:
+        name = str(ent.get("name") or "").strip()
+        if not name or not _should_pull_scan_asset_from_server(name):
+            skipped += 1
+            continue
+        dest = local_dir / Path(name).name
+        try:
+            _api_download_uploads_file(api_url, jwt, dealer_id, safe, name, dest)
+            downloaded += 1
+            pulled_names.append(name)
+            logging.info("pull scan asset: %s -> %s", name, dest)
+            append_print_rto_queue_line(
+                ocr_dir,
+                safe,
+                "PULL",
+                f"OK {name} -> {dest}",
+            )
+        except Exception as exc:
+            failed += 1
+            failed_names.append(name)
+            logging.warning("pull scan asset failed %s: %s", name, exc)
+            append_print_rto_queue_line(
+                ocr_dir,
+                safe,
+                "PULL",
+                f"FAIL {name}: {exc}",
+            )
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "PULL",
+        f"done: downloaded={downloaded} failed={failed} skipped_non_scan={skipped}",
+    )
+    if pulled_names:
+        append_print_rto_queue_line(ocr_dir, safe, "PULL", f"files: {', '.join(pulled_names)}")
+    if failed_names:
+        append_print_rto_queue_line(ocr_dir, safe, "PULL", f"failures: {', '.join(failed_names)}")
+    return {
+        "downloads_uploaded": downloaded,
+        "downloads_failed": failed,
+        "downloads_skipped": skipped,
+    }
+
+
 def _upload_sale_artifacts(
     api_url: str,
     jwt: str,
@@ -521,21 +693,189 @@ def _upload_sale_artifacts(
     subfolder: str,
     uploads_dir: Path,
     ocr_dir: Path,
-) -> None:
+) -> dict[str, int]:
+    """Mirror local sale ``uploads`` + ``ocr_output`` subfolders to EC2 (and S3 per file on upload)."""
     from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
 
     safe = _safe_subfolder_name(subfolder)
     u_root = uploads_dir.resolve()
     o_root = ocr_dir.resolve()
-    _upload_tree_under(api_url, jwt, dealer_id, "uploads", uploads_dir / safe, u_root)
-    _upload_tree_under(api_url, jwt, dealer_id, "ocr", ocr_dir / safe, o_root)
+    local_uploads = uploads_dir / safe
+    local_ocr = ocr_dir / safe
+    if local_uploads.is_dir():
+        upload_names = sorted(p.name for p in local_uploads.rglob("*") if p.is_file())
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe,
+            "PUSH",
+            f"local uploads/{safe}: {len(upload_names)} file(s)",
+        )
+        for name in upload_names[:40]:
+            append_print_rto_queue_line(ocr_dir, safe, "PUSH", f"  uploads: {name}")
+        if len(upload_names) > 40:
+            append_print_rto_queue_line(
+                ocr_dir,
+                safe,
+                "PUSH",
+                f"  … and {len(upload_names) - 40} more under uploads",
+            )
+    else:
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe,
+            "PUSH",
+            f"local uploads folder missing: {local_uploads}",
+        )
+    if local_ocr.is_dir():
+        ocr_names = sorted(p.name for p in local_ocr.rglob("*") if p.is_file())
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe,
+            "PUSH",
+            f"local ocr_output/{safe}: {len(ocr_names)} file(s)",
+        )
+    up_ok, up_fail = _upload_tree_under(api_url, jwt, dealer_id, "uploads", uploads_dir / safe, u_root)
+    ocr_ok, ocr_fail = _upload_tree_under(api_url, jwt, dealer_id, "ocr", ocr_dir / safe, o_root)
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "PUSH",
+        f"upload-artifacts: uploads ok={up_ok} fail={up_fail}; ocr ok={ocr_ok} fail={ocr_fail}",
+    )
     fallback = ocr_dir / "Playwright_insurance_diag_fallback.txt"
     if fallback.is_file():
         try:
             rel = fallback.resolve().relative_to(o_root).as_posix()
             _multipart_upload_file(api_url, jwt, dealer_id, "ocr", rel, fallback)
+            ocr_ok += 1
         except Exception as exc:
+            ocr_fail += 1
             logging.warning("sidecar upload insurance diag fallback: %s", exc)
+    return {
+        "uploads_uploaded": up_ok,
+        "uploads_failed": up_fail,
+        "ocr_uploaded": ocr_ok,
+        "ocr_failed": ocr_fail,
+    }
+
+
+def _dispatch_upload_print_rto_queue_log_impl(params: dict) -> dict:
+    """Append optional lines to local log and upload ``Print_RTO_queue.txt`` to EC2."""
+    from app.config import get_ocr_output_dir
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.print_rto_queue_log import (
+        LOG_FILENAME,
+        append_print_rto_queue_line,
+        print_rto_queue_log_path,
+    )
+
+    api_url, jwt = _require_api_credentials(params)
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    if not subfolder:
+        return {"success": False, "error": "subfolder is required"}
+    ocr_dir = get_ocr_output_dir(dealer_id)
+    safe = _safe_subfolder_name(subfolder)
+    for ent in params.get("lines") or []:
+        if not isinstance(ent, dict):
+            continue
+        prefix = str(ent.get("prefix") or "INFO")
+        message = str(ent.get("message") or "").strip()
+        if message:
+            append_print_rto_queue_line(ocr_dir, safe, prefix, message)
+    log_path = print_rto_queue_log_path(ocr_dir, safe)
+    if log_path is None or not log_path.is_file():
+        return {"success": True, "uploaded": False, "note": f"{LOG_FILENAME} not on disk"}
+    o_root = ocr_dir.resolve()
+    try:
+        rel = log_path.resolve().relative_to(o_root).as_posix()
+        _multipart_upload_file(api_url, jwt, dealer_id, "ocr", rel, log_path)
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe,
+            "LOG",
+            f"uploaded {LOG_FILENAME} to server (ocr/{rel})",
+        )
+        return {"success": True, "uploaded": True, "log_path": str(log_path)}
+    except Exception as exc:
+        append_print_rto_queue_line(ocr_dir, safe, "LOG", f"upload {LOG_FILENAME} failed: {exc}")
+        return {"success": False, "error": str(exc), "uploaded": False}
+
+
+def _dispatch_upload_sale_artifacts_impl(params: dict) -> dict:
+    """
+    Two-way sale-folder sync for Print / Queue RTO:
+
+    1. Pull scan assets from EC2/S3 → local (Aadhaar front/back, Sales Detail Sheet, pencil mark).
+    2. Push all local ``Uploaded scans`` + ``ocr_output`` files → EC2 via ``/sidecar/upload-artifacts``.
+    """
+    api_url, jwt = _require_api_credentials(params)
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    if not subfolder:
+        return {"success": False, "error": "subfolder is required"}
+    from app.config import get_ocr_output_dir, get_uploads_dir
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.print_rto_queue_log import LOG_FILENAME, append_print_rto_queue_line, reset_print_rto_queue_log
+
+    uploads_dir = get_uploads_dir(dealer_id)
+    ocr_dir = get_ocr_output_dir(dealer_id)
+
+    safe = _safe_subfolder_name(subfolder)
+    local_sale = uploads_dir / safe
+    local_sale.mkdir(parents=True, exist_ok=True)
+    log_path = reset_print_rto_queue_log(ocr_dir, safe)
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "START",
+        f"Print/Queue RTO sync dealer_id={dealer_id} subfolder={safe!r}",
+    )
+    append_print_rto_queue_line(ocr_dir, safe, "PATH", f"local uploads: {local_sale.resolve()}")
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "PATH",
+        f"local ocr_output: {(ocr_dir / safe).resolve()}",
+    )
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "PATH",
+        f"log file: {log_path}" if log_path else f"log file: ocr_output/{safe}/{LOG_FILENAME}",
+    )
+    pull_stats = _pull_scan_assets_from_server(
+        api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir=ocr_dir
+    )
+    stats = _upload_sale_artifacts(api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir)
+    total_up = int(stats["uploads_uploaded"]) + int(stats["ocr_uploaded"])
+    total_fail = int(stats["uploads_failed"]) + int(stats["ocr_failed"])
+    total_down = int(pull_stats["downloads_uploaded"])
+    if total_up < 1 and total_fail > 0 and total_down < 1:
+        return {
+            "success": False,
+            "error": "Upload and download both failed (check API URL, JWT, and network).",
+            **stats,
+            **pull_stats,
+            "subfolder": safe,
+        }
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "SYNC",
+        f"complete: downloaded={total_down} uploaded={total_up} failed={total_fail + int(pull_stats['downloads_failed'])}",
+    )
+    return {
+        "success": True,
+        "subfolder": safe,
+        "files_uploaded": total_up,
+        "files_downloaded": total_down,
+        "files_failed": total_fail + int(pull_stats["downloads_failed"]),
+        "log_file": LOG_FILENAME,
+        **stats,
+        **pull_stats,
+    }
 
 
 def _require_api_credentials(params: dict) -> tuple[str, str]:
@@ -1753,6 +2093,20 @@ def dispatch(payload: dict) -> dict:
     if job_type == "mirror_challan_parse_artifacts":
         data = _mirror_challan_parse_artifacts_impl(params)
         return {"success": bool(data.get("ok")), "data": data, "error": data.get("error")}
+    if job_type == "upload_sale_artifacts":
+        data = _dispatch_upload_sale_artifacts_impl(params)
+        return {
+            "success": bool(data.get("success")),
+            "data": data,
+            "error": data.get("error"),
+        }
+    if job_type == "upload_print_rto_queue_log":
+        data = _dispatch_upload_print_rto_queue_log_impl(params)
+        return {
+            "success": bool(data.get("success")),
+            "data": data,
+            "error": data.get("error"),
+        }
     return {"success": False, "error": f"Unknown job type: {job_type}"}
 
 

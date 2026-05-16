@@ -290,25 +290,33 @@ def list_admin_folder_s3(root: str, dealer_id: int, rel_path: str) -> tuple[str,
     prefix = prefix_base + ("/".join(rel_parts) + "/" if rel_parts else "")
     dirs, files = s3_storage.list_one_level_prefix(prefix)
     display = f"s3://{S3_DATA_BUCKET}/{prefix}"
+    epoch = datetime.fromtimestamp(0, tz=timezone.utc)
+    dir_mtimes = s3_storage.aggregate_child_last_modified(prefix, dirs)
     items: list[dict] = []
-    for d in sorted(dirs):
+    for d in dirs:
+        mt = dir_mtimes.get(d) or epoch
         items.append(
             {
                 "name": d,
                 "kind": "dir",
                 "size": None,
-                "modified_at": datetime.now(timezone.utc).isoformat(),
+                "modified_at": mt.isoformat(),
+                "_sort_mtime": mt,
             }
         )
-    for f in sorted(files, key=lambda x: x["name"]):
+    for f in files:
         lm = f.get("LastModified")
-        mt = lm.isoformat() if lm else datetime.now(timezone.utc).isoformat()
+        mt = lm if lm else epoch
         items.append(
             {
                 "name": f["name"],
                 "kind": "file",
                 "size": int(f.get("Size") or 0),
-                "modified_at": mt,
+                "modified_at": mt.isoformat(),
+                "_sort_mtime": mt,
             }
         )
+    items.sort(key=lambda x: (-x["_sort_mtime"].timestamp(), x["name"].lower()))
+    for x in items:
+        del x["_sort_mtime"]
     return display, items

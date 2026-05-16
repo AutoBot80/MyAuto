@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +125,45 @@ def list_one_level_prefix(prefix: str, bucket: str | None = None) -> tuple[list[
             continue
         files.append({"name": name, "Key": key, "Size": obj.get("Size", 0), "LastModified": obj.get("LastModified")})
     return dirs, files
+
+
+def aggregate_child_last_modified(
+    parent_prefix: str,
+    child_names: list[str],
+    bucket: str | None = None,
+) -> dict[str, datetime]:
+    """
+    For each immediate child folder name under ``parent_prefix``, return the newest
+    S3 ``LastModified`` among all objects under ``parent_prefix`` + child + ``/``.
+    """
+    if not child_names:
+        return {}
+    b = bucket or S3_DATA_BUCKET
+    if not b:
+        return {}
+    if not parent_prefix.endswith("/"):
+        parent_prefix = parent_prefix + "/"
+    want = set(child_names)
+    mtimes: dict[str, datetime] = {}
+    paginator = _s3().get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=b, Prefix=parent_prefix):
+        for obj in page.get("Contents") or []:
+            key = obj.get("Key") or ""
+            if not key or key == parent_prefix.rstrip("/"):
+                continue
+            rel = key[len(parent_prefix) :]
+            if not rel:
+                continue
+            seg = rel.split("/")[0]
+            if not seg or seg not in want:
+                continue
+            lm = obj.get("LastModified")
+            if not lm:
+                continue
+            prev = mtimes.get(seg)
+            if prev is None or lm > prev:
+                mtimes[seg] = lm
+    return mtimes
 
 
 def delete_object(key: str, bucket: str | None = None) -> None:

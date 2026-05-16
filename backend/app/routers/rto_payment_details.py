@@ -6,8 +6,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.config import get_ocr_output_dir
+from app.repositories import add_sales_staging as staging_repo
 from app.repositories import rto_payment_details as repo
 from app.security.deps import get_principal, resolve_dealer_id
+from app.services.print_rto_queue_log import append_print_rto_queue_line
 from app.security.principal import Principal
 from app.validation.text_limits import enforce_max_text_depth
 from app.services.rto_otp_bridge import deliver_operator_change_mobile, deliver_operator_otp
@@ -107,10 +110,38 @@ def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
             staging_id=staging_clean,
             dealer_id=int(eff_dealer),
         )
+        subfolder: str | None = None
+        if staging_clean:
+            subfolder = staging_repo.fetch_staging_subfolder(staging_clean, int(eff_dealer))
+        ocr_dir = get_ocr_output_dir(int(eff_dealer))
+        append_print_rto_queue_line(
+            ocr_dir,
+            subfolder,
+            "RTO_QUEUE",
+            f"insert ok rto_queue_id={queue_id} sales_id={sid} status={payload.status or 'Queued'}",
+        )
+        if subfolder:
+            append_print_rto_queue_line(
+                ocr_dir,
+                subfolder,
+                "RTO_QUEUE",
+                f"staging_id={staging_clean} subfolder={subfolder!r}",
+            )
         return {"rto_queue_id": queue_id, "ok": True}
     except HTTPException:
         raise
     except Exception as e:
+        log_dealer = eff_dealer if eff_dealer is not None else payload.dealer_id
+        subfolder_err: str | None = None
+        if staging_clean and log_dealer is not None:
+            subfolder_err = staging_repo.fetch_staging_subfolder(staging_clean, int(log_dealer))
+        if log_dealer is not None:
+            append_print_rto_queue_line(
+                get_ocr_output_dir(int(log_dealer)),
+                subfolder_err,
+                "RTO_QUEUE",
+                f"insert FAIL: {e}",
+            )
         raise HTTPException(status_code=500, detail=str(e))
 
 

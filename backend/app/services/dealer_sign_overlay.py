@@ -435,6 +435,28 @@ def main(argv: list[str] | None = None) -> int:
             logger.warning("dealer_sign_overlay: pencil Form 20 prep failed (non-fatal): %s", exc)
             result["pencil_form20"] = {"ok": False, "note": str(exc)}
 
+    try:
+        from app.config import get_ocr_output_dir
+        from app.services.print_rto_queue_log import append_print_rto_queue_block
+
+        ocr_dir = get_ocr_output_dir(int(args.dealer_id))
+        subfolder = sale_dir.name
+        stamped = result.get("stamped") or []
+        skipped = result.get("skipped") or []
+        lines = [
+            f"dealer_sign_overlay sale_dir={sale_dir}",
+            f"signature={'yes' if sig_path and sig_path.is_file() else 'no'}",
+            f"stamped={stamped!r}",
+        ]
+        if skipped:
+            lines.append(f"skipped={skipped!r}")
+        pf = result.get("pencil_form20")
+        if isinstance(pf, dict):
+            lines.append(f"pencil_form20={pf!r}")
+        append_print_rto_queue_block(ocr_dir, subfolder, "OVERLAY", lines)
+    except Exception as log_exc:
+        logger.warning("dealer_sign_overlay: Print_RTO_queue log skipped: %s", log_exc)
+
     if args.json:
         print(json.dumps(result, default=str))
     else:

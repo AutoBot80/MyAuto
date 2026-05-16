@@ -24,6 +24,10 @@ import {
   fillHeroInsuranceLocal,
   overlayDealerSignaturesLocal,
   printGatePass,
+  finalizePrintRtoQueueLog,
+  printRtoQueueLogHint,
+  uploadSaleFolderToServer,
+  type PrintRtoQueueLogLine,
   isFillDmsAbortError,
   warmDmsBrowserLocal,
   warmInsuranceBrowserLocal,
@@ -1512,6 +1516,49 @@ export function AddSalesPage({
     setPrintFormsStatus(null);
 
     const statusLines: string[] = [];
+    const traceLines: PrintRtoQueueLogLine[] = [];
+
+    if (dealerId > 0 && savedTo) {
+      try {
+        const up = await uploadSaleFolderToServer({ dealer_id: dealerId, subfolder: savedTo });
+        if (!up.success) {
+          traceLines.push({
+            prefix: "UI",
+            message: `sync FAIL: ${up.error ?? "unknown"}`,
+          });
+          await finalizePrintRtoQueueLog({
+            dealer_id: dealerId,
+            subfolder: savedTo,
+            lines: traceLines,
+          });
+          setPrintFormsStatus(
+            `${up.error ?? "Upload sale folder to server failed."} ${printRtoQueueLogHint(savedTo)}`
+          );
+          setIsPrintFormsLoading(false);
+          return;
+        }
+        const parts: string[] = [];
+        if ((up.files_downloaded ?? 0) > 0) parts.push(`${up.files_downloaded} from server`);
+        if ((up.files_uploaded ?? 0) > 0) parts.push(`${up.files_uploaded} to server`);
+        if (parts.length > 0) statusLines.push(`Synced ${parts.join(", ")}.`);
+        traceLines.push({
+          prefix: "UI",
+          message: `sync OK downloaded=${up.files_downloaded ?? 0} uploaded=${up.files_uploaded ?? 0} failed=${up.files_failed ?? 0}`,
+        });
+      } catch (syncErr) {
+        const msg =
+          syncErr instanceof Error ? syncErr.message : "Upload sale folder to server failed.";
+        traceLines.push({ prefix: "UI", message: `sync FAIL: ${msg}` });
+        await finalizePrintRtoQueueLog({
+          dealer_id: dealerId,
+          subfolder: savedTo,
+          lines: traceLines,
+        });
+        setPrintFormsStatus(`${msg} ${printRtoQueueLogHint(savedTo)}`);
+        setIsPrintFormsLoading(false);
+        return;
+      }
+    }
 
     if (lastSubmittedCustomerId != null && lastSubmittedVehicleId != null) {
       try {
@@ -1524,22 +1571,36 @@ export function AddSalesPage({
           status: "Queued",
         });
         statusLines.push("Added to RTO Queue.");
+        traceLines.push({ prefix: "UI", message: "RTO queue insert OK" });
       } catch (queueErr) {
-        setPrintFormsStatus(
-          queueErr instanceof Error ? `RTO queue: ${queueErr.message}` : "RTO queue insert failed."
-        );
+        const msg =
+          queueErr instanceof Error ? `RTO queue: ${queueErr.message}` : "RTO queue insert failed.";
+        traceLines.push({ prefix: "UI", message: msg });
+        if (savedTo) {
+          await finalizePrintRtoQueueLog({
+            dealer_id: dealerId,
+            subfolder: savedTo,
+            lines: traceLines,
+          });
+        }
+        setPrintFormsStatus(savedTo ? `${msg} ${printRtoQueueLogHint(savedTo)}` : msg);
         setIsPrintFormsLoading(false);
         return;
       }
     } else {
       statusLines.push("RTO queue skipped (customer/vehicle IDs missing — run Create Invoice first).");
+      traceLines.push({ prefix: "UI", message: "RTO queue skipped (no customer/vehicle IDs)" });
     }
 
     if (dealerId != null && dealerId > 0 && savedTo) {
       try {
         await overlayDealerSignaturesLocal({ dealerId, subfolder: savedTo });
-      } catch {
-        /* headless overlay is best-effort */
+        traceLines.push({ prefix: "UI", message: "dealer signature overlay finished (best-effort)" });
+      } catch (overlayErr) {
+        traceLines.push({
+          prefix: "UI",
+          message: `dealer signature overlay error: ${overlayErr instanceof Error ? overlayErr.message : String(overlayErr)}`,
+        });
       }
     }
 
@@ -1588,13 +1649,19 @@ export function AddSalesPage({
         setHasPrintedForms(true);
         dispatchPrintJobsFromApi(gatePassRes.print_jobs);
         statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
+        traceLines.push({
+          prefix: "UI",
+          message: `gate pass OK print_jobs=${(gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ")}`,
+        });
       } else if (gatePassRes.error) {
         statusLines.push(`Gate Pass: ${gatePassRes.error}`);
+        traceLines.push({ prefix: "UI", message: `gate pass FAIL: ${gatePassRes.error}` });
       }
     } catch (printErr) {
-      statusLines.push(
-        `Gate Pass: ${printErr instanceof Error ? printErr.message : "Generate & print failed."}`
-      );
+      const msg =
+        printErr instanceof Error ? printErr.message : "Generate & print failed.";
+      statusLines.push(`Gate Pass: ${msg}`);
+      traceLines.push({ prefix: "UI", message: `gate pass exception: ${msg}` });
     } finally {
       setIsPrintFormsLoading(false);
     }
@@ -1611,6 +1678,16 @@ export function AddSalesPage({
         statusLines.push(`Could not move file to processed: ${detail}`);
         setPendingScannerArchiveMove(null);
       }
+    }
+
+    if (dealerId > 0 && savedTo) {
+      traceLines.push({ prefix: "UI", message: `run finished gatePassSucceeded=${gatePassSucceeded}` });
+      await finalizePrintRtoQueueLog({
+        dealer_id: dealerId,
+        subfolder: savedTo,
+        lines: traceLines,
+      });
+      statusLines.push(printRtoQueueLogHint(savedTo));
     }
 
     setPrintFormsStatus(statusLines.join(" "));

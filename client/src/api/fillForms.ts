@@ -373,6 +373,30 @@ export interface PrintForm20Response {
   print_jobs?: ApiPrintJob[];
 }
 
+export interface UploadSaleFolderRequest {
+  dealer_id: number;
+  subfolder: string;
+}
+
+export interface UploadSaleFolderResponse {
+  success: boolean;
+  error?: string | null;
+  files_uploaded?: number;
+  files_downloaded?: number;
+  files_failed?: number;
+  subfolder?: string;
+  log_file?: string;
+}
+
+export type PrintRtoQueueLogLine = { prefix: string; message: string };
+
+/** Per-sale trace filename under ``ocr_output/{dealer}/{subfolder}/`` (see Admin Usage → OCR output). */
+export const PRINT_RTO_QUEUE_LOG_FILENAME = "Print_RTO_queue.txt";
+
+/** Max time to mirror a full sale folder (uploads + ocr) to EC2 before Print / Queue RTO. */
+const UPLOAD_SALE_FOLDER_TIMEOUT_MS = 600_000;
+const UPLOAD_PRINT_RTO_LOG_TIMEOUT_MS = 120_000;
+
 /** Generate Form 20 (all pages) and save to Uploaded scans. Called from Print forms button. */
 export async function printForm20(req: PrintForm20Request): Promise<PrintForm20Response> {
   return apiFetch<PrintForm20Response>("/fill-forms/print-form20", {
@@ -380,6 +404,90 @@ export async function printForm20(req: PrintForm20Request): Promise<PrintForm20R
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
+}
+
+/**
+ * Electron: two-way sale-folder sync via sidecar ``upload_sale_artifacts`` —
+ * pull Aadhaar / detail sheet / pencil mark from server, then push all local uploads (+ ocr) to EC2/S3.
+ * Browser-only dev: no-op (server must already have files).
+ */
+export async function uploadSaleFolderToServer(
+  req: UploadSaleFolderRequest
+): Promise<UploadSaleFolderResponse> {
+  const subfolder = (req.subfolder || "").trim();
+  if (!subfolder || req.dealer_id <= 0) {
+    return { success: false, error: "dealer_id and subfolder are required." };
+  }
+  if (!isElectron()) {
+    return { success: true, files_uploaded: 0 };
+  }
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "upload_sale_artifacts",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: { dealer_id: req.dealer_id, subfolder },
+      timeoutMs: UPLOAD_SALE_FOLDER_TIMEOUT_MS,
+    });
+    const data = (result.parsed as { data?: UploadSaleFolderResponse })?.data;
+    if (result.timedOut) {
+      return { success: false, error: "Upload sale folder timed out." };
+    }
+    if (!result.success || !data?.success) {
+      return {
+        success: false,
+        error:
+          data?.error ||
+          (typeof result.error === "string" ? result.error : null) ||
+          result.stderr?.slice(0, 500) ||
+          "Upload sale folder failed.",
+      };
+    }
+    return {
+      success: true,
+      files_uploaded: data.files_uploaded,
+      files_downloaded: data.files_downloaded,
+      files_failed: data.files_failed,
+      subfolder: data.subfolder,
+      log_file: data.log_file,
+    };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Append UI/sidecar lines to local ``Print_RTO_queue.txt`` and upload it to EC2 (Admin → OCR output).
+ */
+export async function finalizePrintRtoQueueLog(req: {
+  dealer_id: number;
+  subfolder: string;
+  lines: PrintRtoQueueLogLine[];
+}): Promise<void> {
+  const subfolder = (req.subfolder || "").trim();
+  if (!subfolder || req.dealer_id <= 0 || !req.lines.length) return;
+  if (!isElectron()) return;
+  try {
+    await window.electronAPI!.sidecar.runJob({
+      type: "upload_print_rto_queue_log",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: {
+        dealer_id: req.dealer_id,
+        subfolder,
+        lines: req.lines,
+      },
+      timeoutMs: UPLOAD_PRINT_RTO_LOG_TIMEOUT_MS,
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Hint for status banners — open under Admin Usage → Sales → OCR output. */
+export function printRtoQueueLogHint(subfolder: string): string {
+  const sf = (subfolder || "").trim() || "default";
+  return `Trace: ocr_output/${sf}/${PRINT_RTO_QUEUE_LOG_FILENAME}`;
 }
 
 /**

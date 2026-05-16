@@ -38,6 +38,7 @@ from app.services.fill_hero_insurance_service import (
     warm_insurance_browser_session,
 )
 from app.services.fill_rto_service import resolve_rto_print_bundle_pdfs, warm_vahan_browser_session
+from app.services.print_rto_queue_log import LOG_FILENAME, append_print_rto_queue_line
 from app.services.playwright_executor import get_playwright_executor
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
@@ -937,6 +938,34 @@ async def print_gate_pass(
     safe_sub = re.sub(r"[^\w\-]", "_", (req.subfolder or "").strip()) or "default"
     sale_dir = uploads_dir / safe_sub
     mob_for_resolve = _mobile_for_print_forms(req)
+    ocr_dir = get_ocr_output_dir(did)
+
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe_sub,
+        "GATE_PASS",
+        f"print-gate-pass start dealer_id={did} subfolder={safe_sub!r} mobile_resolve={mob_for_resolve!r}",
+    )
+    append_print_rto_queue_line(ocr_dir, safe_sub, "PATH", f"server uploads sale_dir: {sale_dir.resolve()}")
+    if sale_dir.is_dir():
+        sale_files = sorted(p.name for p in sale_dir.iterdir() if p.is_file())
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe_sub,
+            "GATE_PASS",
+            f"sale folder on server: {len(sale_files)} file(s)",
+        )
+        for name in sale_files[:35]:
+            append_print_rto_queue_line(ocr_dir, safe_sub, "GATE_PASS", f"  file: {name}")
+        if len(sale_files) > 35:
+            append_print_rto_queue_line(
+                ocr_dir,
+                safe_sub,
+                "GATE_PASS",
+                f"  … and {len(sale_files) - 35} more",
+            )
+    else:
+        append_print_rto_queue_line(ocr_dir, safe_sub, "GATE_PASS", f"sale folder missing on server: {sale_dir}")
 
     try:
         from app.services.form20_service import generate_gate_pass_pdf_only
@@ -945,6 +974,12 @@ async def print_gate_pass(
             sale_dir,
             subfolder=safe_sub,
             mobile=mob_for_resolve,
+        )
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe_sub,
+            "GATE_PASS",
+            f"resolved sale_certificate={sale_pdf} insurance={ins_pdf}",
         )
         missing: list[str] = []
         if sale_pdf is None or not sale_pdf.is_file():
@@ -956,12 +991,12 @@ async def print_gate_pass(
                 "Insurance certificate ({mobile}_Insurance_{ddmmyyyy}.pdf from Generate Insurance, or *Insurance*.pdf)"
             )
         if missing:
-            return PrintForm20Response(
-                success=False,
-                pdfs_saved=[],
-                error="Missing PDFs in sale folder — run Fill DMS (reports) and Generate Insurance first. "
-                + "; ".join(missing),
+            err = (
+                "Missing PDFs in sale folder — run Fill DMS (reports) and Generate Insurance first. "
+                + "; ".join(missing)
             )
+            append_print_rto_queue_line(ocr_dir, safe_sub, "GATE_PASS", f"FAIL: {err}")
+            return PrintForm20Response(success=False, pdfs_saved=[], error=err)
 
         pdf_path = generate_gate_pass_pdf_only(
             subfolder=req.subfolder,
@@ -991,10 +1026,12 @@ async def print_gate_pass(
                 else:
                     logger.warning("print_gate_pass: no presigned URL for %s", rel)
             if len(print_jobs) != 3:
+                err = "Could not build presigned URLs for all three PDFs (check S3 sync)."
+                append_print_rto_queue_line(ocr_dir, safe_sub, "GATE_PASS", f"FAIL: {err}")
                 return PrintForm20Response(
                     success=False,
                     pdfs_saved=["Gate Pass.pdf"],
-                    error="Could not build presigned URLs for all three PDFs (check S3 sync).",
+                    error=err,
                 )
         else:
             for path_obj, kind in ordered:
@@ -1027,16 +1064,37 @@ async def print_gate_pass(
                 )
         except Exception as exc:
             logger.info("print_gate_pass: Form 20 pencil overlay best-effort skipped: %s", exc)
+            append_print_rto_queue_line(
+                ocr_dir,
+                safe_sub,
+                "GATE_PASS",
+                f"pencil overlay skipped: {exc}",
+            )
 
+        job_names = [j.get("filename") for j in print_jobs]
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe_sub,
+            "GATE_PASS",
+            f"OK Gate Pass.pdf; print_jobs={job_names}",
+        )
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe_sub,
+            "GATE_PASS",
+            f"see server ocr_output/{safe_sub}/{LOG_FILENAME} (synced from PC after run)",
+        )
         return PrintForm20Response(success=True, pdfs_saved=["Gate Pass.pdf"], print_jobs=print_jobs)
     except HTTPException:
         raise
     except FileNotFoundError as e:
         logger.warning("print_gate_pass: %s", e)
+        append_print_rto_queue_line(ocr_dir, safe_sub, "GATE_PASS", f"FAIL FileNotFoundError: {e}")
         _record_failure_print_cloud(did, "Gate pass", req, str(e), "pfgp")
         return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
     except Exception as e:
         logger.warning("print_gate_pass: Gate Pass generation failed: %s", e)
+        append_print_rto_queue_line(ocr_dir, safe_sub, "GATE_PASS", f"FAIL: {e}")
         _record_failure_print_cloud(did, "Gate pass", req, str(e), "pfgp")
         return PrintForm20Response(success=False, pdfs_saved=[], error=str(e))
 

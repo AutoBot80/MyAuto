@@ -15,6 +15,10 @@ import {
   fillHeroInsuranceLocal,
   overlayDealerSignaturesLocal,
   printGatePass,
+  finalizePrintRtoQueueLog,
+  printRtoQueueLogHint,
+  uploadSaleFolderToServer,
+  type PrintRtoQueueLogLine,
 } from "../api/fillForms";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { buildDisplayAddress } from "../types";
@@ -540,6 +544,30 @@ export function AddSalesInProcessPanel({
                                   "Run Create Invoice first (customer/vehicle IDs required for RTO queue)."
                                 );
                               }
+                              const sf = subfolder || "default";
+                              const traceLines: PrintRtoQueueLogLine[] = [];
+                              const up = await uploadSaleFolderToServer({
+                                dealer_id: dealerId,
+                                subfolder: sf,
+                              });
+                              if (!up.success) {
+                                traceLines.push({
+                                  prefix: "UI",
+                                  message: `sync FAIL: ${up.error ?? "unknown"}`,
+                                });
+                                await finalizePrintRtoQueueLog({
+                                  dealer_id: dealerId,
+                                  subfolder: sf,
+                                  lines: traceLines,
+                                });
+                                throw new Error(
+                                  `${up.error ?? "Upload sale folder to server failed."} ${printRtoQueueLogHint(sf)}`
+                                );
+                              }
+                              traceLines.push({
+                                prefix: "UI",
+                                message: `sync OK downloaded=${up.files_downloaded ?? 0} uploaded=${up.files_uploaded ?? 0}`,
+                              });
                               await insertRtoPayment({
                                 customer_id: cid,
                                 vehicle_id: vid,
@@ -548,11 +576,19 @@ export function AddSalesInProcessPanel({
                                 staging_id: r.staging_id,
                                 status: "Queued",
                               });
+                              traceLines.push({ prefix: "UI", message: "RTO queue insert OK" });
                               if (dealerId > 0 && subfolder) {
                                 try {
                                   await overlayDealerSignaturesLocal({ dealerId, subfolder });
-                                } catch {
-                                  /* best-effort */
+                                  traceLines.push({
+                                    prefix: "UI",
+                                    message: "dealer signature overlay finished (best-effort)",
+                                  });
+                                } catch (overlayErr) {
+                                  traceLines.push({
+                                    prefix: "UI",
+                                    message: `dealer signature overlay error: ${overlayErr instanceof Error ? overlayErr.message : String(overlayErr)}`,
+                                  });
                                 }
                               }
                               const vrec = detailPayload?.vehicle as Record<string, unknown> | undefined;
@@ -576,8 +612,26 @@ export function AddSalesInProcessPanel({
                                 vehicle_id: vid,
                                 dealer_id: dealerId,
                               });
-                              if (!gp.success && gp.error) throw new Error(gp.error);
+                              if (!gp.success && gp.error) {
+                                traceLines.push({ prefix: "UI", message: `gate pass FAIL: ${gp.error}` });
+                                await finalizePrintRtoQueueLog({
+                                  dealer_id: dealerId,
+                                  subfolder: sf,
+                                  lines: traceLines,
+                                });
+                                throw new Error(`${gp.error} ${printRtoQueueLogHint(sf)}`);
+                              }
+                              traceLines.push({
+                                prefix: "UI",
+                                message: `gate pass OK print_jobs=${(gp.print_jobs ?? []).map((j) => j.filename).join(", ")}`,
+                              });
                               dispatchPrintJobsFromApi(gp.print_jobs);
+                              traceLines.push({ prefix: "UI", message: "run finished OK" });
+                              await finalizePrintRtoQueueLog({
+                                dealer_id: dealerId,
+                                subfolder: sf,
+                                lines: traceLines,
+                              });
                             });
                           }}
                         >
