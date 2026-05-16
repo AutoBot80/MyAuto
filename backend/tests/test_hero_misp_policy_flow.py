@@ -32,14 +32,29 @@ def test_click_issue_policy_skipped_non_production(mock_page):
 
 
 def test_click_issue_policy_fails_when_not_found_in_production(mock_page):
-    mock_page.locator.return_value.count.return_value = 0
-    mock_page.get_by_role.return_value.count.return_value = 0
-    mock_page.get_by_text.return_value.first.click.side_effect = Exception("no button")
     with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", True):
-        with patch.object(fhi, "_hero_misp_page_and_frame_roots", return_value=[]):
-            err = fhi._hero_misp_click_issue_policy(mock_page, timeout_ms=5_000)
+        with patch.object(fhi, "_hero_misp_page_and_frame_roots", return_value=[mock_page]):
+            with patch.object(
+                fhi, "_hero_misp_click_proposal_preview_submit_in_root", return_value=None
+            ):
+                mock_page.locator.return_value.count.return_value = 0
+                mock_page.get_by_role.return_value.count.return_value = 0
+                mock_page.get_by_text.return_value.first.click.side_effect = Exception("no button")
+                err = fhi._hero_misp_click_issue_policy(mock_page, timeout_ms=5_000)
     assert err is not None
-    assert "Issue Policy" in err
+    assert "btnSubmit" in err or "Submit" in err
+
+
+def test_click_proposal_preview_submit_uses_btnSubmit(mock_page):
+    submit_loc = MagicMock()
+    submit_loc.count.return_value = 1
+    submit_loc.first.is_visible.return_value = True
+    submit_loc.first.click.return_value = None
+    root = MagicMock()
+    with patch.object(fhi, "_proposal_cph1_locator", return_value=submit_loc):
+        tag = fhi._hero_misp_click_proposal_preview_submit_in_root(root, timeout_ms=5_000)
+    assert tag == "cph1_btnSubmit"
+    submit_loc.first.click.assert_called_once()
 
 
 def test_final_policy_commit_skips_insert_non_production(mock_page):

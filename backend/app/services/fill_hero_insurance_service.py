@@ -8206,6 +8206,63 @@ def _hero_misp_proposal_review_consent_checkboxes(
     return None
 
 
+def _hero_misp_click_proposal_preview_submit_in_root(
+    root,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """
+    Click **Submit** on **MispProposalPreview** (real MISP: ``#ctl00_ContentPlaceHolder1_btnSubmit``).
+    Returns a short tag for logging when clicked; ``None`` if not found in this root.
+    """
+    to = max(2_000, int(timeout_ms))
+    _proposal_scroll_root_to_bottom(root)
+
+    attempts: list[tuple[str, Any]] = [
+        (
+            "cph1_btnSubmit",
+            _proposal_cph1_locator(root, "btnSubmit"),
+        ),
+        (
+            "input_submit_name",
+            root.locator(
+                'input[type="submit"][name="ctl00$ContentPlaceHolder1$btnSubmit"]'
+            ),
+        ),
+        (
+            "input_submit_id",
+            root.locator("#ctl00_ContentPlaceHolder1_btnSubmit"),
+        ),
+        (
+            "input_submit_value",
+            root.locator('input[type="submit"][value="Submit" i]'),
+        ),
+        (
+            "role_button_submit",
+            root.get_by_role("button", name=re.compile(r"^Submit$", re.I)),
+        ),
+    ]
+    for tag, loc in attempts:
+        try:
+            if loc.count() == 0:
+                continue
+            el = loc.first
+            if not el.is_visible(timeout=min(2_500, to)):
+                _proposal_scroll_visible(el, timeout_ms=to)
+            if not el.is_visible(timeout=min(3_000, to)):
+                continue
+            try:
+                el.scroll_into_view_if_needed(timeout=min(3_000, to))
+            except Exception:
+                pass
+            el.click(timeout=to, force=True)
+            return tag
+        except Exception as exc:
+            logger.debug("Hero Insurance: proposal preview Submit (%s): %s", tag, exc)
+            continue
+    return None
+
+
 def _hero_misp_click_issue_policy(
     page,
     *,
@@ -8214,70 +8271,74 @@ def _hero_misp_click_issue_policy(
     subfolder: str | None = None,
 ) -> str | None:
     """
-    Click **Issue Policy** on Proposal Review when ``ENVIRONMENT_IS_PRODUCTION``.
-    Returns an error message if production and the control was not clicked; ``None`` on success or non-prod skip.
+    On **Proposal Preview** / Review (production): click **Submit** (``btnSubmit``) to issue policy.
+    Falls back to **Issue Policy** labels / dummy training selectors when needed.
     """
     to = max(2_000, int(timeout_ms))
     if not ENVIRONMENT_IS_PRODUCTION:
-        logger.info("Hero Insurance: Issue Policy click skipped (non-production ENVIRONMENT).")
+        logger.info("Hero Insurance: proposal Submit skipped (non-production ENVIRONMENT).")
         append_playwright_insurance_line(
             ocr_output_dir,
             subfolder,
             "NOTE",
-            "skipping Issue Policy (non-production ENVIRONMENT).",
+            "skipping proposal Submit (non-production ENVIRONMENT).",
         )
         return None
 
+    for r in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+        _proposal_scroll_root_to_bottom(r)
+    _t(page, 300)
+
     clicked = False
-    try:
-        loc = page.locator("#ins-issue-policy")
-        if loc.count() > 0 and loc.first.is_visible(timeout=min(4_000, to)):
-            loc.first.click(timeout=to)
+    click_tag = ""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+        tag = _hero_misp_click_proposal_preview_submit_in_root(root, timeout_ms=to)
+        if tag:
             clicked = True
-            logger.info("Hero Insurance: clicked Issue Policy (#ins-issue-policy).")
-    except Exception as exc:
-        logger.debug("Hero Insurance: Issue Policy dummy selector: %s", exc)
+            click_tag = f"{tag} (frame)"
+            logger.info("Hero Insurance: clicked proposal preview Submit — %s.", click_tag)
+            break
+
+    if not clicked:
+        try:
+            loc = page.locator("#ins-issue-policy")
+            if loc.count() > 0 and loc.first.is_visible(timeout=min(4_000, to)):
+                loc.first.click(timeout=to)
+                clicked = True
+                click_tag = "#ins-issue-policy"
+                logger.info("Hero Insurance: clicked Issue Policy (#ins-issue-policy).")
+        except Exception as exc:
+            logger.debug("Hero Insurance: Issue Policy dummy selector: %s", exc)
     if not clicked:
         try:
             btn = page.get_by_role("button", name=re.compile(r"Issue\s*Policy", re.I))
             if btn.count() > 0 and btn.first.is_visible(timeout=min(4_000, to)):
                 btn.first.click(timeout=to)
                 clicked = True
+                click_tag = "role=button Issue Policy"
                 logger.info("Hero Insurance: clicked Issue Policy (role=button).")
         except Exception as exc:
             logger.debug("Hero Insurance: Issue Policy role=button: %s", exc)
-    if not clicked:
-        try:
-            link = page.get_by_role("link", name=re.compile(r"Issue\s*Policy", re.I))
-            if link.count() > 0 and link.first.is_visible(timeout=min(4_000, to)):
-                link.first.click(timeout=to)
-                clicked = True
-                logger.info("Hero Insurance: clicked Issue Policy (role=link).")
-        except Exception as exc:
-            logger.debug("Hero Insurance: Issue Policy role=link: %s", exc)
     if not clicked:
         for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
             try:
                 root.get_by_text(re.compile(r"^Issue\s*Policy", re.I)).first.click(timeout=min(8_000, to))
                 clicked = True
+                click_tag = "get_by_text Issue Policy (frame)"
                 logger.info("Hero Insurance: clicked Issue Policy (get_by_text in frame).")
                 break
             except Exception:
                 continue
     if not clicked:
-        try:
-            page.get_by_text(re.compile(r"^Issue\s*Policy", re.I)).first.click(timeout=min(8_000, to))
-            clicked = True
-            logger.info("Hero Insurance: clicked Issue Policy (get_by_text).")
-        except Exception as exc:
-            logger.debug("Hero Insurance: Issue Policy get_by_text: %s", exc)
-    if not clicked:
-        return "final_policy: Issue Policy control not found or not clickable (production ENVIRONMENT)."
+        return (
+            "final_policy: proposal preview Submit (ctl00_ContentPlaceHolder1_btnSubmit) or "
+            "Issue Policy control not found or not clickable (production ENVIRONMENT)."
+        )
     append_playwright_insurance_line(
         ocr_output_dir,
         subfolder,
         "NOTE",
-        "clicked Issue Policy (production ENVIRONMENT).",
+        f"clicked proposal preview Submit / issue ({click_tag}) (production ENVIRONMENT).",
     )
     return None
 
