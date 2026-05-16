@@ -803,6 +803,231 @@ def _dispatch_upload_print_rto_queue_log_impl(params: dict) -> dict:
         return {"success": False, "error": str(exc), "uploaded": False}
 
 
+def _saathi_base_dir() -> str:
+    return (os.getenv("SAATHI_BASE_DIR") or r"D:\Saathi").strip() or r"D:\Saathi"
+
+
+def _ensure_gate_pass_template_docx(api_url: str, jwt: str) -> Path:
+    """Local Gate Pass .docx for ``generate_gate_pass_pdf_only`` (dev path, Saathi cache, or API download)."""
+    from app.config import APP_ROOT, GATE_PASS_TEMPLATE_DOCX
+
+    candidates: list[Path] = []
+    env_path = Path(GATE_PASS_TEMPLATE_DOCX)
+    if str(env_path) and env_path.is_file():
+        return env_path.resolve()
+    candidates.append(env_path.resolve())
+    candidates.append((APP_ROOT.parent / "templates" / "word" / "Gate Pass Template.docx").resolve())
+    base = _saathi_base_dir()
+    candidates.append(Path(base) / "templates" / "word" / "Gate Pass Template.docx")
+    for p in candidates:
+        if p.is_file():
+            return p.resolve()
+
+    dest = Path(base) / "templates" / "word" / "Gate Pass Template.docx"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    url = f"{api_url.rstrip('/')}/sidecar/templates/gate-pass-docx"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {jwt}"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=120, context=_get_ssl_context()) as resp:
+        dest.write_bytes(resp.read())
+    if not dest.is_file():
+        raise FileNotFoundError(f"Gate Pass template download failed: {dest}")
+    logging.info("gate pass template cached at %s", dest)
+    return dest.resolve()
+
+
+def _mobile_for_print_local(subfolder: str, customer: dict) -> str:
+    import re
+
+    m = str(customer.get("mobile_number") or customer.get("mobile") or "").strip()
+    if m:
+        return m
+    leaf = Path(str(subfolder or "").strip().replace("\\", "/")).name
+    mm = re.match(r"^(\d{10})_\d{8}$", leaf)
+    return mm.group(1) if mm else ""
+
+
+def _dispatch_pull_sale_scan_assets_impl(params: dict) -> dict:
+    """Pull scan assets from EC2 → local; reset ``Print_RTO_queue.txt``."""
+    api_url, jwt = _require_api_credentials(params)
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    if not subfolder:
+        return {"success": False, "error": "subfolder is required"}
+    from app.config import get_ocr_output_dir, get_uploads_dir
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.print_rto_queue_log import LOG_FILENAME, append_print_rto_queue_line, reset_print_rto_queue_log
+
+    uploads_dir = get_uploads_dir(dealer_id)
+    ocr_dir = get_ocr_output_dir(dealer_id)
+    safe = _safe_subfolder_name(subfolder)
+    local_sale = uploads_dir / safe
+    local_sale.mkdir(parents=True, exist_ok=True)
+    reset_print_rto_queue_log(ocr_dir, safe)
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "START",
+        f"Print/Queue RTO pull dealer_id={dealer_id} subfolder={safe!r}",
+    )
+    pull_stats = _pull_scan_assets_from_server(
+        api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir=ocr_dir
+    )
+    total_down = int(pull_stats["downloads_uploaded"])
+    total_fail = int(pull_stats["downloads_failed"])
+    if total_down < 1 and total_fail > 0:
+        return {
+            "success": False,
+            "error": "Pull scan assets from server failed.",
+            "subfolder": safe,
+            "log_file": LOG_FILENAME,
+            **pull_stats,
+        }
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "PULL",
+        f"complete: downloaded={total_down} failed={total_fail}",
+    )
+    return {
+        "success": True,
+        "subfolder": safe,
+        "files_downloaded": total_down,
+        "files_failed": total_fail,
+        "log_file": LOG_FILENAME,
+        **pull_stats,
+    }
+
+
+def _dispatch_push_sale_artifacts_impl(params: dict) -> dict:
+    """Push local uploads + ocr_output subfolder to EC2 (no pull)."""
+    api_url, jwt = _require_api_credentials(params)
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    if not subfolder:
+        return {"success": False, "error": "subfolder is required"}
+    from app.config import get_ocr_output_dir, get_uploads_dir
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
+
+    uploads_dir = get_uploads_dir(dealer_id)
+    ocr_dir = get_ocr_output_dir(dealer_id)
+    safe = _safe_subfolder_name(subfolder)
+    stats = _upload_sale_artifacts(api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir)
+    total_up = int(stats["uploads_uploaded"]) + int(stats["ocr_uploaded"])
+    total_fail = int(stats["uploads_failed"]) + int(stats["ocr_failed"])
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "PUSH",
+        f"complete: uploaded={total_up} failed={total_fail}",
+    )
+    if total_up < 1 and total_fail > 0:
+        return {
+            "success": False,
+            "error": "Push sale folder to server failed.",
+            "subfolder": safe,
+            **stats,
+        }
+    return {
+        "success": True,
+        "subfolder": safe,
+        "files_uploaded": total_up,
+        "files_failed": total_fail,
+        **stats,
+    }
+
+
+def _dispatch_print_gate_pass_local_impl(params: dict) -> dict:
+    """Generate Gate Pass locally and build print_jobs (sale, insurance, optional cpa, gate pass)."""
+    api_url, jwt = _require_api_credentials(params)
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    if not subfolder:
+        return {"success": False, "error": "subfolder is required"}
+    customer = params.get("customer") if isinstance(params.get("customer"), dict) else {}
+    vehicle = params.get("vehicle") if isinstance(params.get("vehicle"), dict) else {}
+    vehicle_id = params.get("vehicle_id")
+    try:
+        vehicle_id = int(vehicle_id) if vehicle_id is not None else None
+    except (TypeError, ValueError):
+        vehicle_id = None
+
+    from app.config import get_ocr_output_dir, get_uploads_dir
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.fill_rto_service import build_local_rto_print_jobs
+    from app.services.form20_service import generate_gate_pass_pdf_only
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
+
+    safe = _safe_subfolder_name(subfolder)
+    uploads_dir = get_uploads_dir(dealer_id)
+    ocr_dir = get_ocr_output_dir(dealer_id)
+    sale_dir = uploads_dir / safe
+    mob = _mobile_for_print_local(subfolder, customer)
+
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "GATE_PASS",
+        f"local gate pass start subfolder={safe!r} mobile={mob!r}",
+    )
+    try:
+        template_path = _ensure_gate_pass_template_docx(api_url, jwt)
+        os.environ["GATE_PASS_TEMPLATE_DOCX"] = str(template_path)
+        append_print_rto_queue_line(ocr_dir, safe, "GATE_PASS", f"template: {template_path}")
+
+        customer_dict = dict(customer)
+        vehicle_dict = dict(vehicle)
+        if vehicle_dict.get("key_no") and "key_num" not in vehicle_dict:
+            vehicle_dict["key_num"] = vehicle_dict.get("key_no")
+        if vehicle_dict.get("frame_no") and "frame_num" not in vehicle_dict:
+            vehicle_dict["frame_num"] = vehicle_dict.get("frame_no")
+        if vehicle_dict.get("engine_no") and "engine_num" not in vehicle_dict:
+            vehicle_dict["engine_num"] = vehicle_dict.get("engine_no")
+
+        gate_pass_path = generate_gate_pass_pdf_only(
+            subfolder=subfolder,
+            customer=customer_dict,
+            vehicle=vehicle_dict,
+            vehicle_id=vehicle_id,
+            dealer_id=dealer_id,
+            uploads_dir=uploads_dir,
+        )
+        print_jobs, missing = build_local_rto_print_jobs(
+            sale_dir,
+            subfolder=safe,
+            mobile=mob,
+            gate_pass_pdf=gate_pass_path,
+        )
+        if missing:
+            err = "Missing PDFs in sale folder — run Fill DMS (reports) and Generate Insurance first. " + "; ".join(
+                missing
+            )
+            append_print_rto_queue_line(ocr_dir, safe, "GATE_PASS", f"FAIL: {err}")
+            return {"success": False, "error": err, "pdfs_saved": ["Gate Pass.pdf"]}
+
+        kinds = [j.get("kind") for j in print_jobs]
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe,
+            "GATE_PASS",
+            f"OK print_jobs kinds={kinds}",
+        )
+        return {
+            "success": True,
+            "pdfs_saved": ["Gate Pass.pdf"],
+            "print_jobs": print_jobs,
+            "subfolder": safe,
+        }
+    except Exception as exc:
+        append_print_rto_queue_line(ocr_dir, safe, "GATE_PASS", f"FAIL: {exc}")
+        logging.warning("print_gate_pass_local: %s", exc)
+        return {"success": False, "error": str(exc), "pdfs_saved": []}
+
+
 def _dispatch_upload_sale_artifacts_impl(params: dict) -> dict:
     """
     Two-way sale-folder sync for Print / Queue RTO:
@@ -2095,6 +2320,27 @@ def dispatch(payload: dict) -> dict:
         return {"success": bool(data.get("ok")), "data": data, "error": data.get("error")}
     if job_type == "upload_sale_artifacts":
         data = _dispatch_upload_sale_artifacts_impl(params)
+        return {
+            "success": bool(data.get("success")),
+            "data": data,
+            "error": data.get("error"),
+        }
+    if job_type == "pull_sale_scan_assets":
+        data = _dispatch_pull_sale_scan_assets_impl(params)
+        return {
+            "success": bool(data.get("success")),
+            "data": data,
+            "error": data.get("error"),
+        }
+    if job_type == "push_sale_artifacts":
+        data = _dispatch_push_sale_artifacts_impl(params)
+        return {
+            "success": bool(data.get("success")),
+            "data": data,
+            "error": data.get("error"),
+        }
+    if job_type == "print_gate_pass_local":
+        data = _dispatch_print_gate_pass_local_impl(params)
         return {
             "success": bool(data.get("success")),
             "data": data,

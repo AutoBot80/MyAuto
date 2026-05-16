@@ -263,6 +263,53 @@ def fetch_staging_subfolder(staging_id: str, dealer_id: int) -> str | None:
     return s or None
 
 
+def resolve_sales_id_from_staging(staging_id: str, dealer_id: int) -> int | None:
+    """
+    Resolve ``sales_master.sales_id`` for a committed/draft staging row.
+
+    Uses ``payload_json.sales_id`` when set (post Create Invoice), else
+    ``customer_id`` + ``vehicle_id`` on the payload.
+    """
+    p = fetch_staging_payload(staging_id, dealer_id)
+    if not p:
+        return None
+    raw_sid = (p.get("sales_id") or "").strip()
+    if raw_sid.isdigit():
+        return int(raw_sid)
+    try:
+        cid = int(p.get("customer_id") or 0)
+        vid = int(p.get("vehicle_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    if cid < 1 or vid < 1:
+        return None
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT sales_id FROM sales_master WHERE customer_id = %s AND vehicle_id = %s",
+                (cid, vid),
+            )
+            row = cur.fetchone()
+            return int(row["sales_id"]) if row else None
+    finally:
+        conn.close()
+
+
+def staging_customer_mobile_from_payload(payload: dict[str, Any] | None) -> str | None:
+    """Best-effort mobile for RTO queue from staging customer block."""
+    if not payload:
+        return None
+    cust = payload.get("customer")
+    if not isinstance(cust, dict):
+        return None
+    for key in ("mobile_number", "mobile", "phone"):
+        v = str(cust.get(key) or "").strip()
+        if v:
+            return v
+    return None
+
+
 def fetch_draft_payload(staging_id: str, dealer_id: int) -> dict[str, Any] | None:
     """
     Return ``payload_json`` for a **draft** staging row when ``staging_id`` and ``dealer_id`` match.

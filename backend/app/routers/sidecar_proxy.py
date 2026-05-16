@@ -1033,6 +1033,25 @@ def scripts_version() -> dict:
     return {"version": BACKEND_SEMVER, "git_commit": GIT_COMMIT_SHORT}
 
 
+@router.get("/templates/gate-pass-docx")
+def download_gate_pass_template_docx(
+    principal: Principal = Depends(get_principal),
+):
+    """Stream Gate Pass Word template for local sidecar PDF generation (packaged Electron)."""
+    from fastapi.responses import FileResponse
+
+    from app.config import GATE_PASS_TEMPLATE_DOCX
+
+    path = Path(GATE_PASS_TEMPLATE_DOCX).resolve()
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Gate Pass template not found: {path}")
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=path.name,
+    )
+
+
 @router.get("/scripts/bundle")
 def scripts_bundle(
     principal: Principal = Depends(get_principal),

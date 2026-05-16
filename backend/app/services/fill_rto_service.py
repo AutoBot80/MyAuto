@@ -522,6 +522,42 @@ def _canonical_insurance_certificate_pdf(sale_dir: Path, subfolder: str, mob_fn:
     return p if p.is_file() else None
 
 
+def _canonical_cpa_certificate_pdf(sale_dir: Path, subfolder: str, mob_fn: str) -> Path | None:
+    """``{mob_fn}_CPA_{ddmmyyyy}.pdf`` — same date suffix convention as insurance."""
+    suf = _ddmmyyyy_suffix_from_sale_subfolder(subfolder, mob_fn)
+    if not suf:
+        return None
+    p = sale_dir / f"{mob_fn}_CPA_{suf}.pdf"
+    return p if p.is_file() else None
+
+
+def _resolve_cpa_certificate(
+    sale_dir: Path,
+    all_files: list[Path],
+    subfolder: str,
+    mob_fn: str,
+) -> Path | None:
+    canon = _canonical_cpa_certificate_pdf(sale_dir, subfolder, mob_fn)
+    if canon is not None:
+        return canon
+    for f in all_files:
+        if not f.is_file():
+            continue
+        name_lower = f.name.lower()
+        if "cpa" in name_lower and f.suffix.lower() == ".pdf":
+            return f
+    return None
+
+
+def _mobile_fn_from_mobile(mobile: str) -> str:
+    dig = re.sub(r"\D", "", str(mobile or ""))
+    if len(dig) >= 10:
+        return dig[-10:]
+    if dig:
+        return dig.zfill(10)[:10]
+    return "0000000000"
+
+
 def _resolve_insurance_certificate(
     sale_dir: Path,
     all_files: list[Path],
@@ -601,15 +637,65 @@ def resolve_rto_print_bundle_pdfs(
 
     Returns ``(sale_certificate_pdf, insurance_pdf)``.
     """
-    dig = re.sub(r"\D", "", str(mobile or ""))
-    if len(dig) >= 10:
-        mob_fn = dig[-10:]
-    elif dig:
-        mob_fn = dig.zfill(10)[:10]
-    else:
-        mob_fn = "0000000000"
+    mob_fn = _mobile_fn_from_mobile(mobile)
     doc_map = _resolve_sale_documents(sale_dir, subfolder=subfolder, mob_fn=mob_fn)
     return doc_map.get("FORM 21"), doc_map.get("INSURANCE CERTIFICATE")
+
+
+def resolve_cpa_certificate_pdf(
+    sale_dir: Path,
+    *,
+    subfolder: str,
+    mobile: str,
+) -> Path | None:
+    """Optional CPA certificate for Print / Queue RTO (canonical name, then ``*CPA*.pdf`` fallback)."""
+    if not sale_dir.is_dir():
+        return None
+    mob_fn = _mobile_fn_from_mobile(mobile)
+    return _resolve_cpa_certificate(sale_dir, list(sale_dir.iterdir()), subfolder, mob_fn)
+
+
+def build_local_rto_print_jobs(
+    sale_dir: Path,
+    *,
+    subfolder: str,
+    mobile: str,
+    gate_pass_pdf: Path,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """
+    Ordered print jobs for local Electron print: sale_certificate, insurance, optional cpa, gate_pass.
+
+    Returns ``(print_jobs, missing_required_labels)``.
+    """
+    sale_pdf, ins_pdf = resolve_rto_print_bundle_pdfs(sale_dir, subfolder=subfolder, mobile=mobile)
+    cpa_pdf = resolve_cpa_certificate_pdf(sale_dir, subfolder=subfolder, mobile=mobile)
+    missing: list[str] = []
+    if sale_pdf is None or not sale_pdf.is_file():
+        missing.append(
+            "Sale Certificate (*Sale Certificate*, *Sale_Certificate*, or Form 21 PDF from DMS Run Report)"
+        )
+    if ins_pdf is None or not ins_pdf.is_file():
+        missing.append(
+            "Insurance certificate ({mobile}_Insurance_{ddmmyyyy}.pdf from Generate Insurance, or *Insurance*.pdf)"
+        )
+    if gate_pass_pdf is None or not gate_pass_pdf.is_file():
+        missing.append("Gate Pass.pdf")
+    if missing:
+        return [], missing
+
+    ordered: list[tuple[Path, str]] = [
+        (sale_pdf.resolve(), "sale_certificate"),
+        (ins_pdf.resolve(), "insurance"),
+    ]
+    if cpa_pdf is not None and cpa_pdf.is_file():
+        ordered.append((cpa_pdf.resolve(), "cpa"))
+    ordered.append((gate_pass_pdf.resolve(), "gate_pass"))
+
+    jobs = [
+        {"filename": p.name, "presigned_url": str(p), "kind": kind}
+        for p, kind in ordered
+    ]
+    return jobs, []
 
 
 # ---------------------------------------------------------------------------

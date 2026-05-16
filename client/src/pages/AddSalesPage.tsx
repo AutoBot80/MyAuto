@@ -22,12 +22,6 @@ import {
   fillCpaAllianceInsuranceLocal,
   fillDmsLocal,
   fillHeroInsuranceLocal,
-  overlayDealerSignaturesLocal,
-  printGatePass,
-  finalizePrintRtoQueueLog,
-  printRtoQueueLogHint,
-  uploadSaleFolderToServer,
-  type PrintRtoQueueLogLine,
   isFillDmsAbortError,
   warmDmsBrowserLocal,
   warmInsuranceBrowserLocal,
@@ -38,7 +32,7 @@ import {
   type CreateInvoiceEligibilityResponse,
   type CpaInsurerPortalRow,
 } from "../api/addSales";
-import { insertRtoPayment } from "../api/rtoPaymentDetails";
+import { runPrintQueueRtoFlow } from "../utils/printQueueRtoFlow";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { markBulkLoadSuccess } from "../api/bulkLoads";
 import { isHeroBajajFinancierForStaging } from "../utils/financierStagingRules";
@@ -54,7 +48,6 @@ import { AddSalesInProcessPanel } from "./AddSalesInProcessPanel";
 import { StatusMessage } from "../components/StatusMessage";
 import { usePageVisible } from "../hooks/usePageVisible";
 import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
-import { moveConsolidatedToProcessed } from "../utils/scannerArchive";
 import {
   composeCareOf,
   formatDobDigitsInput,
@@ -1515,121 +1508,10 @@ export function AddSalesPage({
     setIsPrintFormsLoading(true);
     setPrintFormsStatus(null);
 
-    const statusLines: string[] = [];
-    const traceLines: PrintRtoQueueLogLine[] = [];
-
-    if (dealerId > 0 && savedTo) {
-      try {
-        const up = await uploadSaleFolderToServer({ dealer_id: dealerId, subfolder: savedTo });
-        if (!up.success) {
-          traceLines.push({
-            prefix: "UI",
-            message: `sync FAIL: ${up.error ?? "unknown"}`,
-          });
-          await finalizePrintRtoQueueLog({
-            dealer_id: dealerId,
-            subfolder: savedTo,
-            lines: traceLines,
-          });
-          setPrintFormsStatus(
-            `${up.error ?? "Upload sale folder to server failed."} ${printRtoQueueLogHint(savedTo)}`
-          );
-          setIsPrintFormsLoading(false);
-          return;
-        }
-        const parts: string[] = [];
-        if ((up.files_downloaded ?? 0) > 0) parts.push(`${up.files_downloaded} from server`);
-        if ((up.files_uploaded ?? 0) > 0) parts.push(`${up.files_uploaded} to server`);
-        if (parts.length > 0) statusLines.push(`Synced ${parts.join(", ")}.`);
-        traceLines.push({
-          prefix: "UI",
-          message: `sync OK downloaded=${up.files_downloaded ?? 0} uploaded=${up.files_uploaded ?? 0} failed=${up.files_failed ?? 0}`,
-        });
-      } catch (syncErr) {
-        const msg =
-          syncErr instanceof Error ? syncErr.message : "Upload sale folder to server failed.";
-        traceLines.push({ prefix: "UI", message: `sync FAIL: ${msg}` });
-        await finalizePrintRtoQueueLog({
-          dealer_id: dealerId,
-          subfolder: savedTo,
-          lines: traceLines,
-        });
-        setPrintFormsStatus(`${msg} ${printRtoQueueLogHint(savedTo)}`);
-        setIsPrintFormsLoading(false);
-        return;
-      }
-    }
-
-    if (lastSubmittedCustomerId != null && lastSubmittedVehicleId != null) {
-      try {
-        await insertRtoPayment({
-          customer_id: lastSubmittedCustomerId,
-          vehicle_id: lastSubmittedVehicleId,
-          dealer_id: dealerId,
-          customer_mobile: mobile ?? undefined,
-          staging_id: lastStagingId?.trim() || undefined,
-          status: "Queued",
-        });
-        statusLines.push("Added to RTO Queue.");
-        traceLines.push({ prefix: "UI", message: "RTO queue insert OK" });
-      } catch (queueErr) {
-        const msg =
-          queueErr instanceof Error ? `RTO queue: ${queueErr.message}` : "RTO queue insert failed.";
-        traceLines.push({ prefix: "UI", message: msg });
-        if (savedTo) {
-          await finalizePrintRtoQueueLog({
-            dealer_id: dealerId,
-            subfolder: savedTo,
-            lines: traceLines,
-          });
-        }
-        setPrintFormsStatus(savedTo ? `${msg} ${printRtoQueueLogHint(savedTo)}` : msg);
-        setIsPrintFormsLoading(false);
-        return;
-      }
-    } else {
-      statusLines.push("RTO queue skipped (customer/vehicle IDs missing — run Create Invoice first).");
-      traceLines.push({ prefix: "UI", message: "RTO queue skipped (no customer/vehicle IDs)" });
-    }
-
-    if (dealerId != null && dealerId > 0 && savedTo) {
-      try {
-        await overlayDealerSignaturesLocal({ dealerId, subfolder: savedTo });
-        traceLines.push({ prefix: "UI", message: "dealer signature overlay finished (best-effort)" });
-      } catch (overlayErr) {
-        traceLines.push({
-          prefix: "UI",
-          message: `dealer signature overlay error: ${overlayErr instanceof Error ? overlayErr.message : String(overlayErr)}`,
-        });
-      }
-    }
-
-    let gatePassSucceeded = false;
     try {
-      // Form 20 generation (print-form20) — disabled; Gate Pass only below.
-      // const form20Res = await printForm20({
-      //   subfolder: savedTo,
-      //   customer: {
-      //     name: c?.name ?? undefined,
-      //     care_of: c?.care_of ?? undefined,
-      //     address: c?.address ?? buildDisplayAddress(c),
-      //     city: c?.city ?? undefined,
-      //     state: c?.state ?? undefined,
-      //     pin_code: c?.pin_code ?? undefined,
-      //     aadhar_id: c?.aadhar_id ?? undefined,
-      //   },
-      //   vehicle: vehicleDataForGatePass,
-      //   vehicle_id: lastSubmittedVehicleId ?? undefined,
-      //   dealer_id: dealerId,
-      // });
-      // if (form20Res.success) {
-      //   setHasPrintedForms(true);
-      //   statusLines.push(`Form 20 saved: ${(form20Res.pdfs_saved ?? []).join(", ")}`);
-      // } else if (form20Res.error) {
-      //   statusLines.push(`Form 20: ${form20Res.error}`);
-      // }
-
-      const gatePassRes = await printGatePass({
+      const result = await runPrintQueueRtoFlow({
+        dealerId,
+        stagingId: lastStagingId?.trim() ?? "",
         subfolder: savedTo,
         customer: {
           name: c?.name ?? undefined,
@@ -1639,58 +1521,22 @@ export function AddSalesPage({
           state: c?.state ?? undefined,
           pin_code: c?.pin_code ?? undefined,
           aadhar_id: c?.aadhar_id ?? undefined,
+          mobile: mobile ?? undefined,
         },
         vehicle: vehicleDataForGatePass,
-        vehicle_id: lastSubmittedVehicleId ?? undefined,
-        dealer_id: dealerId,
+        vehicleId: lastSubmittedVehicleId ?? undefined,
+        pendingScannerArchiveMove: pendingScannerArchiveMove ?? undefined,
       });
-      gatePassSucceeded = !!gatePassRes.success;
-      if (gatePassRes.success) {
+      if (result.gatePassSucceeded) {
         setHasPrintedForms(true);
-        dispatchPrintJobsFromApi(gatePassRes.print_jobs);
-        statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
-        traceLines.push({
-          prefix: "UI",
-          message: `gate pass OK print_jobs=${(gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ")}`,
-        });
-      } else if (gatePassRes.error) {
-        statusLines.push(`Gate Pass: ${gatePassRes.error}`);
-        traceLines.push({ prefix: "UI", message: `gate pass FAIL: ${gatePassRes.error}` });
       }
-    } catch (printErr) {
-      const msg =
-        printErr instanceof Error ? printErr.message : "Generate & print failed.";
-      statusLines.push(`Gate Pass: ${msg}`);
-      traceLines.push({ prefix: "UI", message: `gate pass exception: ${msg}` });
+      if (result.gatePassSucceeded && pendingScannerArchiveMove) {
+        setPendingScannerArchiveMove(null);
+      }
+      setPrintFormsStatus(result.statusLines.join(" "));
     } finally {
       setIsPrintFormsLoading(false);
     }
-
-    if (gatePassSucceeded && pendingScannerArchiveMove) {
-      const arch = pendingScannerArchiveMove;
-      try {
-        await moveConsolidatedToProcessed(arch.fileHandles, arch.scannerRoot);
-        statusLines.push("Moved scan from landing to processed folder.");
-        setPendingScannerArchiveMove(null);
-        setUploadStatus((prev) => (prev ? `${prev} ` : "") + "Moved scan to processed folder.");
-      } catch (e) {
-        const detail = e instanceof Error ? e.message : String(e);
-        statusLines.push(`Could not move file to processed: ${detail}`);
-        setPendingScannerArchiveMove(null);
-      }
-    }
-
-    if (dealerId > 0 && savedTo) {
-      traceLines.push({ prefix: "UI", message: `run finished gatePassSucceeded=${gatePassSucceeded}` });
-      await finalizePrintRtoQueueLog({
-        dealer_id: dealerId,
-        subfolder: savedTo,
-        lines: traceLines,
-      });
-      statusLines.push(printRtoQueueLogHint(savedTo));
-    }
-
-    setPrintFormsStatus(statusLines.join(" "));
   };
 
   const d = dmsScrapedVehicle;

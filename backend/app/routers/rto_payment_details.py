@@ -78,11 +78,24 @@ def _serialize_row(row: dict) -> dict:
 def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
     """Insert one RTO queue row after Fill Forms completes DMS/Form 20 work."""
     enforce_max_text_depth(payload.model_dump())
+    staging_clean = (payload.staging_id or "").strip() or None
+    if staging_clean:
+        try:
+            UUID(staging_clean)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid staging_id (expected UUID)")
+
     sid = payload.sales_id
     if sid is None and payload.customer_id is not None and payload.vehicle_id is not None:
         sid = repo._get_sales_id(payload.customer_id, payload.vehicle_id)
+    eff_dealer_early = payload.dealer_id
+    if sid is None and staging_clean and eff_dealer_early is not None:
+        sid = staging_repo.resolve_sales_id_from_staging(staging_clean, int(eff_dealer_early))
     if sid is None:
-        raise HTTPException(status_code=400, detail="sales_id required (or provide customer_id + vehicle_id)")
+        raise HTTPException(
+            status_code=400,
+            detail="sales_id required (staging_id + dealer_id after Create Invoice, or customer_id + vehicle_id)",
+        )
     sm_dealer = repo.get_dealer_id_for_sales(sid)
     eff_dealer = payload.dealer_id
     if eff_dealer is not None:
@@ -92,18 +105,16 @@ def insert_rto_payment(payload: RtoPaymentInsertPayload) -> dict:
         eff_dealer = sm_dealer
     if eff_dealer is None:
         raise HTTPException(status_code=400, detail="dealer_id is required (could not resolve from sales_master)")
-    staging_clean = (payload.staging_id or "").strip() or None
-    if staging_clean:
-        try:
-            UUID(staging_clean)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid staging_id (expected UUID)")
+    customer_mobile = payload.customer_mobile
+    if not (customer_mobile or "").strip() and staging_clean:
+        sp = staging_repo.fetch_staging_payload(staging_clean, int(eff_dealer))
+        customer_mobile = staging_repo.staging_customer_mobile_from_payload(sp)
     app_date = _parse_date(payload.rto_application_date) if payload.rto_application_date else None
     try:
         queue_id = repo.insert(
             sales_id=sid,
             insurance_id=payload.insurance_id,
-            customer_mobile=payload.customer_mobile,
+            customer_mobile=customer_mobile,
             rto_application_date=app_date,
             rto_payment_amount=payload.rto_payment_amount,
             status=payload.status or "Queued",
