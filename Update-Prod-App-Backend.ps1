@@ -6,7 +6,8 @@
   Run from the repo root. Right-click this file > "Run with PowerShell"
   (or: powershell -ExecutionPolicy Bypass -File .\Prod-ec2-deploy.ps1)
 
-  Commits: git add -u then git commit -m with the next vX.Y.ZZ after "git fetch origin --tags --force":
+  Commits: git status, git add backend/ electron/ client/, git status, then git add -u and
+  git commit -m with the next vX.Y.ZZ after "git fetch origin --tags --force":
   highest vX.Y.Z on origin (ls-remote) and locally, patch + 1 (same as Update-Prod-App-Electron.ps1).
   If no such tags exist yet, starts at v0.5.01. Writes backend/VERSION from that version.
   Use -SkipCommit to push only (no local commit).
@@ -34,7 +35,7 @@
   Skip local git push (use if you already pushed).
 
 .PARAMETER SkipCommit
-  Skip auto-commit (git add -u + version bump commit). Push/deploy only what is already committed.
+  Skip auto-commit (stage + version bump commit). Push/deploy only what is already committed.
 
 .PARAMETER SkipTag
   Skip creating and pushing the vX.Y.Z git tag after push (main still pushes unless -SkipPush).
@@ -240,13 +241,32 @@ Write-Ok "Tags synced from origin"
 
 $pushedVersionTag = $null
 
-# --- Phase 0.5: Auto-commit tracked changes (git add -u) with bumped version message ---
+# --- Phase 0.5: Stage app trees, then auto-commit with bumped version message ---
 if (-not $SkipCommit) {
-    Write-Step "Phase 0.5: Auto-commit (tracked files, version message)"
+    Write-Step "Phase 0.5: Stage backend/, electron/, client/"
+    git status 2>&1 | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "git status failed."
+        Exit-Script 1
+    }
+    git add backend/ electron/ client/ 2>&1 | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "git add backend/ electron/ client/ failed."
+        Exit-Script 1
+    }
+    Write-Host ""
+    Write-Host "After git add backend/ electron/ client/:" -ForegroundColor DarkGray
+    git status 2>&1 | ForEach-Object { Write-Host $_ }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "git status failed."
+        Exit-Script 1
+    }
+
+    Write-Step "Phase 0.5b: Auto-commit (version message)"
     git diff-index --quiet HEAD --
-    $hasTrackedChanges = $LASTEXITCODE -ne 0
-    if (-not $hasTrackedChanges) {
-        Write-Ok "Nothing to commit (working tree matches HEAD for tracked files)"
+    $hasChangesToCommit = $LASTEXITCODE -ne 0
+    if (-not $hasChangesToCommit) {
+        Write-Ok "Nothing to commit (no staged or tracked changes under backend/, electron/, client/)"
     } else {
         $maxTagVer = Get-MaxSemVerForRelease
         $nextSemVer = Get-NextSemVerFromGitTags
@@ -266,6 +286,7 @@ if (-not $SkipCommit) {
             Write-Fail "git add backend/VERSION failed."
             Exit-Script 1
         }
+        # Other tracked paths (e.g. Documentation/) not under the three app trees above.
         git add -u 2>&1 | ForEach-Object { Write-Host $_ }
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "git add -u failed."
