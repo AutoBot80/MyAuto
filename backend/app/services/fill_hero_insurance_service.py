@@ -771,10 +771,13 @@ def _write_hero_misp_frame_dump_file(
     reason: str,
     ocr_output_dir: Path | None,
     subfolder: str | None,
+    lines: list[str] | None = None,
 ) -> str | None:
     """
     Write frame URLs and compact DOM metadata to a **separate** file under ``ocr_output/<subfolder>/``
     (not the main ``Playwright_insurance.txt`` log). Returns the file **name** for a one-line **NOTE** in the log.
+
+    When ``lines`` is set, that body is written instead of :func:`_collect_hero_misp_frame_dump_lines`.
     """
     if not ocr_output_dir or not (subfolder or "").strip():
         return None
@@ -788,7 +791,7 @@ def _write_hero_misp_frame_dump_file(
     out_dir = ocr_output_dir / sub
     name = f"insurance_frame_dump_{slug}_{tstamp}.txt"
     path = out_dir / name
-    body = "\n".join(_collect_hero_misp_frame_dump_lines(page))
+    body = "\n".join(lines if lines is not None else _collect_hero_misp_frame_dump_lines(page))
     header = f"timestamp_ist=about_{tstamp} reason={reason!s} url={_hero_misp_safe_url_for_insurance_log(getattr(page, 'url', '') or '')}\n"
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -811,19 +814,136 @@ def _write_hero_misp_frame_dump_file(
     return name
 
 
+_KYC_POST_UPLOAD_DOM_DUMP_JS = r"""() => {
+  const clip = (s, n) => {
+    const t = (s || '').toString().replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n) + '…' : t;
+  };
+  const vis = (el) => {
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 1 && r.height > 1;
+  };
+  const out = { inputs: [], buttons: [], selects: [], labels: [] };
+  const cap = { inputs: 40, buttons: 30, selects: 15, labels: 25 };
+  try {
+    for (const el of document.querySelectorAll('input')) {
+      if (out.inputs.length >= cap.inputs) break;
+      if (!vis(el)) continue;
+      const row = {
+        type: (el.type || '').toLowerCase(),
+        id: el.id || '',
+        name: el.name || '',
+        value: clip(el.value, 80),
+        checked: !!el.checked,
+        disabled: !!el.disabled,
+      };
+      if (el.type === 'file') row.files = el.files ? el.files.length : 0;
+      out.inputs.push(row);
+    }
+  } catch (e) { out.inputs.push({ error: String(e).slice(0, 120) }); }
+  try {
+    for (const el of document.querySelectorAll('button, input[type="button"], input[type="submit"]')) {
+      if (out.buttons.length >= cap.buttons) break;
+      if (!vis(el)) continue;
+      out.buttons.push({
+        tag: (el.tagName || '').toLowerCase(),
+        type: (el.type || '').toLowerCase(),
+        id: el.id || '',
+        name: el.name || '',
+        text: clip(el.innerText || el.value || '', 100),
+      });
+    }
+  } catch (e) { out.buttons.push({ error: String(e).slice(0, 120) }); }
+  try {
+    for (const el of document.querySelectorAll('select')) {
+      if (out.selects.length >= cap.selects) break;
+      if (!vis(el)) continue;
+      let sel = '';
+      try {
+        const i = el.selectedIndex;
+        if (i >= 0 && el.options[i]) sel = clip(el.options[i].textContent, 80);
+      } catch (e2) {}
+      out.selects.push({ id: el.id || '', name: el.name || '', selected: sel });
+    }
+  } catch (e) { out.selects.push({ error: String(e).slice(0, 120) }); }
+  try {
+    for (const el of document.querySelectorAll('label')) {
+      if (out.labels.length >= cap.labels) break;
+      if (!vis(el)) continue;
+      out.labels.push({
+        for: el.htmlFor || el.getAttribute('for') || '',
+        text: clip(el.innerText || el.textContent, 120),
+      });
+    }
+  } catch (e) { out.labels.push({ error: String(e).slice(0, 120) }); }
+  return out;
+}"""
+
+
+def _collect_kyc_post_upload_form_controls_dump_lines(page) -> list[str]:
+    """Per-frame inputs / buttons / selects / labels after KYC file attach (operator selector tuning)."""
+    out: list[str] = ["--- KYC post-upload form controls (per frame) ---"]
+    try:
+        frs = [f for f in page.frames if not f.is_detached()][:24]
+    except Exception as exc:
+        return [f"frames_enumeration_error={exc!s}"]
+    out.append(f"frame_count={len(frs)}")
+    for i, fr in enumerate(frs):
+        u = ""
+        nm = ""
+        try:
+            u = ((getattr(fr, "url", None) or "")[:420])
+            nm = (getattr(fr, "name", None) or "")
+        except Exception:
+            pass
+        line = f"  [{i}] name={nm!r} url={u!r}"
+        try:
+            data = fr.evaluate(_KYC_POST_UPLOAD_DOM_DUMP_JS)  # type: ignore[union-attr]
+            blob = json.dumps(data, ensure_ascii=False)
+            if len(blob) > 140_000:
+                blob = blob[:140_000] + "…[truncated]"
+            line += f"\n    controls={blob}"
+        except Exception as exc:
+            line += f"\n    controls_evaluate_error={exc!s}"
+        out.append(line)
+    return out
+
+
+def _append_kyc_post_upload_dom_dump(
+    page,
+    *,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """After upload attach: write form-control dump under ``ocr_output/<subfolder>/`` + one **NOTE**."""
+    lines = _collect_kyc_post_upload_form_controls_dump_lines(page)
+    _append_hero_misp_frame_dump(
+        page,
+        reason="kyc_post_upload",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+        lines=lines,
+    )
+
+
 def _append_hero_misp_frame_dump(
     page,
     *,
     reason: str,
     ocr_output_dir: Path | None,
     subfolder: str | None,
+    lines: list[str] | None = None,
 ) -> None:
-    """Missed 2W / New Policy, etc. — :func:`_write_hero_misp_frame_dump_file` + one **NOTE** (no long inline dump)."""
+    """Missed 2W / New Policy, KYC post-upload, etc. — dump file + one **NOTE** (no long inline dump)."""
     written = _write_hero_misp_frame_dump_file(
         page,
         reason=reason,
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
+        lines=lines,
     )
     if not ocr_output_dir or not (subfolder or "").strip():
         return
@@ -1004,7 +1124,7 @@ def _kyc_shared_consent_joint_cta_then_settle_before_vin(
     primary CTA using the **joint** label set from the former verified-only and post-upload clickers (only one
     control; copy differs by branch), then the same **25s-class** load settle as the working mobile path.
     """
-    _kyc_ensure_consent_checked_before_kyc_cta(page)
+    _kyc_ensure_consent_checked_before_kyc_cta(page, kyc_fr)
     to = min(int(timeout_ms), 45_000)
     roots = _kyc_roots_for_post_upload_cta(page, kyc_fr)
     # Deduped union: verified-mobile order first (Proceed, policy issuance, …), then post-upload labels.
@@ -1190,46 +1310,110 @@ def _kyc_select_kyc_partner_if_available(
     )
 
 
-def _kyc_ensure_consent_checked_before_kyc_cta(page) -> None:
-    """Ensure a consent / declaration checkbox is checked before **Proceed** (post-mobile KYC CTA)."""
-    for root in (_kyc_preferred_kyc_frame(page), page):
+_KYC_CONSENT_CHECKBOX_TEXT_RE = re.compile(
+    r"consent|agree|confirm|i\s*confirm|declare|accept|terms|e-?kyc|hereby|ovd|policy\s*issuance",
+    re.I,
+)
+_KYC_CONSENT_LABEL_TEXT_RE = re.compile(
+    r"hereby give my consent|e-?kyc|policy\s*issuance|i\s*hereby",
+    re.I,
+)
+
+
+def _kyc_ensure_consent_checked_before_kyc_cta(page, kyc_fr=None) -> None:
+    """
+    Best-effort: ensure the e-KYC consent **checkbox** is checked before the primary KYC CTA
+    (Proceed / KYC Verification). Scans the same frame roots as post-upload CTA clicks.
+    """
+    fr = kyc_fr if kyc_fr is not None else _kyc_preferred_kyc_frame(page)
+    roots = _kyc_roots_for_post_upload_cta(page, fr)
+    label_re = _KYC_CONSENT_LABEL_TEXT_RE
+    text_re = _KYC_CONSENT_CHECKBOX_TEXT_RE
+
+    def _check_cb(cb, *, via: str) -> bool:
         try:
-            cbs = root.get_by_role("checkbox").filter(
-                has_text=re.compile(
-                    r"consent|agree|confirm|i\s*confirm|declare|accept|terms",
-                    re.I,
-                )
+            if not cb.is_visible(timeout=900):
+                return False
+            if cb.is_checked():
+                return True
+            cb.check(timeout=6_000)
+            logger.info(
+                "Hero Insurance: checked consent checkbox before KYC primary CTA (%s).",
+                via,
             )
-            n = min(cbs.count(), 20)
-            for i in range(n):
-                cb = cbs.nth(i)
+            return True
+        except Exception:
+            return False
+
+    for root in roots:
+        try:
+            cbs = root.get_by_role("checkbox").filter(has_text=text_re)
+            for i in range(min(cbs.count(), 20)):
+                if _check_cb(cbs.nth(i), via="role=checkbox"):
+                    return
+        except Exception:
+            pass
+        try:
+            by_label = root.get_by_label(label_re)
+            for i in range(min(by_label.count(), 12)):
+                el = by_label.nth(i)
                 try:
-                    if cb.is_visible(timeout=900) and not cb.is_checked():
-                        cb.check(timeout=6_000)
-                        logger.info("Hero Insurance: checked consent checkbox before KYC primary CTA.")
+                    tag = (
+                        el.evaluate("e => e && e.tagName ? e.tagName.toLowerCase() : ''") or ""
+                    ).lower()
+                except Exception:
+                    tag = ""
+                if tag == "input":
+                    if _check_cb(el, via="get_by_label input"):
                         return
+                else:
+                    try:
+                        if el.is_visible(timeout=600) and not el.is_checked():
+                            el.check(timeout=6_000)
+                            logger.info(
+                                "Hero Insurance: checked consent via get_by_label (%s).",
+                                tag or "control",
+                            )
+                            return
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            labs = root.locator("label").filter(has_text=label_re)
+            for i in range(min(labs.count(), 16)):
+                lab = labs.nth(i)
+                try:
+                    if not lab.is_visible(timeout=500):
+                        continue
+                    fid = (lab.get_attribute("for") or "").strip()
+                    if fid:
+                        cb = root.locator(
+                            f'input[type="checkbox"]#{fid}, input[type="checkbox"][id="{fid}"]'
+                        ).first
+                        if _check_cb(cb, via=f"label[for={fid[:48]!r}]"):
+                            return
+                    nested = lab.locator('input[type="checkbox"]')
+                    if nested.count() > 0 and _check_cb(nested.first, via="label nested checkbox"):
+                        return
+                    try:
+                        lab.click(timeout=4_000)
+                        logger.info(
+                            "Hero Insurance: clicked consent label before KYC primary CTA."
+                        )
+                        return
+                    except Exception:
+                        pass
                 except Exception:
                     continue
         except Exception:
             pass
         try:
-            loc = root.locator('input[type="checkbox"]:visible')
-            n2 = min(loc.count(), 24)
-            for i in range(n2):
+            loc = root.locator('input[type="checkbox"]')
+            for i in range(min(loc.count(), 24)):
                 cb = loc.nth(i)
-                try:
-                    if not cb.is_visible(timeout=400):
-                        continue
-                    if cb.is_checked():
-                        continue
-                    cb.check(timeout=6_000)
-                    logger.info(
-                        "Hero Insurance: checked visible checkbox index %s before KYC primary CTA.",
-                        i,
-                    )
+                if _check_cb(cb, via=f"visible checkbox index {i}"):
                     return
-                except Exception:
-                    continue
         except Exception:
             pass
 
@@ -4987,6 +5171,11 @@ def _kyc_proceed_or_upload(
         )
     except Exception:
         pass
+    _append_kyc_post_upload_dom_dump(
+        page,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     return None
 
 
