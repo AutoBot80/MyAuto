@@ -86,11 +86,21 @@ def _last4(aadhar_id: str | None) -> str | None:
     return digits[-4:] if len(digits) >= 4 else digits or None
 
 
-def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, int, int]:
+def upsert_customer_vehicle_sales(
+    cur,
+    payload: dict[str, Any],
+    *,
+    scraped_vehicle: dict[str, Any] | None = None,
+) -> tuple[int, int, int]:
     """
     Customer by (aadhar last 4, mobile_number), vehicle by raw triple upsert; **sales** is a plain
     ``INSERT``. If ``sales_master`` already has a row for the resulting ``(customer_id, vehicle_id)``,
     raises ``ValueError`` (unique ``uq_sales_customer_vehicle``).
+
+    When ``scraped_vehicle`` is set (post–Create Invoice Siebel scrape), applies
+    ``_vehicle_master_update_from_scrape_on_cursor`` after ``sales_master`` insert so model/colour/year
+    etc. match the staging-only path used by ``/sidecar/dms/commit``.
+
     Returns ``(customer_id, vehicle_id, sales_id)``.
     """
     customer = payload.get("customer") if isinstance(payload.get("customer"), dict) else {}
@@ -112,8 +122,10 @@ def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, in
     profession = _str_or_none(customer.get("profession"), 16)
     financier = _str_or_none(customer.get("financier"), 255)
     marital_status = _str_or_none(customer.get("marital_status"), 32)
-    dms_relation_prefix = _str_or_none(compute_dms_relation_prefix(address or "", gender), 8)
     care_of = _str_or_none(customer.get("care_of"), 255)
+    dms_relation_prefix = _str_or_none(
+        compute_dms_relation_prefix(care_of=care_of, address=address or "", gender=gender), 8
+    )
     dms_contact_path = _str_or_none(customer.get("dms_contact_path"), 16) or "found"
     if dms_contact_path.lower() not in ("found", "new_enquiry", "skip_find"):
         dms_contact_path = "found"
@@ -271,6 +283,13 @@ def upsert_customer_vehicle_sales(cur, payload: dict[str, Any]) -> tuple[int, in
     if sales_id is None:
         raise RuntimeError("sales_master INSERT did not return sales_id")
 
+    if scraped_vehicle:
+        scrape = dict(scraped_vehicle)
+        if scrape:
+            from app.services.fill_hero_dms_service import _vehicle_master_update_from_scrape_on_cursor
+
+            _vehicle_master_update_from_scrape_on_cursor(cur, int(vehicle_id), scrape)
+
     return int(customer_id), int(vehicle_id), sales_id
 
 
@@ -278,6 +297,7 @@ def commit_staging_masters_and_finalize_row(
     *,
     staging_id: str,
     merged_payload: dict[str, Any],
+    scraped_vehicle: dict[str, Any] | None = None,
 ) -> tuple[int, int]:
     """
     Single transaction: upsert masters, mark ``add_sales_staging`` committed, patch payload with ids,
@@ -300,15 +320,16 @@ def commit_staging_masters_and_finalize_row(
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cid, vid, sid_sale = upsert_customer_vehicle_sales(cur, merged_payload)
+            cid, vid, sid_sale = upsert_customer_vehicle_sales(
+                cur, merged_payload, scraped_vehicle=scraped_vehicle
+            )
             patch_obj = build_staging_commit_patch(
                 merged_payload,
                 customer_id=cid,
                 vehicle_id=vid,
                 sales_id=sid_sale,
             )
-            patch = json.dumps(patch_obj, default=str)
-            mark_staging_committed_on_cursor(cur, sid, dealer_id, patch_json_fragment=patch)
+            mark_staging_committed_on_cursor(cur, sid, dealer_id, patch=patch_obj)
         conn.commit()
     return cid, vid
 
@@ -346,11 +367,10 @@ def finalize_staging_row_with_master_ids(
         vehicle_id=int(vehicle_id),
         sales_id=sales_id,
     )
-    patch = json.dumps(patch_obj, default=str)
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            mark_staging_committed_on_cursor(cur, sid, dealer_id, patch_json_fragment=patch)
+            mark_staging_committed_on_cursor(cur, sid, dealer_id, patch=patch_obj)
         conn.commit()
 
 

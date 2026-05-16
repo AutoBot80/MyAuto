@@ -26,7 +26,7 @@ class CustomerPayload(BaseModel):
     financier: str | None = None
     marital_status: str | None = None
     care_of: str | None = None  # Aadhaar QR care-of; DMS Father/Husband + Form 20
-    dms_relation_prefix: str | None = None  # Ignored for staging; server derives from address + gender
+    dms_relation_prefix: str | None = None  # Ignored for staging; server derives from care_of (+ address fallback)
     dms_contact_path: str | None = None
     file_location: str | None = None
 

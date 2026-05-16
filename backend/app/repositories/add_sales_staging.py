@@ -7,6 +7,54 @@ from typing import Any
 
 from app.db import get_connection
 
+_NESTED_STAGING_PAYLOAD_KEYS = frozenset({"customer", "vehicle", "insurance"})
+
+
+def deep_merge_staging_payload(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """
+    Merge ``patch`` into ``base`` for staging JSON.
+
+    Top-level scalars: patch wins. Nested ``customer`` / ``vehicle`` / ``insurance``: field-level
+    overlay (PostgreSQL ``||`` on jsonb replaces whole nested objects — do not use that here).
+    """
+    result = dict(base)
+    for key, val in patch.items():
+        if key in _NESTED_STAGING_PAYLOAD_KEYS and isinstance(val, dict):
+            existing = result.get(key)
+            if isinstance(existing, dict):
+                merged_nested = dict(existing)
+                merged_nested.update(val)
+                result[key] = merged_nested
+            else:
+                result[key] = dict(val)
+        else:
+            result[key] = val
+    return result
+
+
+def _load_payload_json_for_update_on_cursor(
+    cur, *, staging_id: str, dealer_id: int
+) -> dict[str, Any] | None:
+    """Lock row and return ``payload_json`` dict, or None if missing."""
+    cur.execute(
+        """
+        SELECT payload_json
+        FROM add_sales_staging
+        WHERE staging_id = %s::uuid AND dealer_id = %s
+        FOR UPDATE
+        """,
+        (staging_id, int(dealer_id)),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    raw = row["payload_json"] if isinstance(row, dict) else row[0]
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    return json.loads(raw)
+
 
 def normalize_staging_natural_key_mobile(mobile: Any) -> str | None:
     """Last up to 10 digits as string for dedupe; None if no digits."""
@@ -350,29 +398,44 @@ def merge_staging_payload_on_cursor(
     sid = (staging_id or "").strip()
     if not sid or not patch:
         return
-    frag = json.dumps(patch, default=str)
+    did = int(dealer_id)
+    existing = _load_payload_json_for_update_on_cursor(cur, staging_id=sid, dealer_id=did)
+    if existing is None:
+        return
+    merged = deep_merge_staging_payload(existing, patch)
+    frag = json.dumps(merged, default=str)
     cur.execute(
         """
         UPDATE add_sales_staging
         SET updated_at = now(),
-            payload_json = payload_json || %s::jsonb
+            payload_json = %s::jsonb
         WHERE staging_id = %s::uuid AND dealer_id = %s
           AND status IN ('draft', 'committed')
         """,
-        (frag, sid, int(dealer_id)),
+        (frag, sid, did),
     )
 
 
-def mark_staging_committed_on_cursor(cur, staging_id: str, dealer_id: int, *, patch_json_fragment: str) -> None:
-    """Set status to committed and merge ``patch_json_fragment`` into ``payload_json`` (ids, optional ``customer.financier``, ``vehicle`` DMS numbers)."""
+def mark_staging_committed_on_cursor(
+    cur, staging_id: str, dealer_id: int, *, patch: dict[str, Any]
+) -> None:
+    """Set status to committed and deep-merge ``patch`` into ``payload_json`` (ids, financier, DMS numbers)."""
     sid = (staging_id or "").strip()
+    did = int(dealer_id)
+    existing = _load_payload_json_for_update_on_cursor(cur, staging_id=sid, dealer_id=did)
+    if existing is None:
+        raise ValueError(f"add_sales_staging row not found for staging_id={sid!r} dealer_id={did}")
+    merged = deep_merge_staging_payload(existing, patch)
+    frag = json.dumps(merged, default=str)
     cur.execute(
         """
         UPDATE add_sales_staging
         SET status = 'committed',
             updated_at = now(),
-            payload_json = payload_json || %s::jsonb
+            payload_json = %s::jsonb
         WHERE staging_id = %s::uuid AND dealer_id = %s
         """,
-        (patch_json_fragment, sid, int(dealer_id)),
+        (frag, sid, did),
     )
+    if cur.rowcount != 1:
+        raise ValueError(f"add_sales_staging commit updated {cur.rowcount} rows (expected 1)")

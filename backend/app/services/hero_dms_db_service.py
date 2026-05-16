@@ -173,4 +173,5 @@ def persist_staging_masters_after_invoice(
     return commit_staging_masters_and_finalize_row(
         staging_id=staging_id,
         merged_payload=merged_pl,
+        scraped_vehicle=scraped_vehicle,
     )

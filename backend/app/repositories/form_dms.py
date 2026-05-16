@@ -63,7 +63,11 @@ def build_dms_fill_row_from_staging_payload(payload: dict[str, Any]) -> dict[str
     financier = _st(customer.get("financier"))
     rel_pref = _st(customer.get("dms_relation_prefix"))
     if not rel_pref:
-        rel_pref = compute_dms_relation_prefix(_st(customer.get("address")), customer.get("gender"))
+        rel_pref = compute_dms_relation_prefix(
+            care_of=_st(customer.get("care_of")),
+            address=_st(customer.get("address")),
+            gender=customer.get("gender"),
+        )
     care = _st(customer.get("care_of"))
     father_h = care
     path = (_st(customer.get("dms_contact_path")) or "found").lower()

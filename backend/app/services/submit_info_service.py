@@ -89,9 +89,9 @@ def submit_info(
     profession = _str_or_none(default_profession_if_empty(_prof), 16)
     financier = _str_or_none(customer.get("financier"), 255)
     marital_status = _str_or_none(customer.get("marital_status"), 32)
-    rel_computed = compute_dms_relation_prefix(address or "", gender)
-    dms_relation_prefix = _str_or_none(rel_computed, 8) or rel_computed
     care_of = _str_or_none(customer.get("care_of"), 255)
+    rel_computed = compute_dms_relation_prefix(care_of=care_of, address=address or "", gender=gender)
+    dms_relation_prefix = _str_or_none(rel_computed, 8) or rel_computed
     dms_contact_path = _str_or_none(customer.get("dms_contact_path"), 16) or "found"
     if dms_contact_path.lower() not in ("found", "new_enquiry", "skip_find"):
         dms_contact_path = "found"

@@ -1509,7 +1509,7 @@ def insert_dms_masters_from_siebel_scrape(
 
     drp = (cf.get("dms_relation_prefix") or "").strip()[:8] or None
     if not drp:
-        drp = compute_dms_relation_prefix(address or "", gender)[:8]
+        drp = compute_dms_relation_prefix(care_of=care_of, address=address or "", gender=gender)[:8]
 
     def _strip_or_none(k: str) -> str | None:
         v = (vd.get(k) or "").strip()
@@ -1844,7 +1844,7 @@ def collate_customer_master_from_dms_siebel_inputs(
         ``notes``: product sourcing (detail sheet vs Siebel); ``customer_id`` is never set here (system PK).
         ``mapping_unclear``: optional residual ambiguity (e.g. ``file_location``).
 
-    **``dms_relation_prefix``:** first three characters of trimmed **Address Line 1** when length ≥ 3.
+    **``dms_relation_prefix``:** first three characters of trimmed **care_of**, else **Address Line 1**, when length ≥ 3.
 
     Does **not** write to the database.
     """
@@ -1927,8 +1927,11 @@ def collate_customer_master_from_dms_siebel_inputs(
     if len(digits_aad) >= 4:
         fields["aadhar"] = digits_aad[-4:]
 
+    co_trim = (co or "").strip()
     addr_trim = (addr or "").strip()
-    if len(addr_trim) >= 3:
+    if len(co_trim) >= 3:
+        fields["dms_relation_prefix"] = co_trim[:3]
+    elif len(addr_trim) >= 3:
         fields["dms_relation_prefix"] = addr_trim[:3]
 
     unclear.append(
