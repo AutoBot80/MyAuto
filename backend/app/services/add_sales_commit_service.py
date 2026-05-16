@@ -1,9 +1,9 @@
 """
 Commit customer_master, vehicle_master, sales_master from Add Sales staging payload
-after successful Create Invoice (DMS). ``insert_insurance_master_after_gi`` runs after
-successful Generate Insurance (plain INSERT; duplicate ``(customer_id, vehicle_id, insurance_year)``
-fails). ``update_insurance_master_policy_after_issue`` refreshes policy fields from the post–**Issue Policy**
-preview scrape (same shape as pre-insert scrape).
+after successful Create Invoice (DMS). ``insert_insurance_master_after_gi`` runs once after
+**Issue Policy** / Final Policy Details scrape on MISP (production). Duplicate
+``(customer_id, vehicle_id, insurance_year)`` fails. ``update_insurance_master_policy_after_issue``
+remains for sidecar/manual refresh paths; Hero ``main_process`` uses INSERT only.
 """
 
 from __future__ import annotations
@@ -482,9 +482,11 @@ def compute_insurance_master_insert_snapshot(
     else:
         field_sources["nominee_gender"] = "none"
 
+    _FINAL_SCRAPE_SRC = "final policy details scrape"
+
     pnum = _str_or_none(pv.get("policy_num"), 24) or _str_or_none(ins_staging.get("policy_num"), 24)
     if _str_or_none(pv.get("policy_num"), 24):
-        field_sources["policy_num"] = "proposal preview scrape (pre–Issue Policy)"
+        field_sources["policy_num"] = _FINAL_SCRAPE_SRC
     elif _str_or_none(ins_staging.get("policy_num"), 24):
         field_sources["policy_num"] = "staging_payload.insurance"
     else:
@@ -497,12 +499,12 @@ def compute_insurance_master_insert_snapshot(
     policy_from_d = pf_pv or pf_st
     policy_to_d = pt_pv or pt_st
     field_sources["policy_from"] = (
-        "proposal preview scrape (pre–Issue Policy)"
+        _FINAL_SCRAPE_SRC
         if pf_pv
         else ("staging_payload.insurance (parsed)" if pf_st else "none")
     )
     field_sources["policy_to"] = (
-        "proposal preview scrape (pre–Issue Policy)"
+        _FINAL_SCRAPE_SRC
         if pt_pv
         else ("staging_payload.insurance (parsed)" if pt_st else "none")
     )
@@ -515,7 +517,7 @@ def compute_insurance_master_insert_snapshot(
         except (TypeError, ValueError):
             premium = None
     field_sources["premium"] = (
-        "proposal preview scrape (pre–Issue Policy)"
+        _FINAL_SCRAPE_SRC
         if prem_pv is not None
         else ("staging_payload.insurance (numeric parse)" if premium is not None else "none")
     )
@@ -528,7 +530,7 @@ def compute_insurance_master_insert_snapshot(
         except (TypeError, ValueError):
             idv_f = None
     field_sources["idv"] = (
-        "proposal preview scrape (pre–Issue Policy)"
+        _FINAL_SCRAPE_SRC
         if idv_pv is not None
         else ("staging_payload.insurance (numeric parse)" if idv_f is not None else "none")
     )
@@ -547,8 +549,7 @@ def compute_insurance_master_insert_snapshot(
         "insurance_id: not in INSERT; DB default nextval(insurance_master_insurance_id_seq).",
         "insurance_year uses server calendar year, not policy period from preview unless aligned manually.",
         "policy_broker: INSERT uses staging_payload['insurance'] only (not on preview screen scrape).",
-        "Preview scrape uses regex/heuristics; verify against MISP layout for your insurer.",
-        "policy_num, policy_from, policy_to, premium, idv may be refreshed by update_insurance_master_policy_after_issue after Issue Policy.",
+        "Final policy scrape uses regex/heuristics; verify against MISP Final Policy Details layout.",
         "String fields may be truncated to column max length (_str_or_none); verify against DDL varchar limits.",
     ]
 
@@ -581,6 +582,53 @@ def compute_insurance_master_insert_snapshot(
     }
 
 
+def append_insurance_master_commit_plan_to_playwright(
+    ocr_output_dir: Path | str | None,
+    subfolder: str | None,
+    *,
+    preview_scrape: dict[str, Any] | None,
+    snap: dict[str, Any],
+) -> None:
+    """Log final-page scrape and planned ``insurance_master`` INSERT row to ``Playwright_insurance.txt``."""
+    from app.services.insurance_form_values import append_playwright_insurance_line
+
+    pv = preview_scrape or {}
+    scrape_keys = ("policy_num", "policy_from", "policy_to", "premium", "idv")
+    scrape_part = {k: pv.get(k) for k in scrape_keys}
+    try:
+        scrape_json = json.dumps(scrape_part, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        scrape_json = str(scrape_part)
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"final_policy_scrape (raw): {scrape_json}"[:8_000],
+    )
+    ir = snap.get("insert_row") or {}
+    try:
+        row_json = json.dumps(ir, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        row_json = str(ir)
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"insurance_master INSERT (planned): {row_json}"[:8_000],
+    )
+    fs = snap.get("field_sources") or {}
+    try:
+        fs_json = json.dumps(fs, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        fs_json = str(fs)
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"insurance_master INSERT (field_sources): {fs_json}"[:8_000],
+    )
+
+
 def insert_insurance_master_after_gi(
     customer_id: int,
     vehicle_id: int,
@@ -594,14 +642,13 @@ def insert_insurance_master_after_gi(
     dealer_id: int | None = None,
 ) -> None:
     """
-    INSERT ``insurance_master`` for the current calendar ``insurance_year`` after proposal form fill on MISP,
-    before navigating to **Proposal Preview** / **Proposal Review** (Hero flow). Insurer / nominee fields
-    prefer the MISP fill dict; ``policy_num``, ``policy_from``, ``policy_to``, ``premium``, and ``idv``
-    use ``preview_scrape`` when provided, else staging; ``policy_broker`` from staging when present.
+    INSERT ``insurance_master`` for the current calendar ``insurance_year`` after Final Policy Details
+    scrape on MISP (Hero flow, production **Issue Policy** path). Insurer / nominee fields prefer the MISP
+    fill dict; ``policy_num``, ``policy_from``, ``policy_to``, ``premium``, and ``idv`` use
+    ``preview_scrape`` when provided, else staging; ``policy_broker`` from staging when present.
     Raises ``ValueError`` if a row already exists for the same customer, vehicle, and year
-    (``uq_insurance_customer_vehicle_year``). After **Issue Policy**, call
-    ``update_insurance_master_policy_after_issue`` with the post-issue preview scrape dict.
-    Does not write pre-commit INSERT snapshot lines to ``Playwright_insurance.txt`` (see **LLD** **6.215**).
+    (``uq_insurance_customer_vehicle_year``). When ``ocr_output_dir`` and ``subfolder`` are set, logs
+    scrape + planned INSERT to ``Playwright_insurance.txt`` before commit.
     When ``staging_id`` and ``dealer_id`` are set, merges ``insurance_id`` into ``add_sales_staging.payload_json``.
     """
     snap = compute_insurance_master_insert_snapshot(
@@ -610,6 +657,12 @@ def insert_insurance_master_after_gi(
         fill_values=fill_values,
         staging_payload=staging_payload,
         preview_scrape=preview_scrape,
+    )
+    append_insurance_master_commit_plan_to_playwright(
+        ocr_output_dir,
+        subfolder,
+        preview_scrape=preview_scrape,
+        snap=snap,
     )
 
     ir = snap["insert_row"]
@@ -691,6 +744,15 @@ def insert_insurance_master_after_gi(
                     cur, sid_merge, int(dealer_id), {"insurance_id": insurance_id}
                 )
         conn.commit()
+    from app.services.insurance_form_values import append_playwright_insurance_line
+
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"insurance_master INSERT ok: customer_id={customer_id} vehicle_id={vehicle_id} "
+        f"year={insurance_year} policy_num={policy_num!r} premium={premium}",
+    )
     logger.info(
         "insurance_master insert after GI: customer_id=%s vehicle_id=%s year=%s policy_num=%r premium=%s",
         customer_id,

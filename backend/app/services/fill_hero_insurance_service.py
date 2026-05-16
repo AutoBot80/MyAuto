@@ -2,7 +2,7 @@
 Hero Insurance (MISP) Playwright flow: **pre_process** (``run_fill_insurance_only`` on real MISP) runs through KYC,
 then fills **VIN** from DB (**``full_chassis``**) and clicks the VIN page **Submit**. **main_process** continues with
 **I agree** (if shown), then the proposal form. Proposer/vehicle/nominee fields come from the view;
-email, most add-ons, HDFC, and registration date use **hardcoded** defaults. **``dealer_ref.hero_cpi``** (**``form_insurance_view.hero_cpi``**): **Y** leaves **CPA Tenure** at the portal default (1) and **checks** the bottom NIC/CPI (name varies) add-on; **N** (default) sets **CPA Tenure** to **0** (hides that add-on row) and **unchecks** the add-on if still present. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **insurance_master** INSERT runs after proposal fill (readbacks) and **before** **Proposal Preview** / **Review**; **Proposal Preview** / **Review** (when production); **Issue Policy** optional via ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``; **policy_num**, **policy_from**, **policy_to**, **premium**, **idv** are written once via ``update_insurance_master_policy_after_issue`` from the final scrape in ``main_process`` (post–**Issue Policy** path). Proposal preview still runs in production for logging and **Print Proposal** / **Proposal No.** gating; consent checkboxes are ticked; not a second DB update.
+email, most add-ons, HDFC, and registration date use **hardcoded** defaults. **``dealer_ref.hero_cpi``** (**``form_insurance_view.hero_cpi``**): **Y** leaves **CPA Tenure** at the portal default (1) and **checks** the bottom NIC/CPI (name varies) add-on; **N** (default) sets **CPA Tenure** to **0** (hides that add-on row) and **unchecks** the add-on if still present. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review** → preview scrape (log only) → consent checkboxes. In production (**``ENVIRONMENT_IS_PRODUCTION``**): **Issue Policy** → Final Policy Details → frame dump → scrape → **one** ``insurance_master`` INSERT (logged in ``Playwright_insurance.txt``) → MISP Print Policy. Non-production skips Issue Policy, INSERT, and print.
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import difflib
@@ -20,6 +20,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 from app.config import (
     DEALER_ID,
+    ENVIRONMENT_IS_PRODUCTION,
     HERO_MISP_KYC_TAB_AWAY_SIMULATION,
     HERO_MISP_LANDING_WAIT_MS,
     HERO_MISP_UI_SETTLE_MS,
@@ -51,10 +52,7 @@ from app.config import (
     MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS,
     get_uploads_dir,
 )
-from app.services.add_sales_commit_service import (
-    insert_insurance_master_after_gi,
-    update_insurance_master_policy_after_issue,
-)
+from app.services.add_sales_commit_service import insert_insurance_master_after_gi
 from app.services.hero_insure_reports_service import run_hero_insure_reports
 from app.services.handle_browser_opening import (
     _playwright_page_url_matches_site_base,
@@ -85,12 +83,6 @@ INSURANCE_CLICK_SETTLE_MS = 35
 INSURANCE_KYC_IFRAME_SELECTOR = ""
 INSURANCE_VIN_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
 INSURANCE_NAV_IFRAME_SELECTOR = 'iframe[src*="2w" i]'
-
-# When True: skip clicking **Issue Policy** only (after proposal review steps); still scrapes; one
-# ``update_insurance_master_policy_after_issue`` in ``main_process`` on that scrape.
-# **insurance_master** INSERT is before **Proposal Preview**; **Proposal Preview** / **Review** navigation
-# is separate from this flag (this flag only pauses the **Issue Policy** click after review).
-HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY = True
 
 # Optional: regex on checkbox **label/row text** (MispPolicy proposal grid) for a **new**
 # proposal checkbox MISP added — force **unchecked** when a matching visible checkbox exists. If **empty**, this
@@ -8115,7 +8107,7 @@ def _hero_misp_note_proposal_review_scrape_for_insurance_master(
         ocr_output_dir,
         subfolder,
         "NOTE",
-        "proposal_review_page (insurance_master fields): "
+        "proposal_review_page (preview only, no DB): "
         f"Proposal No.={preview.get('policy_num')!r}; "
         f"Valid From={preview.get('policy_from')!r}; "
         f"Valid To={preview.get('policy_to')!r}; "
@@ -8214,21 +8206,28 @@ def _hero_misp_proposal_review_consent_checkboxes(
     return None
 
 
-def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str, Any]:
+def _hero_misp_click_issue_policy(
+    page,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> str | None:
     """
-    Click **Issue Policy** (dummy ``#ins-issue-policy`` or MISP button / text), wait for navigation,
-    then scrape ``policy_num``, ``policy_from``, ``policy_to``, ``premium``, ``idv`` via
-    ``scrape_insurance_policy_preview_before_issue``.
-    When ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY`` is True, skips the **Issue Policy** click and only scrapes.
+    Click **Issue Policy** on Proposal Review when ``ENVIRONMENT_IS_PRODUCTION``.
+    Returns an error message if production and the control was not clicked; ``None`` on success or non-prod skip.
     """
     to = max(2_000, int(timeout_ms))
-    if HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY:
-        logger.info(
-            "Hero Insurance: Issue Policy click skipped (HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY=True)."
+    if not ENVIRONMENT_IS_PRODUCTION:
+        logger.info("Hero Insurance: Issue Policy click skipped (non-production ENVIRONMENT).")
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "skipping Issue Policy (non-production ENVIRONMENT).",
         )
-        _t(page, 600)
-        _wait_load_optional(page, min(25_000, to * 4))
-        return scrape_insurance_policy_preview_before_issue(page, timeout_ms=to)
+        return None
+
     clicked = False
     try:
         loc = page.locator("#ins-issue-policy")
@@ -8257,14 +8256,150 @@ def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str,
         except Exception as exc:
             logger.debug("Hero Insurance: Issue Policy role=link: %s", exc)
     if not clicked:
+        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+            try:
+                root.get_by_text(re.compile(r"^Issue\s*Policy", re.I)).first.click(timeout=min(8_000, to))
+                clicked = True
+                logger.info("Hero Insurance: clicked Issue Policy (get_by_text in frame).")
+                break
+            except Exception:
+                continue
+    if not clicked:
         try:
             page.get_by_text(re.compile(r"^Issue\s*Policy", re.I)).first.click(timeout=min(8_000, to))
             clicked = True
             logger.info("Hero Insurance: clicked Issue Policy (get_by_text).")
         except Exception as exc:
             logger.debug("Hero Insurance: Issue Policy get_by_text: %s", exc)
+    if not clicked:
+        return "final_policy: Issue Policy control not found or not clickable (production ENVIRONMENT)."
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "clicked Issue Policy (production ENVIRONMENT).",
+    )
+    return None
+
+
+def _hero_misp_wait_final_policy_details_page(page, *, timeout_ms: int) -> None:
+    """Best-effort wait after **Issue Policy** for Final Policy Details (or post-issue summary)."""
+    to = max(2_000, int(timeout_ms))
     _t(page, 600)
     _wait_load_optional(page, min(25_000, to * 4))
+    _land_rx = re.compile(
+        r"Final\s*Policy|Policy\s*Details|Policy\s*Number|Policy\s*No\.?|"
+        r"Valid\s*From|Total\s*IDV|Insurance\s*Cost|Premium",
+        re.I,
+    )
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+        try:
+            root.get_by_text(_land_rx).first.wait_for(state="visible", timeout=min(20_000, to * 3))
+            return
+        except Exception:
+            continue
+    try:
+        page.get_by_text(_land_rx).first.wait_for(state="visible", timeout=min(12_000, to * 2))
+    except Exception:
+        pass
+
+
+def _hero_misp_final_policy_details_commit(
+    page,
+    values: dict,
+    *,
+    timeout_ms: int,
+    customer_id: int,
+    vehicle_id: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+    staging_payload: dict | None = None,
+    staging_id: str | None = None,
+    dealer_id: int | None = None,
+) -> tuple[str | None, dict[str, Any]]:
+    """
+    Production: **Issue Policy** → Final Policy Details → frame dump → scrape → ``insurance_master`` INSERT.
+    Non-production: log skip; no INSERT; returns empty scrape.
+    """
+    pt = max(int(timeout_ms), int(INSURANCE_POLICY_FILL_TIMEOUT_MS))
+    if not ENVIRONMENT_IS_PRODUCTION:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "final_policy_details: skipped (non-production ENVIRONMENT) — no insurance_master INSERT, no Print Policy.",
+        )
+        return None, {}
+
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "final_policy_details: Issue Policy → frame dump → scrape → insurance_master INSERT",
+    )
+    click_err = _hero_misp_click_issue_policy(
+        page,
+        timeout_ms=pt,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    if click_err:
+        return click_err, {}
+
+    _hero_misp_wait_final_policy_details_page(page, timeout_ms=pt)
+    _append_hero_misp_frame_dump(
+        page,
+        reason="final_policy_details_landing",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    final_scrape = scrape_insurance_policy_preview_before_issue(page, timeout_ms=pt)
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "final_policy_details: scrape complete — see final_policy_scrape / INSERT (planned) lines below",
+    )
+    try:
+        insert_insurance_master_after_gi(
+            int(customer_id),
+            int(vehicle_id),
+            fill_values=values,
+            staging_payload=staging_payload,
+            preview_scrape=final_scrape,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            staging_id=staging_id,
+            dealer_id=dealer_id,
+        )
+    except ValueError as persist_exc:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "ERROR",
+            f"final_policy_details: insurance_master insert failed: {persist_exc!s}",
+        )
+        return str(persist_exc), final_scrape
+    except Exception as persist_exc:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "ERROR",
+            f"final_policy_details: insurance_master insert failed: {persist_exc!s}",
+        )
+        return f"insurance_master insert failed: {persist_exc!s}", final_scrape
+
+    return None, final_scrape
+
+
+def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str, Any]:
+    """
+    Legacy helper: production **Issue Policy** click, wait, scrape. Prefer
+    ``_hero_misp_final_policy_details_commit`` for the full commit path.
+    """
+    to = max(2_000, int(timeout_ms))
+    _hero_misp_click_issue_policy(page, timeout_ms=to)
+    _hero_misp_wait_final_policy_details_page(page, timeout_ms=to)
     return scrape_insurance_policy_preview_before_issue(page, timeout_ms=to)
 
 
@@ -8283,9 +8418,8 @@ def _hero_misp_fill_proposal_and_review(
 ) -> tuple[str | None, dict[str, Any]]:
     """
     Proposal page after **I agree**: each fill is read back and logged (``Playwright_insurance.txt``);
-    first failed step returns an error message. When ``customer_id`` / ``vehicle_id`` are set,
-    ``insert_insurance_master_after_gi`` runs (staging / fill values; no preview scrape at insert), then
-    **Proposal Preview** (portal label) → scrape preview (logging / return) → **chkAgree** / **chkconsentagree**. Policy fields in ``insurance_master`` are updated once in ``main_process`` from the post–**Issue Policy** scrape.
+    first failed step returns an error message. Then **Proposal Preview** (portal label) → preview scrape
+    (log only) → **chkAgree** / **chkconsentagree**. DB commit runs in ``_hero_misp_final_policy_details_commit``.
     """
     append_playwright_insurance_line(
         ocr_output_dir,
@@ -8871,41 +9005,7 @@ def _hero_misp_fill_proposal_and_review(
         return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     _t(page, 500)
-    if customer_id is not None and vehicle_id is not None:
-        append_playwright_insurance_line(
-            ocr_output_dir,
-            subfolder,
-            "NOTE",
-            "main_process: insurance_master INSERT (post-proposal fill, before Proposal Preview)",
-        )
-        try:
-            insert_insurance_master_after_gi(
-                int(customer_id),
-                int(vehicle_id),
-                fill_values=values,
-                staging_payload=staging_payload,
-                preview_scrape=None,
-                ocr_output_dir=ocr_output_dir,
-                subfolder=subfolder,
-                staging_id=staging_id,
-                dealer_id=dealer_id,
-            )
-        except ValueError as persist_exc:
-            append_playwright_insurance_line(
-                ocr_output_dir,
-                subfolder,
-                "ERROR",
-                f"main_process: insurance_master insert failed: {persist_exc!s}",
-            )
-            return str(persist_exc), {}
-        except Exception as persist_exc:
-            append_playwright_insurance_line(
-                ocr_output_dir,
-                subfolder,
-                "ERROR",
-                f"main_process: insurance_master insert failed: {persist_exc!s}",
-            )
-            return f"insurance_master insert failed: {persist_exc!s}", {}
+    _ = (customer_id, vehicle_id, staging_payload, staging_id, dealer_id)
 
     try:
         _proposal_preview_rx = re.compile(r"Proposal\s*(Preview|Review)", re.I)
@@ -9033,11 +9133,9 @@ def main_process(
     **Customer/vehicle/nominee/financer** fields come from
     ``form_insurance_view`` / ``_build_insurance_fill_values``; **email, add-ons, payment (HDFC),
     and registration date** use hardcoded defaults; **``hero_cpi``** controls **CPA Tenure** (0 only when **N**)
-    and the bottom **NIC/CPI** add-on (see module docstring). **insurance_master** INSERT runs inside proposal fill,
-    before **Proposal Preview**; policy fields are updated once from the post–**Issue Policy** scrape in this function.
-    **Issue Policy** click may be skipped when ``HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY``
-    is True. **Proposal Preview** / **Proposal Review** is always attempted after proposal fill.
-    Reuses the open Insurance tab via ``match_base`` from ``pre_result``.
+    and the bottom **NIC/CPI** add-on (see module docstring). **insurance_master** INSERT runs once after
+    production **Issue Policy** and Final Policy Details scrape. **Proposal Preview** / **Proposal Review**
+    is always attempted after proposal fill. Reuses the open Insurance tab via ``match_base`` from ``pre_result``.
     """
     out: dict = {
         "success": False,
@@ -9152,22 +9250,45 @@ def main_process(
                 ocr_output_dir, subfolder, "NOTE", f"main_process: proposal form failed: {prop_err}"
             )
             return out
-        post_issue = click_issue_policy_and_scrape_preview(page, timeout_ms=to)
-        try:
-            update_insurance_master_policy_after_issue(
-                int(customer_id),
-                int(vehicle_id),
-                scrape=post_issue,
+        final_err, final_scrape = _hero_misp_final_policy_details_commit(
+            page,
+            values,
+            timeout_ms=to,
+            customer_id=int(customer_id),
+            vehicle_id=int(vehicle_id),
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            staging_payload=staging_payload,
+            staging_id=staging_id,
+            dealer_id=dealer_id,
+        )
+        if final_err:
+            out["error"] = final_err
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                f"main_process: final policy / insurance_master failed: {final_err}",
             )
-        except Exception as upd_exc:
-            logger.warning("main_process: insurance_master post-issue update failed: %s", upd_exc)
+            return out
         hrep: dict = {}
         try:
-            if subfolder and page and not page.is_closed():
-                _pn = (post_issue or {}).get("policy_num")
+            if (
+                ENVIRONMENT_IS_PRODUCTION
+                and subfolder
+                and page
+                and not page.is_closed()
+            ):
+                _pn = (final_scrape or {}).get("policy_num")
                 _ins = (values or {}).get("insurer")
                 if _pn and str(_pn).strip() and _ins and str(_ins).strip():
                     _did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+                    append_playwright_insurance_line(
+                        ocr_output_dir,
+                        subfolder,
+                        "NOTE",
+                        "main_process: MISP Print Policy starting (after insurance_master INSERT)",
+                    )
                     hrep = run_hero_insure_reports(
                         page,
                         insurer=str(_ins).strip(),
@@ -9181,8 +9302,15 @@ def main_process(
                         ocr_output_dir,
                         subfolder,
                         "NOTE",
-                        "main_process: MISP Print Policy report skipped (insurer or policy_num empty after scrape)",
+                        "main_process: MISP Print Policy skipped (insurer or policy_num empty after final scrape)",
                     )
+            elif not ENVIRONMENT_IS_PRODUCTION:
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "NOTE",
+                    "main_process: MISP Print Policy skipped (non-production ENVIRONMENT).",
+                )
         except Exception as hre:
             logger.warning("main_process: run_hero_insure_reports: %s", hre)
             append_playwright_insurance_line(
@@ -9195,9 +9323,9 @@ def main_process(
             ocr_output_dir,
             subfolder,
             "NOTE",
-            "main_process: completed — insurance_master insert (pre-preview), "
-            "proposal review navigated=yes, "
-            f"single policy update from post–Issue Policy scrape (Issue Policy click skipped={HERO_MISP_PAUSE_PROPOSAL_REVIEW_AND_ISSUE_POLICY})",
+            "main_process: completed — proposal review ok, "
+            f"final_policy INSERT={'yes' if ENVIRONMENT_IS_PRODUCTION else 'skipped (non-prod)'}, "
+            f"Print Policy={'yes' if ENVIRONMENT_IS_PRODUCTION and hrep.get('ok') else 'skipped or n/a'}",
         )
         try:
             out["page_url"] = (page.url or "").strip() or None

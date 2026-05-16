@@ -80,13 +80,12 @@ function FailureLogsTable({ rows, ariaLabel }: { rows: AdminProcessFailureLogRow
             <th scope="col">Challan</th>
             <th scope="col">RTO queue</th>
             <th scope="col">Error</th>
-            <th scope="col">Dedupe key</th>
           </tr>
         </thead>
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={8} className="app-table-empty">
+              <td colSpan={7} className="app-table-empty">
                 No failure rows yet.
               </td>
             </tr>
@@ -111,9 +110,6 @@ function FailureLogsTable({ rows, ariaLabel }: { rows: AdminProcessFailureLogRow
                 </td>
                 <td className="admin-failure-logs-num">{r.rto_queue_id ?? "—"}</td>
                 <td className="admin-failure-logs-error">{r.error_text}</td>
-                <td className="admin-failure-logs-key" title={r.entity_dedupe_key}>
-                  {r.entity_dedupe_key}
-                </td>
               </tr>
             ))
           )}
@@ -163,7 +159,9 @@ export function AdminUsagePage({ dealerId }: AdminUsagePageProps) {
   }, [sub, loadFailures]);
 
   return (
-    <div className="admin-usage-page">
+    <div
+      className={`admin-usage-page${sub === "failures" ? " admin-usage-page--failures" : ""}`}
+    >
       <div className="admin-usage-subtabs" role="tablist" aria-label="Usage sections">
         <button type="button" role="tab" className={sub === "sales" ? "active" : ""} onClick={() => setSub("sales")}>
           Sales
@@ -187,10 +185,7 @@ export function AdminUsagePage({ dealerId }: AdminUsagePageProps) {
       </div>
 
       {sub === "failures" ? (
-        <section aria-labelledby="usage-failure-logs-title">
-          <h2 id="usage-failure-logs-title" className="admin-usage-section-title">
-            Failure Logs
-          </h2>
+        <section className="admin-usage-failures-panel" aria-label="Failure logs">
           <p className="admin-failure-logs-hint">
             Newest first ({failures?.timezone_label ?? "Asia/Kolkata (IST)"}). Terminal automation errors only.
           </p>

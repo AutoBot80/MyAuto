@@ -249,6 +249,11 @@
   overflow-y: hidden;
 }
 
+/* Admin Usage Failure Logs: table fills viewport; scroll inside table wrap */
+.app-main-v2-content:has(.admin-usage-page--failures) {
+  overflow-y: hidden;
+}
+
 .app-main-v2:has(.subdealer-challan) {
   padding: 2px 8px 2px;
 }
