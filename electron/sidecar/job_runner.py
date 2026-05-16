@@ -868,20 +868,14 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     _fhi.build_insurance_fill_values = _build_cached
 
     _original_insert_cs = _cs.insert_insurance_master_after_gi
-    _original_update_cs = _cs.update_insurance_master_policy_after_issue
     _original_insert_fhi = _fhi.insert_insurance_master_after_gi
-    _original_update_fhi = _fhi.update_insurance_master_policy_after_issue
     _captured_insert_args: dict = {}
-    _captured_update_args: dict = {}
 
     def _noop_insert(*_a, **kw):
         _captured_insert_args.update(kw)
-    def _noop_update(*_a, **kw):
-        _captured_update_args.update(kw)
+
     _cs.insert_insurance_master_after_gi = _noop_insert
-    _cs.update_insurance_master_policy_after_issue = _noop_update
     _fhi.insert_insurance_master_after_gi = _noop_insert
-    _fhi.update_insurance_master_policy_after_issue = _noop_update
 
     result: dict = {}
     try:
@@ -919,18 +913,17 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
         _ifv.build_insurance_fill_values = _original_build_ifv
         _fhi.build_insurance_fill_values = _original_build_fhi
         _cs.insert_insurance_master_after_gi = _original_insert_cs
-        _cs.update_insurance_master_policy_after_issue = _original_update_cs
         _fhi.insert_insurance_master_after_gi = _original_insert_fhi
-        _fhi.update_insurance_master_policy_after_issue = _original_update_fhi
 
     if result.get("success"):
+        _final_scrape = _captured_insert_args.get("preview_scrape")
         commit_body = {
             "customer_id": cid,
             "vehicle_id": vid,
             "fill_values": cached_values,
             "staging_payload": staging_payload,
-            "preview_scrape": _captured_insert_args.get("preview_scrape"),
-            "post_issue_scrape": _captured_update_args.get("scrape"),
+            "preview_scrape": _final_scrape,
+            "post_issue_scrape": None,
             "staging_id": staging_id,
             "dealer_id": params.get("dealer_id"),
             "subfolder": subfolder,
