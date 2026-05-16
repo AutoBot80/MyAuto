@@ -112,6 +112,8 @@ export interface AddSalesInProcessPanelProps {
   siteUrlsLoading?: boolean;
   siteUrlsError?: string | null;
   preferInsurer?: string | null;
+  /** True when the In-process sub-tab is visible (drives default row selection). */
+  inProcessTabActive: boolean;
   addSalesMainTabActive: boolean;
   mainLastStagingId: string | null;
   pageActionsBusy: boolean;
@@ -126,6 +128,7 @@ export function AddSalesInProcessPanel({
   siteUrlsLoading,
   siteUrlsError,
   preferInsurer = null,
+  inProcessTabActive,
   addSalesMainTabActive,
   mainLastStagingId,
   pageActionsBusy,
@@ -146,6 +149,8 @@ export function AddSalesInProcessPanel({
   const [cpaInsurers, setCpaInsurers] = useState<CpaInsurerPortalRow[]>([]);
   const [dealerCpaInsurer, setDealerCpaInsurer] = useState<string | null>(null);
   const [dealerHeroCpi, setDealerHeroCpi] = useState<string | null>(null);
+  const [panelRefreshToken, setPanelRefreshToken] = useState(0);
+  const [isPanelRefreshing, setIsPanelRefreshing] = useState(false);
 
   const refreshList = useCallback(async () => {
     if (dealerId <= 0) return;
@@ -159,35 +164,63 @@ export function AddSalesInProcessPanel({
     }
   }, [dealerId, onInProcessCountChange]);
 
+  const reloadDealerCpaContext = useCallback(async () => {
+    if (dealerId <= 0) return;
+    try {
+      const r = await fetchDealerCpaContext(dealerId);
+      setCpaInsurers(r.cpa_insurers ?? []);
+      setDealerCpaInsurer(r.dealer_cpa_insurer?.trim() ? r.dealer_cpa_insurer.trim() : null);
+      const hc = r.hero_cpi;
+      setDealerHeroCpi(hc != null && String(hc).trim() !== "" ? String(hc).trim() : null);
+    } catch {
+      setCpaInsurers([]);
+      setDealerCpaInsurer(null);
+      setDealerHeroCpi(null);
+    }
+  }, [dealerId]);
+
+  const handlePanelRefresh = useCallback(async () => {
+    if (isPanelRefreshing) return;
+    setIsPanelRefreshing(true);
+    setRowMsg(null);
+    try {
+      await refreshList();
+      await reloadDealerCpaContext();
+      setPanelRefreshToken((t) => t + 1);
+    } catch (e) {
+      setLoadErr(e instanceof Error ? e.message : "Refresh failed.");
+    } finally {
+      setIsPanelRefreshing(false);
+    }
+  }, [isPanelRefreshing, refreshList, reloadDealerCpaContext]);
+
   useEffect(() => {
     void refreshList();
     const t = setInterval(() => void refreshList(), 60000);
     return () => clearInterval(t);
   }, [refreshList]);
 
+  /** On In-process tab open, select the first row; keep selection if still present after refresh. */
   useEffect(() => {
-    if (dealerId <= 0) return;
-    let c = false;
-    void (async () => {
-      try {
-        const r = await fetchDealerCpaContext(dealerId);
-        if (c) return;
-        setCpaInsurers(r.cpa_insurers ?? []);
-        setDealerCpaInsurer(r.dealer_cpa_insurer?.trim() ? r.dealer_cpa_insurer.trim() : null);
-        const hc = r.hero_cpi;
-        setDealerHeroCpi(hc != null && String(hc).trim() !== "" ? String(hc).trim() : null);
-      } catch {
-        if (!c) {
-          setCpaInsurers([]);
-          setDealerCpaInsurer(null);
-          setDealerHeroCpi(null);
-        }
-      }
-    })();
-    return () => {
-      c = true;
-    };
-  }, [dealerId]);
+    if (!inProcessTabActive) return;
+    if (rows.length === 0) {
+      setSelectedId(null);
+      return;
+    }
+    setSelectedId(rows[0].staging_id);
+  }, [inProcessTabActive]);
+
+  useEffect(() => {
+    if (!inProcessTabActive || rows.length === 0) return;
+    setSelectedId((prev) => {
+      if (prev && rows.some((r) => r.staging_id === prev)) return prev;
+      return rows[0].staging_id;
+    });
+  }, [rows, inProcessTabActive]);
+
+  useEffect(() => {
+    void reloadDealerCpaContext();
+  }, [reloadDealerCpaContext]);
 
   useEffect(() => {
     if (!selectedId || dealerId <= 0) {
@@ -209,7 +242,7 @@ export function AddSalesInProcessPanel({
     return () => {
       c = true;
     };
-  }, [selectedId, dealerId]);
+  }, [selectedId, dealerId, panelRefreshToken]);
 
   const cust = useMemo(() => payloadCustomer((detailPayload?.customer as Record<string, unknown>) ?? null), [detailPayload]);
   const veh = useMemo(() => payloadVehicle((detailPayload?.vehicle as Record<string, unknown>) ?? null), [detailPayload]);
@@ -273,7 +306,7 @@ export function AddSalesInProcessPanel({
     return () => {
       cancelled = true;
     };
-  }, [selectedId, detailPayload, dealerId, mobileDigits]);
+  }, [selectedId, detailPayload, dealerId, mobileDigits, panelRefreshToken]);
 
   const subfolder = useMemo(() => String(detailPayload?.file_location ?? "").trim(), [detailPayload]);
 
@@ -340,13 +373,13 @@ export function AddSalesInProcessPanel({
     !!siteUrlsLoading ||
     !!siteUrlsError;
 
+  /** Same as New tab: CPA is optional; Print unlocks after Create Invoice + Generate Insurance are inactive. */
   const printEnabled =
     !pageActionsBusy &&
     !eligLoading &&
     Boolean(detailPayload) &&
     createInvoicePrimaryDisabled &&
-    generateInsurancePrimaryDisabled &&
-    cpaPrimaryDisabled;
+    generateInsurancePrimaryDisabled;
 
   const custRaw = useMemo(
     () => (detailPayload?.customer as Record<string, unknown> | undefined) ?? undefined,
@@ -398,7 +431,21 @@ export function AddSalesInProcessPanel({
                 <th>Chassis</th>
                 <th>Engine</th>
                 <th>Order #</th>
-                <th>Actions</th>
+                <th className="add-sales-in-process-th-actions">
+                  <span>Actions</span>
+                  <button
+                    type="button"
+                    className="app-button app-button--small add-sales-in-process-refresh-btn"
+                    aria-busy={isPanelRefreshing}
+                    title="Reload in-process list and sales details"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handlePanelRefresh();
+                    }}
+                  >
+                    {isPanelRefreshing ? "Refreshing…" : "Refresh"}
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody>

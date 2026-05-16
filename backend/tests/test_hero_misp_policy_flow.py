@@ -60,52 +60,41 @@ def test_click_proposal_preview_submit_uses_btnSubmit(mock_page):
 def test_final_policy_commit_skips_insert_non_production(mock_page):
     with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", False):
         with patch.object(fhi, "append_playwright_insurance_line") as log:
-            with patch.object(fhi, "insert_insurance_master_after_gi") as ins:
-                err, scrape = fhi._hero_misp_final_policy_details_commit(
-                    mock_page,
-                    {"insurer": "HDFC ERGO"},
-                    timeout_ms=5_000,
-                    customer_id=1,
-                    vehicle_id=2,
-                )
+            err, scrape = fhi._hero_misp_final_policy_details_commit(
+                mock_page,
+                {"insurer": "HDFC ERGO"},
+                timeout_ms=5_000,
+                customer_id=1,
+                vehicle_id=2,
+            )
     assert err is None
     assert scrape == {}
-    ins.assert_not_called()
     notes = " ".join(str(c[0][3]) for c in log.call_args_list)
     assert "non-production" in notes.lower()
 
 
-def test_final_policy_commit_inserts_in_production(mock_page):
-    final_scrape = {
-        "policy_num": "P123",
-        "policy_from": "01/01/2026",
-        "policy_to": "31/12/2026",
-        "premium": 1200.0,
-        "idv": 50000.0,
-    }
+def test_final_policy_commit_post_submit_only_in_production(mock_page):
+    policy_hint = "90000031260970224155"
     with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", True):
         with patch.object(fhi, "_hero_misp_click_issue_policy", return_value=None):
-            with patch.object(fhi, "_hero_misp_wait_final_policy_details_page"):
-                with patch.object(fhi, "_append_hero_misp_frame_dump"):
-                    with patch.object(
-                        fhi,
-                        "scrape_insurance_policy_preview_before_issue",
-                        return_value=final_scrape,
-                    ):
-                        with patch.object(fhi, "insert_insurance_master_after_gi") as ins:
-                            err, scrape = fhi._hero_misp_final_policy_details_commit(
-                                mock_page,
-                                {"insurer": "HDFC ERGO"},
-                                timeout_ms=5_000,
-                                customer_id=10,
-                                vehicle_id=20,
-                                ocr_output_dir=None,
-                                subfolder="mob_chas",
-                            )
+            with patch.object(fhi, "_hero_misp_wait_post_submit_print_policy_page"):
+                with patch.object(
+                    fhi,
+                    "_hero_misp_parse_policy_num_from_print_policy_cert_page",
+                    return_value=policy_hint,
+                ):
+                    with patch.object(fhi, "_append_hero_misp_frame_dump"):
+                        err, scrape = fhi._hero_misp_final_policy_details_commit(
+                            mock_page,
+                            {"insurer": "The New India Assurance Co. Ltd."},
+                            timeout_ms=5_000,
+                            customer_id=10,
+                            vehicle_id=20,
+                            ocr_output_dir=None,
+                            subfolder="mob_chas",
+                        )
     assert err is None
-    assert scrape == final_scrape
-    ins.assert_called_once()
-    assert ins.call_args.kwargs["preview_scrape"] == final_scrape
+    assert scrape == {"policy_num": policy_hint}
 
 
 def test_main_process_does_not_call_update_after_issue(mock_page):
@@ -139,4 +128,5 @@ def test_main_process_does_not_call_update_after_issue(mock_page):
                             )
     assert out["success"] is True
     print_rep.assert_called_once()
+    assert print_rep.call_args.kwargs.get("commit_insurance_master") is True
     assert not hasattr(fhi, "update_insurance_master_policy_after_issue")

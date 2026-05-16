@@ -548,9 +548,144 @@ def _misp_nav_roots(page: Page) -> list[Any]:
     return _hero_misp_page_and_frame_roots(page, purpose="nav")
 
 
+def _misp_on_print_policy_search_page(page: Page) -> bool:
+    try:
+        u = (page.url or "").lower()
+    except Exception:
+        return False
+    return bool(
+        re.search(r"printpolicydetails\.aspx|allprintpolicy\.aspx", u)
+    )
+
+
+def _misp_on_print_policy_cert_page(page: Page) -> bool:
+    """**PrintPolicy.aspx** certificates row (post–proposal Submit), not the search grid."""
+    try:
+        u = (page.url or "").lower()
+    except Exception:
+        return False
+    if _misp_on_print_policy_search_page(page):
+        return False
+    return "printpolicy.aspx" in u
+
+
+def _misp_navigate_to_print_policy_search(
+    page: Page,
+    *,
+    tmo: int,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """From **PrintPolicy.aspx** cert page, search grid, or elsewhere → **PrintPolicyDetails** / **AllPrintPolicy**."""
+    if _misp_on_print_policy_cert_page(page):
+        from app.services.fill_hero_insurance_service import (
+            _hero_misp_goto_print_policy_details_search,
+        )
+
+        _ins_log(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "on PrintPolicy cert page — goto PrintPolicyDetails for search grid",
+        )
+        _hero_misp_goto_print_policy_details_search(
+            page,
+            timeout_ms=tmo,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            pass
+        return
+    if not _misp_on_print_policy_search_page(page):
+        _misp_open_all_print_policy(
+            page, tmo=tmo, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+        )
+
+
+def _misp_insurance_master_commit_from_grid(
+    page: Page,
+    *,
+    insurer: str,
+    policy_num_hint: str,
+    customer_id: int,
+    vehicle_id: int,
+    fill_values: dict | None,
+    staging_payload: dict | None,
+    staging_id: str | None,
+    dealer_id: int | None,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    tmo: int,
+) -> tuple[str | None, dict[str, Any]]:
+    """After **Go** on **PrintPolicyDetails**: scrape grid → ``insurance_master`` INSERT."""
+    from app.services.add_sales_commit_service import insert_insurance_master_after_gi
+    from app.services.fill_hero_insurance_service import (
+        scrape_insurance_print_policy_details_grid,
+    )
+
+    hint = (policy_num_hint or "").strip()
+    grid_scrape = scrape_insurance_print_policy_details_grid(
+        page,
+        policy_num_hint=hint or None,
+        timeout_ms=tmo,
+    )
+    if not grid_scrape.get("policy_num") and hint:
+        grid_scrape["policy_num"] = hint
+    _ins_log(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "print_policy_details grid scrape: "
+        f"policy_num={grid_scrape.get('policy_num')!r} premium={grid_scrape.get('premium')!r}",
+    )
+    if not grid_scrape.get("policy_num"):
+        return "print_policy_details: policy_num missing after grid scrape", grid_scrape
+    try:
+        insert_insurance_master_after_gi(
+            int(customer_id),
+            int(vehicle_id),
+            fill_values=fill_values or {},
+            staging_payload=staging_payload,
+            preview_scrape=grid_scrape,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            staging_id=staging_id,
+            dealer_id=dealer_id,
+        )
+    except ValueError as exc:
+        _ins_log(
+            ocr_output_dir,
+            subfolder,
+            "ERROR",
+            f"insurance_master insert failed: {exc!s}",
+        )
+        return str(exc), grid_scrape
+    except Exception as exc:
+        _ins_log(
+            ocr_output_dir,
+            subfolder,
+            "ERROR",
+            f"insurance_master insert failed: {exc!s}",
+        )
+        return f"insurance_master insert failed: {exc!s}", grid_scrape
+    _ins_log(ocr_output_dir, subfolder, "NOTE", "insurance_master INSERT ok (print_policy_details grid)")
+    return None, grid_scrape
+
+
 def _misp_open_all_print_policy(
     page: Page, *, tmo: int, ocr_output_dir: Path | None, subfolder: str | None
 ) -> None:
+    if _misp_on_print_policy_search_page(page):
+        _ins_log(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            f"already on print policy search page — skip sidebar nav ({(page.url or '')[:120]!r})",
+        )
+        return
     direct = (os.environ.get("MISP_GOTO_ALL_PRINT_POLICY") or "").strip()
     if direct:
         _ins_log(ocr_output_dir, subfolder, "NOTE", f"MISP_GOTO_ALL_PRINT_POLICY: {direct[:100]}")
@@ -995,22 +1130,36 @@ def run_hero_insure_reports(
     uploads_dir: Path,
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
+    customer_id: int | None = None,
+    vehicle_id: int | None = None,
+    fill_values: dict | None = None,
+    staging_payload: dict | None = None,
+    staging_id: str | None = None,
+    dealer_id: int | None = None,
+    commit_insurance_master: bool = False,
 ) -> dict[str, Any]:
     """
-    On the MISP **Insurance** tab: **Policy Issuance** → **Print Policy** → **Search** (Product, Policy
-    No., **Go**) → first **Print** in the search grid (opens **Print Policy Certificates**), then the
-    second **Print** in that window (``gvPrintPolicy``/``btnAppRej``) to load the certificate, **then** save
-    (never ``page.pdf`` the AllPrintPolicy grid before that click, or the PDF is only the applet). **Preferred:** :meth:`Page.pdf` (Edge/Chrome). **Fallback:**
-    file download on the same ``context`` (DMS-style).
-    # After save, a background :func:`schedule_misp_hero_post_pdf` (always: system print UI on save; not env-gated).
-    Capture method: ``HERO_MISP_PDF_STRATEGY=auto|playwright|download`` (default ``auto`` = PDF first, then download).
+    On the MISP **Insurance** tab: navigate to **Print Policy** search (**PrintPolicyDetails** /
+    **AllPrintPolicy**), **Product** + **Policy No.** + **Go**. When ``commit_insurance_master`` is set
+    (Generate Insurance production path), scrape **Total Premium** from the grid and **INSERT**
+    ``insurance_master`` before printing.
 
-    Returns ``{"ok": bool, "error": str|None, "pdf_path": str|None}``.
+    Then: first grid **Print** (opens **Print Policy Certificates**), second **Print** in that window,
+    save PDF (never ``page.pdf`` the search grid alone). **Preferred:** :meth:`Page.pdf` (Edge/Chrome).
+    **Fallback:** file download on the same ``context`` (DMS-style).
+    Capture method: ``HERO_MISP_PDF_STRATEGY=auto|playwright|download`` (default ``auto``).
+
+    Returns ``{"ok": bool, "error": str|None, "pdf_path": str|None, "grid_scrape": dict|None}``.
     """
     tmo = _misp_tmo()
-    out: dict[str, Any] = {"ok": False, "error": None, "pdf_path": None}
+    out: dict[str, Any] = {
+        "ok": False,
+        "error": None,
+        "pdf_path": None,
+        "grid_scrape": None,
+    }
     pn = (policy_num or "").strip()
-    if not pn:
+    if not pn and not commit_insurance_master:
         _ins_log(ocr_output_dir, subfolder, "NOTE", "skipped: policy_num empty")
         return {**out, "error": "skipped: policy_num empty"}
     if page is None or page.is_closed():
@@ -1025,7 +1174,7 @@ def run_hero_insure_reports(
     popup: Page | None = None
     try:
         page.set_default_timeout(tmo)
-        _misp_open_all_print_policy(
+        _misp_navigate_to_print_policy_search(
             page, tmo=tmo, ocr_output_dir=ocr_output_dir, subfolder=subfolder
         )
         _ins_log(ocr_output_dir, subfolder, "NOTE", f"on Print Policy URL: {page.url[:200]!r}")
@@ -1056,6 +1205,11 @@ def run_hero_insure_reports(
         if pol_in is None:
             raise RuntimeError("Policy No. field not found (txtPolicyNo)")
 
+        if commit_insurance_master and not pn:
+            return {
+                **out,
+                "error": "commit_insurance_master: policy_num empty (needed for Go search)",
+            }
         pol_in.fill("", timeout=2000)
         pol_in.fill(pn, timeout=2000)
         _ins_log(ocr_output_dir, subfolder, "NOTE", f"Policy No. filled: {pn!r}")
@@ -1079,6 +1233,35 @@ def run_hero_insure_reports(
         except Exception:
             pass
         page.wait_for_timeout(1500)
+
+        if commit_insurance_master:
+            if customer_id is None or vehicle_id is None:
+                return {
+                    **out,
+                    "error": "commit_insurance_master requires customer_id and vehicle_id",
+                }
+            commit_err, grid_scrape = _misp_insurance_master_commit_from_grid(
+                page,
+                insurer=insurer,
+                policy_num_hint=pn,
+                customer_id=int(customer_id),
+                vehicle_id=int(vehicle_id),
+                fill_values=fill_values,
+                staging_payload=staging_payload,
+                staging_id=staging_id,
+                dealer_id=dealer_id,
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+                tmo=tmo,
+            )
+            out["grid_scrape"] = grid_scrape
+            if commit_err:
+                return {**out, "error": commit_err}
+            scraped_pn = (grid_scrape or {}).get("policy_num")
+            if scraped_pn:
+                pn = str(scraped_pn).strip()
+        elif not pn:
+            return {**out, "error": "skipped: policy_num empty"}
 
         print_grid = None
         for root in _misp_form_roots(page):

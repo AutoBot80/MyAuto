@@ -2,7 +2,7 @@
 Hero Insurance (MISP) Playwright flow: **pre_process** (``run_fill_insurance_only`` on real MISP) runs through KYC,
 then fills **VIN** from DB (**``full_chassis``**) and clicks the VIN page **Submit**. **main_process** continues with
 **I agree** (if shown), then the proposal form. Proposer/vehicle/nominee fields come from the view;
-email, most add-ons, HDFC, and registration date use **hardcoded** defaults. **``dealer_ref.hero_cpi``** (**``form_insurance_view.hero_cpi``**): **Y** leaves **CPA Tenure** at the portal default (1) and **checks** the bottom NIC/CPI (name varies) add-on; **N** (default) sets **CPA Tenure** to **0** (hides that add-on row) and **unchecks** the add-on if still present. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review** → preview scrape (log only) → consent checkboxes. In production (**``ENVIRONMENT_IS_PRODUCTION``**): **Issue Policy** → Final Policy Details → frame dump → scrape → **one** ``insurance_master`` INSERT (logged in ``Playwright_insurance.txt``) → MISP Print Policy. Non-production skips Issue Policy, INSERT, and print.
+email, most add-ons, HDFC, and registration date use **hardcoded** defaults. **``dealer_ref.hero_cpi``** (**``form_insurance_view.hero_cpi``**): **Y** leaves **CPA Tenure** at the portal default (1) and **checks** the bottom NIC/CPI (name varies) add-on; **N** (default) sets **CPA Tenure** to **0** (hides that add-on row) and **unchecks** the add-on if still present. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review** → preview scrape (log only) → consent checkboxes. In production (**``ENVIRONMENT_IS_PRODUCTION``**): proposal **Submit** → **PrintPolicy.aspx** (optional policy # parse + frame dump) → **run_hero_insure_reports** (**PrintPolicyDetails** search, grid scrape, **one** ``insurance_master`` INSERT, PDF). Non-production skips Submit commit, INSERT, and print.
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import difflib
@@ -52,7 +52,6 @@ from app.config import (
     MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS,
     get_uploads_dir,
 )
-from app.services.add_sales_commit_service import insert_insurance_master_after_gi
 from app.services.hero_insure_reports_service import run_hero_insure_reports
 from app.services.handle_browser_opening import (
     _playwright_page_url_matches_site_base,
@@ -711,8 +710,9 @@ def _collect_hero_misp_frame_dump_lines(page) -> list[str]:
         try:
             u = (getattr(fr, "url", None) or "")  # type: ignore[misc]
             u = (u or "")[:420]
-        except Exception:
-            pass
+        except Exception as exc:
+            out.append(f"  [{i}] frame_url_error={exc!s}")
+            continue
         try:
             nm = (getattr(fr, "name", None) or "")  # type: ignore[misc]
         except Exception:
@@ -750,7 +750,11 @@ def _collect_hero_misp_frame_dump_lines(page) -> list[str]:
             }""",
             )
         except Exception as e:
-            meta = {"evaluate_error": str(e)[:200]}
+            err_s = str(e)
+            if "detached" in err_s.lower():
+                meta = {"evaluate_error": "frame_detached"}
+            else:
+                meta = {"evaluate_error": err_s[:200]}
         line += f" meta={meta!s}"
         out.append(line)
     out.insert(0, f"--- Hero MISP frame dump: frames={len(frs)} ---")
@@ -1119,91 +1123,10 @@ def _kyc_shared_consent_joint_cta_then_settle_before_vin(
     _kyc_ensure_consent_checked_before_kyc_cta(page, kyc_fr)
     to = min(int(timeout_ms), 45_000)
     roots = _kyc_roots_for_post_upload_cta(page, kyc_fr)
-    # Deduped union: verified-mobile order first (Proceed, policy issuance, …), then post-upload labels.
-    name_patterns = (
-        re.compile(r"^\s*Proceed\s*$", re.I),
-        re.compile(r"policy\s*issuance", re.I),
-        re.compile(r"^\s*Continue\s*$", re.I),
-        re.compile(r"^\s*Submit\s*$", re.I),
-        re.compile(r"^\s*KYC\s*Verification\s*$", re.I),
-        re.compile(r"^\s*Verify\s*$", re.I),
-        re.compile(r"^\s*Next\s*$", re.I),
-        re.compile(r"^\s*OK\s*$", re.I),
-        re.compile(r"^\s*Save(\s+and\s+Continue)?\s*$", re.I),
-    )
-    for root in roots:
-        for pat in name_patterns:
-            try:
-                b = root.get_by_role("button", name=pat)
-                if b.count() > 0 and b.first.is_visible(timeout=2_000):
-                    b.first.click(timeout=to)
-                    logger.info(
-                        "Hero Insurance: KYC shared tail — clicked button (%s).",
-                        pat.pattern[:80],
-                    )
-                    _wait_load_optional(page, min(25_000, to))
-                    _t(page, 400)
-                    return None
-            except Exception:
-                pass
-            try:
-                ln = root.get_by_role("link", name=pat)
-                if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
-                    ln.first.click(timeout=to)
-                    logger.info(
-                        "Hero Insurance: KYC shared tail — clicked link (%s).",
-                        pat.pattern[:80],
-                    )
-                    _wait_load_optional(page, min(25_000, to))
-                    _t(page, 400)
-                    return None
-            except Exception:
-                pass
-    for root in roots:
-        try:
-            ln = root.get_by_role(
-                "link",
-                name=re.compile(
-                    r"Proceed|policy\s*issuance|Verification|Submit|Continue|Next|Save(\s+and\s+Continue)?",
-                    re.I,
-                ),
-            )
-            if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
-                ln.first.click(timeout=to)
-                logger.info("Hero Insurance: KYC shared tail — clicked link CTA (broad match).")
-                _wait_load_optional(page, min(25_000, to))
-                _t(page, 400)
-                return None
-        except Exception:
-            pass
-    for root in roots:
-        try:
-            inp = root.locator(
-                'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i], '
-                'input[type="submit"][value*="policy" i], input[type="button"][value*="policy" i], '
-                'input[type="submit"][value*="issuance" i], input[type="button"][value*="issuance" i], '
-                'input[type="submit"][value*="Verification" i], input[type="button"][value*="Verification" i], '
-                'input[type="submit"][value*="KYC" i], input[type="button"][value*="KYC" i], '
-                'input[type="submit"][value*="Submit" i], input[type="button"][value*="Submit" i], '
-                'input[type="submit"][value*="Continue" i], input[type="button"][value*="Continue" i], '
-                'input[type="submit"][value*="Verify" i], input[type="button"][value*="Verify" i], '
-                'input[type="submit"][value*="Next" i], input[type="button"][value*="Next" i], '
-                'input[type="submit"][value*="Save" i], input[type="button"][value*="Save" i]'
-            )
-            if inp.count() > 0 and inp.first.is_visible(timeout=2_000):
-                inp.first.click(timeout=to)
-                logger.info("Hero Insurance: KYC shared tail — clicked input[type=submit|button] CTA.")
-                _wait_load_optional(page, min(25_000, to))
-                _t(page, 400)
-                return None
-        except Exception:
-            pass
-    for root in roots:
-        if _kyc_js_click_primary_cta_in_document(root):
-            logger.info("Hero Insurance: KYC shared tail — clicked CTA via JS scan.")
-            _wait_load_optional(page, min(25_000, to))
-            _t(page, 400)
-            return None
+    if _kyc_click_primary_cta_on_roots(roots, timeout_ms=to):
+        _wait_load_optional(page, min(25_000, to))
+        _t(page, 400)
+        return None
     return (
         "KYC: no primary CTA (Proceed / policy issuance / KYC Verification / …) found after consent. "
         "Complete KYC manually or check CTA visibility."
@@ -1310,6 +1233,181 @@ _KYC_CONSENT_LABEL_TEXT_RE = re.compile(
     r"hereby give my consent|e-?kyc|policy\s*issuance|i\s*hereby",
     re.I,
 )
+# Upload Documents screen (``ekycpage``) — from operator frame dumps; stable ASP.NET client ids.
+_KYC_UPLOAD_CONSENT_CHKAGREE_SELECTORS: tuple[str, ...] = (
+    "#ContentPlaceHolder1_chkagree",
+    'input[name="ctl00$ContentPlaceHolder1$chkagree"]',
+    'input[id*="chkagree" i]',
+)
+_KYC_UPLOAD_VALIDATE_BTN_SELECTORS: tuple[str, ...] = (
+    "#ContentPlaceHolder1_btnvalidate",
+    'input[name="ctl00$ContentPlaceHolder1$btnvalidate"]',
+    'input[type="submit"][value="KYC Verification" i]',
+    'input[id*="btnvalidate" i]',
+)
+
+
+def _kyc_dispatch_checkbox_dom_events(cb) -> None:
+    """ASP.NET validators often need ``change`` / ``click`` after programmatic ``check``."""
+    try:
+        cb.evaluate(
+            """el => {
+              if (!el || el.type !== 'checkbox') return;
+              el.dispatchEvent(new Event('click', { bubbles: true }));
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+            }"""
+        )
+    except Exception:
+        pass
+
+
+def _kyc_try_check_consent_chkagree_on_root(root, *, via: str) -> bool:
+    """Target MISP upload consent ``ContentPlaceHolder1_chkagree`` when present."""
+    for sel in _KYC_UPLOAD_CONSENT_CHKAGREE_SELECTORS:
+        try:
+            cb = root.locator(sel).first
+            if cb.count() == 0:
+                continue
+            if not cb.is_visible(timeout=1_200):
+                continue
+            if not cb.is_checked():
+                try:
+                    cb.scroll_into_view_if_needed(timeout=3_000)
+                except Exception:
+                    pass
+                cb.check(timeout=6_000, force=True)
+                _kyc_dispatch_checkbox_dom_events(cb)
+            logger.info(
+                "Hero Insurance: consent chkagree ready before KYC primary CTA (%s).",
+                via,
+            )
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _kyc_click_submit_locator(el, *, timeout_ms: int) -> bool:
+    try:
+        try:
+            el.scroll_into_view_if_needed(timeout=min(4_000, timeout_ms))
+        except Exception:
+            pass
+        el.click(timeout=timeout_ms, force=True)
+        return True
+    except Exception:
+        try:
+            el.click(timeout=timeout_ms)
+            return True
+        except Exception:
+            return False
+
+
+def _kyc_click_primary_cta_on_roots(roots: list, *, timeout_ms: int) -> bool:
+    """
+  Click KYC primary CTA. Upload screen uses ``input#ContentPlaceHolder1_btnvalidate`` (value **KYC Verification**),
+  which ``get_by_role("button")`` often misses — try known ids first, then joint label patterns.
+    """
+    to = min(int(timeout_ms), 45_000)
+    for root in roots:
+        for sel in _KYC_UPLOAD_VALIDATE_BTN_SELECTORS:
+            try:
+                loc = root.locator(sel)
+                if loc.count() == 0:
+                    continue
+                el = loc.first
+                if not el.is_visible(timeout=2_000):
+                    continue
+                if _kyc_click_submit_locator(el, timeout_ms=to):
+                    logger.info(
+                        "Hero Insurance: KYC shared tail — clicked submit (%s).",
+                        sel[:72],
+                    )
+                    return True
+            except Exception:
+                continue
+    name_patterns = (
+        re.compile(r"^\s*KYC\s*Verification\s*$", re.I),
+        re.compile(r"^\s*Proceed\s*$", re.I),
+        re.compile(r"policy\s*issuance", re.I),
+        re.compile(r"^\s*Continue\s*$", re.I),
+        re.compile(r"^\s*Submit\s*$", re.I),
+        re.compile(r"^\s*Verify\s*$", re.I),
+        re.compile(r"^\s*Next\s*$", re.I),
+        re.compile(r"^\s*OK\s*$", re.I),
+        re.compile(r"^\s*Save(\s+and\s+Continue)?\s*$", re.I),
+    )
+    for root in roots:
+        for pat in name_patterns:
+            try:
+                b = root.get_by_role("button", name=pat)
+                if b.count() > 0 and b.first.is_visible(timeout=2_000):
+                    if _kyc_click_submit_locator(b.first, timeout_ms=to):
+                        logger.info(
+                            "Hero Insurance: KYC shared tail — clicked button (%s).",
+                            pat.pattern[:80],
+                        )
+                        return True
+            except Exception:
+                pass
+            try:
+                ln = root.get_by_role("link", name=pat)
+                if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
+                    if _kyc_click_submit_locator(ln.first, timeout_ms=to):
+                        logger.info(
+                            "Hero Insurance: KYC shared tail — clicked link (%s).",
+                            pat.pattern[:80],
+                        )
+                        return True
+            except Exception:
+                pass
+    for root in roots:
+        try:
+            ln = root.get_by_role(
+                "link",
+                name=re.compile(
+                    r"Proceed|policy\s*issuance|Verification|Submit|Continue|Next|Save(\s+and\s+Continue)?",
+                    re.I,
+                ),
+            )
+            if ln.count() > 0 and ln.first.is_visible(timeout=1_500):
+                if _kyc_click_submit_locator(ln.first, timeout_ms=to):
+                    logger.info("Hero Insurance: KYC shared tail — clicked link CTA (broad match).")
+                    return True
+        except Exception:
+            pass
+    for root in roots:
+        try:
+            inp = root.locator(
+                'input[type="submit"][value*="Verification" i], '
+                'input[type="button"][value*="Verification" i], '
+                'input[type="submit"][value*="Proceed" i], input[type="button"][value*="Proceed" i], '
+                'input[type="submit"][value*="policy" i], input[type="button"][value*="policy" i], '
+                'input[type="submit"][value*="issuance" i], input[type="button"][value*="issuance" i], '
+                'input[type="submit"][value*="KYC" i], input[type="button"][value*="KYC" i], '
+                'input[type="submit"][value*="Submit" i], input[type="button"][value*="Submit" i], '
+                'input[type="submit"][value*="Continue" i], input[type="button"][value*="Continue" i], '
+                'input[type="submit"][value*="Verify" i], input[type="button"][value*="Verify" i], '
+                'input[type="submit"][value*="Next" i], input[type="button"][value*="Next" i], '
+                'input[type="submit"][value*="Save" i], input[type="button"][value*="Save" i]'
+            )
+            n = min(inp.count(), 8)
+            for i in range(n):
+                el = inp.nth(i)
+                if not el.is_visible(timeout=1_500):
+                    continue
+                if _kyc_click_submit_locator(el, timeout_ms=to):
+                    logger.info(
+                        "Hero Insurance: KYC shared tail — clicked input CTA index %s.", i
+                    )
+                    return True
+        except Exception:
+            pass
+    for root in roots:
+        if _kyc_js_click_primary_cta_in_document(root):
+            logger.info("Hero Insurance: KYC shared tail — clicked CTA via JS scan.")
+            return True
+    return False
 
 
 def _kyc_ensure_consent_checked_before_kyc_cta(page, kyc_fr=None) -> None:
@@ -1322,13 +1420,22 @@ def _kyc_ensure_consent_checked_before_kyc_cta(page, kyc_fr=None) -> None:
     label_re = _KYC_CONSENT_LABEL_TEXT_RE
     text_re = _KYC_CONSENT_CHECKBOX_TEXT_RE
 
+    for root in roots:
+        if _kyc_try_check_consent_chkagree_on_root(root, via="known chkagree id"):
+            return
+
     def _check_cb(cb, *, via: str) -> bool:
         try:
             if not cb.is_visible(timeout=900):
                 return False
             if cb.is_checked():
                 return True
-            cb.check(timeout=6_000)
+            try:
+                cb.scroll_into_view_if_needed(timeout=3_000)
+            except Exception:
+                pass
+            cb.check(timeout=6_000, force=True)
+            _kyc_dispatch_checkbox_dom_events(cb)
             logger.info(
                 "Hero Insurance: checked consent checkbox before KYC primary CTA (%s).",
                 via,
@@ -1388,18 +1495,14 @@ def _kyc_ensure_consent_checked_before_kyc_cta(page, kyc_fr=None) -> None:
                     nested = lab.locator('input[type="checkbox"]')
                     if nested.count() > 0 and _check_cb(nested.first, via="label nested checkbox"):
                         return
-                    try:
-                        lab.click(timeout=4_000)
-                        logger.info(
-                            "Hero Insurance: clicked consent label before KYC primary CTA."
-                        )
+                    if _kyc_try_check_consent_chkagree_on_root(root, via="after consent label"):
                         return
-                    except Exception:
-                        pass
                 except Exception:
                     continue
         except Exception:
             pass
+        if _kyc_try_check_consent_chkagree_on_root(root, via="end of root sweep"):
+            return
         try:
             loc = root.locator('input[type="checkbox"]')
             for i in range(min(loc.count(), 24)):
@@ -8343,26 +8446,257 @@ def _hero_misp_click_issue_policy(
     return None
 
 
-def _hero_misp_wait_final_policy_details_page(page, *, timeout_ms: int) -> None:
-    """Best-effort wait after **Issue Policy** for Final Policy Details (or post-issue summary)."""
+def _hero_misp_wait_post_submit_print_policy_page(page, *, timeout_ms: int) -> None:
+    """After proposal **Submit**, MISP lands on **PrintPolicy.aspx** (certificates) or **PrintPolicyDetails.aspx**."""
     to = max(2_000, int(timeout_ms))
     _t(page, 600)
     _wait_load_optional(page, min(25_000, to * 4))
-    _land_rx = re.compile(
-        r"Final\s*Policy|Policy\s*Details|Policy\s*Number|Policy\s*No\.?|"
-        r"Valid\s*From|Total\s*IDV|Insurance\s*Cost|Premium",
-        re.I,
-    )
-    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
-        try:
-            root.get_by_text(_land_rx).first.wait_for(state="visible", timeout=min(20_000, to * 3))
-            return
-        except Exception:
-            continue
     try:
-        page.get_by_text(_land_rx).first.wait_for(state="visible", timeout=min(12_000, to * 2))
+        page.wait_for_url(
+            re.compile(r"PrintPolicy\.aspx|PrintPolicyDetails\.aspx|AllPrintPolicy\.aspx", re.I),
+            timeout=min(35_000, to * 5),
+        )
     except Exception:
         pass
+    try:
+        page.get_by_text(
+            re.compile(r"Print\s*Policy|Policy\s*Certificate|Total\s*Premium", re.I)
+        ).first.wait_for(state="visible", timeout=min(15_000, to * 3))
+    except Exception:
+        pass
+
+
+def _hero_misp_parse_policy_num_from_print_policy_cert_page(page) -> str | None:
+    """Best-effort policy number from **PrintPolicy.aspx** (e.g. insurer line with ``#9000…``)."""
+    try:
+        body = (page.locator("body").first.inner_text(timeout=8_000) or "")[:80_000]
+    except Exception:
+        return None
+    for pat in (
+        re.compile(r"#(\d{10,24})\b"),
+        re.compile(r"Policy\s*(?:Number|No\.?)\s*[:\s#]*(\d{10,24})", re.I),
+        re.compile(r"\b(\d{15,24})\b"),
+    ):
+        m = pat.search(body)
+        if m:
+            cand = _normalize_policy_num_for_db(m.group(1).strip())
+            if cand:
+                return cand
+    return None
+
+
+def _hero_misp_goto_print_policy_details_search(
+    page,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> None:
+    """Open **PrintPolicyDetails.aspx** search grid (sidebar or URL from **PrintPolicy.aspx** cert page)."""
+    to = max(2_000, int(timeout_ms))
+    try:
+        u = (page.url or "").strip()
+    except Exception:
+        u = ""
+    if re.search(r"PrintPolicyDetails\.aspx|AllPrintPolicy\.aspx", u, re.I):
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            f"print_policy_details: already on search page url={u[:180]!r}",
+        )
+        return
+    derived = re.sub(
+        r"PrintPolicy\.aspx",
+        "PrintPolicyDetails.aspx",
+        u,
+        count=1,
+        flags=re.I,
+    )
+    if derived != u and "PrintPolicyDetails.aspx" in derived:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "print_policy_details: goto PrintPolicyDetails.aspx (from PrintPolicy.aspx URL)",
+        )
+        try:
+            page.goto(derived, timeout=min(60_000, to * 5), wait_until="domcontentloaded")
+        except Exception as exc:
+            logger.warning("Hero Insurance: goto PrintPolicyDetails: %s", exc)
+        _wait_load_optional(page, min(20_000, to * 3))
+        return
+    from app.services.hero_insure_reports_service import _misp_open_all_print_policy
+
+    _misp_open_all_print_policy(
+        page, tmo=to, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+    )
+
+
+def scrape_insurance_print_policy_details_grid(
+    page,
+    *,
+    policy_num_hint: str | None = None,
+    timeout_ms: int = 12_000,
+) -> dict[str, Any]:
+    """Scrape **Policy No.** and **Total Premium** from **PrintPolicyDetails.aspx** / **AllPrintPolicy.aspx** grid."""
+    out: dict[str, Any] = {
+        "policy_num": None,
+        "policy_from": None,
+        "policy_to": None,
+        "premium": None,
+        "idv": None,
+    }
+    hint = _normalize_policy_num_for_db((policy_num_hint or "").strip()) if policy_num_hint else None
+    to = max(2_000, int(timeout_ms))
+
+    js = r"""(policyHint) => {
+      const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+      const digits = (s) => (s || '').replace(/\D/g, '');
+      const hintD = policyHint ? digits(policyHint) : '';
+      const tables = Array.from(document.querySelectorAll('table'));
+      for (const table of tables) {
+        const header = norm(table.innerText).slice(0, 500);
+        if (!/Policy/i.test(header) || !/Premium/i.test(header)) continue;
+        const rows = Array.from(table.querySelectorAll('tr'));
+        for (const tr of rows) {
+          const cells = Array.from(tr.querySelectorAll('td')).map((td) => norm(td.innerText));
+          if (cells.length < 4) continue;
+          let policyD = '';
+          let premiumRaw = null;
+          for (const c of cells) {
+            const d = digits(c);
+            if (d.length >= 12 && d.length <= 24) policyD = d;
+          }
+          for (const c of cells) {
+            if (!/^[\d,]+$/.test(c)) continue;
+            const n = parseInt(c.replace(/,/g, ''), 10);
+            if (n >= 100 && n < 50000000) premiumRaw = c;
+          }
+          if (!policyD) continue;
+          if (hintD && policyD !== hintD && !policyD.endsWith(hintD) && !hintD.endsWith(policyD)) continue;
+          return { policy_num: policyD, premium_raw: premiumRaw };
+        }
+      }
+      return null;
+    }"""
+
+    parsed: Any = None
+    try:
+        parsed = page.evaluate(js, hint or "")
+    except Exception as exc:
+        logger.debug("print_policy_details grid evaluate (main): %s", exc)
+    if not parsed:
+        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or []:
+            try:
+                parsed = root.evaluate(js, hint or "")
+                if parsed:
+                    break
+            except Exception:
+                continue
+
+    if parsed and isinstance(parsed, dict):
+        pn = _normalize_policy_num_for_db(str(parsed.get("policy_num") or ""))
+        if pn:
+            out["policy_num"] = pn
+        pr = _parse_currency_amount_text(str(parsed.get("premium_raw") or ""))
+        if pr is not None:
+            out["premium"] = pr
+
+    if not out.get("policy_num") or out.get("premium") is None:
+        try:
+            body = (page.locator("body").first.inner_text(timeout=min(12_000, to)) or "")[:120_000]
+        except Exception:
+            body = ""
+        if body:
+            _insurance_preview_apply_body_text_heuristics(body, out)
+            if hint and out.get("policy_num") and hint not in str(out.get("policy_num")):
+                if hint in body:
+                    out["policy_num"] = hint
+            if out.get("premium") is None:
+                m = re.search(
+                    r"Total\s*Premium\s*[\s:]*([\d][\d,]*(?:\.\d{1,2})?)",
+                    body,
+                    re.I | re.M,
+                )
+                if m:
+                    amt = _parse_currency_amount_text(m.group(1))
+                    if amt is not None:
+                        out["premium"] = amt
+
+    return out
+
+
+def _hero_misp_print_policy_details_run_search(
+    page,
+    *,
+    insurer: str,
+    policy_num: str,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> None:
+    """On **PrintPolicyDetails.aspx**: Product + Policy No. + **Go** (reuses hero_insure_reports helpers)."""
+    from app.services.hero_insure_reports_service import (
+        _collect_option_labels,
+        _find_go_button,
+        _find_policy_no_input,
+        _find_product_row_select,
+        _longest_prefix_product_label,
+        _misp_form_roots,
+    )
+
+    to = max(2_000, int(timeout_ms))
+    ins = (insurer or "").strip()
+    pn = (policy_num or "").strip()
+    if not pn:
+        return
+
+    product_sel = None
+    for root in _misp_form_roots(page):
+        product_sel = _find_product_row_select(root)
+        if product_sel is not None:
+            break
+    if product_sel is not None and ins:
+        opts = _collect_option_labels(product_sel)
+        labels = [o[1] for o in opts]
+        pick = _longest_prefix_product_label(ins, labels)
+        if pick:
+            try:
+                product_sel.select_option(label=pick, timeout=to)
+            except Exception as exc:
+                logger.debug("print_policy_details Product select: %s", exc)
+
+    pol_in = None
+    for root in _misp_form_roots(page):
+        pol_in = _find_policy_no_input(root)
+        if pol_in is not None:
+            break
+    if pol_in is not None:
+        try:
+            pol_in.fill("", timeout=2000)
+            pol_in.fill(pn, timeout=2000)
+        except Exception as exc:
+            logger.debug("print_policy_details Policy No. fill: %s", exc)
+
+    go_loc = None
+    for root in _misp_form_roots(page):
+        go_loc = _find_go_button(root)
+        if go_loc is not None:
+            break
+    if go_loc is not None:
+        try:
+            go_loc.click(timeout=to, force=True)
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                f"print_policy_details: Go clicked for policy_num={pn!r}",
+            )
+        except Exception as exc:
+            logger.debug("print_policy_details Go: %s", exc)
+    _wait_load_optional(page, min(20_000, to * 3))
+    _t(page, 800)
 
 
 def _hero_misp_final_policy_details_commit(
@@ -8379,16 +8713,19 @@ def _hero_misp_final_policy_details_commit(
     dealer_id: int | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
     """
-    Production: **Issue Policy** → Final Policy Details → frame dump → scrape → ``insurance_master`` INSERT.
-    Non-production: log skip; no INSERT; returns empty scrape.
+    Production: proposal **Submit** → wait **PrintPolicy.aspx** (or search page) → optional policy # parse
+    → frame dump. Grid scrape, ``insurance_master`` INSERT, and PDF print run in
+    :func:`hero_insure_reports_service.run_hero_insure_reports`.
+    Non-production: log skip; returns empty scrape.
     """
+    _ = customer_id, vehicle_id, staging_payload, staging_id, dealer_id
     pt = max(int(timeout_ms), int(INSURANCE_POLICY_FILL_TIMEOUT_MS))
     if not ENVIRONMENT_IS_PRODUCTION:
         append_playwright_insurance_line(
             ocr_output_dir,
             subfolder,
             "NOTE",
-            "final_policy_details: skipped (non-production ENVIRONMENT) — no insurance_master INSERT, no Print Policy.",
+            "final_policy_details: skipped (non-production ENVIRONMENT) — no Submit, INSERT, or Print Policy.",
         )
         return None, {}
 
@@ -8396,7 +8733,8 @@ def _hero_misp_final_policy_details_commit(
         ocr_output_dir,
         subfolder,
         "NOTE",
-        "final_policy_details: Issue Policy → frame dump → scrape → insurance_master INSERT",
+        "final_policy_details: Submit → PrintPolicy cert page → frame dump; "
+        "PrintPolicyDetails scrape/INSERT/PDF in run_hero_insure_reports",
     )
     click_err = _hero_misp_click_issue_policy(
         page,
@@ -8407,61 +8745,52 @@ def _hero_misp_final_policy_details_commit(
     if click_err:
         return click_err, {}
 
-    _hero_misp_wait_final_policy_details_page(page, timeout_ms=pt)
-    _append_hero_misp_frame_dump(
-        page,
-        reason="final_policy_details_landing",
-        ocr_output_dir=ocr_output_dir,
-        subfolder=subfolder,
-    )
-    final_scrape = scrape_insurance_policy_preview_before_issue(page, timeout_ms=pt)
-    append_playwright_insurance_line(
-        ocr_output_dir,
-        subfolder,
-        "NOTE",
-        "final_policy_details: scrape complete — see final_policy_scrape / INSERT (planned) lines below",
-    )
+    _hero_misp_wait_post_submit_print_policy_page(page, timeout_ms=pt)
     try:
-        insert_insurance_master_after_gi(
-            int(customer_id),
-            int(vehicle_id),
-            fill_values=values,
-            staging_payload=staging_payload,
-            preview_scrape=final_scrape,
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            f"post_submit_print_policy url={(page.url or '')[:200]!r}",
+        )
+    except Exception:
+        pass
+
+    policy_hint = _normalize_policy_num_for_db((values.get("policy_num") or "").strip()) if values else None
+    if not policy_hint:
+        policy_hint = _hero_misp_parse_policy_num_from_print_policy_cert_page(page)
+
+    try:
+        _append_hero_misp_frame_dump(
+            page,
+            reason="post_submit_print_policy",
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
-            staging_id=staging_id,
-            dealer_id=dealer_id,
         )
-    except ValueError as persist_exc:
+    except Exception as dump_exc:
         append_playwright_insurance_line(
             ocr_output_dir,
             subfolder,
-            "ERROR",
-            f"final_policy_details: insurance_master insert failed: {persist_exc!s}",
+            "NOTE",
+            f"post_submit_print_policy: frame dump skipped ({dump_exc!s}) — continuing",
         )
-        return str(persist_exc), final_scrape
-    except Exception as persist_exc:
-        append_playwright_insurance_line(
-            ocr_output_dir,
-            subfolder,
-            "ERROR",
-            f"final_policy_details: insurance_master insert failed: {persist_exc!s}",
-        )
-        return f"insurance_master insert failed: {persist_exc!s}", final_scrape
 
-    return None, final_scrape
+    hint_scrape: dict[str, Any] = {}
+    if policy_hint:
+        hint_scrape["policy_num"] = policy_hint
+    return None, hint_scrape
 
 
 def click_issue_policy_and_scrape_preview(page, *, timeout_ms: int) -> dict[str, Any]:
     """
-    Legacy helper: production **Issue Policy** click, wait, scrape. Prefer
-    ``_hero_misp_final_policy_details_commit`` for the full commit path.
+    Legacy helper: production **Submit** click, print-policy navigation, grid scrape.
+    Prefer ``_hero_misp_final_policy_details_commit`` for the full commit path.
     """
     to = max(2_000, int(timeout_ms))
     _hero_misp_click_issue_policy(page, timeout_ms=to)
-    _hero_misp_wait_final_policy_details_page(page, timeout_ms=to)
-    return scrape_insurance_policy_preview_before_issue(page, timeout_ms=to)
+    _hero_misp_wait_post_submit_print_policy_page(page, timeout_ms=to)
+    _hero_misp_goto_print_policy_details_search(page, timeout_ms=to)
+    return scrape_insurance_print_policy_details_grid(page, timeout_ms=to)
 
 
 def _hero_misp_fill_proposal_and_review(
@@ -8480,7 +8809,8 @@ def _hero_misp_fill_proposal_and_review(
     """
     Proposal page after **I agree**: each fill is read back and logged (``Playwright_insurance.txt``);
     first failed step returns an error message. Then **Proposal Preview** (portal label) → preview scrape
-    (log only) → **chkAgree** / **chkconsentagree**. DB commit runs in ``_hero_misp_final_policy_details_commit``.
+    (log only) → **chkAgree** / **chkconsentagree**. Post-Submit + DB commit run in
+    ``_hero_misp_final_policy_details_commit`` / ``run_hero_insure_reports``.
     """
     append_playwright_insurance_line(
         ocr_output_dir,
@@ -9342,28 +9672,36 @@ def main_process(
             ):
                 _pn = (final_scrape or {}).get("policy_num")
                 _ins = (values or {}).get("insurer")
-                if _pn and str(_pn).strip() and _ins and str(_ins).strip():
+                if _ins and str(_ins).strip():
                     _did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
                     append_playwright_insurance_line(
                         ocr_output_dir,
                         subfolder,
                         "NOTE",
-                        "main_process: MISP Print Policy starting (after insurance_master INSERT)",
+                        "main_process: run_hero_insure_reports "
+                        "(PrintPolicyDetails → scrape/INSERT → PDF)",
                     )
                     hrep = run_hero_insure_reports(
                         page,
                         insurer=str(_ins).strip(),
-                        policy_num=str(_pn).strip(),
+                        policy_num=str(_pn).strip() if _pn else "",
                         uploads_dir=get_uploads_dir(_did) / subfolder,
                         ocr_output_dir=ocr_output_dir,
                         subfolder=subfolder,
+                        customer_id=int(customer_id),
+                        vehicle_id=int(vehicle_id),
+                        fill_values=values,
+                        staging_payload=staging_payload,
+                        staging_id=staging_id,
+                        dealer_id=dealer_id,
+                        commit_insurance_master=True,
                     )
                 else:
                     append_playwright_insurance_line(
                         ocr_output_dir,
                         subfolder,
                         "NOTE",
-                        "main_process: MISP Print Policy skipped (insurer or policy_num empty after final scrape)",
+                        "main_process: MISP Print Policy skipped (insurer empty)",
                     )
             elif not ENVIRONMENT_IS_PRODUCTION:
                 append_playwright_insurance_line(
@@ -9385,8 +9723,8 @@ def main_process(
             subfolder,
             "NOTE",
             "main_process: completed — proposal review ok, "
-            f"final_policy INSERT={'yes' if ENVIRONMENT_IS_PRODUCTION else 'skipped (non-prod)'}, "
-            f"Print Policy={'yes' if ENVIRONMENT_IS_PRODUCTION and hrep.get('ok') else 'skipped or n/a'}",
+            f"post_submit={'yes' if ENVIRONMENT_IS_PRODUCTION else 'skipped (non-prod)'}, "
+            f"Print Policy/scrape/INSERT={'yes' if ENVIRONMENT_IS_PRODUCTION and hrep.get('ok') else 'skipped or n/a'}",
         )
         try:
             out["page_url"] = (page.url or "").strip() or None

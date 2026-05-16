@@ -1799,6 +1799,7 @@ export function AddSalesPage({
           siteUrlsLoading={siteUrlsLoading}
           siteUrlsError={siteUrlsError ?? null}
           preferInsurer={preferInsurer ?? null}
+          inProcessTabActive={addSalesPageTab === "in-process"}
           addSalesMainTabActive={addSalesPageTab === "add-sales"}
           mainLastStagingId={lastStagingId}
           pageActionsBusy={pageActionsBusy}

@@ -387,6 +387,26 @@
   background: rgba(30, 90, 158, 0.08);
 }
 
+.add-sales-in-process-th-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+}
+
+.add-sales-in-process-th-actions > span {
+  flex-shrink: 0;
+}
+
+.add-sales-in-process-refresh-btn {
+  flex-shrink: 0;
+  min-width: 4.75rem;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 .add-sales-in-process-actions {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
