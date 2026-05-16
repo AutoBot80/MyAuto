@@ -1558,6 +1558,11 @@ def _relation_display_name_from_care_of(care_of: str) -> str:
     return co[:255]
 
 
+def _address_line1_for_siebel_fill(raw: str) -> str:
+    """Trimmed ``address_line_1`` for Siebel Address Line 1 (care_of already stripped upstream)."""
+    return (raw or "").strip()
+
+
 def _occupation_siebel_label_from_staging_profession(profession: str | None) -> str:
     """Hero contact Occupation LOV: farmer-related staging → Farmer/ Farm Related, else Private Sector."""
     p = (profession or "").strip().lower()
@@ -4491,15 +4496,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
         )
         return _after_relation_fill_nav()
 
-    # DB rule: Address Line 1 should be the substring between first and second comma.
-    addr_raw = (address_line_1 or "").strip()
-    addr_line1_value = ""
-    if addr_raw and "," in addr_raw:
-        parts = [p.strip() for p in addr_raw.split(",")]
-        if len(parts) >= 3:
-            addr_line1_value = parts[1]
-    if not addr_line1_value:
-        addr_line1_value = ""
+    addr_line1_value = _address_line1_for_siebel_fill(address_line_1)
 
     def _fill_with_retry(loc, value: str, *, attempts: int = 3, visible_ms: int = 900, _lbl: str = "") -> bool:
         """
@@ -4546,7 +4543,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                 try:
                     loc = fl.locator(css).first
                     if _fill_with_retry(loc, addr_line1_value, attempts=3, visible_ms=900):
-                        note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
+                        note(f"Address Line 1 filled from DB address_line_1: {addr_line1_value!r}")
                         return True
                 except Exception:
                     continue
@@ -4555,11 +4552,11 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
                 try:
                     loc = frame.locator(css).first
                     if _fill_with_retry(loc, addr_line1_value, attempts=3, visible_ms=900):
-                        note(f"Address Line 1 filled from DB substring: {addr_line1_value!r}")
+                        note(f"Address Line 1 filled from DB address_line_1: {addr_line1_value!r}")
                         return True
                 except Exception:
                     continue
-        note(f"Could not fill Address Line 1 from DB substring: {addr_line1_value!r}")
+        note(f"Could not fill Address Line 1 from DB address_line_1: {addr_line1_value!r}")
         return False
 
     def _after_relation_fill_nav() -> bool:
@@ -4568,7 +4565,7 @@ def _siebel_video_path_after_find_go_to_all_enquiries(
             note("Stopping before Add customer payment: Address Line 1 was not filled.")
             return False
         note(
-            "Relation's Name filled; optional Address Line 1 substring applied when available. "
+            "Relation's Name filled; optional Address Line 1 from DB address_line_1 when available. "
             "Continuing video SOP (branch (2) contact fields / Payments next)."
         )
         return True
@@ -7283,6 +7280,40 @@ def _financier_mvg_wait_popup_indicator(
     return False
 
 
+def _financier_tablet_criterion_applet_open(
+    page: Page,
+    content_frame_selector: str | None,
+    *,
+    timeout_ms: int = 500,
+) -> bool:
+    """True when Tab opened the financier search tablet (criterion combobox ``*_312_0``)."""
+    _combo = 'input[type="text"][name$="_312_0"]'
+    for root in _siebel_all_search_roots(page, content_frame_selector):
+        try:
+            loc = root.locator(_combo).first
+            if loc.count() > 0 and loc.is_visible(timeout=timeout_ms):
+                return True
+        except Exception:
+            continue
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                    const el = document.activeElement;
+                    if (!el) return false;
+                    const nm = String(el.getAttribute('name') || '');
+                    if (!/_312_0$/.test(nm)) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    const r = el.getBoundingClientRect();
+                    return r.width > 2 && r.height > 2;
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
 # Pick Financers MVG: Siebel field-type combobox (must never receive the financier search string).
 _FINANCER_PICK_ACCOUNT_ID_COMBO_NAME = "s_5_1_312_0"
 
@@ -7571,22 +7602,28 @@ def _financier_mvg_pick_account_name_on_criteria_control(
     """
     _tmo = min(int(action_timeout_ms), 8000)
     _acct_id_combo = f'input[type="text"][name="{_FINANCER_PICK_ACCOUNT_ID_COMBO_NAME}"]'
+    _acct_suffix_combo = 'input[type="text"][name$="_312_0"]'
     acct: object | None = None
     for root in _siebel_all_search_roots(page, content_frame_selector):
-        try:
-            cand = root.locator(_acct_id_combo).first
-            if cand.count() > 0 and cand.is_visible(timeout=900):
-                acct = cand
-                break
-        except Exception:
-            continue
+        for css in (_acct_suffix_combo, _acct_id_combo):
+            try:
+                cand = root.locator(css).first
+                if cand.count() > 0 and cand.is_visible(timeout=900):
+                    acct = cand
+                    break
+            except Exception:
+                continue
+        if acct is not None:
+            break
     if acct is None:
-        try:
-            cand = page.locator(_acct_id_combo).first
-            if cand.count() > 0 and cand.is_visible(timeout=700):
-                acct = cand
-        except Exception:
-            pass
+        for css in (_acct_suffix_combo, _acct_id_combo):
+            try:
+                cand = page.locator(css).first
+                if cand.count() > 0 and cand.is_visible(timeout=700):
+                    acct = cand
+                    break
+            except Exception:
+                continue
     if acct is None:
         return False
     try:
@@ -7706,30 +7743,54 @@ def _financier_mvg_account_name_search_and_pick(
     action_timeout_ms: int,
 ) -> str | None:
     """
-    In the open financier MVG applet: **Account Name** → Tab → ALL CAPS name → Tab → Enter;
-    require at least one Financial Consultant grid row, then first row + Enter.
+    Financier MVG / tablet criterion: **Account Name** on ``*_312_0`` (click + ArrowDown×2).
+
+    Tablet path: focus already on field 1 after caller Tab; criteria locator search skipped;
+    returns after readback. Caller Tabs to value field and types ``caps``. Value-field + grid
+    block below kept for a future full Pick Financers caller.
 
     Returns ``None`` on success, or a short error token / user-facing message.
     """
     _tmo = min(int(action_timeout_ms), 8000)
-    criteria_loc, value_loc = None, None
-    _pf_dd, _pf_val = _financier_mvg_find_pick_financers_dialog_toolbar(page, content_frame_selector)
-    if _pf_dd is not None:
-        criteria_loc, value_loc = _pf_dd, _pf_val
-    if criteria_loc is None:
-        criteria_loc, value_loc = _financier_mvg_find_search_row_pair(page, content_frame_selector)
-    if criteria_loc is None:
-        criteria_loc = _financier_mvg_find_criteria_type_locator(page, content_frame_selector)
-    if criteria_loc is None:
-        return "Financer MVG: Account Name criteria not found in popup."
+    # criteria_loc, value_loc = None, None
+    # _pf_dd, _pf_val = _financier_mvg_find_pick_financers_dialog_toolbar(page, content_frame_selector)
+    # if _pf_dd is not None:
+    #     criteria_loc, value_loc = _pf_dd, _pf_val
+    # if criteria_loc is None:
+    #     criteria_loc, value_loc = _financier_mvg_find_search_row_pair(page, content_frame_selector)
+    # if criteria_loc is None:
+    #     criteria_loc = _financier_mvg_find_criteria_type_locator(page, content_frame_selector)
+    # if criteria_loc is None:
+    #     return "Financer MVG: Account Name criteria not found in popup."
     if not _financier_mvg_pick_account_name_on_criteria_control(
-        criteria_loc,
+        None,
         page,
         content_frame_selector,
         action_timeout_ms=action_timeout_ms,
     ):
-        return "Financer MVG: could not focus Account ID criterion field (Pick Financers)."
+        return "Financer MVG: could not drive criterion combobox to Account Name."
     _safe_page_wait(page, 220, log_label="financier_mvg_after_account_name")
+    _crit_val = ""
+    try:
+        _crit_val = (
+            page.evaluate(
+                """() => {
+                    const el = document.activeElement;
+                    if (!el) return '';
+                    return String(el.value || el.textContent || '').trim();
+                }"""
+            )
+            or ""
+        ).strip()
+    except Exception:
+        _crit_val = ""
+    if not re.search(r"account\s*name", _crit_val, re.I):
+        return (
+            f"Financer MVG: criterion readback expected Account Name, got {_crit_val!r}."
+        )
+    return None  # tablet: caller continues Tab → field 2 → type caps → Tab → Enter
+
+    value_loc = None
     _val_resolved = _financier_mvg_find_pick_financers_search_value_input(
         page, content_frame_selector
     )
@@ -7819,9 +7880,9 @@ def _fill_create_order_financier_field_on_frame(
     **Vehicle Sales — Financer** on create order (main form only):
 
     Click the **Financer text input** (not the pick/magnifier control), type the name in **ALL CAPS**,
-    **Tab** out. That **Tab** opens a small tablet/dialog with focus in the first field.
-
-    Then: **Tab** to the second field, clear it, type the same **ALL CAPS** financier name, **Tab**, **Enter**
+    **Tab** out. If Siebel accepts the name on the main field (no tablet), return success. If a tablet
+    opens (criterion ``*_312_0``), select **Account Name**, then **Tab** to the second field, type
+    **ALL CAPS**, **Tab**, **Enter**
     (not Enter immediately after typing). Siebel may resolve the account and replace the main Financer text
     (e.g. canonical company name) without a detectable **Financial Consultant** jqGrid row count — so this
     path does **not** validate or select rows in that grid; it waits for the tablet to settle / close.
@@ -7956,7 +8017,50 @@ def _fill_create_order_financier_field_on_frame(
         except Exception:
             pass
     _safe_page_wait(page, 600, log_label="financier_main_after_tab_tablet_open")
-    # Tablet opens with focus in field 1 — Tab to field 2, clear, fill financier ALL CAPS, Enter.
+    if not _financier_tablet_criterion_applet_open(
+        page, content_frame_selector, timeout_ms=500
+    ):
+        _main_after_tab = ""
+        try:
+            _main_after_tab = (inp.input_value(timeout=800) or "").strip()
+        except Exception:
+            pass
+        if _main_after_tab:
+            if callable(note):
+                try:
+                    note(
+                        "Create Order: Financer accepted on main field (no tablet); "
+                        f"display={_main_after_tab!r} typed={_caps!r}."
+                    )
+                except Exception:
+                    pass
+            return True, None
+        if callable(note):
+            try:
+                note(
+                    "Create Order: Financer tablet did not open and main field empty "
+                    f"after Tab (typed={_caps!r})."
+                )
+            except Exception:
+                pass
+        return False, (
+            "Could not set Financer: tablet did not open and main field is empty after Tab."
+        )
+
+    _crit_err = _financier_mvg_account_name_search_and_pick(
+        page,
+        content_frame_selector,
+        _caps,
+        action_timeout_ms=action_timeout_ms,
+    )
+    if _crit_err:
+        if callable(note):
+            try:
+                note(f"Create Order: Financer tablet criterion → {_crit_err!r}.")
+            except Exception:
+                pass
+        return False, _crit_err
+    # Tablet field 1 done — Tab to field 2, clear, fill financier ALL CAPS, Enter.
     try:
         page.keyboard.press("Tab")
     except Exception:
@@ -8044,12 +8148,22 @@ def _fill_create_order_financier_field_on_frame(
         pass
     _safe_page_wait(page, 700, log_label="financier_tablet_after_tab_enter_search")
     _safe_page_wait(page, 600, log_label="financier_tablet_settle_no_grid_check")
+    _main_after_tablet = ""
+    try:
+        _main_after_tablet = (inp.input_value(timeout=800) or "").strip()
+    except Exception:
+        pass
     if callable(note):
         try:
             note(
                 "Create Order: Financer tablet field2 ALL CAPS + Tab + Enter; "
                 "no Financial Consultant grid row check (Siebel may resolve canonical name on main field). "
-                f"source={financier_display!r} typed={_caps!r}."
+                f"source={financier_display!r} typed={_caps!r}"
+                + (
+                    f" main_field_readback={_main_after_tablet!r}."
+                    if _main_after_tablet
+                    else " main_field_readback=(empty)."
+                )
             )
         except Exception:
             pass
@@ -8371,17 +8485,6 @@ def _add_enquiry_opportunity(
             return "O"
         return (raw or "").strip()
 
-    def _address_line1_between_first_second_comma(raw: str) -> str:
-        s = (raw or "").strip()
-        if not s:
-            return ""
-        parts = [p.strip() for p in s.split(",")]
-        if len(parts) >= 3:
-            return parts[1]
-        if len(parts) == 2:
-            return parts[1]
-        return s
-
     def _city_pick_any_then_ok(frame: Frame) -> bool:
         search_btn = None
         for css in (
@@ -8577,7 +8680,7 @@ def _add_enquiry_opportunity(
     district = (dms_values.get("district") or "").strip()
     tehsil = (dms_values.get("tehsil") or "").strip()
     city = (dms_values.get("city") or "").strip()
-    addr = _address_line1_between_first_second_comma((dms_values.get("address_line_1") or "").strip())
+    addr = _address_line1_for_siebel_fill(dms_values.get("address_line_1") or "")
     pin = (dms_values.get("pin_code") or "").strip()
     age = (dms_values.get("age") or "").strip()
     if not age:

@@ -148,6 +148,8 @@ export interface ExtractedCustomerDetails {
   address?: string;
   dms_relation_prefix?: string;
   dms_contact_path?: string;
+  /** From details sheet / Submit Info — stored on staging ``customer.financier``. */
+  financier?: string;
 }
 
 /** Build display address from granular fields (care of, house, street, location, state, pin). Uses existing address if set. */

@@ -364,7 +364,7 @@ def merge_staging_payload_on_cursor(
 
 
 def mark_staging_committed_on_cursor(cur, staging_id: str, dealer_id: int, *, patch_json_fragment: str) -> None:
-    """Set status to committed and merge ``patch_json_fragment`` into ``payload_json`` (ids, optional ``customer.financier``)."""
+    """Set status to committed and merge ``patch_json_fragment`` into ``payload_json`` (ids, optional ``customer.financier``, ``vehicle`` DMS numbers)."""
     sid = (staging_id or "").strip()
     cur.execute(
         """

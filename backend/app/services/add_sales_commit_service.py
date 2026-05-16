@@ -47,6 +47,38 @@ def _str_or_none(val: Any, max_len: int | None = None) -> str | None:
     return s
 
 
+def build_staging_commit_patch(
+    merged_payload: dict[str, Any],
+    *,
+    customer_id: int,
+    vehicle_id: int,
+    sales_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    JSONB fragment merged into ``add_sales_staging.payload_json`` on Create Invoice commit:
+    master ids, optional ``customer.financier``, and DMS ``vehicle`` order/invoice/enquiry numbers.
+    """
+    patch_obj: dict[str, Any] = {
+        "customer_id": int(customer_id),
+        "vehicle_id": int(vehicle_id),
+    }
+    if sales_id is not None:
+        patch_obj["sales_id"] = int(sales_id)
+    cust_m = merged_payload.get("customer") if isinstance(merged_payload.get("customer"), dict) else {}
+    fn = (cust_m.get("financier") or "").strip()
+    if fn:
+        patch_obj["customer"] = {"financier": fn[:255]}
+    veh_m = merged_payload.get("vehicle") if isinstance(merged_payload.get("vehicle"), dict) else {}
+    vehicle_patch: dict[str, str] = {}
+    for k, max_len in (("order_number", 128), ("invoice_number", 128), ("enquiry_number", 128)):
+        v = str(veh_m.get(k) or "").strip()
+        if v:
+            vehicle_patch[k] = v[:max_len]
+    if vehicle_patch:
+        patch_obj["vehicle"] = vehicle_patch
+    return patch_obj
+
+
 def _last4(aadhar_id: str | None) -> str | None:
     if not aadhar_id or not str(aadhar_id).strip():
         return None
@@ -248,10 +280,10 @@ def commit_staging_masters_and_finalize_row(
     merged_payload: dict[str, Any],
 ) -> tuple[int, int]:
     """
-    Single transaction: upsert masters, mark ``add_sales_staging`` committed, patch payload with ids
-    and (when present) Siebel-resolved ``customer.financier`` so ``payload_json`` matches masters.
-    Called only after **Create Invoice** (Invoice# present in merged scrape); order/invoice/enquiry are
-    stored on ``sales_master`` in the same INSERT — no follow-up UPDATE.
+    Single transaction: upsert masters, mark ``add_sales_staging`` committed, patch payload with ids,
+    ``customer.financier``, and ``vehicle`` order/invoice/enquiry when present in ``merged_payload``.
+    Called only after **Create Invoice** (Invoice# present in merged scrape); same values are stored on
+    ``sales_master`` in the same INSERT — no follow-up UPDATE on masters.
     """
     from app.db import get_connection
     from app.repositories.add_sales_staging import mark_staging_committed_on_cursor
@@ -269,11 +301,12 @@ def commit_staging_masters_and_finalize_row(
     with get_connection() as conn:
         with conn.cursor() as cur:
             cid, vid, sid_sale = upsert_customer_vehicle_sales(cur, merged_payload)
-            patch_obj: dict[str, Any] = {"customer_id": cid, "vehicle_id": vid, "sales_id": sid_sale}
-            cust_m = merged_payload.get("customer") if isinstance(merged_payload.get("customer"), dict) else {}
-            fn = (cust_m.get("financier") or "").strip()
-            if fn:
-                patch_obj["customer"] = {"financier": fn[:255]}
+            patch_obj = build_staging_commit_patch(
+                merged_payload,
+                customer_id=cid,
+                vehicle_id=vid,
+                sales_id=sid_sale,
+            )
             patch = json.dumps(patch_obj, default=str)
             mark_staging_committed_on_cursor(cur, sid, dealer_id, patch_json_fragment=patch)
         conn.commit()
@@ -307,16 +340,12 @@ def finalize_staging_row_with_master_ids(
     except (TypeError, ValueError):
         dealer_id = int(DEALER_ID)
 
-    patch_obj: dict[str, Any] = {
-        "customer_id": int(customer_id),
-        "vehicle_id": int(vehicle_id),
-    }
-    if sales_id is not None:
-        patch_obj["sales_id"] = int(sales_id)
-    cust_m = merged_payload.get("customer") if isinstance(merged_payload.get("customer"), dict) else {}
-    fn = (cust_m.get("financier") or "").strip()
-    if fn:
-        patch_obj["customer"] = {"financier": fn[:255]}
+    patch_obj = build_staging_commit_patch(
+        merged_payload,
+        customer_id=int(customer_id),
+        vehicle_id=int(vehicle_id),
+        sales_id=sales_id,
+    )
     patch = json.dumps(patch_obj, default=str)
 
     with get_connection() as conn:

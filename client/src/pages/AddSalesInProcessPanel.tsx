@@ -70,6 +70,7 @@ function payloadCustomer(rec: Record<string, unknown> | null): ExtractedCustomer
     city: String(c.city ?? "").trim() || undefined,
     state: String(c.state ?? "").trim() || undefined,
     pin_code: String(c.pin ?? c.pin_code ?? "").trim() || undefined,
+    financier: String(c.financier ?? "").trim() || undefined,
   };
 }
 
@@ -90,7 +91,6 @@ function payloadInsurance(rec: Record<string, unknown> | null): ExtractedInsuran
   if (!rec || typeof rec !== "object") return null;
   const i = rec as Record<string, unknown>;
   return {
-    financier: String(i.financier ?? "").trim() || undefined,
     insurer: String(i.insurer ?? "").trim() || undefined,
     policy_num: String(i.policy_num ?? "").trim() || undefined,
     nominee_name: String(i.nominee_name ?? "").trim() || undefined,
@@ -577,7 +577,7 @@ export function AddSalesInProcessPanel({
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Financier</dt>
-                    <dd>{ins?.financier?.trim() ? ins.financier : "—"}</dd>
+                    <dd>{cust?.financier?.trim() ? cust.financier : "—"}</dd>
                   </div>
                 </dl>
               </div>
