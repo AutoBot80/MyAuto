@@ -3,6 +3,7 @@
 from app.services.cpa_form_values import (
     CPA_PLAN_TOTAL_AMOUNT_DEFAULT,
     _apply_staging_cpa_overlay,
+    _resolve_subfolder_for_cpa,
     cpa_fill_values_to_alliance_payload,
 )
 
@@ -29,6 +30,16 @@ def test_apply_staging_cpa_overlay_fills_empty_view_fields():
     assert values["model"] == "Splendor+"
     assert values["nominee_name"] == "Ravi Kumar"
     assert values["nominee_age"] == "32"
+
+
+def test_resolve_subfolder_for_cpa_ignores_default_placeholder():
+    out = _resolve_subfolder_for_cpa(
+        "default",
+        None,
+        100001,
+        {"file_location": "Sale-123"},
+    )
+    assert out == "Sale-123"
 
 
 def test_cpa_fill_values_to_alliance_payload_maps_mobile_and_defaults():

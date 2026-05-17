@@ -96,10 +96,32 @@ export interface ApiPrintJob {
   kind?: string;
 }
 
+export interface PrintQueueRtoFailureContext {
+  dealerId: number;
+  subfolder: string;
+  customer?: FillDmsCustomer | null;
+}
+
+function normalizePrintJobResult(
+  result: unknown,
+  jobCount: number
+): { ok: boolean; printed: number; queued?: number; error?: string } {
+  if (result && typeof result === "object" && "ok" in result) {
+    const r = result as { ok?: boolean; printed?: number; queued?: number; error?: string };
+    return {
+      ok: Boolean(r.ok),
+      printed: Number(r.printed ?? 0),
+      queued: typeof r.queued === "number" ? r.queued : undefined,
+      error: typeof r.error === "string" ? r.error : undefined,
+    };
+  }
+  return { ok: true, printed: 0, queued: jobCount };
+}
+
 /** Print PDFs in Electron (no-op in browser-only). Default: non-blocking background print. */
 export async function dispatchPrintJobsFromApi(
   jobs: ApiPrintJob[] | undefined | null,
-  options?: { awaitCompletion?: boolean }
+  options?: { awaitCompletion?: boolean; failureLog?: PrintQueueRtoFailureContext }
 ): Promise<{ ok: boolean; printed: number; queued?: number; error?: string }> {
   if (!jobs?.length) return { ok: true, printed: 0 };
   if (typeof window === "undefined") return { ok: true, printed: 0 };
@@ -109,15 +131,31 @@ export async function dispatchPrintJobsFromApi(
     silent: getSilentPrintEnabled(),
     background: options?.awaitCompletion !== true,
   };
-  const result = await fn(jobs, printOpts);
-  if (result && typeof result === "object" && "ok" in result) {
-    return {
-      ok: Boolean(result.ok),
-      printed: Number(result.printed ?? 0),
-      queued: typeof result.queued === "number" ? result.queued : undefined,
-      error: typeof result.error === "string" ? result.error : undefined,
-    };
+  const failureLog = options?.failureLog;
+  const logPrintFailure = async (parsed: { ok: boolean; error?: string }) => {
+    if (!failureLog || parsed.ok || !parsed.error) return;
+    const { recordPrintQueueRtoFailure } = await import("./processFailureLog");
+    await recordPrintQueueRtoFailure({
+      dealerId: failureLog.dealerId,
+      subfolder: failureLog.subfolder,
+      customer: failureLog.customer,
+      errorText: `Print: ${parsed.error}`,
+    });
+  };
+
+  if (options?.awaitCompletion) {
+    const result = normalizePrintJobResult(await fn(jobs, printOpts), jobs.length);
+    await logPrintFailure(result);
+    return result;
   }
+
+  void fn(jobs, printOpts)
+    .then((result) => normalizePrintJobResult(result, jobs.length))
+    .then(async (parsed) => {
+      await logPrintFailure(parsed);
+      return parsed;
+    });
+
   return { ok: true, printed: 0, queued: jobs.length };
 }
 
@@ -643,9 +681,25 @@ export async function fillCpaAllianceInsuranceLocal(
     if (result.timedOut) {
       return { success: false, error: "CPA Insurance sidecar timed out." };
     }
-    const data = (result.parsed as { data?: FillCpaAllianceInsuranceResponse })?.data;
-    if (data) return data;
-    return { success: result.success, error: result.error ?? undefined };
+    const root = result.parsed as {
+      success?: boolean;
+      data?: FillCpaAllianceInsuranceResponse;
+      error?: string;
+    };
+    const data = root?.data;
+    if (data && typeof data === "object") {
+      return {
+        success: Boolean(data.success),
+        error: data.error ?? undefined,
+        page_url: data.page_url ?? undefined,
+        playwright_log: data.playwright_log ?? undefined,
+      };
+    }
+    const err =
+      root?.error ??
+      result.error ??
+      (root?.success === false ? "CPA Insurance sidecar job failed." : "CPA Insurance sidecar returned no data.");
+    return { success: false, error: err };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }

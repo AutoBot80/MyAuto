@@ -34,6 +34,12 @@ function formatMobileAlternateSlash(custRec: Record<string, unknown> | null | un
   return "—";
 }
 
+function rowHasCommittedIds(r: AddSalesInProcessRow): boolean {
+  const c = parseInt(String(r.customer_id_text ?? "").trim(), 10);
+  const v = parseInt(String(r.vehicle_id_text ?? "").trim(), 10);
+  return !Number.isNaN(c) && !Number.isNaN(v) && c > 0 && v > 0;
+}
+
 function formatHeroCpiDisplay(raw: unknown): string {
   const s = String(raw ?? "").trim();
   const v = s.slice(0, 1).toUpperCase();
@@ -310,7 +316,14 @@ export function AddSalesInProcessPanel({
 
   const wrapRowAction = useCallback(
     async (stagingId: string, fn: () => Promise<void>) => {
-      if (busyRowId != null || pageActionsBusy) return;
+      if (busyRowId != null || pageActionsBusy) {
+        setRowMsg(
+          pageActionsBusy
+            ? "Another sale action is still running. Wait for it to finish, then try again."
+            : "This row is busy. Wait for the current action to finish."
+        );
+        return;
+      }
       setBusyRowId(stagingId);
       onRowActionStart(stagingId);
       setRowMsg(null);
@@ -370,6 +383,19 @@ export function AddSalesInProcessPanel({
     dealerId <= 0 ||
     !!siteUrlsLoading ||
     !!siteUrlsError;
+
+  const cpaDisabledForRow = (r: AddSalesInProcessRow) =>
+    pageActionsBusy ||
+    busyRowId !== null ||
+    !cpaAlliancePortalEnabled ||
+    !(cpaInsurersFromElig?.length) ||
+    !cpaSelectedPortalUrl ||
+    dealerId <= 0 ||
+    !!siteUrlsLoading ||
+    !!siteUrlsError ||
+    (selectedId === r.staging_id
+      ? cpaPrimaryDisabled
+      : !rowHasCommittedIds(r));
 
   /** Same as New tab: CPA is optional; Print unlocks after Create Invoice + Generate Insurance are inactive. */
   const printEnabled =
@@ -472,9 +498,10 @@ export function AddSalesInProcessPanel({
                         <button
                           type="button"
                           className="app-button app-button--small"
-                          disabled={createInvoicePrimaryDisabled || selectedId !== r.staging_id || busyRowId !== null}
+                          disabled={createInvoicePrimaryDisabled || busyRowId !== null}
                           onClick={(e) => {
                             e.stopPropagation();
+                            setSelectedId(r.staging_id);
                             void wrapRowAction(r.staging_id, async () => {
                               if (!dmsUrl.trim()) throw new Error("DMS URL missing.");
                               const res = await fillDmsLocal({ staging_id: r.staging_id });
@@ -488,9 +515,10 @@ export function AddSalesInProcessPanel({
                         <button
                           type="button"
                           className="app-button app-button--small"
-                          disabled={generateInsurancePrimaryDisabled || selectedId !== r.staging_id || busyRowId !== null}
+                          disabled={generateInsurancePrimaryDisabled || busyRowId !== null}
                           onClick={(e) => {
                             e.stopPropagation();
+                            setSelectedId(r.staging_id);
                             void wrapRowAction(r.staging_id, async () => {
                               const res = await fillHeroInsuranceLocal({ staging_id: r.staging_id });
                               if (!res.success) throw new Error(res.error ?? "Generate Insurance failed.");
@@ -503,22 +531,31 @@ export function AddSalesInProcessPanel({
                         <button
                           type="button"
                           className="app-button app-button--small"
-                          disabled={cpaPrimaryDisabled || selectedId !== r.staging_id || busyRowId !== null}
+                          disabled={cpaDisabledForRow(r)}
+                          title={
+                            cpaDisabledForRow(r)
+                              ? !rowHasCommittedIds(r) && selectedId !== r.staging_id
+                                ? "Select this row or run Create Invoice first (customer/vehicle IDs required)."
+                                : "CPA Insurance is not available for this sale."
+                              : "Open CPA Alliance portal for this sale."
+                          }
                           onClick={(e) => {
                             e.stopPropagation();
+                            setSelectedId(r.staging_id);
                             void wrapRowAction(r.staging_id, async () => {
                               const portal = pickCpaPortalRow(cpaInsurersFromElig ?? [], dealerCpaFromElig ?? null);
                               if (!portal?.login_url) throw new Error("No CPA portal URL.");
-                              const sf = subfolder || "default";
                               const res = await fillCpaAllianceInsuranceLocal(
                                 buildFillCpaAllianceInsuranceRequest({
                                   dealerId,
-                                  subfolder: sf,
                                   portalUrl: portal.login_url,
                                   stagingId: r.staging_id,
                                 })
                               );
                               if (!res.success) throw new Error(res.error ?? "CPA Insurance failed.");
+                              setRowMsg(
+                                "CPA portal opened — complete any remaining steps in the browser. Trace: ocr_output/…/playwright_cpa_*.txt"
+                              );
                             });
                           }}
                         >

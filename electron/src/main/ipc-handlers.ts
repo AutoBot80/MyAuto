@@ -15,8 +15,12 @@ export function registerIpc(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle("sidecar:runJob", async (_evt: IpcMainInvokeEvent, payload: SidecarJobPayload) => {
+    const jobType = String(payload?.type ?? payload?.job ?? "unknown");
+    logInfo(`sidecar:runJob start type=${jobType}`);
     try {
-      return await runSidecarJob(payload);
+      const result = await runSidecarJob(payload);
+      logInfo(`sidecar:runJob end type=${jobType} success=${result.success}`);
+      return result;
     } catch (e) {
       logError("sidecar:runJob", e);
       return {

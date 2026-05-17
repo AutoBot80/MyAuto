@@ -12,6 +12,7 @@ import {
   type PrintRtoQueueLogLine,
 } from "../api/fillForms";
 import { insertRtoPayment } from "../api/rtoPaymentDetails";
+import { recordPrintQueueRtoFailure } from "../api/processFailureLog";
 import { isElectron } from "../electron";
 import {
   printGatePassLocal,
@@ -40,6 +41,20 @@ export interface RunPrintQueueRtoFlowResult {
   error?: string;
 }
 
+async function logPrintQueueRtoFailure(
+  input: RunPrintQueueRtoFlowInput,
+  errorText: string,
+  rtoQueueId?: number | null
+): Promise<void> {
+  await recordPrintQueueRtoFailure({
+    dealerId: input.dealerId,
+    subfolder: input.subfolder,
+    customer: input.customer,
+    errorText,
+    rtoQueueId,
+  });
+}
+
 export async function runPrintQueueRtoFlow(
   input: RunPrintQueueRtoFlowInput
 ): Promise<RunPrintQueueRtoFlowResult> {
@@ -48,6 +63,7 @@ export async function runPrintQueueRtoFlow(
   const dealerId = input.dealerId;
   const subfolder = (input.subfolder || "").trim();
   const stagingId = (input.stagingId || "").trim();
+  const failureLog = { dealerId, subfolder, customer: input.customer };
 
   if (!subfolder || dealerId <= 0) {
     return {
@@ -72,6 +88,7 @@ export async function runPrintQueueRtoFlow(
     traceLines.push({ prefix: "UI", message: `pull FAIL: ${pull.error ?? "unknown"}` });
     await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
     const err = pull.error ?? "Download sale folder from server failed.";
+    await logPrintQueueRtoFailure(input, `Pull: ${err}`);
     return {
       success: false,
       statusLines: [`${err} ${printRtoQueueLogHint(subfolder)}`],
@@ -111,6 +128,7 @@ export async function runPrintQueueRtoFlow(
     const msg = printErr instanceof Error ? printErr.message : "Generate Gate Pass failed.";
     traceLines.push({ prefix: "UI", message: `gate pass exception: ${msg}` });
     await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
+    await logPrintQueueRtoFailure(input, `Gate pass: ${msg}`);
     return {
       success: false,
       statusLines: [`Gate Pass: ${msg} ${printRtoQueueLogHint(subfolder)}`],
@@ -124,6 +142,7 @@ export async function runPrintQueueRtoFlow(
     const err = gatePassRes.error ?? "Gate Pass generation failed.";
     traceLines.push({ prefix: "UI", message: `gate pass FAIL: ${err}` });
     await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
+    await logPrintQueueRtoFailure(input, `Gate pass: ${err}`);
     return {
       success: false,
       statusLines: [`Gate Pass: ${err} ${printRtoQueueLogHint(subfolder)}`],
@@ -135,7 +154,7 @@ export async function runPrintQueueRtoFlow(
   statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
   const jobNames = (gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ");
   if (gatePassRes.print_jobs?.length) {
-    void dispatchPrintJobsFromApi(gatePassRes.print_jobs);
+    void dispatchPrintJobsFromApi(gatePassRes.print_jobs, { failureLog });
     statusLines.push(
       `Printing ${gatePassRes.print_jobs.length} document(s) in the background (Sale Certificate, Insurance, Gate Pass).`
     );
@@ -170,6 +189,7 @@ export async function runPrintQueueRtoFlow(
       subfolder,
       lines: [{ prefix: "UI", message: `push FAIL: ${err}` }],
     });
+    await logPrintQueueRtoFailure(input, `Push: ${err}`);
     return {
       success: false,
       statusLines: [
@@ -187,9 +207,16 @@ export async function runPrintQueueRtoFlow(
     prefix: "UI",
     message: `push OK uploaded=${push.files_uploaded ?? 0} failed=${push.files_failed ?? 0}`,
   });
+  if ((push.files_failed ?? 0) > 0) {
+    await logPrintQueueRtoFailure(
+      input,
+      `Push: ${push.files_failed} file(s) failed to upload (${push.files_uploaded ?? 0} ok). See Print_RTO_queue.txt PUSH lines.`
+    );
+  }
 
   if (!stagingId) {
     await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
+    await logPrintQueueRtoFailure(input, "RTO queue: staging_id missing.");
     return {
       success: false,
       statusLines: [
@@ -222,6 +249,7 @@ export async function runPrintQueueRtoFlow(
       subfolder,
       lines: [{ prefix: "UI", message: msg }],
     });
+    await logPrintQueueRtoFailure(input, msg);
     return {
       success: false,
       statusLines: [...statusLines, `${msg} ${printRtoQueueLogHint(subfolder)}`],

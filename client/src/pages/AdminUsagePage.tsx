@@ -187,7 +187,8 @@ export function AdminUsagePage({ dealerId }: AdminUsagePageProps) {
       {sub === "failures" ? (
         <section className="admin-usage-failures-panel" aria-label="Failure logs">
           <p className="admin-failure-logs-hint">
-            Newest first ({failures?.timezone_label ?? "Asia/Kolkata (IST)"}). Terminal automation errors only.
+            Newest first ({failures?.timezone_label ?? "Asia/Kolkata (IST)"}). Includes Print / Queue RTO,
+            Create Invoice, Insurance, challan, and related automation failures.
           </p>
           {failuresErr ? <p className="view-vehicles-error">{failuresErr}</p> : null}
           {failures ? (

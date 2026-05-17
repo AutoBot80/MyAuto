@@ -413,6 +413,46 @@ def _record_process_failure_via_api(api_url: str, jwt: str, body: dict) -> None:
         logging.warning("failure-log sidecar API: %s", exc)
 
 
+def _record_print_queue_rto_failure(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    subfolder: str,
+    error_text: str,
+    *,
+    customer: dict | None = None,
+    rto_queue_id: int | None = None,
+) -> None:
+    """Admin Failure Logs row for Print / Queue RTO (sidecar steps)."""
+    err = (error_text or "").strip()
+    if not err:
+        return
+    try:
+        from app.services.process_failure_log_service import (
+            PROCESS_LABEL_PRINT_QUEUE_RTO,
+            entity_key_print_queue_rto,
+            mobile_digits_for_print_rto_subfolder,
+        )
+
+        md = mobile_digits_for_print_rto_subfolder(subfolder, customer)
+        _record_process_failure_via_api(
+            api_url,
+            jwt,
+            {
+                "dealer_id": int(dealer_id),
+                "process_label": PROCESS_LABEL_PRINT_QUEUE_RTO,
+                "entity_dedupe_key": entity_key_print_queue_rto(
+                    subfolder=subfolder, mobile_digits=md
+                ),
+                "error_text": err,
+                "customer_mobile": md,
+                "rto_queue_id": int(rto_queue_id) if rto_queue_id is not None else None,
+            },
+        )
+    except Exception:
+        logging.exception("print queue rto failure-log")
+
+
 def _slim_subdealer_challan_finalize_playwright_result(frag: dict) -> dict:
     """
     ``sidecar_finalize_order_playwright_result`` only uses ``error``, ``vehicle``, and
@@ -1313,9 +1353,11 @@ def _dispatch_pull_sale_scan_assets_impl(params: dict) -> dict:
     total_fail = int(pull_stats["downloads_failed"])
     attempted = total_down + total_fail
     if attempted > 0 and total_down < 1:
+        err = "Pull sale folder from server failed (no files downloaded)."
+        _record_print_queue_rto_failure(api_url, jwt, dealer_id, safe, err)
         return {
             "success": False,
-            "error": "Pull sale folder from server failed (no files downloaded).",
+            "error": err,
             "subfolder": safe,
             "log_file": LOG_FILENAME,
             **pull_stats,
@@ -1361,13 +1403,25 @@ def _dispatch_push_sale_artifacts_impl(params: dict) -> dict:
         "PUSH",
         f"complete: uploaded={total_up} failed={total_fail}",
     )
+    customer = params.get("customer") if isinstance(params.get("customer"), dict) else None
     if total_up < 1 and total_fail > 0:
+        err = "Push sale folder to server failed."
+        _record_print_queue_rto_failure(api_url, jwt, dealer_id, safe, err, customer=customer)
         return {
             "success": False,
-            "error": "Push sale folder to server failed.",
+            "error": err,
             "subfolder": safe,
             **stats,
         }
+    if total_fail > 0:
+        _record_print_queue_rto_failure(
+            api_url,
+            jwt,
+            dealer_id,
+            safe,
+            f"Push: {total_fail} file(s) failed to upload ({total_up} ok). See Print_RTO_queue.txt PUSH lines.",
+            customer=customer,
+        )
     return {
         "success": True,
         "subfolder": safe,
@@ -1454,6 +1508,9 @@ def _dispatch_print_gate_pass_local_impl(params: dict) -> dict:
                 missing
             )
             append_print_rto_queue_line(ocr_dir, safe, "GATE_PASS", f"FAIL: {err}")
+            _record_print_queue_rto_failure(
+                api_url, jwt, dealer_id, safe, f"Gate pass: {err}", customer=customer_dict
+            )
             return {"success": False, "error": err, "pdfs_saved": ["Gate Pass.pdf"]}
 
         kinds = [j.get("kind") for j in print_jobs]
@@ -1472,6 +1529,10 @@ def _dispatch_print_gate_pass_local_impl(params: dict) -> dict:
     except Exception as exc:
         append_print_rto_queue_line(ocr_dir, safe, "GATE_PASS", f"FAIL: {exc}")
         logging.warning("print_gate_pass_local: %s", exc)
+        cust = params.get("customer") if isinstance(params.get("customer"), dict) else None
+        _record_print_queue_rto_failure(
+            api_url, jwt, dealer_id, safe, f"Gate pass: {exc}", customer=cust
+        )
         return {"success": False, "error": str(exc), "pdfs_saved": []}
 
 
@@ -2004,6 +2065,11 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
 
 def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
     """CPA Alliance portal — resolve (API) → Playwright (local); no local DATABASE_URL."""
+    logging.info(
+        "fill_cpa_alliance_insurance: start staging_id=%s dealer_id=%s",
+        params.get("staging_id"),
+        params.get("dealer_id"),
+    )
     api_url, jwt = _require_api_credentials(params)
 
     from app.config import get_ocr_output_dir, get_uploads_dir
@@ -2025,9 +2091,21 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
-    alliance_kwargs = ctx["alliance_kwargs"]
-    full_values = ctx["full_values"]
-    subfolder = ctx["subfolder"]
+    if not isinstance(ctx, dict):
+        return {"success": False, "error": "CPA resolve returned an invalid response."}
+    try:
+        alliance_kwargs = ctx["alliance_kwargs"]
+        full_values = ctx["full_values"]
+        subfolder = ctx["subfolder"]
+    except KeyError as exc:
+        return {
+            "success": False,
+            "error": f"CPA resolve response missing field ({exc}). Redeploy the API with /sidecar/cpa/resolve.",
+        }
+    if not isinstance(alliance_kwargs, dict) or not isinstance(full_values, dict):
+        return {"success": False, "error": "CPA resolve returned invalid fill payloads."}
+    if not str(subfolder or "").strip():
+        return {"success": False, "error": "CPA resolve did not return a sale subfolder (file_location)."}
 
     ocr_dir = Path(get_ocr_output_dir(dealer_id))
     try:
@@ -2035,11 +2113,17 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
     except Exception as exc:
         logging.warning("fill_cpa_alliance_insurance local CPA_Form_Values snapshot: %s", exc)
 
+    logging.info("fill_cpa_alliance_insurance: resolve ok subfolder=%s — starting Playwright", subfolder)
     result = add_alliance_cpa_insurance(
         dealer_id=dealer_id,
         subfolder=subfolder,
         portal_url=portal_url,
         **alliance_kwargs,
+    )
+    logging.info(
+        "fill_cpa_alliance_insurance: finished success=%s error=%s",
+        result.get("success"),
+        result.get("error"),
     )
 
     uploads_dir = get_uploads_dir(dealer_id)
@@ -2723,6 +2807,7 @@ def dispatch(payload: dict) -> dict:
     job_type = payload.get("type") or payload.get("job")
     if not job_type:
         return {"success": False, "error": "Missing type"}
+    logging.info("dispatch: job_type=%s", job_type)
     if job_type == "ping":
         return {"success": True, "data": {"pong": True}}
     if job_type == "teardown_local_browsers":
@@ -2755,7 +2840,12 @@ def dispatch(payload: dict) -> dict:
         return {"success": True, "data": data}
     if job_type == "fill_cpa_alliance_insurance":
         data = _run_sidecar_playwright_job(lambda: _dispatch_fill_cpa_alliance_insurance_impl(params))
-        return {"success": True, "data": data}
+        ok = isinstance(data, dict) and bool(data.get("success"))
+        return {
+            "success": ok,
+            "data": data,
+            "error": data.get("error") if isinstance(data, dict) else None,
+        }
     if job_type == "fill_vahan_batch":
         data = _run_sidecar_playwright_job(lambda: _dispatch_fill_vahan_batch_impl(params))
         return {"success": True, "data": data}

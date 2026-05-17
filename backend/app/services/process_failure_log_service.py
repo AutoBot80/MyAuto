@@ -42,6 +42,29 @@ def entity_key_print_forms(*, subfolder: str, mobile_digits: str | None, suffix:
     return f"{suffix}:{safe}:{mob}"
 
 
+PROCESS_LABEL_PRINT_QUEUE_RTO = "Print / Queue RTO"
+
+
+def mobile_digits_for_print_rto_subfolder(
+    subfolder: str,
+    customer: dict | None = None,
+) -> str | None:
+    """10-digit mobile from customer dict or sale subfolder prefix ``{mobile}_…``."""
+    if isinstance(customer, dict):
+        raw = customer.get("mobile_number")
+        if raw is None:
+            raw = customer.get("mobile")
+        md = digits_only_mobile(str(raw).strip() if raw is not None else "")
+        if md:
+            return md
+    m = re.match(r"^(\d{10})", (subfolder or "").strip())
+    return m.group(1) if m else None
+
+
+def entity_key_print_queue_rto(*, subfolder: str, mobile_digits: str | None) -> str:
+    return entity_key_print_forms(subfolder=subfolder, mobile_digits=mobile_digits, suffix="pqtrto")
+
+
 def entity_key_challan(*, challan_book_num: str | None, challan_date: str | None, batch_id: uuid.UUID) -> str:
     cb = (challan_book_num or "").strip()
     cd = (challan_date or "").strip()

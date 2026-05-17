@@ -225,6 +225,8 @@ def _resolve_subfolder_for_cpa(
     staging_payload: dict | None,
 ) -> str:
     s = clean_text(req_subfolder)
+    if s.lower() == "default":
+        s = ""
     if s:
         return s
     sid = clean_text(staging_id)
