@@ -71,7 +71,7 @@ export async function runPrintQueueRtoFlow(
   if (!pull.success) {
     traceLines.push({ prefix: "UI", message: `pull FAIL: ${pull.error ?? "unknown"}` });
     await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
-    const err = pull.error ?? "Download scan assets from server failed.";
+    const err = pull.error ?? "Download sale folder from server failed.";
     return {
       success: false,
       statusLines: [`${err} ${printRtoQueueLogHint(subfolder)}`],
@@ -80,7 +80,7 @@ export async function runPrintQueueRtoFlow(
     };
   }
   if ((pull.files_downloaded ?? 0) > 0) {
-    statusLines.push(`Downloaded ${pull.files_downloaded} scan file(s) from server.`);
+    statusLines.push(`Downloaded ${pull.files_downloaded} file(s) from server sale folder.`);
   }
   traceLines.push({
     prefix: "UI",

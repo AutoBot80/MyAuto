@@ -545,24 +545,56 @@ def _upload_rto_row_log_if_present(api_url: str, jwt: str, dealer_id: int, row: 
         logging.warning("vahan RTO log upload: %s", exc)
 
 
-def _should_pull_scan_asset_from_server(filename: str) -> bool:
-    """Aadhaar scans, sales detail sheet, and pencil mark — often on EC2 from Submit only."""
-    low = (filename or "").lower().replace(" ", "_")
-    if not low:
-        return False
-    if "pencil_mark" in low or low.startswith("pencil."):
+def _should_skip_server_upload_pull(filename: str) -> bool:
+    """Skip OCR JSON artifacts only — pull every other file in the sale subfolder (varied names)."""
+    if not (filename or "").strip():
         return True
-    if "detail_sheet" in low or "sales_detail" in low:
-        return True
-    if "aadhar_back" in low or "aadhaar_back" in low or low.endswith("_back.jpg") or low.endswith("_back.jpeg"):
-        return True
-    if "aadhar_front" in low or "aadhaar_front" in low:
-        return True
-    if low in ("aadhar.jpg", "aadhaar.jpg", "aadhar.jpeg", "aadhaar.jpeg"):
-        return True
-    if ("aadhar" in low or "aadhaar" in low) and "front" in low:
-        return True
-    return False
+    base = Path(filename).stem.lower().replace(" ", "_")
+    return base == "ocr_to_be_used"
+
+
+class _PresignedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """
+    S3 presigned GET URLs break when urllib forwards ``Authorization`` from the API redirect.
+
+    Build a fresh request to ``Location`` without inherited JWT headers.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return urllib.request.Request(newurl, method=req.get_method())
+
+
+_api_download_opener: urllib.request.OpenerDirector | None = None
+
+
+def _api_download_opener() -> urllib.request.OpenerDirector:
+    global _api_download_opener
+    if _api_download_opener is None:
+        _api_download_opener = urllib.request.build_opener(
+            _PresignedRedirectHandler(),
+            urllib.request.HTTPSHandler(context=_get_ssl_context()),
+        )
+    return _api_download_opener
+
+
+def _http_error_detail(exc: urllib.error.HTTPError, url: str) -> str:
+    body = ""
+    try:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        pass
+    if body:
+        try:
+            parsed = json.loads(body)
+            detail = parsed.get("detail")
+            if detail:
+                return f"HTTP {exc.code} {url}: {detail}"
+        except Exception:
+            pass
+        if len(body) > 600:
+            body = body[:600] + "…"
+        return f"HTTP {exc.code} {url}: {body}"
+    return f"HTTP {exc.code} {url}"
 
 
 def _api_download_uploads_file(
@@ -585,12 +617,15 @@ def _api_download_uploads_file(
         headers={"Authorization": f"Bearer {jwt}"},
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(resp.read())
+    try:
+        with _api_download_opener().open(req, timeout=timeout) as resp:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(resp.read())
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(_http_error_detail(exc, url)) from exc
 
 
-def _pull_scan_assets_from_server(
+def _pull_sale_subfolder_from_server(
     api_url: str,
     jwt: str,
     dealer_id: int,
@@ -600,7 +635,9 @@ def _pull_scan_assets_from_server(
     ocr_dir: Path | None = None,
 ) -> dict[str, int]:
     """
-    Download scan assets present on the API host (EC2 / S3) into local ``Uploaded scans/{dealer}/{subfolder}``.
+    Download **all** files listed for the sale subfolder on the API host (EC2 disk preferred per file GET).
+
+    Filenames vary (Aadhaar, Insurance, Sale Certificate, etc.) — no pattern filter beyond OCR JSON skip.
     """
     from app.services.fill_hero_dms_service import _safe_subfolder_name
     from app.services.print_rto_queue_log import append_print_rto_queue_line
@@ -621,7 +658,7 @@ def _pull_scan_assets_from_server(
             timeout=60,
         )
     except Exception as exc:
-        logging.warning("pull scan assets: list documents failed: %s", exc)
+        logging.warning("pull sale subfolder: list documents failed: %s", exc)
         append_print_rto_queue_line(
             ocr_dir,
             safe,
@@ -644,7 +681,7 @@ def _pull_scan_assets_from_server(
 
     for ent in listing.get("files") or []:
         name = str(ent.get("name") or "").strip()
-        if not name or not _should_pull_scan_asset_from_server(name):
+        if _should_skip_server_upload_pull(name):
             skipped += 1
             continue
         dest = local_dir / Path(name).name
@@ -652,7 +689,7 @@ def _pull_scan_assets_from_server(
             _api_download_uploads_file(api_url, jwt, dealer_id, safe, name, dest)
             downloaded += 1
             pulled_names.append(name)
-            logging.info("pull scan asset: %s -> %s", name, dest)
+            logging.info("pull sale file: %s -> %s", name, dest)
             append_print_rto_queue_line(
                 ocr_dir,
                 safe,
@@ -662,18 +699,19 @@ def _pull_scan_assets_from_server(
         except Exception as exc:
             failed += 1
             failed_names.append(name)
-            logging.warning("pull scan asset failed %s: %s", name, exc)
+            err_msg = str(exc).strip() or repr(exc)
+            logging.warning("pull sale file failed %s: %s", name, err_msg)
             append_print_rto_queue_line(
                 ocr_dir,
                 safe,
                 "PULL",
-                f"FAIL {name}: {exc}",
+                f"FAIL {name}: {err_msg}",
             )
     append_print_rto_queue_line(
         ocr_dir,
         safe,
         "PULL",
-        f"done: downloaded={downloaded} failed={failed} skipped_non_scan={skipped}",
+        f"done: downloaded={downloaded} failed={failed} skipped={skipped}",
     )
     if pulled_names:
         append_print_rto_queue_line(ocr_dir, safe, "PULL", f"files: {', '.join(pulled_names)}")
@@ -851,7 +889,7 @@ def _mobile_for_print_local(subfolder: str, customer: dict) -> str:
 
 
 def _dispatch_pull_sale_scan_assets_impl(params: dict) -> dict:
-    """Pull scan assets from EC2 → local; reset ``Print_RTO_queue.txt``."""
+    """Pull full sale subfolder from server → local; reset ``Print_RTO_queue.txt``."""
     api_url, jwt = _require_api_credentials(params)
     dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
     subfolder = (params.get("subfolder") or "").strip()
@@ -873,15 +911,16 @@ def _dispatch_pull_sale_scan_assets_impl(params: dict) -> dict:
         "START",
         f"Print/Queue RTO pull dealer_id={dealer_id} subfolder={safe!r}",
     )
-    pull_stats = _pull_scan_assets_from_server(
+    pull_stats = _pull_sale_subfolder_from_server(
         api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir=ocr_dir
     )
     total_down = int(pull_stats["downloads_uploaded"])
     total_fail = int(pull_stats["downloads_failed"])
-    if total_down < 1 and total_fail > 0:
+    attempted = total_down + total_fail
+    if attempted > 0 and total_down < 1:
         return {
             "success": False,
-            "error": "Pull scan assets from server failed.",
+            "error": "Pull sale folder from server failed (no files downloaded).",
             "subfolder": safe,
             "log_file": LOG_FILENAME,
             **pull_stats,
@@ -1032,7 +1071,7 @@ def _dispatch_upload_sale_artifacts_impl(params: dict) -> dict:
     """
     Two-way sale-folder sync for Print / Queue RTO:
 
-    1. Pull scan assets from EC2/S3 → local (Aadhaar front/back, Sales Detail Sheet, pencil mark).
+    1. Pull full sale subfolder from EC2/S3 → local (all listed uploads files; skip ``OCR_To_be_Used.json`` only).
     2. Push all local ``Uploaded scans`` + ``ocr_output`` files → EC2 via ``/sidecar/upload-artifacts``.
     """
     api_url, jwt = _require_api_credentials(params)
@@ -1070,7 +1109,7 @@ def _dispatch_upload_sale_artifacts_impl(params: dict) -> dict:
         "PATH",
         f"log file: {log_path}" if log_path else f"log file: ocr_output/{safe}/{LOG_FILENAME}",
     )
-    pull_stats = _pull_scan_assets_from_server(
+    pull_stats = _pull_sale_subfolder_from_server(
         api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir=ocr_dir
     )
     stats = _upload_sale_artifacts(api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir)

@@ -125,13 +125,32 @@ def get_document(
     requested_name = Path(filename).name
     if requested_name != filename or requested_name in {".", ".."}:
         raise HTTPException(status_code=400, detail="Invalid filename")
+
+    rel = f"{safe_sub}/{requested_name}"
+    local_path = get_uploads_dir(did) / safe_sub / requested_name
+    # Prefer EC2/local disk when the file is present (sidecar pull, no S3 presigned redirect).
+    if local_path.is_file():
+        logger.info("get_document: local disk dealer_id=%s rel=%s", did, rel)
+        return FileResponse(
+            local_path,
+            filename=requested_name,
+            content_disposition_type="inline",
+        )
+
     if STORAGE_USE_S3:
-        url = presigned_uploads_get_by_rel_path(did, f"{safe_sub}/{requested_name}")
+        url = presigned_uploads_get_by_rel_path(did, rel)
         if not url:
+            logger.warning(
+                "get_document: not on disk or S3 dealer_id=%s rel=%s",
+                did,
+                rel,
+            )
             raise HTTPException(status_code=404, detail="File not found")
+        logger.info(
+            "get_document: S3 redirect dealer_id=%s rel=%s (file absent on local disk)",
+            did,
+            rel,
+        )
         return RedirectResponse(url=url, status_code=307)
 
-    path = get_uploads_dir(did) / safe_sub / requested_name
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=requested_name, content_disposition_type="inline")
+    raise HTTPException(status_code=404, detail="File not found")
