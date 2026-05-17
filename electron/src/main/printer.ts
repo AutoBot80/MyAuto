@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { BrowserWindow, type WebContents } from "electron";
 import type { PrinterInfo, WebContentsPrintOptions } from "electron";
 import { logError, logInfo } from "./logger";
+import { printPdfFile } from "./pdf-file-print";
 
 export async function getPrinters(): Promise<PrinterInfo[]> {
   const win = new BrowserWindow({ show: false });
@@ -36,31 +37,6 @@ async function resolveDefaultPrinterName(): Promise<string | undefined> {
   const printers = await getPrinters();
   const def = printers.find((p) => p.isDefault) ?? printers[0];
   return def?.name?.trim() || undefined;
-}
-
-/**
- * Print PDF. When ``silent`` is true, sends to the default printer without a system dialog.
- * Uses explicit ``pageSize`` so Chromium does not send an empty layout to the driver.
- */
-async function printPdfContents(
-  wc: WebContents,
-  deviceName?: string,
-  silent = false
-): Promise<void> {
-  let device = deviceName?.trim() || undefined;
-  if (silent && !device) {
-    device = await resolveDefaultPrinterName();
-  }
-  const base: WebContentsPrintOptions = {
-    printBackground: true,
-    pageSize: "A4",
-    deviceName: device,
-  };
-  if (silent) {
-    await printWithCallback(wc, { ...base, silent: true });
-    return;
-  }
-  await printWithCallback(wc, { ...base, silent: false });
 }
 
 export interface PrintOptions {
@@ -130,28 +106,6 @@ export interface PdfPrintOptions {
   background?: boolean;
 }
 
-/**
- * PDF print needs a laid-out webview. For silent mode we keep a small off-screen window
- * (still ``show: true``) so Chromium assigns a content size; dialog mode uses a normal window.
- */
-function createPdfPrintWindow(title: string, silent: boolean): BrowserWindow {
-  return new BrowserWindow({
-    show: true,
-    width: silent ? 800 : 900,
-    height: silent ? 600 : 1100,
-    x: silent ? -32000 : undefined,
-    y: silent ? -32000 : undefined,
-    center: !silent,
-    title: title || "Print",
-    autoHideMenuBar: true,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      plugins: true,
-    },
-  });
-}
-
 /** Sidecar / Create Invoice writes PDFs on disk; same field as S3 URL for API compatibility. */
 function isLocalPdfPath(s: string): boolean {
   const t = s.trim();
@@ -167,8 +121,11 @@ export async function printPdfsFromPresignedUrls(
 ): Promise<{ ok: boolean; printed: number; error?: string }> {
   const opts: PdfPrintOptions =
     typeof options === "string" ? { deviceName: options } : options ?? {};
-  const deviceName = opts.deviceName;
+  let deviceName = opts.deviceName;
   const silent = opts.silent === true;
+  if (silent && !deviceName?.trim()) {
+    deviceName = await resolveDefaultPrinterName();
+  }
   const { writeFile, unlink } = await import("fs/promises");
   const { join } = await import("path");
   const { tmpdir } = await import("os");
@@ -177,7 +134,6 @@ export async function printPdfsFromPresignedUrls(
   const total = items.length;
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    const step = `${i + 1}/${total}`;
     const label =
       item.kind === "sale_certificate"
         ? "Sale Certificate"
@@ -188,67 +144,42 @@ export async function printPdfsFromPresignedUrls(
             : item.kind === "cpa"
               ? "CPA"
               : item.filename ?? "Document";
-    const windowTitle = `Print ${step}: ${label}`;
     let tmpPath: string | null = null;
     try {
-      const useLocal = isLocalPdfPath(item.presigned_url);
-      if (useLocal) {
-        const localPath = item.presigned_url.trim().startsWith("file://")
+      let pdfPath: string;
+      if (isLocalPdfPath(item.presigned_url)) {
+        pdfPath = item.presigned_url.trim().startsWith("file://")
           ? fileURLToPath(item.presigned_url.trim())
           : item.presigned_url.trim();
-        if (!existsSync(localPath)) {
+      } else {
+        const res = await fetch(item.presigned_url);
+        if (!res.ok) {
           return {
             ok: false,
             printed,
-            error: `PDF not found on this PC: ${item.filename ?? localPath}`,
+            error: `Download failed HTTP ${res.status} for ${item.filename ?? "pdf"}`,
           };
         }
-        const win = createPdfPrintWindow(windowTitle, silent);
-        try {
-          await win.loadFile(localPath);
-          if (!silent) {
-            win.focus();
-            win.setAlwaysOnTop(true, "screen-saver");
-          }
-          await new Promise<void>((r) => setTimeout(r, silent ? 800 : 500));
-          await printPdfContents(win.webContents, deviceName, silent);
-          printed++;
-        } finally {
-          if (!silent) win.setAlwaysOnTop(false);
-          win.destroy();
-        }
-        continue;
+        const buf = Buffer.from(await res.arrayBuffer());
+        tmpPath = join(
+          tmpdir(),
+          `saathi-print-${process.pid}-${Date.now()}-${printed}-${Math.random().toString(36).slice(2)}.pdf`
+        );
+        await writeFile(tmpPath, buf);
+        pdfPath = tmpPath;
       }
 
-      const res = await fetch(item.presigned_url);
-      if (!res.ok) {
+      if (!existsSync(pdfPath)) {
         return {
           ok: false,
           printed,
-          error: `Download failed HTTP ${res.status} for ${item.filename ?? "pdf"}`,
+          error: `PDF not found on this PC: ${item.filename ?? pdfPath}`,
         };
       }
-      const buf = Buffer.from(await res.arrayBuffer());
-      tmpPath = join(
-        tmpdir(),
-        `saathi-print-${process.pid}-${Date.now()}-${printed}-${Math.random().toString(36).slice(2)}.pdf`
-      );
-      await writeFile(tmpPath, buf);
 
-      const win = createPdfPrintWindow(windowTitle, silent);
-      try {
-        await win.loadFile(tmpPath);
-        if (!silent) {
-          win.focus();
-          win.setAlwaysOnTop(true, "screen-saver");
-        }
-        await new Promise<void>((r) => setTimeout(r, silent ? 800 : 500));
-        await printPdfContents(win.webContents, deviceName, silent);
-        printed++;
-      } finally {
-        if (!silent) win.setAlwaysOnTop(false);
-        win.destroy();
-      }
+      logInfo(`print pdf [${i + 1}/${total}] ${label}: ${pdfPath}`);
+      await printPdfFile(pdfPath, deviceName, silent);
+      printed++;
     } catch (e) {
       return {
         ok: false,

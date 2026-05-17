@@ -22,6 +22,8 @@
     "electron-builder": "^25.1.8"
   },
   "dependencies": {
-    "electron-updater": "^6.6.2"
+    "electron-updater": "^6.6.2",
+    "pdf-to-printer": "^5.6.1",
+    "pdfjs-dist": "^4.10.38"
   }
 }

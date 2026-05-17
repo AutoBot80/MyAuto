@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Print</title>
+    <style>
+      @page {
+        size: A4;
+        margin: 0;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #fff;
+      }
+      .page {
+        display: block;
+        page-break-after: always;
+        break-after: page;
+        overflow: hidden;
+      }
+      .page:last-child {
+        page-break-after: auto;
+        break-after: auto;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="pages"></div>
+    <script type="module">
+      const PDFJS_MODULE = "__PDFJS_MODULE__";
+      const pdfjsLib = await import(PDFJS_MODULE);
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "__PDFJS_WORKER__";
+
+      const src = new URLSearchParams(location.search).get("src");
+      if (!src) {
+        throw new Error("missing src query param");
+      }
+
+      const container = document.getElementById("pages");
+      const pdf = await pdfjsLib.getDocument({ url: src }).promise;
+      const scale = Math.min(2, Math.max(1, 794 / 612));
+
+      for (let num = 1; num <= pdf.numPages; num += 1) {
+        const page = await pdf.getPage(num);
+        const viewport = page.getViewport({ scale });
+        const wrap = document.createElement("div");
+        wrap.className = "page";
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        wrap.appendChild(canvas);
+        container.appendChild(wrap);
+        await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+      }
+
+      window.__PDF_PRINT_READY__ = true;
+    </script>
+  </body>
+</html>

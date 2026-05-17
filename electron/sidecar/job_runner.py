@@ -532,10 +532,93 @@ def _upload_http_code(exc: Exception) -> int | None:
 def _upload_retry_sleep(attempt: int, http_code: int | None) -> float:
     """Backoff between upload attempts (longer after CloudFront/WAF 403)."""
     if http_code == 403:
-        return min(12.0, 1.0 * (2**attempt))
+        return min(20.0, 2.0 * (2**attempt))
     if http_code in (429, 502, 503, 504):
-        return min(8.0, 0.75 * (2**attempt))
-    return 0.4 * (attempt + 1)
+        return min(10.0, 1.0 * (2**attempt))
+    return 0.5 * (attempt + 1)
+
+
+def _upload_inter_file_sleep(*, print_rto: bool = False) -> float:
+    """Pause between successful uploads (WAF-friendly). Override via env."""
+    key = "SAATHI_PRINT_RTO_UPLOAD_SLEEP" if print_rto else "SAATHI_UPLOAD_INTER_FILE_SLEEP"
+    default = 1.5 if print_rto else 0.45
+    raw = (os.getenv(key) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0.25, float(raw))
+    except ValueError:
+        return default
+
+
+def _upload_one_file_with_retries(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    tree: str,
+    rel: str,
+    file_path: Path,
+    *,
+    ocr_dir: Path | None,
+    log_subfolder: str | None,
+    max_attempts: int = 6,
+) -> tuple[bool, bool]:
+    """
+    Upload one artifact. Returns ``(http_ok, s3_sync_failed)``.
+    ``http_ok`` False means all attempts exhausted (e.g. CloudFront 403).
+    """
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
+
+    last_exc: Exception | None = None
+    s3_failed = False
+    for attempt in range(max_attempts):
+        try:
+            result = _multipart_upload_file(api_url, jwt, dealer_id, tree, rel, file_path)
+            if ocr_dir is not None and log_subfolder:
+                if result.get("s3_synced", True):
+                    append_print_rto_queue_line(
+                        ocr_dir,
+                        log_subfolder,
+                        "PUSH",
+                        f"OK {tree}/{rel} (EC2+S3)",
+                    )
+                else:
+                    s3_failed = True
+                    s3_err = str(result.get("s3_error") or "S3 sync failed")[:300]
+                    append_print_rto_queue_line(
+                        ocr_dir,
+                        log_subfolder,
+                        "PUSH",
+                        f"EC2 OK S3 FAIL {tree}/{rel}: {s3_err}",
+                    )
+            elif not result.get("s3_synced", True):
+                s3_failed = True
+            return True, s3_failed
+        except Exception as exc:
+            last_exc = exc
+            http_code = _upload_http_code(exc)
+            if attempt < max_attempts - 1:
+                delay = _upload_retry_sleep(attempt, http_code)
+                if ocr_dir is not None and log_subfolder:
+                    append_print_rto_queue_line(
+                        ocr_dir,
+                        log_subfolder,
+                        "PUSH",
+                        f"retry {tree}/{rel} in {delay:.0f}s "
+                        f"(attempt {attempt + 2}/{max_attempts}, HTTP {http_code or 'err'})",
+                    )
+                time.sleep(delay)
+    if last_exc is not None:
+        err_msg = str(last_exc).strip() or repr(last_exc)
+        logging.warning("sidecar upload %s/%s: %s", tree, rel, err_msg)
+        if ocr_dir is not None and log_subfolder:
+            append_print_rto_queue_line(
+                ocr_dir,
+                log_subfolder,
+                "PUSH",
+                f"FAIL {tree}/{rel}: {err_msg[:500]}",
+            )
+    return False, s3_failed
 
 
 def _upload_tree_under(
@@ -565,50 +648,23 @@ def _upload_tree_under(
             rel = f.resolve().relative_to(anchor_res).as_posix()
         except ValueError:
             continue
-        last_exc: Exception | None = None
-        max_attempts = 5
-        for attempt in range(max_attempts):
-            try:
-                result = _multipart_upload_file(api_url, jwt, dealer_id, tree, rel, f)
-                uploaded += 1
-                if ocr_dir is not None and log_subfolder:
-                    if result.get("s3_synced", True):
-                        append_print_rto_queue_line(
-                            ocr_dir,
-                            log_subfolder,
-                            "PUSH",
-                            f"OK {tree}/{rel} (EC2+S3)",
-                        )
-                    else:
-                        s3_failed += 1
-                        s3_err = str(result.get("s3_error") or "S3 sync failed")[:300]
-                        append_print_rto_queue_line(
-                            ocr_dir,
-                            log_subfolder,
-                            "PUSH",
-                            f"EC2 OK S3 FAIL {tree}/{rel}: {s3_err}",
-                        )
-                elif not result.get("s3_synced", True):
-                    s3_failed += 1
-                last_exc = None
-                break
-            except Exception as exc:
-                last_exc = exc
-                http_code = _upload_http_code(exc)
-                if attempt < max_attempts - 1:
-                    time.sleep(_upload_retry_sleep(attempt, http_code))
-        if last_exc is not None:
+        ok, one_s3_fail = _upload_one_file_with_retries(
+            api_url,
+            jwt,
+            dealer_id,
+            tree,
+            rel,
+            f,
+            ocr_dir=ocr_dir,
+            log_subfolder=log_subfolder,
+        )
+        if ok:
+            uploaded += 1
+            if one_s3_fail:
+                s3_failed += 1
+        else:
             failed += 1
-            err_msg = str(last_exc).strip() or repr(last_exc)
-            logging.warning("sidecar upload %s/%s: %s", tree, rel, err_msg)
-            if ocr_dir is not None and log_subfolder:
-                append_print_rto_queue_line(
-                    ocr_dir,
-                    log_subfolder,
-                    "PUSH",
-                    f"FAIL {tree}/{rel}: {err_msg[:500]}",
-                )
-        time.sleep(0.45)
+        time.sleep(_upload_inter_file_sleep(print_rto=False))
     return uploaded, failed, s3_failed
 
 
@@ -621,6 +677,7 @@ def _upload_uploads_file_list(
     *,
     ocr_dir: Path | None = None,
     log_subfolder: str | None = None,
+    print_rto: bool = False,
 ) -> tuple[int, int, int]:
     """Upload explicit paths under ``uploads`` (relative to ``uploads_root``)."""
     from app.services.print_rto_queue_log import append_print_rto_queue_line
@@ -629,6 +686,18 @@ def _upload_uploads_file_list(
     uploaded = 0
     failed = 0
     s3_failed = 0
+    pending: list[tuple[Path, str]] = []
+    pause = _upload_inter_file_sleep(print_rto=print_rto)
+    if print_rto and ocr_dir is not None and log_subfolder:
+        append_print_rto_queue_line(
+            ocr_dir,
+            log_subfolder,
+            "PUSH",
+            f"throttle: {pause:.1f}s between uploads (CloudFront/WAF); "
+            "set SAATHI_PRINT_RTO_UPLOAD_SLEEP to override",
+        )
+        time.sleep(1.0)
+
     for f in sorted(files, key=lambda p: p.name.lower()):
         if not f.is_file():
             continue
@@ -636,50 +705,56 @@ def _upload_uploads_file_list(
             rel = f.resolve().relative_to(u_root).as_posix()
         except ValueError:
             continue
-        last_exc: Exception | None = None
-        max_attempts = 5
-        for attempt in range(max_attempts):
-            try:
-                result = _multipart_upload_file(api_url, jwt, dealer_id, "uploads", rel, f)
-                uploaded += 1
-                if ocr_dir is not None and log_subfolder:
-                    if result.get("s3_synced", True):
-                        append_print_rto_queue_line(
-                            ocr_dir,
-                            log_subfolder,
-                            "PUSH",
-                            f"OK uploads/{rel} (EC2+S3)",
-                        )
-                    else:
-                        s3_failed += 1
-                        s3_err = str(result.get("s3_error") or "S3 sync failed")[:300]
-                        append_print_rto_queue_line(
-                            ocr_dir,
-                            log_subfolder,
-                            "PUSH",
-                            f"EC2 OK S3 FAIL uploads/{rel}: {s3_err}",
-                        )
-                elif not result.get("s3_synced", True):
-                    s3_failed += 1
-                last_exc = None
-                break
-            except Exception as exc:
-                last_exc = exc
-                http_code = _upload_http_code(exc)
-                if attempt < max_attempts - 1:
-                    time.sleep(_upload_retry_sleep(attempt, http_code))
-        if last_exc is not None:
+        ok, one_s3_fail = _upload_one_file_with_retries(
+            api_url,
+            jwt,
+            dealer_id,
+            "uploads",
+            rel,
+            f,
+            ocr_dir=ocr_dir,
+            log_subfolder=log_subfolder,
+        )
+        if ok:
+            uploaded += 1
+            if one_s3_fail:
+                s3_failed += 1
+        else:
             failed += 1
-            err_msg = str(last_exc).strip() or repr(last_exc)
-            logging.warning("sidecar upload uploads/%s: %s", rel, err_msg)
-            if ocr_dir is not None and log_subfolder:
-                append_print_rto_queue_line(
-                    ocr_dir,
-                    log_subfolder,
-                    "PUSH",
-                    f"FAIL uploads/{rel}: {err_msg[:500]}",
-                )
-        time.sleep(0.45)
+            pending.append((f, rel))
+        time.sleep(pause)
+
+    if print_rto and pending and ocr_dir is not None and log_subfolder:
+        cool = 25.0
+        append_print_rto_queue_line(
+            ocr_dir,
+            log_subfolder,
+            "PUSH",
+            f"retry round after {cool:.0f}s cooldown for {len(pending)} failed file(s)",
+        )
+        time.sleep(cool)
+        still_failed: list[tuple[Path, str]] = []
+        for f, rel in pending:
+            ok, one_s3_fail = _upload_one_file_with_retries(
+                api_url,
+                jwt,
+                dealer_id,
+                "uploads",
+                rel,
+                f,
+                ocr_dir=ocr_dir,
+                log_subfolder=log_subfolder,
+            )
+            if ok:
+                uploaded += 1
+                failed -= 1
+                if one_s3_fail:
+                    s3_failed += 1
+            else:
+                still_failed.append((f, rel))
+            time.sleep(pause)
+        pending = still_failed
+
     return uploaded, failed, s3_failed
 
 
@@ -958,6 +1033,7 @@ def _upload_sale_artifacts(
             selected,
             ocr_dir=ocr_dir,
             log_subfolder=safe,
+            print_rto=True,
         )
         ocr_ok, ocr_http_fail, ocr_s3_fail = 0, 0, 0
         append_print_rto_queue_line(
@@ -1927,37 +2003,37 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
 
 
 def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
-    """CPA Alliance portal — local Playwright only; uploads + ocr_output mirrored like other sale jobs."""
+    """CPA Alliance portal — resolve (API) → Playwright (local); no local DATABASE_URL."""
     api_url, jwt = _require_api_credentials(params)
 
     from app.config import get_ocr_output_dir, get_uploads_dir
     from app.services.add_alliance_cpa_insurance import add_alliance_cpa_insurance
-    from app.services.cpa_form_values import prepare_cpa_alliance_fill
+    from app.services.cpa_form_values import write_cpa_form_values_snapshot
 
     dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
     portal_url = (params.get("portal_url") or "").strip() or None
 
-    def _opt_int(key: str) -> int | None:
-        v = params.get(key)
-        if v is None or v == "":
-            return None
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return None
+    resolve_body = {
+        "staging_id": params.get("staging_id"),
+        "customer_id": params.get("customer_id"),
+        "vehicle_id": params.get("vehicle_id"),
+        "subfolder": params.get("subfolder"),
+        "dealer_id": params.get("dealer_id"),
+    }
+    try:
+        ctx = _api_post(api_url, jwt, "/sidecar/cpa/resolve", resolve_body)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+    alliance_kwargs = ctx["alliance_kwargs"]
+    full_values = ctx["full_values"]
+    subfolder = ctx["subfolder"]
 
     ocr_dir = Path(get_ocr_output_dir(dealer_id))
     try:
-        alliance_kwargs, full_values, subfolder = prepare_cpa_alliance_fill(
-            dealer_id=dealer_id,
-            subfolder=(params.get("subfolder") or "").strip() or None,
-            staging_id=(params.get("staging_id") or "").strip() or None,
-            customer_id=_opt_int("customer_id"),
-            vehicle_id=_opt_int("vehicle_id"),
-            ocr_output_dir=ocr_dir,
-        )
-    except ValueError as exc:
-        return {"success": False, "error": str(exc)}
+        write_cpa_form_values_snapshot(ocr_dir, subfolder, full_values)
+    except Exception as exc:
+        logging.warning("fill_cpa_alliance_insurance local CPA_Form_Values snapshot: %s", exc)
 
     result = add_alliance_cpa_insurance(
         dealer_id=dealer_id,

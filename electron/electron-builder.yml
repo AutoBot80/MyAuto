@@ -40,6 +40,15 @@ extraResources:
     to: update-token.json
     filter:
       - "**/*"
+  - from: resources/pdf-print
+    to: pdf-print
+    filter:
+      - "**/*"
+  - from: node_modules/pdfjs-dist/build
+    to: pdfjs
+    filter:
+      - pdf.min.mjs
+      - pdf.worker.min.mjs
 
 nsis:
   # electron-builder 25.x: no `compression` / `buildUniversalInstaller` here (schema moved — use win.target + --x64 only).

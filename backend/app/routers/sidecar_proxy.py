@@ -7,6 +7,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/dms/commit``    → persist masters + finalize staging after Playwright
   - ``/sidecar/insurance/resolve`` → load insurance fill values
   - ``/sidecar/insurance/commit``  → insert/update insurance_master
+  - ``/sidecar/cpa/resolve`` → load CPA Alliance fill values (``form_cpa_insurance_view`` + staging)
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
   - ``/sidecar/vahan/row-result``  → report per-row result (completed/failed/pending)
   - ``/sidecar/upload-artifacts`` → multipart upload into uploads, ocr, or challans tree (syncs to S3)
@@ -108,6 +109,23 @@ class InsuranceResolveResponse(BaseModel):
     ocr_output_dir: str
     headed: bool
     remote_debug_port: int
+
+
+class CpaResolveRequest(BaseModel):
+    staging_id: str | None = None
+    customer_id: int | None = None
+    vehicle_id: int | None = None
+    subfolder: str | None = None
+    dealer_id: int | None = None
+
+
+class CpaResolveResponse(BaseModel):
+    alliance_kwargs: dict[str, Any]
+    full_values: dict[str, Any]
+    subfolder: str
+    customer_id: int
+    vehicle_id: int
+    staging_id: str | None = None
 
 
 class InsuranceCommitRequest(BaseModel):
@@ -429,6 +447,46 @@ async def insurance_resolve(
         ocr_output_dir=ocr_dir,
         headed=bool(DMS_PLAYWRIGHT_HEADED),
         remote_debug_port=int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333),
+    )
+
+
+@router.post("/cpa/resolve", response_model=CpaResolveResponse)
+async def cpa_resolve(
+    req: CpaResolveRequest,
+    principal: Principal = Depends(get_principal),
+) -> CpaResolveResponse:
+    """Load CPA Alliance fill values on the API host (sidecar has no ``DATABASE_URL``)."""
+    did = resolve_dealer_id(principal, req.dealer_id)
+    from app.services.cpa_form_values import prepare_cpa_alliance_fill
+
+    ocr_dir = Path(get_ocr_output_dir(did))
+    try:
+        alliance_kwargs, full_values, subfolder = prepare_cpa_alliance_fill(
+            dealer_id=did,
+            subfolder=(req.subfolder or "").strip() or None,
+            staging_id=(req.staging_id or "").strip() or None,
+            customer_id=req.customer_id,
+            vehicle_id=req.vehicle_id,
+            ocr_output_dir=ocr_dir,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "staging_id must be" in msg:
+            raise HTTPException(status_code=400, detail=msg) from exc
+        if "Staging not found" in msg:
+            raise HTTPException(status_code=404, detail=msg) from exc
+        raise HTTPException(status_code=400, detail=msg) from exc
+
+    cid = int(full_values["customer_id"])
+    vid = int(full_values["vehicle_id"])
+    sid = (req.staging_id or "").strip() or None
+    return CpaResolveResponse(
+        alliance_kwargs=alliance_kwargs,
+        full_values=full_values,
+        subfolder=subfolder,
+        customer_id=cid,
+        vehicle_id=vid,
+        staging_id=sid,
     )
 
 
