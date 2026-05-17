@@ -132,21 +132,22 @@ export async function runPrintQueueRtoFlow(
     };
   }
 
-  const printResult = await dispatchPrintJobsFromApi(gatePassRes.print_jobs);
   statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
-  if (printResult.ok) {
+  const jobNames = (gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ");
+  if (gatePassRes.print_jobs?.length) {
+    void dispatchPrintJobsFromApi(gatePassRes.print_jobs);
     statusLines.push(
-      `Sent ${printResult.printed} document(s) to the printer (Sale Certificate, Insurance, Gate Pass).`
+      `Printing ${gatePassRes.print_jobs.length} document(s) in the background (Sale Certificate, Insurance, Gate Pass).`
     );
     traceLines.push({
       prefix: "UI",
-      message: `print OK printed=${printResult.printed} jobs=${(gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ")}`,
+      message: `print started (background) jobs=${jobNames}`,
     });
-  } else {
-    const printErr = printResult.error ?? "Print failed.";
-    statusLines.push(`Print: ${printErr}`);
-    traceLines.push({ prefix: "UI", message: `print FAIL: ${printErr}` });
   }
+
+  traceLines.push({ prefix: "UI", message: "uploading trace log (pre-push)" });
+  await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
+  traceLines.length = 0;
 
   if (input.pendingScannerArchiveMove) {
     const arch = input.pendingScannerArchiveMove;
@@ -160,9 +161,6 @@ export async function runPrintQueueRtoFlow(
       traceLines.push({ prefix: "UI", message: `scanner archive move FAIL: ${detail}` });
     }
   }
-
-  traceLines.push({ prefix: "UI", message: "uploading trace log" });
-  await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
 
   const push = await pushSaleFolderToServer({ dealer_id: dealerId, subfolder });
   if (!push.success) {
@@ -185,8 +183,13 @@ export async function runPrintQueueRtoFlow(
   const pushParts: string[] = [];
   if ((push.files_uploaded ?? 0) > 0) pushParts.push(`${push.files_uploaded} to server`);
   if (pushParts.length > 0) statusLines.push(`Uploaded ${pushParts.join(", ")}.`);
+  traceLines.push({
+    prefix: "UI",
+    message: `push OK uploaded=${push.files_uploaded ?? 0} failed=${push.files_failed ?? 0}`,
+  });
 
   if (!stagingId) {
+    await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
     return {
       success: false,
       statusLines: [
@@ -228,6 +231,7 @@ export async function runPrintQueueRtoFlow(
   }
 
   statusLines.push(printRtoQueueLogHint(subfolder));
+  await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
   return {
     success: true,
     statusLines,

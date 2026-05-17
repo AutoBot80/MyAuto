@@ -213,7 +213,7 @@ def collect_invoice_print_jobs_s3(
         try:
             from app.services.form20_pencil_overlay import form20_pencil_overlay_write_only
 
-            stamped = form20_pencil_overlay_write_only(base, mob)
+            stamped, _ = form20_pencil_overlay_write_only(base, mob, inplace=False)
             if stamped is not None and stamped.is_file():
                 sync_uploads_subfolder_to_s3(dealer_id, subfolder)
                 rel = f"{subfolder}/{stamped.name}"
@@ -268,7 +268,7 @@ def collect_invoice_print_jobs_electron_local(
         try:
             from app.services.form20_pencil_overlay import form20_pencil_overlay_write_only
 
-            stamped = form20_pencil_overlay_write_only(base, mob)
+            stamped, _ = form20_pencil_overlay_write_only(base, mob, inplace=False)
             if stamped is not None and stamped.is_file():
                 jobs.append(_print_job(stamped.name, str(stamped.resolve()), "form20_pencil"))
         except Exception as exc:

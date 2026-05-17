@@ -32,8 +32,8 @@ export interface ElectronAPI {
     testPrint: (deviceName?: string) => Promise<{ ok: boolean; error?: string }>;
     printPdfsFromUrls: (
       items: { presigned_url: string; filename?: string; kind?: string }[],
-      options?: { deviceName?: string; silent?: boolean }
-    ) => Promise<{ ok: boolean; printed: number; error?: string }>;
+      options?: { deviceName?: string; silent?: boolean; background?: boolean }
+    ) => Promise<{ ok: boolean; printed: number; queued?: number; error?: string }>;
   };
   file: {
     list: (p: string) => Promise<string[]>;

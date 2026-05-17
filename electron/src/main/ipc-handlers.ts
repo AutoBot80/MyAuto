@@ -57,7 +57,18 @@ export function registerIpc(mainWindow: BrowserWindow): void {
       _evt: IpcMainInvokeEvent,
       items: printer.PresignedPrintItem[],
       options?: printer.PdfPrintOptions | string
-    ) => printer.printPdfsFromPresignedUrls(items, options)
+    ) => {
+      const opts: printer.PdfPrintOptions =
+        typeof options === "string" ? { deviceName: options } : options ?? {};
+      if (opts.background === false) {
+        return printer.printPdfsFromPresignedUrls(items, opts);
+      }
+      void printer.printPdfsFromPresignedUrls(items, opts).catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError(`print:pdfsFromUrls background failed: ${msg}`);
+      });
+      return { ok: true, printed: 0, queued: items.length };
+    }
   );
 
   ipcMain.handle(

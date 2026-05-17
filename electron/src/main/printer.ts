@@ -126,6 +126,8 @@ export interface PresignedPrintItem {
 export interface PdfPrintOptions {
   silent?: boolean;
   deviceName?: string;
+  /** When true (default), IPC returns immediately while printing continues in the main process. */
+  background?: boolean;
 }
 
 /**

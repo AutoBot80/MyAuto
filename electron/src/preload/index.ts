@@ -16,7 +16,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     testPrint: (deviceName?: string) => ipcRenderer.invoke("print:test", deviceName),
     printPdfsFromUrls: (
       items: { presigned_url: string; filename?: string; kind?: string }[],
-      options?: { deviceName?: string; silent?: boolean }
+      options?: { deviceName?: string; silent?: boolean; background?: boolean }
     ) => ipcRenderer.invoke("print:pdfsFromUrls", items, options),
   },
   file: {

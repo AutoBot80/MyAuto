@@ -655,6 +655,52 @@ def resolve_cpa_certificate_pdf(
     return _resolve_cpa_certificate(sale_dir, list(sale_dir.iterdir()), subfolder, mob_fn)
 
 
+def resolve_print_rto_push_upload_paths(
+    sale_dir: Path,
+    *,
+    subfolder: str,
+    mobile: str,
+) -> list[Path]:
+    """
+    Local **uploads** files to push after Print / Queue RTO (not scans, OCR JSON, or gate pass).
+
+    Uses the on-disk Form 20 PDF after dealer signature / pencil overlay (canonical ``{mobile}_Form_20.pdf``).
+
+    Order: Form 20, Form 22, Sale Certificate (Form 21), GST Retail Invoice, Insurance, optional CPA.
+    """
+    if not sale_dir.is_dir():
+        return []
+
+    mob_fn = _mobile_fn_from_mobile(mobile)
+    sub = (subfolder or sale_dir.name).strip()
+    doc_map = _resolve_sale_documents(sale_dir, subfolder=sub, mob_fn=mob_fn)
+
+    from app.services.form20_pencil_overlay import find_form20_pdf
+
+    form20 = find_form20_pdf(sale_dir, mob_fn) or doc_map.get("FORM 20")
+
+    ordered: list[Path | None] = [
+        form20,
+        doc_map.get("FORM 22"),
+        doc_map.get("FORM 21"),
+        doc_map.get("INVOICE ORIGINAL"),
+        doc_map.get("INSURANCE CERTIFICATE"),
+        resolve_cpa_certificate_pdf(sale_dir, subfolder=sub, mobile=mobile),
+    ]
+
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for p in ordered:
+        if p is None or not p.is_file():
+            continue
+        key = p.resolve()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
 def build_local_rto_print_jobs(
     sale_dir: Path,
     *,

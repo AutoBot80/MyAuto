@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -493,6 +494,8 @@ def _multipart_upload_file(
         headers={
             "Content-Type": f"multipart/form-data; boundary={boundary}",
             "Authorization": f"Bearer {jwt}",
+            "User-Agent": "DealerSaathi-Sidecar/1.0",
+            "Accept": "application/json",
         },
         method="POST",
     )
@@ -514,6 +517,25 @@ def _multipart_upload_file(
     if not parsed.get("ok"):
         raise RuntimeError(f"upload-artifacts rejected: {raw[:500]}")
     return parsed
+
+
+def _upload_http_code(exc: Exception) -> int | None:
+    m = re.search(r"HTTP (\d{3})", str(exc))
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _upload_retry_sleep(attempt: int, http_code: int | None) -> float:
+    """Backoff between upload attempts (longer after CloudFront/WAF 403)."""
+    if http_code == 403:
+        return min(12.0, 1.0 * (2**attempt))
+    if http_code in (429, 502, 503, 504):
+        return min(8.0, 0.75 * (2**attempt))
+    return 0.4 * (attempt + 1)
 
 
 def _upload_tree_under(
@@ -544,7 +566,8 @@ def _upload_tree_under(
         except ValueError:
             continue
         last_exc: Exception | None = None
-        for attempt in range(2):
+        max_attempts = 5
+        for attempt in range(max_attempts):
             try:
                 result = _multipart_upload_file(api_url, jwt, dealer_id, tree, rel, f)
                 uploaded += 1
@@ -571,8 +594,9 @@ def _upload_tree_under(
                 break
             except Exception as exc:
                 last_exc = exc
-                if attempt == 0:
-                    time.sleep(0.35)
+                http_code = _upload_http_code(exc)
+                if attempt < max_attempts - 1:
+                    time.sleep(_upload_retry_sleep(attempt, http_code))
         if last_exc is not None:
             failed += 1
             err_msg = str(last_exc).strip() or repr(last_exc)
@@ -584,7 +608,78 @@ def _upload_tree_under(
                     "PUSH",
                     f"FAIL {tree}/{rel}: {err_msg[:500]}",
                 )
-        time.sleep(0.12)
+        time.sleep(0.45)
+    return uploaded, failed, s3_failed
+
+
+def _upload_uploads_file_list(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    uploads_root: Path,
+    files: list[Path],
+    *,
+    ocr_dir: Path | None = None,
+    log_subfolder: str | None = None,
+) -> tuple[int, int, int]:
+    """Upload explicit paths under ``uploads`` (relative to ``uploads_root``)."""
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
+
+    u_root = uploads_root.resolve()
+    uploaded = 0
+    failed = 0
+    s3_failed = 0
+    for f in sorted(files, key=lambda p: p.name.lower()):
+        if not f.is_file():
+            continue
+        try:
+            rel = f.resolve().relative_to(u_root).as_posix()
+        except ValueError:
+            continue
+        last_exc: Exception | None = None
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            try:
+                result = _multipart_upload_file(api_url, jwt, dealer_id, "uploads", rel, f)
+                uploaded += 1
+                if ocr_dir is not None and log_subfolder:
+                    if result.get("s3_synced", True):
+                        append_print_rto_queue_line(
+                            ocr_dir,
+                            log_subfolder,
+                            "PUSH",
+                            f"OK uploads/{rel} (EC2+S3)",
+                        )
+                    else:
+                        s3_failed += 1
+                        s3_err = str(result.get("s3_error") or "S3 sync failed")[:300]
+                        append_print_rto_queue_line(
+                            ocr_dir,
+                            log_subfolder,
+                            "PUSH",
+                            f"EC2 OK S3 FAIL uploads/{rel}: {s3_err}",
+                        )
+                elif not result.get("s3_synced", True):
+                    s3_failed += 1
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                http_code = _upload_http_code(exc)
+                if attempt < max_attempts - 1:
+                    time.sleep(_upload_retry_sleep(attempt, http_code))
+        if last_exc is not None:
+            failed += 1
+            err_msg = str(last_exc).strip() or repr(last_exc)
+            logging.warning("sidecar upload uploads/%s: %s", rel, err_msg)
+            if ocr_dir is not None and log_subfolder:
+                append_print_rto_queue_line(
+                    ocr_dir,
+                    log_subfolder,
+                    "PUSH",
+                    f"FAIL uploads/{rel}: {err_msg[:500]}",
+                )
+        time.sleep(0.45)
     return uploaded, failed, s3_failed
 
 
@@ -796,8 +891,12 @@ def _upload_sale_artifacts(
     subfolder: str,
     uploads_dir: Path,
     ocr_dir: Path,
+    *,
+    print_rto_push: bool = False,
 ) -> dict[str, int]:
-    """Mirror local sale ``uploads`` + ``ocr_output`` subfolders to EC2 (and S3 per file on upload)."""
+    """Mirror local sale ``uploads`` (+ ``ocr_output`` unless ``print_rto_push``) to EC2/S3."""
+    import re
+
     from app.services.fill_hero_dms_service import _safe_subfolder_name
     from app.services.print_rto_queue_log import append_print_rto_queue_line
 
@@ -806,6 +905,7 @@ def _upload_sale_artifacts(
     o_root = ocr_dir.resolve()
     local_uploads = uploads_dir / safe
     local_ocr = ocr_dir / safe
+    upload_names: list[str] = []
     if local_uploads.is_dir():
         upload_names = sorted(p.name for p in local_uploads.rglob("*") if p.is_file())
         append_print_rto_queue_line(
@@ -814,15 +914,16 @@ def _upload_sale_artifacts(
             "PUSH",
             f"local uploads/{safe}: {len(upload_names)} file(s)",
         )
-        for name in upload_names[:40]:
-            append_print_rto_queue_line(ocr_dir, safe, "PUSH", f"  uploads: {name}")
-        if len(upload_names) > 40:
-            append_print_rto_queue_line(
-                ocr_dir,
-                safe,
-                "PUSH",
-                f"  … and {len(upload_names) - 40} more under uploads",
-            )
+        if not print_rto_push:
+            for name in upload_names[:40]:
+                append_print_rto_queue_line(ocr_dir, safe, "PUSH", f"  uploads: {name}")
+            if len(upload_names) > 40:
+                append_print_rto_queue_line(
+                    ocr_dir,
+                    safe,
+                    "PUSH",
+                    f"  … and {len(upload_names) - 40} more under uploads",
+                )
     else:
         append_print_rto_queue_line(
             ocr_dir,
@@ -830,34 +931,70 @@ def _upload_sale_artifacts(
             "PUSH",
             f"local uploads folder missing: {local_uploads}",
         )
-    if local_ocr.is_dir():
-        ocr_names = sorted(p.name for p in local_ocr.rglob("*") if p.is_file())
+
+    if print_rto_push and local_uploads.is_dir():
+        from app.services.fill_rto_service import resolve_print_rto_push_upload_paths
+
+        mm = re.match(r"^(\d{10})", safe)
+        mob10 = mm.group(1) if mm else ""
+        selected = resolve_print_rto_push_upload_paths(
+            local_uploads, subfolder=safe, mobile=mob10
+        )
         append_print_rto_queue_line(
             ocr_dir,
             safe,
             "PUSH",
-            f"local ocr_output/{safe}: {len(ocr_names)} file(s)",
+            f"print-rto push: {len(selected)} file(s) selected "
+            f"(Form 20, Form 22, Sale Certificate, GST invoice, Insurance, optional CPA) "
+            f"of {len(upload_names)} in folder",
         )
-    up_ok, up_http_fail, up_s3_fail = _upload_tree_under(
-        api_url,
-        jwt,
-        dealer_id,
-        "uploads",
-        uploads_dir / safe,
-        u_root,
-        ocr_dir=ocr_dir,
-        log_subfolder=safe,
-    )
-    ocr_ok, ocr_http_fail, ocr_s3_fail = _upload_tree_under(
-        api_url,
-        jwt,
-        dealer_id,
-        "ocr",
-        ocr_dir / safe,
-        o_root,
-        ocr_dir=ocr_dir,
-        log_subfolder=safe,
-    )
+        for p in selected:
+            append_print_rto_queue_line(ocr_dir, safe, "PUSH", f"  selected: {p.name}")
+        up_ok, up_http_fail, up_s3_fail = _upload_uploads_file_list(
+            api_url,
+            jwt,
+            dealer_id,
+            u_root,
+            selected,
+            ocr_dir=ocr_dir,
+            log_subfolder=safe,
+        )
+        ocr_ok, ocr_http_fail, ocr_s3_fail = 0, 0, 0
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe,
+            "PUSH",
+            "ocr_output subfolder skipped for print-rto push (trace log uploaded separately)",
+        )
+    else:
+        if local_ocr.is_dir():
+            ocr_names = sorted(p.name for p in local_ocr.rglob("*") if p.is_file())
+            append_print_rto_queue_line(
+                ocr_dir,
+                safe,
+                "PUSH",
+                f"local ocr_output/{safe}: {len(ocr_names)} file(s)",
+            )
+        up_ok, up_http_fail, up_s3_fail = _upload_tree_under(
+            api_url,
+            jwt,
+            dealer_id,
+            "uploads",
+            uploads_dir / safe,
+            u_root,
+            ocr_dir=ocr_dir,
+            log_subfolder=safe,
+        )
+        ocr_ok, ocr_http_fail, ocr_s3_fail = _upload_tree_under(
+            api_url,
+            jwt,
+            dealer_id,
+            "ocr",
+            ocr_dir / safe,
+            o_root,
+            ocr_dir=ocr_dir,
+            log_subfolder=safe,
+        )
     total_s3_fail = int(up_s3_fail) + int(ocr_s3_fail)
     append_print_rto_queue_line(
         ocr_dir,
@@ -1124,7 +1261,7 @@ def _dispatch_pull_sale_scan_assets_impl(params: dict) -> dict:
 
 
 def _dispatch_push_sale_artifacts_impl(params: dict) -> dict:
-    """Push local uploads + ocr_output subfolder to EC2 (no pull)."""
+    """Push Print/Queue RTO documents to EC2 (Form 20/22, Sale Certificate, GST, Insurance, optional CPA)."""
     api_url, jwt = _require_api_credentials(params)
     dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
     subfolder = (params.get("subfolder") or "").strip()
@@ -1137,7 +1274,9 @@ def _dispatch_push_sale_artifacts_impl(params: dict) -> dict:
     uploads_dir = get_uploads_dir(dealer_id)
     ocr_dir = get_ocr_output_dir(dealer_id)
     safe = _safe_subfolder_name(subfolder)
-    stats = _upload_sale_artifacts(api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir)
+    stats = _upload_sale_artifacts(
+        api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir, print_rto_push=True
+    )
     total_up = int(stats["uploads_uploaded"]) + int(stats["ocr_uploaded"])
     total_fail = int(stats["uploads_failed"]) + int(stats["ocr_failed"])
     append_print_rto_queue_line(

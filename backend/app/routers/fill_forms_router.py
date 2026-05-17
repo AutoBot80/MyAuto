@@ -1044,7 +1044,7 @@ async def print_gate_pass(
             from app.services.form20_pencil_overlay import form20_pencil_overlay_write_only
 
             mob10 = _mobile_10_digits_for_overlay(mob_for_resolve)
-            stamped = form20_pencil_overlay_write_only(sale_dir, mob10)
+            stamped, _pencil_note = form20_pencil_overlay_write_only(sale_dir, mob10, inplace=True)
             if stamped is not None:
                 logger.info("print_gate_pass: Form 20 pencil overlay written: %s", stamped)
                 if STORAGE_USE_S3:

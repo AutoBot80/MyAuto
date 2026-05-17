@@ -96,23 +96,29 @@ export interface ApiPrintJob {
   kind?: string;
 }
 
-/** Print PDFs in Electron when ``print_jobs`` is present (no-op in browser-only). Honors home-page silent print preference. */
+/** Print PDFs in Electron (no-op in browser-only). Default: non-blocking background print. */
 export async function dispatchPrintJobsFromApi(
-  jobs: ApiPrintJob[] | undefined | null
-): Promise<{ ok: boolean; printed: number; error?: string }> {
+  jobs: ApiPrintJob[] | undefined | null,
+  options?: { awaitCompletion?: boolean }
+): Promise<{ ok: boolean; printed: number; queued?: number; error?: string }> {
   if (!jobs?.length) return { ok: true, printed: 0 };
   if (typeof window === "undefined") return { ok: true, printed: 0 };
   const fn = window.electronAPI?.print?.printPdfsFromUrls;
   if (!fn) return { ok: true, printed: 0 };
-  const result = await fn(jobs, { silent: getSilentPrintEnabled() });
+  const printOpts = {
+    silent: getSilentPrintEnabled(),
+    background: options?.awaitCompletion !== true,
+  };
+  const result = await fn(jobs, printOpts);
   if (result && typeof result === "object" && "ok" in result) {
     return {
       ok: Boolean(result.ok),
       printed: Number(result.printed ?? 0),
+      queued: typeof result.queued === "number" ? result.queued : undefined,
       error: typeof result.error === "string" ? result.error : undefined,
     };
   }
-  return { ok: true, printed: jobs.length };
+  return { ok: true, printed: 0, queued: jobs.length };
 }
 
 /**
