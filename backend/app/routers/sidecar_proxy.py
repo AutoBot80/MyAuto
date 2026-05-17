@@ -8,6 +8,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/insurance/resolve`` → load insurance fill values
   - ``/sidecar/insurance/commit``  → insert/update insurance_master
   - ``/sidecar/cpa/resolve`` → load CPA Alliance fill values (``form_cpa_insurance_view`` + staging)
+  - ``/sidecar/cpa/commit``  → persist CPA certificate # (staging ``cpa_policy_num`` + ``insurance_master``)
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
   - ``/sidecar/vahan/row-result``  → report per-row result (completed/failed/pending)
   - ``/sidecar/upload-artifacts`` → multipart upload into uploads, ocr, or challans tree (syncs to S3)
@@ -126,6 +127,19 @@ class CpaResolveResponse(BaseModel):
     customer_id: int
     vehicle_id: int
     staging_id: str | None = None
+
+
+class CpaCommitRequest(BaseModel):
+    customer_id: int
+    vehicle_id: int
+    certificate_number: str
+    staging_id: str | None = None
+    dealer_id: int | None = None
+    cpa_insurer: str | None = None
+
+
+class CpaCommitResponse(BaseModel):
+    error: str | None = None
 
 
 class InsuranceCommitRequest(BaseModel):
@@ -490,6 +504,39 @@ async def cpa_resolve(
     )
 
 
+@router.post("/cpa/commit", response_model=CpaCommitResponse)
+async def cpa_commit(
+    req: CpaCommitRequest,
+    principal: Principal = Depends(get_principal),
+) -> CpaCommitResponse:
+    """Persist scraped Alliance CPA certificate number (sidecar has no local DB)."""
+    did = resolve_dealer_id(principal, req.dealer_id)
+    cert = (req.certificate_number or "").strip()
+    if not cert:
+        raise HTTPException(status_code=400, detail="certificate_number is required.")
+    from app.repositories.add_sales_staging import fetch_staging_payload
+    from app.services.add_sales_commit_service import commit_cpa_alliance_certificate
+
+    sid = (req.staging_id or "").strip() or None
+    staging_payload = fetch_staging_payload(sid, did) if sid else None
+
+    error: str | None = None
+    try:
+        commit_cpa_alliance_certificate(
+            req.customer_id,
+            req.vehicle_id,
+            certificate_number=cert,
+            staging_id=sid,
+            dealer_id=did,
+            cpa_insurer=(req.cpa_insurer or "").strip() or None,
+            staging_payload=staging_payload,
+        )
+    except Exception as exc:
+        error = f"CPA certificate commit failed: {exc!s}"
+        logger.warning("sidecar_proxy cpa/commit: %s", exc)
+    return CpaCommitResponse(error=error)
+
+
 @router.post("/insurance/commit", response_model=InsuranceCommitResponse)
 async def insurance_commit(
     req: InsuranceCommitRequest,
@@ -527,6 +574,8 @@ async def insurance_commit(
                 req.customer_id,
                 req.vehicle_id,
                 scrape=req.post_issue_scrape,
+                staging_id=(req.staging_id or "").strip() or None,
+                dealer_id=did,
             )
         except Exception as exc:
             logger.warning("sidecar_proxy insurance/commit update: %s", exc)

@@ -54,6 +54,7 @@ export interface AddSalesStored {
     nominee_relationship?: string;
     insurer?: string;
     policy_num?: string;
+    cpa_policy_num?: string;
     policy_from?: string;
     policy_to?: string;
     premium?: string;
@@ -186,6 +187,7 @@ export function loadAddSalesForm(): AddSalesStored {
           "nominee_gender",
           "insurer",
           "policy_num",
+          "cpa_policy_num",
           "policy_from",
           "policy_to",
           "premium",

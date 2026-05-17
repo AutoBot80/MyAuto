@@ -189,6 +189,7 @@ def search_customer(
                     SELECT DISTINCT ON (vehicle_id) vehicle_id, insurer, policy_num, policy_from, policy_to, nominee_gender
                     FROM insurance_master
                     WHERE customer_id = %s AND vehicle_id = ANY(%s)
+                      AND insurance_type = 'Main'
                     ORDER BY vehicle_id, insurance_year DESC NULLS LAST
                     """,
                     (cid, vehicle_ids),

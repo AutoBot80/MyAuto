@@ -2158,6 +2158,29 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
         result.get("error"),
     )
 
+    cert_num = (result.get("certificate_number") or "").strip()
+    if result.get("success") and cert_num:
+        commit_body = {
+            "customer_id": ctx.get("customer_id"),
+            "vehicle_id": ctx.get("vehicle_id"),
+            "certificate_number": cert_num,
+            "staging_id": params.get("staging_id"),
+            "dealer_id": params.get("dealer_id"),
+            "cpa_insurer": (full_values.get("cpa_insurer") or alliance_kwargs.get("cpa_insurer") or "").strip()
+            or None,
+        }
+        try:
+            commit_resp = _api_post(api_url, jwt, "/sidecar/cpa/commit", commit_body)
+            if commit_resp.get("error"):
+                result["error"] = commit_resp["error"]
+                result["success"] = False
+        except Exception as exc:
+            logging.warning("fill_cpa_alliance_insurance commit: %s", exc)
+            result["error"] = str(exc)
+            result["success"] = False
+    elif result.get("success") and not cert_num:
+        logging.info("fill_cpa_alliance_insurance: no certificate_number scraped — skip DB commit")
+
     uploads_dir = get_uploads_dir(dealer_id)
     ocr_dir = get_ocr_output_dir(dealer_id)
     if subfolder:
@@ -2194,6 +2217,8 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
         "error": result.get("error"),
         "page_url": result.get("page_url"),
         "playwright_log": result.get("playwright_log"),
+        "certificate_number": result.get("certificate_number"),
+        "cpa_download_ok": result.get("cpa_download_ok"),
     }
 
 

@@ -1,6 +1,7 @@
--- CPA Alliance certificate form: sale-linked projection (customer + vehicle + latest insurance nominee).
+-- CPA Alliance certificate form: sale-linked projection (customer + vehicle + latest CPA insurance row).
 -- Pattern mirrors form_insurance_view; consumed by build_cpa_fill_values + add_alliance_cpa_insurance.
--- Run after: sales_master, customer_master, vehicle_master, insurance_master, 17a (latest_insurance CTE shape).
+-- Run after: sales_master, customer_master, vehicle_master, insurance_master.
+-- On existing DBs that already have insurance_type, prefer 31a_insurance_master_insurance_type.sql (recreates this view with CPA filter).
 
 DROP VIEW IF EXISTS form_cpa_insurance_view;
 
@@ -10,6 +11,9 @@ WITH latest_insurance AS (
         customer_id,
         vehicle_id,
         insurance_id,
+        insurer,
+        policy_num,
+        premium,
         nominee_name,
         nominee_age,
         nominee_relationship,
@@ -17,6 +21,7 @@ WITH latest_insurance AS (
         policy_to,
         insurance_year
     FROM insurance_master
+    WHERE insurance_type = 'CPA'
     ORDER BY
         customer_id,
         vehicle_id,
@@ -46,7 +51,8 @@ SELECT
     COALESCE(li.nominee_name, '') AS nominee_name,
     COALESCE(li.nominee_age::text, '') AS nominee_age,
     COALESCE(li.nominee_relationship, '') AS nominee_relationship,
-    COALESCE(li.nominee_gender, '') AS nominee_gender
+    COALESCE(li.nominee_gender, '') AS nominee_gender,
+    COALESCE(li.policy_num, '') AS cpa_policy_num
 FROM sales_master sm
 JOIN customer_master cm ON cm.customer_id = sm.customer_id
 JOIN vehicle_master vm ON vm.vehicle_id = sm.vehicle_id
@@ -55,4 +61,4 @@ LEFT JOIN latest_insurance li
    AND li.vehicle_id = sm.vehicle_id;
 
 COMMENT ON VIEW form_cpa_insurance_view IS
-    'Single-row projection per sale for CPA Alliance portal fill: customer_master, vehicle_master, latest insurance_master nominee row';
+    'Per sale for CPA Alliance fill: customer/vehicle; latest insurance_master where insurance_type=CPA';

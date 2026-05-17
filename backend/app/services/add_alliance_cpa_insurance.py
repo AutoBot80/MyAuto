@@ -1351,17 +1351,345 @@ def _click_alliance_save_button(page, log_path: Path) -> bool:
     return False
 
 
-def _maybe_click_save_alliance(page, log_path: Path) -> None:
+def _maybe_click_save_alliance(page, log_path: Path) -> bool:
     """Production only: click **Save** on Alliance certificate form."""
     if not ENVIRONMENT_IS_PRODUCTION:
         _append_cpa_log(log_path, "NOTE skipping Save (non-production ENVIRONMENT).")
-        return
+        return False
     try:
         page.wait_for_timeout(500)
     except Exception:
         time.sleep(0.5)
     if not _click_alliance_save_button(page, log_path):
         _append_cpa_log(log_path, "ERROR Save was not clicked successfully.")
+        return False
+    return True
+
+
+def _mobile_fn_for_cpa_download(mobile: str) -> str:
+    dig = re.sub(r"\D", "", str(mobile or ""))
+    if len(dig) >= 10:
+        return dig[-10:]
+    if dig:
+        return dig.zfill(10)[:10]
+    return "0000000000"
+
+
+def _cpa_ddmmyyyy_from_subfolder(subfolder: str) -> str:
+    safe = _safe_subfolder_name(subfolder)
+    m = re.search(r"(\d{8})\s*$", safe)
+    if m:
+        return m.group(1)
+    return datetime.now(_IST).strftime("%d%m%Y")
+
+
+def _collect_cpa_frame_dump_lines(page, *, reason: str) -> list[str]:
+    lines = [
+        f"timestamp_ist={datetime.now(_IST).isoformat()} reason={reason!r} url={(page.url or '')!r}",
+        "--- CPA Alliance frame dump ---",
+    ]
+    idx = 0
+    for root in _iter_cpa_page_frames(page):
+        try:
+            u = (root.url or "")[:400]
+        except Exception:
+            u = ""
+        lines.append(f"--- frame[{idx}] url={u!r} ---")
+        interactive = 0
+        try:
+            for el in root.locator("button:visible, a:visible, input:visible, select:visible, label:visible").all()[
+                :120
+            ]:
+                tag = ""
+                try:
+                    tag = (el.evaluate("e => (e.tagName || '').toLowerCase()") or "").strip()
+                except Exception:
+                    pass
+                txt = ""
+                try:
+                    txt = (el.inner_text(timeout=500) or "").strip().replace("\n", " ")[:80]
+                except Exception:
+                    pass
+                attrs = ""
+                try:
+                    attrs = el.evaluate(
+                        """e => {
+                        const a = [];
+                        for (const k of ['id','name','type','formcontrolname','placeholder','href','role']) {
+                          const v = e.getAttribute(k);
+                          if (v) a.push(k + '=' + JSON.stringify(v));
+                        }
+                        return a.join(' ');
+                        }"""
+                    )
+                except Exception:
+                    pass
+                lines.append(f"  [{interactive}] <{tag}> txt={txt!r} {attrs}")
+                interactive += 1
+        except Exception as exc:
+            lines.append(f"  enumerate_error={exc!s}")
+        idx += 1
+    return lines
+
+
+def _write_cpa_frame_dump(
+    page,
+    log_path: Path,
+    *,
+    reason: str,
+    ocr_dir: Path,
+    subfolder: str,
+) -> str | None:
+    if not subfolder or not str(subfolder).strip():
+        return None
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", (reason or "frame_dump").strip())[:80] or "frame_dump"
+    ts = datetime.now(_IST).strftime("%d%m%Y_%H%M%S")
+    out_dir = Path(ocr_dir) / _safe_subfolder_name(subfolder)
+    name = f"cpa_frame_dump_{slug}_{ts}.txt"
+    path = out_dir / name
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        body = "\n".join(_collect_cpa_frame_dump_lines(page, reason=reason))
+        path.write_text(body, encoding="utf-8")
+        _append_cpa_log(log_path, f"NOTE frame dump written {name}")
+        return name
+    except OSError as exc:
+        _append_cpa_log(log_path, f"WARNING frame dump write failed: {exc}")
+        return None
+
+
+def _wait_for_alliance_print_new(page, log_path: Path, *, max_wait_ms: int = 25_000) -> bool:
+    deadline = time.time() + max_wait_ms / 1000.0
+    while time.time() < deadline:
+        try:
+            u = (page.url or "").lower()
+        except Exception:
+            u = ""
+        if "printnew" in u or "/printnew" in u:
+            _append_cpa_log(log_path, f"NOTE post-save page ready url={u[:120]!r}")
+            try:
+                page.wait_for_load_state("networkidle", timeout=12_000)
+            except Exception:
+                pass
+            return True
+        try:
+            page.wait_for_timeout(400)
+        except Exception:
+            time.sleep(0.4)
+    _append_cpa_log(log_path, "NOTE post-save: printNew URL not seen within timeout.")
+    return False
+
+
+def _click_alliance_download_certificate(
+    page,
+    log_path: Path,
+    *,
+    dealer_id: int,
+    ocr_dir: Path,
+    subfolder: str,
+    mobile: str,
+) -> bool:
+    patterns = (
+        re.compile(r"download\s+certificate", re.I),
+        re.compile(r"download\s+cert", re.I),
+    )
+    btn = None
+    for root in _iter_cpa_page_frames(page):
+        for pat in patterns:
+            try:
+                loc = root.get_by_role("button", name=pat)
+                if loc.count() > 0 and loc.first.is_visible():
+                    btn = loc.first
+                    break
+                loc = root.locator("button, a").filter(has_text=pat)
+                if loc.count() > 0 and loc.first.is_visible():
+                    btn = loc.first
+                    break
+            except Exception:
+                continue
+        if btn is not None:
+            break
+    if btn is None:
+        _write_cpa_frame_dump(
+            page, log_path, reason="download_certificate_not_found", ocr_dir=ocr_dir, subfolder=subfolder
+        )
+        _append_cpa_log(log_path, "ERROR Download certificate control not found.")
+        return False
+    mob_fn = _mobile_fn_for_cpa_download(mobile)
+    ddmm = _cpa_ddmmyyyy_from_subfolder(subfolder)
+    dest_name = f"{mob_fn}_CPA_{ddmm}.pdf"
+    uploads_root = get_uploads_dir(int(dealer_id)) / _safe_subfolder_name(subfolder)
+    try:
+        btn.scroll_into_view_if_needed(timeout=3_000)
+        with page.expect_download(timeout=90_000) as dl_info:
+            btn.click(timeout=15_000)
+        download = dl_info.value
+        uploads_root.mkdir(parents=True, exist_ok=True)
+        dest = uploads_root / dest_name
+        download.save_as(str(dest))
+        _append_cpa_log(log_path, f"NOTE certificate PDF saved uploads/{subfolder}/{dest.name}")
+        return True
+    except Exception as exc:
+        _append_cpa_log(log_path, f"ERROR Download certificate failed: {exc}")
+        _write_cpa_frame_dump(
+            page, log_path, reason="download_certificate_click_failed", ocr_dir=ocr_dir, subfolder=subfolder
+        )
+        return False
+
+
+def _navigate_alliance_print_certificate(page, log_path: Path) -> bool:
+    for root in _iter_cpa_page_frames(page):
+        for sel in ('a[href="/reports/printCertificate"]', 'a[routerlink="/reports/printCertificate"]'):
+            try:
+                loc = root.locator(sel)
+                if loc.count() > 0 and loc.first.is_visible():
+                    loc.first.click(timeout=12_000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=18_000)
+                    except Exception:
+                        pass
+                    _append_cpa_log(log_path, "NOTE navigated to Print Certificate report.")
+                    return True
+            except Exception:
+                continue
+        try:
+            loc = root.get_by_role("link", name=re.compile(r"print\s+certificate", re.I))
+            if loc.count() > 0 and loc.first.is_visible():
+                loc.first.click(timeout=12_000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=18_000)
+                except Exception:
+                    pass
+                _append_cpa_log(log_path, "NOTE navigated via Print Certificate nav link.")
+                return True
+        except Exception:
+            continue
+    _append_cpa_log(log_path, "ERROR Print Certificate nav link not found.")
+    return False
+
+
+def _alliance_print_certificate_search_chassis(page, log_path: Path, chassis: str) -> bool:
+    ch = (chassis or "").strip()
+    if not ch:
+        _append_cpa_log(log_path, "ERROR Print Certificate search: chassis empty.")
+        return False
+    filled = False
+    for root in _iter_cpa_page_frames(page):
+        try:
+            loc = root.locator('input[formcontrolname="chasisNumber"]')
+            if loc.count() > 0 and loc.first.is_visible():
+                loc.first.fill(ch, timeout=5_000)
+                filled = True
+                break
+        except Exception:
+            continue
+    if not filled:
+        filled = _fill_text_by_label(
+            page, log_path, re.compile(r"chasis\s*number", re.I), ch, field="Chasis Number"
+        )
+    if not filled:
+        _append_cpa_log(log_path, "ERROR Chasis Number field not found on Print Certificate.")
+        return False
+    for root in _iter_cpa_page_frames(page):
+        try:
+            btn = root.get_by_role("button", name=re.compile(r"^search$", re.I))
+            if btn.count() > 0 and btn.first.is_visible():
+                btn.first.click(timeout=10_000)
+                try:
+                    page.wait_for_timeout(1_500)
+                except Exception:
+                    time.sleep(1.5)
+                _append_cpa_log(log_path, f"NOTE Print Certificate Search for chassis={ch[:24]!r}")
+                return True
+        except Exception:
+            continue
+    _append_cpa_log(log_path, "ERROR Search button not found on Print Certificate.")
+    return False
+
+
+def _scrape_alliance_certificate_number(page, log_path: Path) -> str | None:
+    cert_hdr = re.compile(r"certificate\s*number", re.I)
+    for root in _iter_cpa_page_frames(page):
+        try:
+            n_tables = root.locator("table").count()
+        except Exception:
+            n_tables = 0
+        for ti in range(min(n_tables, 6)):
+            try:
+                table = root.locator("table").nth(ti)
+                headers = table.locator("th")
+                col_idx: int | None = None
+                for hi in range(headers.count()):
+                    ht = (headers.nth(hi).inner_text(timeout=1_500) or "").strip()
+                    if cert_hdr.search(ht):
+                        col_idx = hi
+                        break
+                if col_idx is None:
+                    continue
+                rows = table.locator("tbody tr")
+                if rows.count() < 1:
+                    rows = table.locator("tr")
+                body_row = rows.first
+                cell = body_row.locator("td").nth(col_idx)
+                val = (cell.inner_text(timeout=3_000) or "").strip()
+                if val and val not in ("—", "-", "N/A"):
+                    clean = re.sub(r"\s+", " ", val)[:24]
+                    _append_cpa_log(log_path, f"NOTE scraped Certificate Number={clean!r}")
+                    return clean
+            except Exception as exc:
+                _append_cpa_log(log_path, f"NOTE certificate table scrape: {exc}")
+    return None
+
+
+def _alliance_post_save_certificate_flow(
+    page,
+    log_path: Path,
+    payload: CpaAllianceFillPayload,
+    *,
+    dealer_id: int,
+    safe_sub: str,
+    ocr_dir: Path,
+) -> dict[str, Any]:
+    """After Save → ``/printNew``: download PDF, Print Certificate search, scrape cert #."""
+    result: dict[str, Any] = {
+        "certificate_number": None,
+        "download_ok": False,
+        "print_search_ok": False,
+    }
+    if not _wait_for_alliance_print_new(page, log_path) and "printnew" not in (page.url or "").lower():
+        return result
+    result["download_ok"] = _click_alliance_download_certificate(
+        page,
+        log_path,
+        dealer_id=dealer_id,
+        ocr_dir=ocr_dir,
+        subfolder=safe_sub,
+        mobile=payload.mobile,
+    )
+    if not _navigate_alliance_print_certificate(page, log_path):
+        _write_cpa_frame_dump(
+            page, log_path, reason="print_certificate_nav", ocr_dir=ocr_dir, subfolder=safe_sub
+        )
+        return result
+    result["print_search_ok"] = _alliance_print_certificate_search_chassis(
+        page, log_path, payload.chassis
+    )
+    if not result["print_search_ok"]:
+        _write_cpa_frame_dump(
+            page, log_path, reason="print_certificate_search", ocr_dir=ocr_dir, subfolder=safe_sub
+        )
+        return result
+    cert = _scrape_alliance_certificate_number(page, log_path)
+    result["certificate_number"] = cert
+    if not cert:
+        _write_cpa_frame_dump(
+            page,
+            log_path,
+            reason="certificate_number_not_found",
+            ocr_dir=ocr_dir,
+            subfolder=safe_sub,
+        )
+    return result
 
 
 def _fill_one_hint_on_root(root, hint: str, val: str) -> bool:
@@ -1604,12 +1932,24 @@ def add_alliance_cpa_insurance(
     except Exception:
         page_host = ""
     missing_required: list[str] = []
+    post_save: dict[str, Any] = {}
     if "allianceassure.in" in page_host:
         filled_count, missing_required = _try_fill_alliance_certificate_form(page, log_path, payload)
+        save_clicked = False
         if filled_count > 0:
-            _maybe_click_save_alliance(page, log_path)
+            save_clicked = _maybe_click_save_alliance(page, log_path)
         elif ENVIRONMENT_IS_PRODUCTION:
             _append_cpa_log(log_path, "NOTE skipping Save — no fields were filled.")
+        if save_clicked or "printnew" in (page.url or "").lower():
+            ocr_dir = Path(get_ocr_output_dir(int(dealer_id)))
+            post_save = _alliance_post_save_certificate_flow(
+                page,
+                log_path,
+                payload,
+                dealer_id=int(dealer_id),
+                safe_sub=safe_sub,
+                ocr_dir=ocr_dir,
+            )
     else:
         fill_pairs: list[tuple[str, str | None]] = [
             ("chasis", payload.chassis),
@@ -1680,4 +2020,12 @@ def add_alliance_cpa_insurance(
     except Exception as exc:
         logger.warning("add_alliance_cpa_insurance: S3 sync: %s", exc)
 
-    return {"success": True, "error": None, "page_url": page_url or None, "playwright_log": str(log_path)}
+    return {
+        "success": True,
+        "error": None,
+        "page_url": page_url or None,
+        "playwright_log": str(log_path),
+        "certificate_number": post_save.get("certificate_number"),
+        "cpa_download_ok": bool(post_save.get("download_ok")),
+        "cpa_print_search_ok": bool(post_save.get("print_search_ok")),
+    }

@@ -27,6 +27,7 @@ import {
   warmInsuranceBrowserLocal,
 } from "../api/fillForms";
 import {
+  fetchAddSalesStagingPayload,
   fetchCreateInvoiceEligibility,
   fetchDealerCpaContext,
   type CreateInvoiceEligibilityResponse,
@@ -56,6 +57,10 @@ import {
   parseCareOfFromCombined,
 } from "../utils/section2CustomerFormat";
 import { isPlaceholderCustomerMobileDigits } from "../utils/customerMobile";
+import {
+  cpaPolicyFromInsuranceRaw,
+  insuranceFieldsFromStagingInsurance,
+} from "../utils/insuranceDisplay";
 /** Shown under Upload documents while upload or OCR polling runs; counts down toward 00m:00s. */
 const ADD_SALES_OCR_COUNTDOWN_START_SEC = 40;
 
@@ -323,6 +328,14 @@ function mergeInsuranceFromOcrPayload(
     policy_num: preferNonEmptyOcr(
       sanitizeOptionalFormField(fromServer.policy_num),
       sanitizeOptionalFormField(current.policy_num)
+    ),
+    cpa_policy_num: preferNonEmptyOcr(
+      sanitizeOptionalFormField(
+        typeof r.cpa_policy_num === "string"
+          ? r.cpa_policy_num
+          : cpaPolicyFromInsuranceRaw(r) || undefined
+      ),
+      sanitizeOptionalFormField(current.cpa_policy_num)
     ),
     policy_from: preferNonEmptyOcr(
       sanitizeOptionalFormField(fromServer.policy_from),
@@ -825,6 +838,30 @@ export function AddSalesPage({
   const v = normalizeVehicleDetails(extractedVehicle) ?? extractedVehicle;
   const c = extractedCustomer;
   const ins = extractedInsurance;
+
+  const cpaPolicyDisplay = useMemo(() => {
+    const direct = (ins?.cpa_policy_num ?? "").trim();
+    if (direct) return direct;
+    const fromRaw = cpaPolicyFromInsuranceRaw(ins as Record<string, unknown> | undefined);
+    return fromRaw || "—";
+  }, [ins]);
+
+  const reloadInsuranceFromStaging = useCallback(async () => {
+    const sid = lastStagingId;
+    if (!sid || dealerId <= 0) return;
+    try {
+      const r = await fetchAddSalesStagingPayload(sid, dealerId);
+      const raw = r.payload_json?.insurance;
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        const patch = insuranceFieldsFromStagingInsurance(raw as Record<string, unknown>);
+        if (Object.keys(patch).length > 0) {
+          setExtractedInsurance((prev) => ({ ...(prev ?? {}), ...patch }));
+        }
+      }
+    } catch {
+      /* display refresh is best-effort */
+    }
+  }, [lastStagingId, dealerId]);
 
   /** Section 3 dropdown: value in list, else rule (prefer_insurer) until ``useEffect`` syncs ``extractedInsurance.insurer``. */
   const insuranceProviderSelectValue = useMemo(() => {
@@ -1377,6 +1414,7 @@ export function AddSalesPage({
         setFillInsuranceStatus("Hero Insurance run completed (pre + main + post). Browser may remain open for operator.");
         setGenerateInsuranceCompleted(true);
         dispatchPrintJobsFromApi(insuranceRes.print_jobs);
+        await reloadInsuranceFromStaging();
         if (
           cpaAlliancePortalEnabled &&
           savedTo &&
@@ -1462,6 +1500,7 @@ export function AddSalesPage({
         setFillInsuranceStatus(
           "CPA portal: fields filled. Finish any remaining steps in the browser; trace is under ocr_output (playwright_cpa_*.txt)."
         );
+        await reloadInsuranceFromStaging();
       }
     } catch (e) {
       setFillInsuranceStatus(e instanceof Error ? e.message : "CPA Insurance failed.");
@@ -2428,7 +2467,7 @@ export function AddSalesPage({
                   <div className="add-sales-v2-dl-row-group">
                     <div className="add-sales-v2-dl-row">
                       <dt>Policy No.</dt>
-                      <dd>{ins?.policy_num?.trim() ? ins.policy_num : "—"}</dd>
+                      <dd>{cpaPolicyDisplay}</dd>
                     </div>
                   </div>
                 </dl>

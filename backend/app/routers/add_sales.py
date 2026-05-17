@@ -164,6 +164,7 @@ def _eligibility_by_customer_vehicle_ids(customer_id: int, vehicle_id: int) -> d
                         FROM insurance_master im
                         WHERE im.customer_id = %s
                           AND im.vehicle_id = %s
+                          AND im.insurance_type = 'Main'
                           AND TRIM(COALESCE(im.policy_num, '')) <> ''
                         LIMIT 1
                         """,
@@ -333,6 +334,7 @@ def get_create_invoice_eligibility(
                             FROM insurance_master im
                             WHERE im.customer_id = %s
                               AND im.vehicle_id = %s
+                              AND im.insurance_type = 'Main'
                               AND TRIM(COALESCE(im.policy_num, '')) <> ''
                             LIMIT 1
                             """,

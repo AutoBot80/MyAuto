@@ -17,6 +17,7 @@ import {
 import { runPrintQueueRtoFlow } from "../utils/printQueueRtoFlow";
 import { buildDisplayAddress } from "../types";
 import type { ExtractedCustomerDetails, ExtractedInsuranceDetails, ExtractedVehicleDetails } from "../types";
+import { cpaPolicyFromInsuranceRaw } from "../utils/insuranceDisplay";
 
 function formatTenDigitSegment(raw: unknown): string {
   const d = String(raw ?? "").replace(/\D/g, "").slice(-10);
@@ -101,13 +102,6 @@ function payloadInsurance(rec: Record<string, unknown> | null): ExtractedInsuran
     nominee_age: i.nominee_age != null ? String(i.nominee_age) : undefined,
     nominee_relationship: String(i.nominee_relationship ?? "").trim() || undefined,
   };
-}
-
-function cpaPolicyFromInsuranceRaw(rec: Record<string, unknown> | null | undefined): string {
-  if (!rec) return "";
-  const v = rec.cpa_policy_num ?? rec.cpa_policy ?? rec.alliance_policy_num ?? rec.cpa_policy_number;
-  const s = v != null ? String(v).trim() : "";
-  return s || "";
 }
 
 export interface AddSalesInProcessPanelProps {
@@ -523,6 +517,7 @@ export function AddSalesInProcessPanel({
                               const res = await fillHeroInsuranceLocal({ staging_id: r.staging_id });
                               if (!res.success) throw new Error(res.error ?? "Generate Insurance failed.");
                               dispatchPrintJobsFromApi(res.print_jobs);
+                              setPanelRefreshToken((t) => t + 1);
                             });
                           }}
                         >
@@ -556,6 +551,7 @@ export function AddSalesInProcessPanel({
                               setRowMsg(
                                 "CPA portal opened — complete any remaining steps in the browser. Trace: ocr_output/…/playwright_cpa_*.txt"
                               );
+                              setPanelRefreshToken((t) => t + 1);
                             });
                           }}
                         >

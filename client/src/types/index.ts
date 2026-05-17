@@ -172,6 +172,8 @@ export interface ExtractedInsuranceDetails {
   insurer?: string;
   /** Policy number */
   policy_num?: string;
+  /** Alliance CPA certificate # (staging; separate from Hero ``policy_num``) */
+  cpa_policy_num?: string;
   /** Valid From / policy_from (dd-mm-yyyy or dd/mm/yyyy) */
   policy_from?: string;
   /** Valid To / policy_to */
