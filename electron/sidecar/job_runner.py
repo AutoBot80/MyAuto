@@ -17,6 +17,7 @@ import re
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 import urllib.error
@@ -25,19 +26,50 @@ import uuid
 from pathlib import Path
 
 
+def _sidecar_log_file_candidates(saathi_base: Path) -> list[Path]:
+    """Prefer ``SAATHI_BASE_DIR/logs``; fall back when the install tree is not writable."""
+    paths = [saathi_base / "logs" / "sidecar.log"]
+    local = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if local:
+        paths.append(Path(local) / "Saathi" / "logs" / "sidecar.log")
+    paths.append(Path(tempfile.gettempdir()) / "Saathi" / "logs" / "sidecar.log")
+    return paths
+
+
 def _setup_logging(saathi_base: Path) -> None:
-    log_dir = saathi_base / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "sidecar.log"
+    """
+    Configure sidecar logging. Never raises: file logging is best-effort so a locked
+    ``D:\\Saathi\\logs\\sidecar.log`` cannot kill the daemon before CPA/DMS jobs run.
+    """
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     root = logging.getLogger()
     root.handlers.clear()
     root.setLevel(logging.INFO)
-    fh = logging.FileHandler(log_path, encoding="utf-8")
-    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    root.addHandler(fh)
+
     sh = logging.StreamHandler(sys.stderr)
-    sh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    sh.setFormatter(fmt)
     root.addHandler(sh)
+
+    file_attached = False
+    last_err: OSError | None = None
+    for log_path in _sidecar_log_file_candidates(saathi_base):
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            fh = logging.FileHandler(log_path, encoding="utf-8")
+            fh.setFormatter(fmt)
+            root.addHandler(fh)
+            root.info("sidecar file log: %s", log_path)
+            file_attached = True
+            break
+        except OSError as exc:
+            last_err = exc
+            continue
+
+    if not file_attached and last_err is not None:
+        root.warning(
+            "sidecar file logging disabled (%s); using stderr only.",
+            last_err,
+        )
 
 
 _is_frozen = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
