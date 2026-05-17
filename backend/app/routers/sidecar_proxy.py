@@ -176,6 +176,14 @@ class UploadArtifactResponse(BaseModel):
     ok: bool
     rel_path: str
     tree: str
+    ec2_written: bool = True
+    s3_synced: bool = True
+    s3_error: str | None = None
+
+
+class SyncSaleFolderS3Request(BaseModel):
+    dealer_id: int
+    subfolder: str
 
 
 def _sanitize_sidecar_rel_path(raw: str) -> str:
@@ -600,8 +608,10 @@ async def upload_artifacts(
     principal: Principal = Depends(get_principal),
 ) -> UploadArtifactResponse:
     """
-    Multipart upload of one file from the dealer PC Playwright run. Writes under
-    ``get_uploads_dir``, ``get_ocr_output_dir``, or ``CHALLANS_DIR`` and syncs to S3 when configured.
+    Multipart upload of one file from the dealer PC Playwright run.
+
+    **Always writes to EC2/local disk first** (for ``GET /documents`` pull/download).
+    **Then** syncs the same bytes to S3 when ``STORAGE_USE_S3`` is enabled (long-term retention).
     """
     did = resolve_dealer_id(principal, dealer_id)
     t = (tree or "").strip().lower()
@@ -628,13 +638,52 @@ async def upload_artifacts(
     dest.parent.mkdir(parents=True, exist_ok=True)
     body = await file.read()
     dest.write_bytes(body)
+    s3_synced = True
+    s3_error: str | None = None
     if t == "uploads":
-        sync_uploads_file_to_s3(did, dest)
+        s3_synced, s3_error = sync_uploads_file_to_s3(did, dest)
     elif t == "ocr":
-        sync_ocr_file_to_s3(did, dest)
+        s3_synced, s3_error = sync_ocr_file_to_s3(did, dest)
     else:
         sync_challans_file_to_s3(dest)
-    return UploadArtifactResponse(ok=True, rel_path=safe_rel, tree=t)
+    if not s3_synced and s3_error:
+        logger.warning(
+            "upload-artifacts: EC2 ok tree=%s rel=%s dealer_id=%s s3_error=%s",
+            t,
+            safe_rel,
+            did,
+            s3_error,
+        )
+    return UploadArtifactResponse(
+        ok=True,
+        rel_path=safe_rel,
+        tree=t,
+        ec2_written=True,
+        s3_synced=s3_synced,
+        s3_error=s3_error,
+    )
+
+
+@router.post("/sync-sale-folder-s3")
+def sync_sale_folder_s3(
+    payload: SyncSaleFolderS3Request,
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """
+    Re-sync a sale subfolder from EC2 disk to S3 (uploads + ocr_output).
+
+    Use after Print/Queue RTO push when some files landed on disk but S3 sync failed.
+    """
+    from app.services.dealer_storage import sync_ocr_subfolder_to_s3, sync_uploads_subfolder_to_s3
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+
+    did = resolve_dealer_id(principal, payload.dealer_id)
+    safe = _safe_subfolder_name((payload.subfolder or "").strip())
+    if not safe:
+        raise HTTPException(status_code=400, detail="subfolder is required")
+    sync_uploads_subfolder_to_s3(did, safe)
+    sync_ocr_subfolder_to_s3(did, safe)
+    return {"ok": True, "dealer_id": did, "subfolder": safe}
 
 
 # ---------------------------------------------------------------------------
@@ -1031,6 +1080,61 @@ def scripts_version() -> dict:
     from app.version import BACKEND_SEMVER, GIT_COMMIT_SHORT
 
     return {"version": BACKEND_SEMVER, "git_commit": GIT_COMMIT_SHORT}
+
+
+@router.get("/gate-pass-context")
+def gate_pass_context(
+    dealer_id: int | None = None,
+    vehicle_id: int | None = None,
+    staging_id: str | None = None,
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """
+    Vehicle + dealer fields for local Gate Pass generation (sidecar has no ``DATABASE_URL``).
+
+    Merges ``vehicle_master`` (when ``vehicle_id`` set), ``dealer_ref``/``oem_ref`` (OEM name), and
+  optional staging ``payload_json`` customer/vehicle snapshot.
+    """
+    from app.repositories import add_sales_staging as staging_repo
+    from app.services.form20_service import _get_dealer_from_db, _get_vehicle_from_db
+
+    did = resolve_dealer_id(principal, dealer_id)
+    vehicle_out: dict[str, Any] = {}
+    customer_out: dict[str, Any] = {}
+    dealer_out: dict[str, Any] = {}
+
+    staging_clean = (staging_id or "").strip() or None
+    if staging_clean:
+        try:
+            UUID(staging_clean)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail="Invalid staging_id (expected UUID)") from e
+        payload = staging_repo.fetch_staging_payload(staging_clean, did)
+        if payload:
+            pc = payload.get("customer")
+            pv = payload.get("vehicle")
+            if isinstance(pc, dict):
+                customer_out = dict(pc)
+            if isinstance(pv, dict):
+                vehicle_out = dict(pv)
+
+    if vehicle_id is not None and int(vehicle_id) > 0:
+        db_v = _get_vehicle_from_db(int(vehicle_id))
+        if db_v:
+            vehicle_out = {**vehicle_out, **db_v}
+
+    db_d = _get_dealer_from_db(did)
+    if db_d:
+        dealer_out = dict(db_d)
+
+    return {
+        "dealer_id": did,
+        "vehicle_id": int(vehicle_id) if vehicle_id is not None else None,
+        "staging_id": staging_clean,
+        "vehicle": vehicle_out,
+        "customer": customer_out,
+        "dealer": dealer_out,
+    }
 
 
 @router.get("/templates/gate-pass-docx")

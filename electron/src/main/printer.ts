@@ -32,20 +32,35 @@ function printWithCallback(wc: WebContents, options: WebContentsPrintOptions): P
   });
 }
 
+async function resolveDefaultPrinterName(): Promise<string | undefined> {
+  const printers = await getPrinters();
+  const def = printers.find((p) => p.isDefault) ?? printers[0];
+  return def?.name?.trim() || undefined;
+}
+
 /**
- * Print PDF via **system dialog only** (no silent fallback: same HP/driver bugs affect silent).
+ * Print PDF. When ``silent`` is true, sends to the default printer without a system dialog.
  * Uses explicit ``pageSize`` so Chromium does not send an empty layout to the driver.
  */
-async function printPdfContents(wc: WebContents, deviceName?: string): Promise<void> {
-  const opts: WebContentsPrintOptions = {
-    silent: false,
+async function printPdfContents(
+  wc: WebContents,
+  deviceName?: string,
+  silent = false
+): Promise<void> {
+  let device = deviceName?.trim() || undefined;
+  if (silent && !device) {
+    device = await resolveDefaultPrinterName();
+  }
+  const base: WebContentsPrintOptions = {
     printBackground: true,
     pageSize: "A4",
+    deviceName: device,
   };
-  if (deviceName?.trim()) {
-    opts.deviceName = deviceName.trim();
+  if (silent) {
+    await printWithCallback(wc, { ...base, silent: true });
+    return;
   }
-  await printWithCallback(wc, opts);
+  await printWithCallback(wc, { ...base, silent: false });
 }
 
 export interface PrintOptions {
@@ -108,17 +123,23 @@ export interface PresignedPrintItem {
   kind?: string;
 }
 
+export interface PdfPrintOptions {
+  silent?: boolean;
+  deviceName?: string;
+}
+
 /**
- * PDF print must use a **visible** window on Windows: a hidden window often has no laid-out
- * content size, which triggers ``content size is empty`` / ``Printer settings invalid`` and the
- * system print dialog may never appear.
+ * PDF print needs a laid-out webview. For silent mode we keep a small off-screen window
+ * (still ``show: true``) so Chromium assigns a content size; dialog mode uses a normal window.
  */
-function createPdfPrintWindow(title: string): BrowserWindow {
+function createPdfPrintWindow(title: string, silent: boolean): BrowserWindow {
   return new BrowserWindow({
     show: true,
-    width: 900,
-    height: 1100,
-    center: true,
+    width: silent ? 800 : 900,
+    height: silent ? 600 : 1100,
+    x: silent ? -32000 : undefined,
+    y: silent ? -32000 : undefined,
+    center: !silent,
     title: title || "Print",
     autoHideMenuBar: true,
     webPreferences: {
@@ -140,14 +161,32 @@ function isLocalPdfPath(s: string): boolean {
 
 export async function printPdfsFromPresignedUrls(
   items: PresignedPrintItem[],
-  deviceName?: string
+  options?: PdfPrintOptions | string
 ): Promise<{ ok: boolean; printed: number; error?: string }> {
+  const opts: PdfPrintOptions =
+    typeof options === "string" ? { deviceName: options } : options ?? {};
+  const deviceName = opts.deviceName;
+  const silent = opts.silent === true;
   const { writeFile, unlink } = await import("fs/promises");
   const { join } = await import("path");
   const { tmpdir } = await import("os");
 
   let printed = 0;
-  for (const item of items) {
+  const total = items.length;
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const step = `${i + 1}/${total}`;
+    const label =
+      item.kind === "sale_certificate"
+        ? "Sale Certificate"
+        : item.kind === "insurance"
+          ? "Insurance"
+          : item.kind === "gate_pass"
+            ? "Gate Pass"
+            : item.kind === "cpa"
+              ? "CPA"
+              : item.filename ?? "Document";
+    const windowTitle = `Print ${step}: ${label}`;
     let tmpPath: string | null = null;
     try {
       const useLocal = isLocalPdfPath(item.presigned_url);
@@ -162,15 +201,18 @@ export async function printPdfsFromPresignedUrls(
             error: `PDF not found on this PC: ${item.filename ?? localPath}`,
           };
         }
-        const win = createPdfPrintWindow(item.filename ?? "Print");
+        const win = createPdfPrintWindow(windowTitle, silent);
         try {
           await win.loadFile(localPath);
-          win.focus();
-          // PDF viewer may need a tick before layout/size exist for print preview.
-          await new Promise<void>((r) => setTimeout(r, 500));
-          await printPdfContents(win.webContents, deviceName);
+          if (!silent) {
+            win.focus();
+            win.setAlwaysOnTop(true, "screen-saver");
+          }
+          await new Promise<void>((r) => setTimeout(r, silent ? 800 : 500));
+          await printPdfContents(win.webContents, deviceName, silent);
           printed++;
         } finally {
+          if (!silent) win.setAlwaysOnTop(false);
           win.destroy();
         }
         continue;
@@ -191,14 +233,18 @@ export async function printPdfsFromPresignedUrls(
       );
       await writeFile(tmpPath, buf);
 
-      const win = createPdfPrintWindow(item.filename ?? "Print");
+      const win = createPdfPrintWindow(windowTitle, silent);
       try {
         await win.loadFile(tmpPath);
-        win.focus();
-        await new Promise<void>((r) => setTimeout(r, 500));
-        await printPdfContents(win.webContents, deviceName);
+        if (!silent) {
+          win.focus();
+          win.setAlwaysOnTop(true, "screen-saver");
+        }
+        await new Promise<void>((r) => setTimeout(r, silent ? 800 : 500));
+        await printPdfContents(win.webContents, deviceName, silent);
         printed++;
       } finally {
+        if (!silent) win.setAlwaysOnTop(false);
         win.destroy();
       }
     } catch (e) {

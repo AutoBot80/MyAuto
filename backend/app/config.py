@@ -270,9 +270,31 @@ _TEMPLATES_WORD = APP_ROOT.parent / "templates" / "word"
 # Form 20 Word template (preferred - preserves layout)
 _FORM20_DOCX = os.getenv("FORM20_TEMPLATE_DOCX", "")
 FORM20_TEMPLATE_DOCX = Path(_FORM20_DOCX) if _FORM20_DOCX else _TEMPLATES_WORD / "FORM 20 Template.docx"
-# Gate Pass Word template
+# Gate Pass Word template (import-time default; sidecar may set env after download — use resolver at runtime)
 _GATE_PASS_DOCX = os.getenv("GATE_PASS_TEMPLATE_DOCX", "")
 GATE_PASS_TEMPLATE_DOCX = Path(_GATE_PASS_DOCX) if _GATE_PASS_DOCX else _TEMPLATES_WORD / "Gate Pass Template.docx"
+_GATE_PASS_DOCX_NAME = "Gate Pass Template.docx"
+
+
+def resolve_gate_pass_template_docx() -> Path:
+    """
+    Resolve Gate Pass .docx at call time (env override, then Saathi cache, then project default).
+
+    Packaged sidecar sets ``APP_ROOT`` under ``{SAATHI_BASE_DIR}/script_cache/backend``; the import-time
+    ``GATE_PASS_TEMPLATE_DOCX`` constant may point at a non-existent ``script_cache/templates`` path until
+    ``_ensure_gate_pass_template_docx`` downloads under ``{SAATHI_BASE_DIR}/templates/word/``.
+    """
+    raw = os.getenv("GATE_PASS_TEMPLATE_DOCX", "").strip()
+    if raw:
+        p = Path(raw)
+        if p.is_file():
+            return p.resolve()
+    saathi = os.getenv("SAATHI_BASE_DIR", "").strip() or _SAATHI_BASE_RAW
+    if saathi:
+        cached = Path(saathi) / "templates" / "word" / _GATE_PASS_DOCX_NAME
+        if cached.is_file():
+            return cached.resolve()
+    return (_TEMPLATES_WORD / _GATE_PASS_DOCX_NAME).resolve()
 
 # Tesseract OCR languages: "eng" (English), "hin" (Hindi/Devanagari). Use "+" for multiple (e.g. "eng+hin" for Aadhar).
 OCR_LANG = os.getenv("OCR_LANG", "eng+hin")

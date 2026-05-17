@@ -105,6 +105,7 @@ export async function runPrintQueueRtoFlow(
       vehicle: input.vehicle,
       vehicle_id: input.vehicleId ?? undefined,
       dealer_id: dealerId,
+      staging_id: stagingId || undefined,
     });
   } catch (printErr) {
     const msg = printErr instanceof Error ? printErr.message : "Generate Gate Pass failed.";
@@ -131,12 +132,21 @@ export async function runPrintQueueRtoFlow(
     };
   }
 
-  dispatchPrintJobsFromApi(gatePassRes.print_jobs);
+  const printResult = await dispatchPrintJobsFromApi(gatePassRes.print_jobs);
   statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
-  traceLines.push({
-    prefix: "UI",
-    message: `gate pass OK print_jobs=${(gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ")}`,
-  });
+  if (printResult.ok) {
+    statusLines.push(
+      `Sent ${printResult.printed} document(s) to the printer (Sale Certificate, Insurance, Gate Pass).`
+    );
+    traceLines.push({
+      prefix: "UI",
+      message: `print OK printed=${printResult.printed} jobs=${(gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ")}`,
+    });
+  } else {
+    const printErr = printResult.error ?? "Print failed.";
+    statusLines.push(`Print: ${printErr}`);
+    traceLines.push({ prefix: "UI", message: `print FAIL: ${printErr}` });
+  }
 
   if (input.pendingScannerArchiveMove) {
     const arch = input.pendingScannerArchiveMove;

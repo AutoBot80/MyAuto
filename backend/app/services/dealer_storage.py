@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -53,38 +54,81 @@ def _relative_under(base: Path, file_path: Path) -> str | None:
     return rel.as_posix()
 
 
-def sync_uploads_file_to_s3(dealer_id: int, file_path: Path) -> None:
-    """Upload a single file under ``get_uploads_dir(dealer_id)`` to S3."""
+def sync_uploads_file_to_s3(
+    dealer_id: int,
+    file_path: Path,
+    *,
+    retries: int = 2,
+) -> tuple[bool, str | None]:
+    """
+    Copy a file already on EC2 disk to S3 (long-term storage).
+
+    Returns ``(True, None)`` when S3 is disabled, skipped, or upload succeeded.
+    Returns ``(False, error)`` when S3 is configured but upload failed after retries.
+    """
     if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
-        return
+        return True, None
     base = get_uploads_dir(dealer_id)
     rel = _relative_under(base, file_path)
     if rel is None:
-        return
+        return True, None
     if not file_path.is_file():
-        return
+        return False, "file not found on disk before S3 sync"
     key = uploads_s3_key(dealer_id, *rel.split("/"))
-    try:
-        s3_storage.upload_file(file_path, key)
-    except Exception:
-        logger.exception("dealer_storage: failed to sync uploads file to S3: %s", file_path)
+    last_err: str | None = None
+    for attempt in range(max(1, retries)):
+        try:
+            s3_storage.upload_file(file_path, key)
+            return True, None
+        except Exception as exc:
+            last_err = str(exc).strip() or repr(exc)
+            logger.warning(
+                "dealer_storage: uploads S3 sync attempt %s/%s failed %s: %s",
+                attempt + 1,
+                retries,
+                file_path,
+                last_err,
+            )
+            if attempt + 1 < retries:
+                time.sleep(0.4)
+    logger.exception("dealer_storage: failed to sync uploads file to S3: %s", file_path)
+    return False, last_err
 
 
-def sync_ocr_file_to_s3(dealer_id: int, file_path: Path) -> None:
-    """Upload a file under ``get_ocr_output_dir(dealer_id)`` to S3."""
+def sync_ocr_file_to_s3(
+    dealer_id: int,
+    file_path: Path,
+    *,
+    retries: int = 2,
+) -> tuple[bool, str | None]:
+    """Same contract as :func:`sync_uploads_file_to_s3` for ``ocr_output/{dealer_id}/``."""
     if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
-        return
+        return True, None
     base = get_ocr_output_dir(dealer_id)
     rel = _relative_under(base, file_path)
     if rel is None:
-        return
+        return True, None
     if not file_path.is_file():
-        return
+        return False, "file not found on disk before S3 sync"
     key = ocr_s3_key(dealer_id, *rel.split("/"))
-    try:
-        s3_storage.upload_file(file_path, key)
-    except Exception:
-        logger.exception("dealer_storage: failed to sync OCR file to S3: %s", file_path)
+    last_err: str | None = None
+    for attempt in range(max(1, retries)):
+        try:
+            s3_storage.upload_file(file_path, key)
+            return True, None
+        except Exception as exc:
+            last_err = str(exc).strip() or repr(exc)
+            logger.warning(
+                "dealer_storage: OCR S3 sync attempt %s/%s failed %s: %s",
+                attempt + 1,
+                retries,
+                file_path,
+                last_err,
+            )
+            if attempt + 1 < retries:
+                time.sleep(0.4)
+    logger.exception("dealer_storage: failed to sync OCR file to S3: %s", file_path)
+    return False, last_err
 
 
 def sync_uploads_subfolder_to_s3(dealer_id: int, subfolder: str) -> None:

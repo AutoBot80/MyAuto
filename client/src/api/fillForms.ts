@@ -1,6 +1,7 @@
 import { apiFetch, getBaseUrl } from "./client";
 import { getAccessToken } from "../auth/token";
 import { isElectron } from "../electron";
+import { getSilentPrintEnabled } from "../settings/printPreferences";
 
 export interface FillDmsCustomer {
   name?: string | null;
@@ -95,13 +96,23 @@ export interface ApiPrintJob {
   kind?: string;
 }
 
-/** Fire-and-forget: print PDFs in Electron when ``print_jobs`` is present (no-op in browser-only). */
-export function dispatchPrintJobsFromApi(jobs: ApiPrintJob[] | undefined | null): void {
-  if (!jobs?.length) return;
-  if (typeof window === "undefined") return;
+/** Print PDFs in Electron when ``print_jobs`` is present (no-op in browser-only). Honors home-page silent print preference. */
+export async function dispatchPrintJobsFromApi(
+  jobs: ApiPrintJob[] | undefined | null
+): Promise<{ ok: boolean; printed: number; error?: string }> {
+  if (!jobs?.length) return { ok: true, printed: 0 };
+  if (typeof window === "undefined") return { ok: true, printed: 0 };
   const fn = window.electronAPI?.print?.printPdfsFromUrls;
-  if (!fn) return;
-  void fn(jobs);
+  if (!fn) return { ok: true, printed: 0 };
+  const result = await fn(jobs, { silent: getSilentPrintEnabled() });
+  if (result && typeof result === "object" && "ok" in result) {
+    return {
+      ok: Boolean(result.ok),
+      printed: Number(result.printed ?? 0),
+      error: typeof result.error === "string" ? result.error : undefined,
+    };
+  }
+  return { ok: true, printed: jobs.length };
 }
 
 /**
@@ -364,6 +375,8 @@ export interface PrintForm20Request {
   vehicle: Record<string, unknown>;
   vehicle_id?: number | null;
   dealer_id?: number | null;
+  /** Staging row for API merge when sidecar has no DATABASE_URL (Print / Queue RTO). */
+  staging_id?: string | null;
 }
 
 export interface PrintForm20Response {

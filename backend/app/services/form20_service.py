@@ -17,10 +17,16 @@ from app.config import (
     FORM20_TEMPLATE_FRONT,
     FORM20_TEMPLATE_BACK,
     FORM20_TEMPLATE_DOCX,
-    GATE_PASS_TEMPLATE_DOCX,
+    resolve_gate_pass_template_docx,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _db_available() -> bool:
+    from app.config import DATABASE_URL
+
+    return bool((DATABASE_URL or "").strip())
 
 # ``care_of`` may already include ``S/o`` / ``W/o`` / ``D/o`` / ``C/o`` (Aadhaar OCR).
 _CARE_OF_REL_PREFIX = re.compile(r"(?i)^(C|S|W|D)/o\s+")
@@ -51,6 +57,8 @@ FORM20_FIELD_POSITIONS = {
 
 def _get_vehicle_from_db(vehicle_id: int) -> dict[str, Any]:
     """Fetch vehicle from vehicle_master by vehicle_id."""
+    if not _db_available():
+        return {}
     from app.db import get_connection
 
     conn = get_connection()
@@ -90,6 +98,8 @@ def _get_vehicle_from_db(vehicle_id: int) -> dict[str, Any]:
 
 def _get_dealer_from_db(dealer_id: int) -> dict[str, Any]:
     """Fetch dealer from dealer_ref by dealer_id. Includes oem_name from oem_ref."""
+    if not _db_available():
+        return {}
     from app.db import get_connection
 
     conn = get_connection()
@@ -232,11 +242,15 @@ def _build_gate_pass_data(
     vehicle: dict[str, Any],
     vehicle_id: int | None = None,
     dealer_id: int | None = None,
+    *,
+    dealer: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Build Gate Pass field values from customer and vehicle."""
     data: dict[str, str] = {}
-    db_vehicle = _get_vehicle_from_db(vehicle_id) if vehicle_id else {}
-    dealer = _get_dealer_from_db(dealer_id) if dealer_id else {}
+    db_vehicle = _get_vehicle_from_db(vehicle_id) if vehicle_id and _db_available() else {}
+    dealer_row = dict(dealer or {})
+    if dealer_id and _db_available():
+        dealer_row = {**dealer_row, **_get_dealer_from_db(dealer_id)}
     v = {**vehicle, **db_vehicle}
     c = customer or {}
 
@@ -246,7 +260,7 @@ def _build_gate_pass_data(
         return str(val).strip() or ""
 
     # field_1_oem_name: OEM name (Welcome to X family)
-    oem = _str(v.get("oem_name")) or _str(dealer.get("oem_name")) or _str(v.get("make") or v.get("maker"))
+    oem = _str(v.get("oem_name")) or _str(dealer_row.get("oem_name")) or _str(v.get("make") or v.get("maker"))
     data["field_1_oem_name"] = oem
 
     # field_0_today_date: Delivery date (today)
@@ -457,6 +471,8 @@ def generate_gate_pass_pdf_only(
     vehicle_id: int | None = None,
     dealer_id: int | None = None,
     uploads_dir: Path | None = None,
+    *,
+    dealer: dict[str, Any] | None = None,
 ) -> Path:
     """
     Generate only ``Gate Pass.pdf`` from ``GATE_PASS_TEMPLATE_DOCX``
@@ -469,13 +485,15 @@ def generate_gate_pass_pdf_only(
     safe_sub = re.sub(r"[^\w\-]", "_", (subfolder or "").strip()) or "default"
     subfolder_path = uploads_path / safe_sub
     subfolder_path.mkdir(parents=True, exist_ok=True)
-    gate_pass_template = Path(GATE_PASS_TEMPLATE_DOCX).resolve()
+    gate_pass_template = resolve_gate_pass_template_docx()
     if not gate_pass_template.is_file():
         raise FileNotFoundError(
             f"Gate Pass template not found: {gate_pass_template}. "
             "Set GATE_PASS_TEMPLATE_DOCX or add templates/word/Gate Pass Template.docx"
         )
-    gate_pass_data = _build_gate_pass_data(customer, vehicle, vehicle_id, dealer_id)
+    gate_pass_data = _build_gate_pass_data(
+        customer, vehicle, vehicle_id, dealer_id, dealer=dealer
+    )
     saved = _generate_gate_pass_via_docx(gate_pass_template, subfolder_path, gate_pass_data)
     if not saved:
         raise RuntimeError(
@@ -589,7 +607,7 @@ def generate_form20_pdfs(
 
     def _add_gate_pass(saved: list[str]) -> list[str]:
         """Append Gate Pass.pdf if template exists and generation succeeds."""
-        gate_pass_template = Path(GATE_PASS_TEMPLATE_DOCX).resolve()
+        gate_pass_template = resolve_gate_pass_template_docx()
         if gate_pass_template.exists():
             gate_pass_data = _build_gate_pass_data(customer, vehicle, vehicle_id, dealer_id)
             saved = saved + _generate_gate_pass_via_docx(gate_pass_template, subfolder_path, gate_pass_data)

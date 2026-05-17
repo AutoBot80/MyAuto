@@ -100,6 +100,7 @@ export async function printGatePassLocal(req: PrintForm20Request): Promise<Print
       customer: req.customer,
       vehicle: req.vehicle ?? {},
       vehicle_id: req.vehicle_id ?? null,
+      staging_id: req.staging_id ?? null,
     },
     GATE_PASS_LOCAL_TIMEOUT_MS
   );

@@ -25,6 +25,36 @@
   border-radius: 8px;
 }
 
+.home-silent-print-toggle {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.65rem;
+  font-size: 13px;
+  color: #1e5a9e;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #c5d9ed;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  user-select: none;
+}
+
+.home-silent-print-toggle__label {
+  font-weight: 600;
+}
+
+.home-silent-print-toggle input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  cursor: pointer;
+}
+
 .home-page-tiles-wrap {
   position: relative;
   display: flex;

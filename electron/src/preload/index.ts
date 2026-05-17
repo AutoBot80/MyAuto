@@ -14,8 +14,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     printHtml: (opts: { html: string; deviceName?: string; silent?: boolean; copies?: number }) =>
       ipcRenderer.invoke("print:html", opts),
     testPrint: (deviceName?: string) => ipcRenderer.invoke("print:test", deviceName),
-    printPdfsFromUrls: (items: { presigned_url: string; filename?: string; kind?: string }[], deviceName?: string) =>
-      ipcRenderer.invoke("print:pdfsFromUrls", items, deviceName),
+    printPdfsFromUrls: (
+      items: { presigned_url: string; filename?: string; kind?: string }[],
+      options?: { deviceName?: string; silent?: boolean }
+    ) => ipcRenderer.invoke("print:pdfsFromUrls", items, options),
   },
   file: {
     list: (p: string) => ipcRenderer.invoke("file:list", p),

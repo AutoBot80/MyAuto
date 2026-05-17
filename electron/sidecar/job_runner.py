@@ -302,11 +302,27 @@ def _cli_install_playwright_browsers_main() -> int:
     return 0 if _install_playwright_chromium_if_missing(browsers_dir) else 1
 
 
+def _prime_gate_pass_template_env(saathi_base: str) -> None:
+    """
+    Set ``GATE_PASS_TEMPLATE_DOCX`` before ``app.config`` is first imported.
+
+    Packaged sidecar loads ``script_cache/backend`` where the import-time default is
+    ``script_cache/templates/...`` (usually missing). A copy under ``{saathi}/templates/word/``
+    must be visible via env before any job imports ``app.config``.
+    """
+    if os.getenv("GATE_PASS_TEMPLATE_DOCX", "").strip():
+        return
+    cached = Path(saathi_base) / "templates" / "word" / "Gate Pass Template.docx"
+    if cached.is_file():
+        os.environ["GATE_PASS_TEMPLATE_DOCX"] = str(cached.resolve())
+
+
 def _bootstrap_imports(saathi_base: str, *, api_url: str = "", jwt: str = "") -> None:
     os.environ["SAATHI_BASE_DIR"] = saathi_base
     saathi_path = Path(saathi_base)
     env_file = saathi_path / ".env"
     _load_dotenv_safe(env_file)
+    _prime_gate_pass_template_env(saathi_base)
 
     if _is_frozen and api_url:
         _sync_scripts(api_url, jwt, saathi_base)
@@ -443,8 +459,8 @@ def _multipart_upload_file(
     rel_path: str,
     file_path: Path,
     timeout: int = 300,
-) -> None:
-    """POST one file to ``/sidecar/upload-artifacts`` (multipart/form-data)."""
+) -> dict:
+    """POST one file to ``/sidecar/upload-artifacts`` (EC2 disk, then S3 when configured)."""
     boundary = f"----SaathiFormBoundary{uuid.uuid4().hex}"
     crlf = b"\r\n"
     bnd = boundary.encode("ascii")
@@ -481,8 +497,8 @@ def _multipart_upload_file(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=_get_ssl_context()) as resp:
-            resp.read()
+        with _get_api_download_opener().open(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         body_text = ""
         try:
@@ -491,6 +507,13 @@ def _multipart_upload_file(
             pass
         detail = body_text[:500]
         raise RuntimeError(f"upload-artifacts failed HTTP {exc.code}: {detail}") from exc
+    try:
+        parsed = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        parsed = {"ok": True}
+    if not parsed.get("ok"):
+        raise RuntimeError(f"upload-artifacts rejected: {raw[:500]}")
+    return parsed
 
 
 def _upload_tree_under(
@@ -500,27 +523,69 @@ def _upload_tree_under(
     tree: str,
     folder: Path,
     anchor: Path,
-) -> tuple[int, int]:
-    """Return ``(files_uploaded, files_failed)``."""
+    *,
+    ocr_dir: Path | None = None,
+    log_subfolder: str | None = None,
+) -> tuple[int, int, int]:
+    """Return ``(ec2_uploaded, http_failed, s3_sync_failed)``."""
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
+
     if not folder.is_dir():
-        return 0, 0
+        return 0, 0, 0
     anchor_res = anchor.resolve()
     uploaded = 0
     failed = 0
-    for f in folder.rglob("*"):
+    s3_failed = 0
+    for f in sorted(folder.rglob("*")):
         if not f.is_file():
             continue
         try:
             rel = f.resolve().relative_to(anchor_res).as_posix()
         except ValueError:
             continue
-        try:
-            _multipart_upload_file(api_url, jwt, dealer_id, tree, rel, f)
-            uploaded += 1
-        except Exception as exc:
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                result = _multipart_upload_file(api_url, jwt, dealer_id, tree, rel, f)
+                uploaded += 1
+                if ocr_dir is not None and log_subfolder:
+                    if result.get("s3_synced", True):
+                        append_print_rto_queue_line(
+                            ocr_dir,
+                            log_subfolder,
+                            "PUSH",
+                            f"OK {tree}/{rel} (EC2+S3)",
+                        )
+                    else:
+                        s3_failed += 1
+                        s3_err = str(result.get("s3_error") or "S3 sync failed")[:300]
+                        append_print_rto_queue_line(
+                            ocr_dir,
+                            log_subfolder,
+                            "PUSH",
+                            f"EC2 OK S3 FAIL {tree}/{rel}: {s3_err}",
+                        )
+                elif not result.get("s3_synced", True):
+                    s3_failed += 1
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 0:
+                    time.sleep(0.35)
+        if last_exc is not None:
             failed += 1
-            logging.warning("sidecar upload %s/%s: %s", tree, rel, exc)
-    return uploaded, failed
+            err_msg = str(last_exc).strip() or repr(last_exc)
+            logging.warning("sidecar upload %s/%s: %s", tree, rel, err_msg)
+            if ocr_dir is not None and log_subfolder:
+                append_print_rto_queue_line(
+                    ocr_dir,
+                    log_subfolder,
+                    "PUSH",
+                    f"FAIL {tree}/{rel}: {err_msg[:500]}",
+                )
+        time.sleep(0.12)
+    return uploaded, failed, s3_failed
 
 
 def _upload_rto_row_log_if_present(api_url: str, jwt: str, dealer_id: int, row: dict) -> None:
@@ -773,14 +838,56 @@ def _upload_sale_artifacts(
             "PUSH",
             f"local ocr_output/{safe}: {len(ocr_names)} file(s)",
         )
-    up_ok, up_fail = _upload_tree_under(api_url, jwt, dealer_id, "uploads", uploads_dir / safe, u_root)
-    ocr_ok, ocr_fail = _upload_tree_under(api_url, jwt, dealer_id, "ocr", ocr_dir / safe, o_root)
+    up_ok, up_http_fail, up_s3_fail = _upload_tree_under(
+        api_url,
+        jwt,
+        dealer_id,
+        "uploads",
+        uploads_dir / safe,
+        u_root,
+        ocr_dir=ocr_dir,
+        log_subfolder=safe,
+    )
+    ocr_ok, ocr_http_fail, ocr_s3_fail = _upload_tree_under(
+        api_url,
+        jwt,
+        dealer_id,
+        "ocr",
+        ocr_dir / safe,
+        o_root,
+        ocr_dir=ocr_dir,
+        log_subfolder=safe,
+    )
+    total_s3_fail = int(up_s3_fail) + int(ocr_s3_fail)
     append_print_rto_queue_line(
         ocr_dir,
         safe,
         "PUSH",
-        f"upload-artifacts: uploads ok={up_ok} fail={up_fail}; ocr ok={ocr_ok} fail={ocr_fail}",
+        f"upload-artifacts: uploads ec2_ok={up_ok} http_fail={up_http_fail} s3_fail={up_s3_fail}; "
+        f"ocr ec2_ok={ocr_ok} http_fail={ocr_http_fail} s3_fail={ocr_s3_fail}",
     )
+    if total_s3_fail > 0 and (up_ok + ocr_ok) > 0:
+        try:
+            _api_post(
+                api_url,
+                jwt,
+                "/sidecar/sync-sale-folder-s3",
+                {"dealer_id": int(dealer_id), "subfolder": safe},
+                timeout=600,
+            )
+            append_print_rto_queue_line(
+                ocr_dir,
+                safe,
+                "PUSH",
+                f"S3 resync requested for subfolder ({total_s3_fail} per-file sync failure(s))",
+            )
+        except Exception as exc:
+            append_print_rto_queue_line(
+                ocr_dir,
+                safe,
+                "PUSH",
+                f"S3 resync failed: {exc}",
+            )
     fallback = ocr_dir / "Playwright_insurance_diag_fallback.txt"
     if fallback.is_file():
         try:
@@ -788,13 +895,15 @@ def _upload_sale_artifacts(
             _multipart_upload_file(api_url, jwt, dealer_id, "ocr", rel, fallback)
             ocr_ok += 1
         except Exception as exc:
-            ocr_fail += 1
+            ocr_http_fail += 1
             logging.warning("sidecar upload insurance diag fallback: %s", exc)
     return {
         "uploads_uploaded": up_ok,
-        "uploads_failed": up_fail,
+        "uploads_failed": up_http_fail,
+        "uploads_s3_failed": up_s3_fail,
         "ocr_uploaded": ocr_ok,
-        "ocr_failed": ocr_fail,
+        "ocr_failed": ocr_http_fail,
+        "ocr_s3_failed": ocr_s3_fail,
     }
 
 
@@ -846,21 +955,18 @@ def _saathi_base_dir() -> str:
 
 
 def _ensure_gate_pass_template_docx(api_url: str, jwt: str) -> Path:
-    """Local Gate Pass .docx for ``generate_gate_pass_pdf_only`` (dev path, Saathi cache, or API download)."""
-    from app.config import APP_ROOT, GATE_PASS_TEMPLATE_DOCX
+    """Local Gate Pass .docx for ``generate_gate_pass_pdf_only`` (resolver, repo dev path, or API download)."""
+    from app.config import APP_ROOT, resolve_gate_pass_template_docx
 
-    candidates: list[Path] = []
-    env_path = Path(GATE_PASS_TEMPLATE_DOCX)
-    if str(env_path) and env_path.is_file():
-        return env_path.resolve()
-    candidates.append(env_path.resolve())
-    candidates.append((APP_ROOT.parent / "templates" / "word" / "Gate Pass Template.docx").resolve())
+    found = resolve_gate_pass_template_docx()
+    if found.is_file():
+        return found
+
+    repo_template = (_repo_backend().parent / "templates" / "word" / "Gate Pass Template.docx").resolve()
+    if repo_template.is_file():
+        return repo_template
+
     base = _saathi_base_dir()
-    candidates.append(Path(base) / "templates" / "word" / "Gate Pass Template.docx")
-    for p in candidates:
-        if p.is_file():
-            return p.resolve()
-
     dest = Path(base) / "templates" / "word" / "Gate Pass Template.docx"
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"{api_url.rstrip('/')}/sidecar/templates/gate-pass-docx"
@@ -869,12 +975,88 @@ def _ensure_gate_pass_template_docx(api_url: str, jwt: str) -> Path:
         headers={"Authorization": f"Bearer {jwt}"},
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=120, context=_get_ssl_context()) as resp:
-        dest.write_bytes(resp.read())
+    try:
+        with _get_api_download_opener().open(req, timeout=120) as resp:
+            dest.write_bytes(resp.read())
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(_http_error_detail(exc, url)) from exc
     if not dest.is_file():
         raise FileNotFoundError(f"Gate Pass template download failed: {dest}")
     logging.info("gate pass template cached at %s", dest)
+    os.environ["GATE_PASS_TEMPLATE_DOCX"] = str(dest.resolve())
     return dest.resolve()
+
+
+def _merge_gate_pass_context_from_api(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    params: dict,
+    customer: dict,
+    vehicle: dict,
+) -> tuple[dict, dict, dict]:
+    """
+    Fetch vehicle_master + dealer OEM + staging snapshot from cloud API (no local DB).
+
+    Returns ``(customer, vehicle, dealer)`` dicts for :func:`generate_gate_pass_pdf_only`.
+    """
+    from urllib.parse import urlencode
+
+    out_c = dict(customer)
+    out_v = dict(vehicle)
+    out_d: dict = {}
+    q: dict[str, str | int] = {"dealer_id": int(dealer_id)}
+    vid = params.get("vehicle_id")
+    if vid is not None:
+        try:
+            q["vehicle_id"] = int(vid)
+        except (TypeError, ValueError):
+            pass
+    staging_id = str(params.get("staging_id") or "").strip()
+    if staging_id:
+        q["staging_id"] = staging_id
+    try:
+        data = _api_get(
+            api_url,
+            jwt,
+            f"/sidecar/gate-pass-context?{urlencode(q)}",
+            timeout=60,
+        )
+    except Exception as exc:
+        logging.warning("gate pass: gate-pass-context API failed: %s", exc)
+        return out_c, out_v, out_d
+
+    api_c = data.get("customer") if isinstance(data.get("customer"), dict) else {}
+    api_v = data.get("vehicle") if isinstance(data.get("vehicle"), dict) else {}
+    api_d = data.get("dealer") if isinstance(data.get("dealer"), dict) else {}
+    out_d = dict(api_d)
+
+    for key, val in api_c.items():
+        if val is not None and str(val).strip() and not str(out_c.get(key) or "").strip():
+            out_c[key] = val
+
+    # Staging + vehicle_master: API wins for Gate Pass placeholders when present.
+    for key in (
+        "model",
+        "colour",
+        "color",
+        "oem_name",
+        "key_num",
+        "key_no",
+        "chassis",
+        "frame_num",
+        "frame_no",
+        "engine_num",
+        "engine_no",
+    ):
+        val = api_v.get(key)
+        if val is not None and str(val).strip():
+            out_v[key] = val
+
+    if not str(out_v.get("oem_name") or "").strip() and api_d.get("oem_name"):
+        out_v["oem_name"] = api_d["oem_name"]
+
+    return out_c, out_v, out_d
 
 
 def _mobile_for_print_local(subfolder: str, customer: dict) -> str:
@@ -1018,8 +1200,18 @@ def _dispatch_print_gate_pass_local_impl(params: dict) -> dict:
         os.environ["GATE_PASS_TEMPLATE_DOCX"] = str(template_path)
         append_print_rto_queue_line(ocr_dir, safe, "GATE_PASS", f"template: {template_path}")
 
-        customer_dict = dict(customer)
-        vehicle_dict = dict(vehicle)
+        customer_dict, vehicle_dict, dealer_dict = _merge_gate_pass_context_from_api(
+            api_url, jwt, dealer_id, params, dict(customer), dict(vehicle)
+        )
+        append_print_rto_queue_line(
+            ocr_dir,
+            safe,
+            "GATE_PASS",
+            "context: "
+            f"oem={vehicle_dict.get('oem_name') or dealer_dict.get('oem_name')!r} "
+            f"model={vehicle_dict.get('model')!r} "
+            f"colour={vehicle_dict.get('colour') or vehicle_dict.get('color')!r}",
+        )
         if vehicle_dict.get("key_no") and "key_num" not in vehicle_dict:
             vehicle_dict["key_num"] = vehicle_dict.get("key_no")
         if vehicle_dict.get("frame_no") and "frame_num" not in vehicle_dict:
@@ -1034,6 +1226,7 @@ def _dispatch_print_gate_pass_local_impl(params: dict) -> dict:
             vehicle_id=vehicle_id,
             dealer_id=dealer_id,
             uploads_dir=uploads_dir,
+            dealer=dealer_dict,
         )
         print_jobs, missing = build_local_rto_print_jobs(
             sale_dir,

@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import type { HomeTileFlags } from "../api/auth";
 import { releaseAutomationBrowsers } from "../api/releaseBrowsers";
 import { HomePageWatermark } from "../components/HomePageWatermark";
+import { SilentPrintToggle } from "../components/SilentPrintToggle";
 import "./HomePage.css";
 
 interface HomePageProps {
@@ -58,6 +59,7 @@ export function HomePage({
   return (
     <div className="home-page">
       <div className="home-page-tiles-wrap">
+        <SilentPrintToggle />
         <HomePageWatermark />
         {!anyTile ? (
           <p className="home-page-no-tiles" role="status">

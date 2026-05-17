@@ -32,7 +32,7 @@ export interface ElectronAPI {
     testPrint: (deviceName?: string) => Promise<{ ok: boolean; error?: string }>;
     printPdfsFromUrls: (
       items: { presigned_url: string; filename?: string; kind?: string }[],
-      deviceName?: string
+      options?: { deviceName?: string; silent?: boolean }
     ) => Promise<{ ok: boolean; printed: number; error?: string }>;
   };
   file: {

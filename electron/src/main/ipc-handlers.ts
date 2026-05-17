@@ -56,8 +56,8 @@ export function registerIpc(mainWindow: BrowserWindow): void {
     async (
       _evt: IpcMainInvokeEvent,
       items: printer.PresignedPrintItem[],
-      deviceName?: string
-    ) => printer.printPdfsFromPresignedUrls(items, deviceName)
+      options?: printer.PdfPrintOptions | string
+    ) => printer.printPdfsFromPresignedUrls(items, options)
   );
 
   ipcMain.handle(

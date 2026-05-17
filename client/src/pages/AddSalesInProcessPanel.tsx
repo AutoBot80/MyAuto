@@ -537,6 +537,10 @@ export function AddSalesInProcessPanel({
                                 key_no: vrec?.key_no,
                                 frame_no: vrec?.frame_no,
                                 engine_no: vrec?.engine_no,
+                                model: vrec?.model,
+                                colour: vrec?.colour ?? vrec?.color,
+                                color: vrec?.color ?? vrec?.colour,
+                                oem_name: vrec?.oem_name,
                               };
                               const vid = parseInt(String(detailPayload?.vehicle_id ?? "").trim(), 10);
                               const result = await runPrintQueueRtoFlow({
