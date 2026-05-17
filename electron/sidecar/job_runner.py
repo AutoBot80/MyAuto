@@ -564,17 +564,17 @@ class _PresignedRedirectHandler(urllib.request.HTTPRedirectHandler):
         return urllib.request.Request(newurl, method=req.get_method())
 
 
-_api_download_opener: urllib.request.OpenerDirector | None = None
+_cached_api_download_opener: urllib.request.OpenerDirector | None = None
 
 
-def _api_download_opener() -> urllib.request.OpenerDirector:
-    global _api_download_opener
-    if _api_download_opener is None:
-        _api_download_opener = urllib.request.build_opener(
+def _get_api_download_opener() -> urllib.request.OpenerDirector:
+    global _cached_api_download_opener
+    if _cached_api_download_opener is None:
+        _cached_api_download_opener = urllib.request.build_opener(
             _PresignedRedirectHandler(),
             urllib.request.HTTPSHandler(context=_get_ssl_context()),
         )
-    return _api_download_opener
+    return _cached_api_download_opener
 
 
 def _http_error_detail(exc: urllib.error.HTTPError, url: str) -> str:
@@ -618,7 +618,7 @@ def _api_download_uploads_file(
         method="GET",
     )
     try:
-        with _api_download_opener().open(req, timeout=timeout) as resp:
+        with _get_api_download_opener().open(req, timeout=timeout) as resp:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(resp.read())
     except urllib.error.HTTPError as exc:
