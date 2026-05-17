@@ -40,9 +40,16 @@ from app.services.utility_functions import (
 # After open: poll for manual login / SPA shell before clicking Issue New Certificate (not Hero insurance wait).
 CPA_PORTAL_READY_MAX_POLLS = 10
 CPA_PORTAL_READY_POLL_MS = 1_000
+# Alliance ``Plan`` dropdown preset (``master_ref`` / dealer SOP). When selected, plan amounts auto-fill.
+ALLIANCE_CPA_PLAN_DEFAULT = "PLAN348 RGI"
 
 logger = logging.getLogger(__name__)
 _IST = ZoneInfo("Asia/Kolkata")
+
+
+def _resolve_alliance_cpa_plan_name() -> str:
+    """``ALLIANCE_CPA_PLAN`` env override (default ``PLAN348 RGI``)."""
+    return (os.getenv("ALLIANCE_CPA_PLAN") or ALLIANCE_CPA_PLAN_DEFAULT).strip() or ALLIANCE_CPA_PLAN_DEFAULT
 
 
 def _resolve_cpa_portal_url(portal_url: str | None) -> str:
@@ -1161,37 +1168,70 @@ def _try_fill_alliance_certificate_form(page, log_path: Path, payload: CpaAllian
         ok = _select_by_label_exact(page, log_path, re.compile(r"^city$", re.I), payload.city, field="City")
         steps.append(("city", ok, False))
 
-    plan_amt = (payload.plan_total_amount or "5400").strip() or "5400"
-    loc = None
-    for root in _iter_cpa_page_frames(page):
-        try:
-            labels = root.locator("label").filter(has_text=re.compile(r"^total amount$", re.I))
-            if labels.count() > 0:
-                loc = labels.last.locator("xpath=following-sibling::input[1]")
-                if loc.count() < 1:
-                    loc = labels.last.locator("input")
-        except Exception:
-            continue
-    if loc is not None:
-        try:
-            if loc.count() > 0 and loc.first.is_visible():
-                loc.first.fill(plan_amt, timeout=4_000)
-                _append_cpa_log(log_path, f"NOTE filled Alliance Plan Total Amount={plan_amt}")
-                steps.append(("plan_total_amount", True, False))
-            else:
-                steps.append(("plan_total_amount", False, False))
-        except Exception as exc:
-            _append_cpa_log(log_path, f"NOTE Plan Total Amount fill failed: {exc}")
-            steps.append(("plan_total_amount", False, False))
-    else:
-        ok = _fill_text_by_label(
+    plan_name = _resolve_alliance_cpa_plan_name()
+    plan_selected = False
+    if plan_name:
+        ok = _select_by_label_fuzzy(
             page,
             log_path,
-            re.compile(r"^total amount$", re.I),
-            plan_amt,
-            field="Plan Total Amount",
+            re.compile(r"^plan$", re.I),
+            plan_name,
+            field="Plan",
+            min_score=0.72,
         )
-        steps.append(("plan_total_amount", ok, False))
+        if not ok and "PLAN348" in plan_name.upper():
+            ok = _select_by_label_fuzzy(
+                page,
+                log_path,
+                re.compile(r"^plan$", re.I),
+                "PLAN348",
+                field="Plan",
+                min_score=0.65,
+            )
+        steps.append(("plan", ok, False))
+        if ok:
+            plan_selected = True
+            try:
+                page.wait_for_timeout(900)
+            except Exception:
+                time.sleep(0.9)
+            _append_cpa_log(
+                log_path,
+                f"NOTE Plan preset {plan_name!r} selected — skipping manual Plan Total Amount entry.",
+            )
+
+    if not plan_selected:
+        plan_amt = (payload.plan_total_amount or "5400").strip() or "5400"
+        loc = None
+        for root in _iter_cpa_page_frames(page):
+            try:
+                labels = root.locator("label").filter(has_text=re.compile(r"^total amount$", re.I))
+                if labels.count() > 0:
+                    loc = labels.last.locator("xpath=following-sibling::input[1]")
+                    if loc.count() < 1:
+                        loc = labels.last.locator("input")
+            except Exception:
+                continue
+        if loc is not None:
+            try:
+                if loc.count() > 0 and loc.first.is_visible():
+                    loc.first.fill(plan_amt, timeout=4_000)
+                    _append_cpa_log(log_path, f"NOTE filled Alliance Plan Total Amount={plan_amt}")
+                    steps.append(("plan_total_amount", True, False))
+                else:
+                    steps.append(("plan_total_amount", False, False))
+            except Exception as exc:
+                _append_cpa_log(log_path, f"NOTE Plan Total Amount fill failed: {exc}")
+                steps.append(("plan_total_amount", False, False))
+        else:
+            ok = _fill_text_by_label(
+                page,
+                log_path,
+                re.compile(r"^total amount$", re.I),
+                plan_amt,
+                field="Plan Total Amount",
+            )
+            steps.append(("plan_total_amount", ok, False))
 
     if payload.nominee_name:
         ok = _fill_text_by_label(
@@ -1231,22 +1271,97 @@ def _try_fill_alliance_certificate_form(page, log_path: Path, payload: CpaAllian
     return filled, missing_required
 
 
+def _scroll_alliance_form_to_bottom(page) -> None:
+    """Save sits below Plan / Nominee sections — ensure it is in view before click."""
+    try:
+        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(400)
+    except Exception:
+        try:
+            page.keyboard.press("End")
+            page.wait_for_timeout(350)
+        except Exception:
+            time.sleep(0.35)
+
+
+def _locate_alliance_save_button(page):
+    """Visible **Save** on certificate form (main document + child frames)."""
+    save_pat = re.compile(r"^save$", re.I)
+    candidates: list = []
+    for root in _iter_cpa_page_frames(page):
+        locators = (
+            root.locator("button").filter(has_text=save_pat),
+            root.get_by_role("button", name=save_pat),
+        )
+        for loc in locators:
+            try:
+                n = loc.count()
+            except Exception:
+                continue
+            for i in range(n):
+                try:
+                    btn = loc.nth(i)
+                    if btn.is_visible():
+                        candidates.append(btn)
+                except Exception:
+                    continue
+    if not candidates:
+        return None
+    return candidates[-1]
+
+
+def _click_alliance_save_button(page, log_path: Path) -> bool:
+    """Click the bottom **Save** button; return True when click was dispatched."""
+    _scroll_alliance_form_to_bottom(page)
+    btn = _locate_alliance_save_button(page)
+    if btn is None:
+        _append_cpa_log(log_path, "ERROR Save button not found (searched all frames).")
+        return False
+    try:
+        btn.scroll_into_view_if_needed(timeout=3_000)
+    except Exception:
+        pass
+    try:
+        if btn.is_disabled():
+            _append_cpa_log(log_path, "NOTE Save button is disabled — form may be incomplete.")
+            return False
+    except Exception:
+        pass
+    last_exc: Exception | None = None
+    for force in (False, True):
+        try:
+            btn.click(timeout=12_000, force=force)
+            try:
+                page.wait_for_timeout(1_200)
+            except Exception:
+                time.sleep(1.2)
+            try:
+                page.wait_for_load_state("networkidle", timeout=12_000)
+            except Exception:
+                pass
+            _append_cpa_log(
+                log_path,
+                f"NOTE clicked Save (production ENVIRONMENT, force={force}).",
+            )
+            return True
+        except Exception as exc:
+            last_exc = exc
+            continue
+    _append_cpa_log(log_path, f"ERROR Save click failed: {last_exc}")
+    return False
+
+
 def _maybe_click_save_alliance(page, log_path: Path) -> None:
     """Production only: click **Save** on Alliance certificate form."""
     if not ENVIRONMENT_IS_PRODUCTION:
         _append_cpa_log(log_path, "NOTE skipping Save (non-production ENVIRONMENT).")
         return
-    for pat in (re.compile(r"^save$", re.I), re.compile(r"\bsave\b", re.I)):
-        try:
-            btn = page.get_by_role("button", name=pat).first
-            if btn.is_visible(timeout=2_500):
-                btn.scroll_into_view_if_needed(timeout=2_000)
-                btn.click(timeout=10_000)
-                _append_cpa_log(log_path, "NOTE clicked Save (production ENVIRONMENT).")
-                return
-        except Exception:
-            continue
-    _append_cpa_log(log_path, "ERROR Save button not found or not clickable.")
+    try:
+        page.wait_for_timeout(500)
+    except Exception:
+        time.sleep(0.5)
+    if not _click_alliance_save_button(page, log_path):
+        _append_cpa_log(log_path, "ERROR Save was not clicked successfully.")
 
 
 def _fill_one_hint_on_root(root, hint: str, val: str) -> bool:
@@ -1491,7 +1606,10 @@ def add_alliance_cpa_insurance(
     missing_required: list[str] = []
     if "allianceassure.in" in page_host:
         filled_count, missing_required = _try_fill_alliance_certificate_form(page, log_path, payload)
-        _maybe_click_save_alliance(page, log_path)
+        if filled_count > 0:
+            _maybe_click_save_alliance(page, log_path)
+        elif ENVIRONMENT_IS_PRODUCTION:
+            _append_cpa_log(log_path, "NOTE skipping Save — no fields were filled.")
     else:
         fill_pairs: list[tuple[str, str | None]] = [
             ("chasis", payload.chassis),
