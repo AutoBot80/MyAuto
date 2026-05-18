@@ -252,6 +252,42 @@ def _find_loose_model_details_table(
     return best[0], best[1], best[2], best[3]
 
 
+def _collect_vehicle_lines_from_tables(
+    tables: list[list[list[str]]],
+) -> tuple[list[dict[str, str]], bool, bool]:
+    """
+    Extract vehicle rows from **every** Textract table (multi-page challans).
+
+    Page 1 often has ``Frame No`` / ``Engine No`` headers; page 2+ may be a continuation grid
+    with data rows only — those are picked up via loose column inference per table.
+    """
+    lines: list[dict[str, str]] = []
+    used_strict = False
+    used_loose = False
+    for table in tables:
+        if not table:
+            continue
+        header_row_index: int | None = None
+        for hi, row in enumerate(table):
+            if not row:
+                continue
+            joined = " ".join(str(c or "") for c in row).lower()
+            if "engine" in joined and _joined_row_has_chassis_signal(joined):
+                if _header_row_engine_chassis_indices(row):
+                    header_row_index = hi
+                    break
+        if header_row_index is not None:
+            lines.extend(_rows_from_table(table, header_row_index))
+            used_strict = True
+            continue
+        loose = _find_loose_model_details_table([table])
+        if loose is not None:
+            grid_l, sr, ei, ci = loose
+            lines.extend(_rows_from_table_merged_headers(grid_l, sr, ei, ci))
+            used_loose = True
+    return lines, used_strict, used_loose
+
+
 def _rows_from_table_merged_headers(
     table: list[list[str]], start_row: int, eng_i: int, cha_i: int
 ) -> list[dict[str, str]]:
@@ -701,32 +737,23 @@ def parse_subdealer_challan(
     used_table_loose = False
     fallback_inv: str | None = None
 
-    found = _find_engine_chassis_table(tables)
-    if found:
-        grid, hi = found
-        lines = _rows_from_table(grid, hi)
-        lines, dup_n = dedupe_challan_lines(lines)
+    table_lines, _used_strict, used_table_loose = _collect_vehicle_lines_from_tables(tables)
+    if table_lines:
+        lines, dup_n = dedupe_challan_lines(table_lines)
         if dup_n:
             out["warnings"].append(
                 f"Removed {dup_n} duplicate row(s) with the same engine and chassis numbers."
             )
         if not challan_no:
-            challan_no = _challan_no_from_repeated_invoice(grid, hi)
-
-    if not lines:
-        loose = _find_loose_model_details_table(tables)
-        if loose is not None:
-            grid_l, sr, ei, ci = loose
-            lines = _rows_from_table_merged_headers(grid_l, sr, ei, ci)
-            used_table_loose = True
-            lines, dup_loose = dedupe_challan_lines(lines)
-            dup_n += dup_loose
-            if dup_loose:
-                out["warnings"].append(
-                    f"Removed {dup_loose} duplicate row(s) with the same engine and chassis numbers."
-                )
-            if not challan_no:
-                challan_no = _invoice_from_table_column_zero(grid_l, sr)
+            found = _find_engine_chassis_table(tables)
+            if found:
+                grid, hi = found
+                challan_no = _challan_no_from_repeated_invoice(grid, hi)
+            elif used_table_loose:
+                loose = _find_loose_model_details_table(tables)
+                if loose is not None:
+                    grid_l, sr, _, _ = loose
+                    challan_no = _invoice_from_table_column_zero(grid_l, sr)
 
     if not lines:
         fb_lines, fallback_inv = _fallback_lines_from_full_text(full_text)

@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from app.services.subdealer_challan_ocr_service import (
     _challan_no_from_repeated_invoice,
+    _collect_vehicle_lines_from_tables,
     _dominant_invoice_from_tokens,
     _find_engine_chassis_table,
     _find_loose_model_details_table,
@@ -108,6 +109,23 @@ class TestEngineChassisTable(unittest.TestCase):
         self.assertEqual(rows[0]["engine_no"], "111")
         self.assertEqual(rows[0]["chassis_no"], "222")
         self.assertEqual(rows[0]["status"], "queued")
+
+    def test_collect_lines_from_header_table_plus_continuation(self) -> None:
+        """Page 1 with headers + page 2 continuation without headers (multi-page PDF)."""
+        page1 = [
+            ["Frame No", "Engine No", "Material"],
+            ["MBLHAW520THE03790", "HA11F6THE78918", "HSPLMTSSCFIRBK"],
+            ["MBLHAW520THE04065", "HA11F6THE01808", "HSPLMTSSCFIRBK"],
+        ]
+        page2 = [
+            ["MBLHAW523THE03766", "HA11F6THE78863", "HSPLMTSSCFIRBK"],
+            ["MBLHAW523THE04030", "HA11F6THE78856", "HSPLMTSSCFITGB"],
+        ]
+        lines, used_strict, used_loose = _collect_vehicle_lines_from_tables([page1, page2])
+        self.assertTrue(used_strict)
+        self.assertTrue(used_loose)
+        self.assertEqual(len(lines), 4)
+        self.assertEqual(lines[-1]["chassis_no"], "MBLHAW523THE04030")
 
     def test_find_model_details_frame_no_table(self) -> None:
         grid = [
