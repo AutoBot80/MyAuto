@@ -675,6 +675,17 @@ def parse_subdealer_challan(
         out["error"] = str(tx["error"])
         return out
 
+    pages_processed = int(tx.get("pages_processed") or 0)
+    pages_failed = int(tx.get("pages_failed") or 0)
+    if pages_processed > 1:
+        out["warnings"].append(
+            f"Multi-page PDF ({pages_processed} pages) processed page-by-page for OCR."
+        )
+    if pages_failed:
+        out["warnings"].append(
+            f"Textract failed on {pages_failed} of {pages_processed} page(s); results use successful pages only."
+        )
+
     full_text = tx.get("full_text") or ""
     kvp = tx.get("key_value_pairs") or []
     tables = tx.get("tables") or []
