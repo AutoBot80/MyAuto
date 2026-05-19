@@ -3,8 +3,8 @@ import { DEALER_ID } from "./dealerId";
 import { isElectron } from "../electron";
 import { getAccessToken } from "../auth/token";
 
-/** Matches server default for Failed-tab list and failed badge window. */
-export const CHALLAN_STAGING_RECENT_DAYS = 15;
+/** In-process list and badge window. */
+export const CHALLAN_STAGING_RECENT_DAYS = 7;
 
 /** Default window for committed subdealer invoices (Invoices tab). */
 export const CHALLAN_INVOICES_RECENT_DAYS = 365;
