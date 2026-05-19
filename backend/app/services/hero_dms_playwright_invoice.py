@@ -156,7 +156,6 @@ def _normalize_attach_line_items(
     full_chassis: str,
     line_item_discount: str,
     attach_line_items: list[dict] | None,
-    allow_empty: bool = False,
 ) -> tuple[list[dict[str, str]], str | None]:
     """
     Build a list of ``{full_chassis, line_item_discount}`` for order line attach.
@@ -164,14 +163,9 @@ def _normalize_attach_line_items(
     If ``attach_line_items`` is non-empty, each dict may use ``full_chassis``, ``vin``, or ``frame_num``
     and optional ``line_item_discount`` / ``discount``. Otherwise a single line is built from
     ``full_chassis`` + ``line_item_discount``.
-
-    When ``allow_empty`` is True, an explicit empty ``attach_line_items`` list is valid (challan
-    resume: all VINs already on the order — caller runs Price All / Allocate with ``skip_line_item_fill``).
     """
     if attach_line_items is not None and len(attach_line_items) == 0:
-        if allow_empty:
-            return [], None
-        return [], "attach_line_items was empty or had no chassis values."
+        return [], None  # Explicit empty list: all VINs already attached (challan resume x=y)
     if attach_line_items is not None and len(attach_line_items) > 0:
         if len(attach_line_items) > _ATTACH_LINE_ITEMS_MAX:
             return [], f"attach_line_items exceeds maximum ({_ATTACH_LINE_ITEMS_MAX})."
@@ -2703,7 +2697,6 @@ def _attach_vehicle_to_bkg(
             full_chassis=full_chassis,
             line_item_discount=line_item_discount,
             attach_line_items=attach_line_items,
-            allow_empty=skip_line_item_fill,
         )
         if _li_err:
             return False, _li_err, {}
@@ -4953,16 +4946,6 @@ def _create_order(
 
         _start_alloc = _branch == "allocated"
         if len(_to_attach) == 0:
-            if len(_siebel_vin_set) < len(_olv_full):
-                note(
-                    "Create Order: challan resume — WARNING: Siebel VIN count "
-                    f"({len(_siebel_vin_set)}) < staging ({len(_olv_full)}); "
-                    "grid read may be incomplete — continuing to Price All / Allocate All."
-                )
-            note(
-                "Create Order: challan resume — all staging VINs already on order; "
-                "skipping line-item fill; running Price All / Allocate All."
-            )
             _att_ok, _att_err, _att_scraped = _attach_vehicle_to_bkg(
                 page,
                 full_chassis=full_chassis,
