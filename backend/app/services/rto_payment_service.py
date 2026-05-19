@@ -5,7 +5,6 @@ import threading
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.db import get_connection
 from app.repositories import rto_payment_details as repo
 from app.services.fill_rto_service import fill_rto_row
 from app.services.playwright_executor import run_playwright_callable_sync
@@ -13,10 +12,6 @@ from app.services.playwright_executor import run_playwright_callable_sync
 logger = logging.getLogger(__name__)
 _BATCH_LOCK = threading.Lock()
 _BATCH_STATUS_BY_DEALER: dict[int, dict] = {}
-
-
-def _batch_lock_key(dealer_id: int) -> int:
-    return 9_200_000 + int(dealer_id)
 
 
 def _utc_now() -> str:
@@ -107,6 +102,7 @@ def start_dealer_rto_batch(
     *,
     dealer_id: int,
     limit: int = 7,
+    login_id: str | None = None,
 ) -> dict:
     dealer_id = int(dealer_id)
     with _BATCH_LOCK:
@@ -140,6 +136,7 @@ def start_dealer_rto_batch(
             "dealer_id": dealer_id,
             "session_id": session_id,
             "limit": limit,
+            "login_id": login_id,
         },
         daemon=True,
         name=f"rto-batch-{dealer_id}",
@@ -153,35 +150,19 @@ def _run_dealer_rto_batch(
     dealer_id: int,
     session_id: str,
     limit: int,
+    login_id: str | None = None,
 ) -> None:
     worker_id = f"dealer-{dealer_id}:{session_id}"
-    advisory_conn = None
-    acquired_lock = False
     current_queue_id: int | None = None
     current_sales_id: int | None = None
     try:
-        advisory_conn = get_connection()
-        advisory_conn.autocommit = True
-        with advisory_conn.cursor() as cur:
-            cur.execute("SELECT pg_try_advisory_lock(%s) AS locked", (_batch_lock_key(dealer_id),))
-            row = cur.fetchone()
-            acquired_lock = bool(row and row.get("locked"))
-        if not acquired_lock:
-            _write_batch_status(
-                dealer_id,
-                state="failed",
-                completed_at=_utc_now(),
-                message="Another RTO session is already running for this dealer",
-                last_error="Dealer lock is already held",
-            )
-            return
-
         _write_batch_status(dealer_id, state="running", message="Claiming queued rows")
         claimed_rows = repo.claim_oldest_batch(
             dealer_id=dealer_id,
             processing_session_id=session_id,
             worker_id=worker_id,
             limit=max(1, min(int(limit or 7), 7)),
+            locked_by_login_id=login_id,
         )
         total_count = len(claimed_rows)
         _write_batch_status(
@@ -316,10 +297,3 @@ def _run_dealer_rto_batch(
             repo.release_batch_claims(session_id)
         except Exception:
             logger.exception("rto_batch: failed to release queued claims session_id=%s", session_id)
-        if advisory_conn is not None:
-            try:
-                if acquired_lock:
-                    with advisory_conn.cursor() as cur:
-                        cur.execute("SELECT pg_advisory_unlock(%s)", (_batch_lock_key(dealer_id),))
-            finally:
-                advisory_conn.close()

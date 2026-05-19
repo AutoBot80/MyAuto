@@ -19,6 +19,7 @@ rq.status,
 rq.processing_session_id,
 rq.worker_id,
 rq.leased_until,
+rq.locked_by_login_id,
 rq.attempt_count,
 rq.last_error,
 rq.started_at,
@@ -50,7 +51,8 @@ im.policy_num,
 im.policy_from,
 im.idv,
 im.nominee_name,
-im.nominee_relationship
+im.nominee_relationship,
+lr.name AS locked_by_name
 """.strip()
 
 JOIN_CLAUSE = """
@@ -60,6 +62,7 @@ JOIN customer_master cm ON cm.customer_id = sm.customer_id
 JOIN vehicle_master vm ON vm.vehicle_id = sm.vehicle_id
 LEFT JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
 LEFT JOIN insurance_master im ON im.insurance_id = rq.insurance_id
+LEFT JOIN login_ref lr ON lr.login_id = rq.locked_by_login_id
 """.strip()
 
 
@@ -252,7 +255,8 @@ def claim_oldest_batch(
     worker_id: str,
     *,
     limit: int = 7,
-    lease_seconds: int = 1800,
+    lease_seconds: int = 900,
+    locked_by_login_id: str | None = None,
 ) -> list[dict]:
     """Claim the oldest queued rows for one dealer."""
     conn = get_connection()
@@ -265,6 +269,7 @@ def claim_oldest_batch(
                     leased_until = NULL,
                     processing_session_id = NULL,
                     worker_id = NULL,
+                    locked_by_login_id = NULL,
                     last_error = COALESCE(last_error, 'Session expired or lease timed out'),
                     updated_at = NOW()
                 WHERE rto_queue_id IN (
@@ -297,6 +302,7 @@ def claim_oldest_batch(
                 SET processing_session_id = %s,
                     worker_id = %s,
                     leased_until = NOW() + make_interval(secs => %s),
+                    locked_by_login_id = %s,
                     attempt_count = COALESCE(q.attempt_count, 0) + 1,
                     last_error = NULL,
                     updated_at = NOW()
@@ -304,7 +310,7 @@ def claim_oldest_batch(
                 WHERE q.rto_queue_id = candidates.rto_queue_id
                 RETURNING q.rto_queue_id
                 """,
-                (dealer_id, limit, processing_session_id, worker_id, lease_seconds),
+                (dealer_id, limit, processing_session_id, worker_id, lease_seconds, locked_by_login_id),
             )
             claimed_ids = [row["rto_queue_id"] for row in cur.fetchall()]
             if not claimed_ids:
@@ -336,7 +342,7 @@ def mark_batch_row_in_progress(rto_queue_id: int, processing_session_id: str, wo
                 UPDATE rto_queue
                 SET status = 'In Progress',
                     started_at = COALESCE(started_at, NOW()),
-                    leased_until = NOW() + make_interval(secs => 1800),
+                    leased_until = NOW() + make_interval(secs => 900),
                     processing_session_id = %s,
                     worker_id = %s,
                     updated_at = NOW()
@@ -370,6 +376,7 @@ def mark_batch_row_completed(
                     uploaded_at = NOW(),
                     finished_at = NOW(),
                     leased_until = NULL,
+                    locked_by_login_id = NULL,
                     processing_session_id = %s,
                     worker_id = %s,
                     last_error = NULL,
@@ -402,6 +409,7 @@ def mark_batch_row_failed(rto_queue_id: int, processing_session_id: str, worker_
                 SET status = 'Failed',
                     finished_at = NOW(),
                     leased_until = NULL,
+                    locked_by_login_id = NULL,
                     processing_session_id = %s,
                     worker_id = %s,
                     last_error = %s,
@@ -430,6 +438,7 @@ def mark_batch_row_pending(
                 UPDATE rto_queue
                 SET status = 'Pending',
                     leased_until = NULL,
+                    locked_by_login_id = NULL,
                     processing_session_id = NULL,
                     worker_id = NULL,
                     last_error = %s,
@@ -455,6 +464,7 @@ def release_batch_claims(processing_session_id: str) -> int:
                     processing_session_id = NULL,
                     worker_id = NULL,
                     leased_until = NULL,
+                    locked_by_login_id = NULL,
                     last_error = COALESCE(last_error, 'Session released before completion'),
                     updated_at = NOW()
                 WHERE processing_session_id = %s
@@ -477,6 +487,7 @@ def retry_failed_row(rto_queue_id: int) -> bool:
                 UPDATE rto_queue
                 SET status = 'Queued',
                     leased_until = NULL,
+                    locked_by_login_id = NULL,
                     processing_session_id = NULL,
                     worker_id = NULL,
                     last_error = NULL,

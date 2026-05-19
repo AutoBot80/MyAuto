@@ -167,6 +167,7 @@ def process_rto_batch(
     result = start_dealer_rto_batch(
         dealer_id=did,
         limit=payload.limit,
+        login_id=principal.login_id,
     )
     if not result.get("started"):
         raise HTTPException(status_code=409, detail=result.get("message") or "Dealer batch already running")

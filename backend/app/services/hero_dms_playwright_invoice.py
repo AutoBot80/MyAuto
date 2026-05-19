@@ -4781,15 +4781,15 @@ def _create_order(
         return ""
 
     def _poll_invoice_number_loops_only() -> str:
-        """Up to 20×1s wait then scrape Invoice# each time (caller supplies any prior settle wait)."""
-        note("Create Order: polling Invoice# (up to 20×1s).")
+        """Up to 60×1s wait then scrape Invoice# each time (caller supplies any prior settle wait)."""
+        note("Create Order: polling Invoice# (up to 60×1s).")
         inv_got = ""
-        for _inv_i in range(20):
+        for _inv_i in range(60):
             _safe_page_wait(page, 1000, log_label=f"invoice_poll_wait_{_inv_i}")
             try:
                 inv_got = (_scrape_invoice_number_current() or "").strip()
             except Exception as _inv_exc:
-                note(f"Create Order: Invoice# scrape attempt {_inv_i + 1}/20 raised {_inv_exc!r} (ignored).")
+                note(f"Create Order: Invoice# scrape attempt {_inv_i + 1}/60 raised {_inv_exc!r} (ignored).")
                 inv_got = ""
             if inv_got:
                 note(
@@ -4797,7 +4797,7 @@ def _create_order(
                     f"{_inv_i + 1}×1s poll wait(s)."
                 )
                 return inv_got
-        note("Create Order: Invoice# not on screen or not readable after 20×1s poll (best-effort).")
+        note("Create Order: Invoice# not on screen or not readable after 60×1s poll (best-effort).")
         return ""
 
     if callable(form_trace):

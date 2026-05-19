@@ -1198,14 +1198,14 @@ export function SubdealerChallanPage({
                 </div>
               </div>
               <div
-                className="challans-processed-failed-section"
+                className="challans-processed-failed-section challans-invoices-vehicle-section"
                 role="region"
                 aria-labelledby="challans-invoices-detail-heading"
               >
-                <h3 className="challans-processed-failed-heading" id="challans-invoices-detail-heading">
+                <h3 className="challans-processed-failed-heading challans-invoices-vehicle-heading" id="challans-invoices-detail-heading">
                   Vehicles (discount per line)
                 </h3>
-                <div className="challans-processed-failed-table-wrap">
+                <div className="challans-processed-failed-table-wrap challans-invoices-vehicle-wrap">
                   {selectedInvoiceChallanId === null ? (
                     <p className="app-table-empty challans-processed-failed-placeholder">
                       Select an invoice row above to view vehicles.
@@ -1221,9 +1221,10 @@ export function SubdealerChallanPage({
                       No vehicle lines for this invoice.
                     </p>
                   ) : (
-                    <table className="app-table challans-processed-failed-table">
+                    <table className="app-table challans-invoices-vehicle-table">
                       <thead>
                         <tr>
+                          <th scope="col">S.No.</th>
                           <th scope="col">Chassis</th>
                           <th scope="col">Engine</th>
                           <th scope="col">Model</th>
@@ -1234,8 +1235,9 @@ export function SubdealerChallanPage({
                         </tr>
                       </thead>
                       <tbody>
-                        {invoiceLines.map((ln) => (
+                        {invoiceLines.map((ln, idx) => (
                           <tr key={ln.inventory_line_id}>
+                            <td>{idx + 1}</td>
                             <td>{(ln.chassis_no || "").trim() || "—"}</td>
                             <td>{(ln.engine_no || "").trim() || "—"}</td>
                             <td>{(ln.model || "").trim() || "—"}</td>

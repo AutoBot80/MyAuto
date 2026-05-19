@@ -45,6 +45,10 @@ export interface RtoPaymentRow {
   updated_at?: string | null;
   processing_session_id?: string | null;
   worker_id?: string | null;
+  /** login_id of the user who locked this row for batch processing. */
+  locked_by_login_id?: string | null;
+  /** Display name of the user who locked this row. */
+  locked_by_name?: string | null;
 }
 
 export interface RtoBatchRowResult {

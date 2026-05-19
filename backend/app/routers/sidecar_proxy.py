@@ -606,6 +606,7 @@ async def vahan_claim_batch(
         processing_session_id=session_id,
         worker_id=worker_id,
         limit=max(1, min(int(req.limit or 7), 7)),
+        locked_by_login_id=principal.login_id,
     )
     serialised = []
     for r in rows:

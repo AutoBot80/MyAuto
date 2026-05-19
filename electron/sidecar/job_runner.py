@@ -2260,14 +2260,47 @@ def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
     if not rows:
         return {"success": True, "total": 0, "completed": 0, "failed": 0, "message": "No queued rows"}
 
+    from app.config import get_ocr_output_dir, get_uploads_dir
     from app.services.fill_rto_service import fill_rto_row
+
+    uploads_dir = get_uploads_dir(dealer_id)
+    ocr_dir = get_ocr_output_dir(dealer_id)
 
     completed_count = 0
     failed_count = 0
+    pending_count = 0
 
     for row in rows:
         rto_queue_id = int(row["rto_queue_id"])
         sales_id = int(row["sales_id"])
+        subfolder = (row.get("subfolder") or "").strip()
+
+        # Download files from EC2 before processing (files may not exist locally)
+        if subfolder:
+            try:
+                pull_stats = _pull_sale_subfolder_from_server(
+                    api_url, jwt, dealer_id, subfolder, uploads_dir, ocr_dir=ocr_dir
+                )
+                logging.info(
+                    "vahan batch row %s: pulled %d files (failed=%d, skipped=%d)",
+                    rto_queue_id,
+                    pull_stats.get("downloads_uploaded", 0),
+                    pull_stats.get("downloads_failed", 0),
+                    pull_stats.get("downloads_skipped", 0),
+                )
+            except Exception as pull_exc:
+                logging.warning("vahan batch row %s: file pull failed: %s", rto_queue_id, pull_exc)
+                # Mark row as Pending so operator can retry after fixing file issues
+                _api_post(api_url, jwt, "/sidecar/vahan/row-result", {
+                    "rto_queue_id": rto_queue_id,
+                    "sales_id": sales_id,
+                    "session_id": session_id,
+                    "worker_id": worker_id,
+                    "status": "Pending",
+                    "error": f"File download failed: {pull_exc}"[:2000],
+                })
+                pending_count += 1
+                continue
 
         try:
             batch_result = fill_rto_row(row)
@@ -2301,10 +2334,11 @@ def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
             _upload_rto_row_log_if_present(api_url, jwt, dealer_id, row)
 
     return {
-        "success": failed_count == 0,
+        "success": failed_count == 0 and pending_count == 0,
         "total": len(rows),
         "completed": completed_count,
         "failed": failed_count,
+        "pending": pending_count,
     }
 
 

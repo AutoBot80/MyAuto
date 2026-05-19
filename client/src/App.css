@@ -3530,6 +3530,96 @@
   background: rgba(198, 40, 40, 0.07);
 }
 
+/* Invoices tab: vehicle table with S.No., Chassis, Engine, Model, Variant, Color, Ex-showroom, Discount */
+.challans-invoices-vehicle-section {
+  gap: 2px;
+  padding: 4px 10px 6px;
+}
+
+.challans-invoices-vehicle-heading {
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.challans-invoices-vehicle-wrap {
+  min-height: 10rem;
+}
+
+.challans-invoices-vehicle-table {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.challans-invoices-vehicle-table.app-table thead th,
+.challans-invoices-vehicle-table.app-table tbody td {
+  vertical-align: middle;
+  line-height: 1.2;
+  padding: 4px 5px;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* S.No. column - narrow */
+.challans-invoices-vehicle-table.app-table thead th:nth-child(1),
+.challans-invoices-vehicle-table.app-table tbody td:nth-child(1) {
+  width: 4ch;
+  max-width: 4ch;
+  text-align: center;
+}
+
+/* Chassis column - wide for 17-char VINs */
+.challans-invoices-vehicle-table.app-table thead th:nth-child(2),
+.challans-invoices-vehicle-table.app-table tbody td:nth-child(2) {
+  width: 19ch;
+  max-width: 19ch;
+}
+
+/* Engine column */
+.challans-invoices-vehicle-table.app-table thead th:nth-child(3),
+.challans-invoices-vehicle-table.app-table tbody td:nth-child(3) {
+  width: 16ch;
+  max-width: 16ch;
+}
+
+/* Model column */
+.challans-invoices-vehicle-table.app-table thead th:nth-child(4),
+.challans-invoices-vehicle-table.app-table tbody td:nth-child(4) {
+  width: 14ch;
+  max-width: 14ch;
+}
+
+/* Variant column */
+.challans-invoices-vehicle-table.app-table thead th:nth-child(5),
+.challans-invoices-vehicle-table.app-table tbody td:nth-child(5) {
+  width: 11ch;
+  max-width: 11ch;
+}
+
+/* Color column - narrower */
+.challans-invoices-vehicle-table.app-table thead th:nth-child(6),
+.challans-invoices-vehicle-table.app-table tbody td:nth-child(6) {
+  width: 7ch;
+  max-width: 7ch;
+}
+
+/* Ex-showroom column */
+.challans-invoices-vehicle-table.app-table thead th:nth-child(7),
+.challans-invoices-vehicle-table.app-table tbody td:nth-child(7) {
+  width: 10ch;
+  max-width: 10ch;
+  text-align: right;
+}
+
+/* Discount column */
+.challans-invoices-vehicle-table.app-table thead th:nth-child(8),
+.challans-invoices-vehicle-table.app-table tbody td:nth-child(8) {
+  width: auto;
+  min-width: 8ch;
+  text-align: right;
+}
+
 .challans-proc-master-row {
   cursor: pointer;
 }

@@ -1,0 +1,3 @@
+# Per-run Playwright DMS text traces and optional Playwright trace ZIPs from test wrappers
+*
+!.gitignore

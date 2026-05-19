@@ -248,6 +248,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     "Chassis No.",
     "RTO Amount",
     "Status",
+    "Locked By",
     "Actions",
   ];
 
@@ -422,6 +423,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                   <td>{r.chassis_num ?? "—"}</td>
                   <td>{r.rto_payment_amount != null ? `₹${r.rto_payment_amount}` : "—"}</td>
                   <td>{r.status ?? "Pending"}</td>
+                  <td>{r.locked_by_name ?? "—"}</td>
                   <td>
                     {String(r.status || "").toLowerCase() === "failed" ? (
                       <button
