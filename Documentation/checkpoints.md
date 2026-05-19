@@ -47,6 +47,7 @@ Cursor agents follow **`.cursor/rules/checkpoints-registry.mdc`**: full workflow
 | 18 | v0.5.00 | `v0.5.00` | `f1eb9c5e861a5a65cfb175c97be69d35377ffed2` | 2026-04-17T08:39:19+05:30 | 1) Strengthened Consolidated Input file; 2) End to end run successful; 3) GO for Beta! |
 | 19 | v0.7.00 — Fixed PDI issues. After Beta | `v0.7.00` | `c44e604da2f8d3751a19ef81dca1233c292b9925` | 2026-05-03T20:07:47+05:30 | 1) Fixed PDI issues (see snapshot commit); 2) Post-beta soak — regression on vehicle / challan / overlay paths; 3) Optional narrative — **`Documentation/checkpoint-v0-7-00.md`** |
 | 20 | v0.7.10 | `v0.7.10` | `056850f23cbf717b92ae8de15d5e9767e12a309d` | 2026-05-05T18:31:30+05:30 | 1) Moved to Playwright Chromium. |
+| 21 | v0.9.00 | `v0.9.00` | `2fbb1426f29b16750d39cd1bab020d3cae45108d` | 2026-05-19T11:13:20+05:30 | — |
 
 ## Rollback / Restore
 
