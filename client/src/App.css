@@ -3572,8 +3572,8 @@
 /* Chassis column - wide for 17-char VINs */
 .challans-invoices-vehicle-table.app-table thead th:nth-child(2),
 .challans-invoices-vehicle-table.app-table tbody td:nth-child(2) {
-  width: 19ch;
-  max-width: 19ch;
+  width: 24ch;
+  max-width: 24ch;
 }
 
 /* Engine column */
@@ -3593,8 +3593,8 @@
 /* Variant column */
 .challans-invoices-vehicle-table.app-table thead th:nth-child(5),
 .challans-invoices-vehicle-table.app-table tbody td:nth-child(5) {
-  width: 11ch;
-  max-width: 11ch;
+  width: 16ch;
+  max-width: 16ch;
 }
 
 /* Color column - narrower */
@@ -3607,8 +3607,8 @@
 /* Ex-showroom column */
 .challans-invoices-vehicle-table.app-table thead th:nth-child(7),
 .challans-invoices-vehicle-table.app-table tbody td:nth-child(7) {
-  width: 10ch;
-  max-width: 10ch;
+  width: 17ch;
+  max-width: 17ch;
   text-align: right;
 }
 

@@ -4474,13 +4474,14 @@ def _fill_challan_account_institution_name_verify_pin(
         # Two ArrowDown presses: first may open dropdown, second selects "Account Name"
         try:
             page.keyboard.press("ArrowDown")
-            _safe_page_wait(page, 150, log_label="pick_account_dropdown_down1")
+            page.keyboard.press("ArrowDown")
+            _safe_page_wait(page, 150, log_label="pick_account_dropdown_down1_2")
             _dropdown_ok = True
-            note("Pick Account MVG: first ArrowDown on criterion dropdown.")
+            note("Pick Account MVG: two ArrowDowns on criterion dropdown.")
         except Exception as e:
             note(f"Pick Account MVG: keyboard navigation failed: {e!r}")
 
-        # Read back selected criterion; first ArrowDown sometimes leaves Account ID
+        # Read back selected criterion; if still Account ID, one more ArrowDown
         try:
             _crit = (page.evaluate(
                 """() => {
@@ -4497,15 +4498,15 @@ def _fill_challan_account_institution_name_verify_pin(
                     return '';
                 }"""
             ) or "").strip()
-            note(f"Pick Account MVG: criterion after ArrowDown = {_crit!r}.")
+            note(f"Pick Account MVG: criterion after two ArrowDowns = {_crit!r}.")
             if (
                 _crit
                 and re.search(r"account\s*id", _crit, re.I)
                 and not re.search(r"account\s*name", _crit, re.I)
             ):
                 page.keyboard.press("ArrowDown")
-                _safe_page_wait(page, 150, log_label="pick_account_dropdown_down2")
-                note("Pick Account MVG: second ArrowDown (criterion was Account ID).")
+                _safe_page_wait(page, 150, log_label="pick_account_dropdown_down3")
+                note("Pick Account MVG: third ArrowDown (criterion still Account ID).")
         except Exception as e:
             note(f"Pick Account MVG: criterion readback skipped ({e!r}).")
 
