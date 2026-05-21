@@ -8347,8 +8347,14 @@ def _hero_misp_click_proposal_preview_submit_in_root(
     ]
     for tag, loc in attempts:
         try:
-            if loc.count() == 0:
+            cnt = loc.count()
+        except Exception as cnt_exc:
+            if "detached" in str(cnt_exc).lower():
                 continue
+            cnt = 0
+        if cnt == 0:
+            continue
+        try:
             el = loc.first
             if not el.is_visible(timeout=min(2_500, to)):
                 _proposal_scroll_visible(el, timeout_ms=to)
@@ -8360,8 +8366,10 @@ def _hero_misp_click_proposal_preview_submit_in_root(
                 pass
             el.click(timeout=to, force=True)
             return tag
-        except Exception as exc:
-            logger.debug("Hero Insurance: proposal preview Submit (%s): %s", tag, exc)
+        except Exception as el_exc:
+            if "detached" in str(el_exc).lower():
+                continue
+            logger.debug("Hero Insurance: proposal preview Submit (%s): %s", tag, el_exc)
             continue
     return None
 
@@ -8389,18 +8397,27 @@ def _hero_misp_click_issue_policy(
         return None
 
     for r in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
-        _proposal_scroll_root_to_bottom(r)
+        try:
+            _proposal_scroll_root_to_bottom(r)
+        except Exception as scroll_exc:
+            if "detached" not in str(scroll_exc).lower():
+                logger.debug("Hero Insurance: scroll to bottom: %s", scroll_exc)
     _t(page, 300)
 
     clicked = False
     click_tag = ""
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
-        tag = _hero_misp_click_proposal_preview_submit_in_root(root, timeout_ms=to)
-        if tag:
-            clicked = True
-            click_tag = f"{tag} (frame)"
-            logger.info("Hero Insurance: clicked proposal preview Submit — %s.", click_tag)
-            break
+        try:
+            tag = _hero_misp_click_proposal_preview_submit_in_root(root, timeout_ms=to)
+            if tag:
+                clicked = True
+                click_tag = f"{tag} (frame)"
+                logger.info("Hero Insurance: clicked proposal preview Submit — %s.", click_tag)
+                break
+        except Exception as root_exc:
+            if "detached" in str(root_exc).lower():
+                continue
+            logger.debug("Hero Insurance: Submit in root: %s", root_exc)
 
     if not clicked:
         try:

@@ -437,18 +437,19 @@ def merge_staging_payload_on_cursor(
     staging_id: str,
     dealer_id: int,
     patch: dict[str, Any],
-) -> None:
+) -> int:
     """
     Merge ``patch`` into ``payload_json`` without changing ``status`` (e.g. ``insurance_id`` after GI).
     Only updates rows where ``staging_id`` / ``dealer_id`` match and ``status`` is draft or committed.
+    Returns ``cur.rowcount`` from the UPDATE (0 if row missing or not draft/committed).
     """
     sid = (staging_id or "").strip()
     if not sid or not patch:
-        return
+        return 0
     did = int(dealer_id)
     existing = _load_payload_json_for_update_on_cursor(cur, staging_id=sid, dealer_id=did)
     if existing is None:
-        return
+        return 0
     merged = deep_merge_staging_payload(existing, patch)
     frag = json.dumps(merged, default=str)
     cur.execute(
@@ -461,6 +462,7 @@ def merge_staging_payload_on_cursor(
         """,
         (frag, sid, did),
     )
+    return int(cur.rowcount or 0)
 
 
 def mark_staging_committed_on_cursor(

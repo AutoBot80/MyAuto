@@ -92,3 +92,37 @@ export async function fetchAddSalesStagingPayload(
     `/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`
   );
 }
+
+/** Whitelisted operator edits for In-process Sales Details (PATCH merge into staging). */
+export interface PatchAddSalesStagingPayloadBody {
+  customer?: {
+    care_of?: string | null;
+    address?: string | null;
+  };
+  vehicle?: {
+    frame_no?: string | null;
+    engine_no?: string | null;
+    key_no?: string | null;
+    battery_no?: string | null;
+  };
+  insurance?: {
+    nominee_name?: string | null;
+    nominee_relationship?: string | null;
+  };
+}
+
+export async function patchAddSalesStagingPayload(
+  stagingId: string,
+  dealerId: number,
+  body: PatchAddSalesStagingPayloadBody
+): Promise<{ ok: boolean; staging_id: string; updated_at: string | null }> {
+  const q = new URLSearchParams({ dealer_id: String(dealerId) });
+  return apiFetch<{ ok: boolean; staging_id: string; updated_at: string | null }>(
+    `/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+}

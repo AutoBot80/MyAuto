@@ -1498,7 +1498,9 @@ export function AddSalesPage({
         setFillInsuranceStatus(cpaRes.error ?? "CPA Insurance failed.");
       } else {
         setFillInsuranceStatus(
-          "CPA portal: fields filled. Finish any remaining steps in the browser; trace is under ocr_output (playwright_cpa_*.txt)."
+          cpaRes.certificate_number
+            ? `CPA Insurance completed. Certificate: ${cpaRes.certificate_number}`
+            : "CPA Insurance completed."
         );
         await reloadInsuranceFromStaging();
       }

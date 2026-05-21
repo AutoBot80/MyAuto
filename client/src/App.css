@@ -483,11 +483,34 @@
   padding-bottom: 1.25rem;
 }
 
+.add-sales-in-process-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
 .add-sales-in-process-detail-title {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 15px;
   font-weight: 600;
   color: #1e5a9e;
+}
+
+.add-sales-in-process-save-btn {
+  flex-shrink: 0;
+}
+
+.add-sales-in-process-dd--readonly {
+  color: #3d4f5f;
+}
+
+.add-sales-in-process-sales-dl .add-sales-v2-dl-input {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .add-sales-in-process-hint,

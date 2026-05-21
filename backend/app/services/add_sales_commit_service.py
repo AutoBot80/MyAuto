@@ -937,8 +937,6 @@ def compute_cpa_insurance_master_insert_snapshot(
     fill_values: dict[str, Any] = {}
     if cpa_insurer:
         fill_values["insurer"] = cpa_insurer
-    elif ins_staging.get("insurer"):
-        fill_values["insurer"] = ins_staging.get("insurer")
     for key in ("nominee_name", "nominee_age", "nominee_relationship", "nominee_gender"):
         if ins_staging.get(key) is not None:
             fill_values[key] = ins_staging.get(key)

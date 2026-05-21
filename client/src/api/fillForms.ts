@@ -635,6 +635,7 @@ export interface FillCpaAllianceInsuranceResponse {
   error?: string | null;
   page_url?: string | null;
   playwright_log?: string | null;
+  certificate_number?: string | null;
 }
 
 /** CPA Alliance portal on the API host (browser dev / cloud worker). Same automation as the Electron sidecar. */
@@ -693,6 +694,7 @@ export async function fillCpaAllianceInsuranceLocal(
         error: data.error ?? undefined,
         page_url: data.page_url ?? undefined,
         playwright_log: data.playwright_log ?? undefined,
+        certificate_number: (data as any).certificate_number ?? undefined,
       };
     }
     const err =

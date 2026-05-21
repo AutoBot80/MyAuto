@@ -5,7 +5,9 @@ import {
   fetchAddSalesStagingPayload,
   fetchCreateInvoiceEligibility,
   fetchDealerCpaContext,
+  patchAddSalesStagingPayload,
   type AddSalesInProcessRow,
+  type PatchAddSalesStagingPayloadBody,
 } from "../api/addSales";
 import {
   buildFillCpaAllianceInsuranceRequest,
@@ -18,6 +20,7 @@ import { runPrintQueueRtoFlow } from "../utils/printQueueRtoFlow";
 import { buildDisplayAddress } from "../types";
 import type { ExtractedCustomerDetails, ExtractedInsuranceDetails, ExtractedVehicleDetails } from "../types";
 import { cpaPolicyFromInsuranceRaw } from "../utils/insuranceDisplay";
+import { sanitizeFormFieldInputValue, sanitizeFormFieldValue } from "../utils/formFieldSanitize";
 
 function formatTenDigitSegment(raw: unknown): string {
   const d = String(raw ?? "").replace(/\D/g, "").slice(-10);
@@ -92,6 +95,66 @@ function payloadVehicle(rec: Record<string, unknown> | null): ExtractedVehicleDe
   };
 }
 
+/** Editable subset of In-process Sales Details (maps to PATCH whitelist). */
+interface InProcessDetailDraft {
+  care_of: string;
+  address: string;
+  frame_no: string;
+  engine_no: string;
+  key_no: string;
+  battery_no: string;
+  nominee_name: string;
+  nominee_relationship: string;
+}
+
+function buildDraftFromPayload(payload: Record<string, unknown> | null): InProcessDetailDraft | null {
+  if (!payload) return null;
+  const cust = payloadCustomer((payload.customer as Record<string, unknown>) ?? null);
+  const veh = payloadVehicle((payload.vehicle as Record<string, unknown>) ?? null);
+  const ins = payloadInsurance((payload.insurance as Record<string, unknown>) ?? null);
+  const address =
+    cust?.address?.trim() ? cust.address : cust ? buildDisplayAddress(cust) : "";
+  return {
+    care_of: cust?.care_of?.trim() ?? "",
+    address: address.trim(),
+    frame_no: veh?.frame_no?.trim() ?? "",
+    engine_no: veh?.engine_no?.trim() ?? "",
+    key_no: veh?.key_no?.trim() ?? "",
+    battery_no: veh?.battery_no?.trim() ?? "",
+    nominee_name: ins?.nominee_name?.trim() ?? "",
+    nominee_relationship: ins?.nominee_relationship?.trim() ?? "",
+  };
+}
+
+function draftsEqual(a: InProcessDetailDraft, b: InProcessDetailDraft): boolean {
+  return (
+    a.care_of === b.care_of &&
+    a.address === b.address &&
+    a.frame_no === b.frame_no &&
+    a.engine_no === b.engine_no &&
+    a.key_no === b.key_no &&
+    a.battery_no === b.battery_no &&
+    a.nominee_name === b.nominee_name &&
+    a.nominee_relationship === b.nominee_relationship
+  );
+}
+
+function draftToPatchBody(draft: InProcessDetailDraft): PatchAddSalesStagingPayloadBody {
+  return {
+    customer: { care_of: draft.care_of, address: draft.address },
+    vehicle: {
+      frame_no: draft.frame_no,
+      engine_no: draft.engine_no,
+      key_no: draft.key_no,
+      battery_no: draft.battery_no,
+    },
+    insurance: {
+      nominee_name: draft.nominee_name,
+      nominee_relationship: draft.nominee_relationship,
+    },
+  };
+}
+
 function payloadInsurance(rec: Record<string, unknown> | null): ExtractedInsuranceDetails | null {
   if (!rec || typeof rec !== "object") return null;
   const i = rec as Record<string, unknown>;
@@ -149,6 +212,8 @@ export function AddSalesInProcessPanel({
   const [dealerHeroCpi, setDealerHeroCpi] = useState<string | null>(null);
   const [panelRefreshToken, setPanelRefreshToken] = useState(0);
   const [isPanelRefreshing, setIsPanelRefreshing] = useState(false);
+  const [detailEditDraft, setDetailEditDraft] = useState<InProcessDetailDraft | null>(null);
+  const [detailSaveBusy, setDetailSaveBusy] = useState(false);
 
   const refreshList = useCallback(async () => {
     if (dealerId <= 0) return;
@@ -241,6 +306,43 @@ export function AddSalesInProcessPanel({
       c = true;
     };
   }, [selectedId, dealerId, panelRefreshToken]);
+
+  useEffect(() => {
+    setDetailEditDraft(buildDraftFromPayload(detailPayload));
+  }, [detailPayload, selectedId]);
+
+  const detailDraftBaseline = useMemo(
+    () => buildDraftFromPayload(detailPayload),
+    [detailPayload]
+  );
+  const detailDirty = useMemo(() => {
+    if (!detailEditDraft || !detailDraftBaseline) return false;
+    return !draftsEqual(detailEditDraft, detailDraftBaseline);
+  }, [detailEditDraft, detailDraftBaseline]);
+
+  const onSaveDetailChanges = useCallback(async () => {
+    if (!selectedId || !detailEditDraft || dealerId <= 0 || !detailDirty) return;
+    setDetailSaveBusy(true);
+    setDetailErr(null);
+    try {
+      await patchAddSalesStagingPayload(selectedId, dealerId, draftToPatchBody(detailEditDraft));
+      setPanelRefreshToken((t) => t + 1);
+      await refreshList();
+      setRowMsg("Changes saved.");
+    } catch (e) {
+      setDetailErr(e instanceof Error ? e.message : "Could not save changes.");
+    } finally {
+      setDetailSaveBusy(false);
+    }
+  }, [selectedId, detailEditDraft, dealerId, detailDirty, refreshList]);
+
+  const saveDetailDisabled =
+    !detailDirty ||
+    detailSaveBusy ||
+    pageActionsBusy ||
+    busyRowId != null ||
+    !selectedId ||
+    !detailPayload;
 
   const cust = useMemo(() => payloadCustomer((detailPayload?.customer as Record<string, unknown>) ?? null), [detailPayload]);
   const veh = useMemo(() => payloadVehicle((detailPayload?.vehicle as Record<string, unknown>) ?? null), [detailPayload]);
@@ -549,7 +651,9 @@ export function AddSalesInProcessPanel({
                               );
                               if (!res.success) throw new Error(res.error ?? "CPA Insurance failed.");
                               setRowMsg(
-                                "CPA portal opened — complete any remaining steps in the browser. Trace: ocr_output/…/playwright_cpa_*.txt"
+                                res.certificate_number
+                                  ? `CPA Insurance completed. Certificate: ${res.certificate_number}`
+                                  : "CPA Insurance completed."
                               );
                               setPanelRefreshToken((t) => t + 1);
                             });
@@ -614,36 +718,77 @@ export function AddSalesInProcessPanel({
           )}
         </div>
         <div className="add-sales-in-process-detail">
-          <h3 className="add-sales-in-process-detail-title">Sales Details</h3>
+          <div className="add-sales-in-process-detail-head">
+            <h3 className="add-sales-in-process-detail-title">Sales Details</h3>
+            {selectedId && detailPayload && detailEditDraft ? (
+              <button
+                type="button"
+                className="app-button app-button--small add-sales-in-process-save-btn"
+                disabled={saveDetailDisabled}
+                onClick={() => void onSaveDetailChanges()}
+              >
+                {detailSaveBusy ? "Saving…" : "Save Changes"}
+              </button>
+            ) : null}
+          </div>
           {!selectedId && <p className="add-sales-in-process-hint">Select a row in the table above.</p>}
           {detailErr && (
             <p className="add-sales-in-process-err" role="alert">
               {detailErr}
             </p>
           )}
-          {selectedId && detailPayload && (
+          {selectedId && detailPayload && detailEditDraft && (
             <div className="add-sales-in-process-sales-details">
               <div className="add-sales-in-process-sales-col add-sales-in-process-sales-col--customer">
                 <dl className="add-sales-v2-dl add-sales-in-process-sales-dl">
                   <div className="add-sales-v2-dl-row">
                     <dt>Mobile</dt>
-                    <dd>{mobileAlternateDisplay}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{mobileAlternateDisplay}</dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Customer Name</dt>
-                    <dd>{cust?.name?.trim() ? cust.name : "—"}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{cust?.name?.trim() ? cust.name : "—"}</dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Care of</dt>
-                    <dd>{cust?.care_of?.trim() ? cust.care_of : "—"}</dd>
+                    <dd>
+                      <input
+                        className="add-sales-v2-dl-input add-sales-v2-dl-input--care-of-free"
+                        value={detailEditDraft.care_of}
+                        onChange={(e) => {
+                          const raw = sanitizeFormFieldInputValue(e.target.value);
+                          setDetailEditDraft((prev) =>
+                            prev ? { ...prev, care_of: raw } : prev
+                          );
+                        }}
+                        placeholder="C/o Father's Name"
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={detailSaveBusy}
+                      />
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Address</dt>
-                    <dd>{cust?.address?.trim() ? cust.address : buildDisplayAddress(cust)}</dd>
+                    <dd>
+                      <input
+                        className="add-sales-v2-dl-input"
+                        value={detailEditDraft.address}
+                        onChange={(e) =>
+                          setDetailEditDraft((prev) =>
+                            prev
+                              ? { ...prev, address: sanitizeFormFieldInputValue(e.target.value) }
+                              : prev
+                          )
+                        }
+                        placeholder="—"
+                        disabled={detailSaveBusy}
+                      />
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Financier</dt>
-                    <dd>{cust?.financier?.trim() ? cust.financier : "—"}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{cust?.financier?.trim() ? cust.financier : "—"}</dd>
                   </div>
                 </dl>
               </div>
@@ -651,27 +796,81 @@ export function AddSalesInProcessPanel({
                 <dl className="add-sales-v2-dl add-sales-in-process-sales-dl">
                   <div className="add-sales-v2-dl-row">
                     <dt>Chassis</dt>
-                    <dd>{veh?.frame_no?.trim() ? veh.frame_no : "—"}</dd>
+                    <dd>
+                      <input
+                        className="add-sales-v2-dl-input"
+                        value={detailEditDraft.frame_no}
+                        onChange={(e) =>
+                          setDetailEditDraft((prev) =>
+                            prev
+                              ? { ...prev, frame_no: sanitizeFormFieldValue(e.target.value) }
+                              : prev
+                          )
+                        }
+                        placeholder="—"
+                        disabled={detailSaveBusy}
+                      />
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Engine</dt>
-                    <dd>{veh?.engine_no?.trim() ? veh.engine_no : "—"}</dd>
+                    <dd>
+                      <input
+                        className="add-sales-v2-dl-input"
+                        value={detailEditDraft.engine_no}
+                        onChange={(e) =>
+                          setDetailEditDraft((prev) =>
+                            prev
+                              ? { ...prev, engine_no: sanitizeFormFieldValue(e.target.value) }
+                              : prev
+                          )
+                        }
+                        placeholder="—"
+                        disabled={detailSaveBusy}
+                      />
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Key</dt>
-                    <dd>{veh?.key_no?.trim() ? veh.key_no : "—"}</dd>
+                    <dd>
+                      <input
+                        className="add-sales-v2-dl-input"
+                        value={detailEditDraft.key_no}
+                        onChange={(e) =>
+                          setDetailEditDraft((prev) =>
+                            prev ? { ...prev, key_no: sanitizeFormFieldValue(e.target.value) } : prev
+                          )
+                        }
+                        placeholder="—"
+                        disabled={detailSaveBusy}
+                      />
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Battery</dt>
-                    <dd>{veh?.battery_no?.trim() ? veh.battery_no : "—"}</dd>
+                    <dd>
+                      <input
+                        className="add-sales-v2-dl-input"
+                        value={detailEditDraft.battery_no}
+                        onChange={(e) =>
+                          setDetailEditDraft((prev) =>
+                            prev
+                              ? { ...prev, battery_no: sanitizeFormFieldValue(e.target.value) }
+                              : prev
+                          )
+                        }
+                        placeholder="—"
+                        disabled={detailSaveBusy}
+                      />
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Order#</dt>
-                    <dd>{veh?.order_number?.trim() ? veh.order_number : "—"}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{veh?.order_number?.trim() ? veh.order_number : "—"}</dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Invoice#</dt>
-                    <dd>{veh?.invoice_number?.trim() ? veh.invoice_number : "—"}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{veh?.invoice_number?.trim() ? veh.invoice_number : "—"}</dd>
                   </div>
                 </dl>
               </div>
@@ -679,31 +878,62 @@ export function AddSalesInProcessPanel({
                 <dl className="add-sales-v2-dl add-sales-in-process-sales-dl">
                   <div className="add-sales-v2-dl-row">
                     <dt>Nominee Name</dt>
-                    <dd>{ins?.nominee_name?.trim() ? ins.nominee_name : "—"}</dd>
+                    <dd>
+                      <input
+                        className="add-sales-v2-dl-input"
+                        value={detailEditDraft.nominee_name}
+                        onChange={(e) =>
+                          setDetailEditDraft((prev) =>
+                            prev
+                              ? { ...prev, nominee_name: sanitizeFormFieldInputValue(e.target.value) }
+                              : prev
+                          )
+                        }
+                        placeholder="—"
+                        disabled={detailSaveBusy}
+                      />
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Relationship</dt>
-                    <dd>{ins?.nominee_relationship?.trim() ? ins.nominee_relationship : "—"}</dd>
+                    <dd>
+                      <input
+                        className="add-sales-v2-dl-input"
+                        value={detailEditDraft.nominee_relationship}
+                        onChange={(e) =>
+                          setDetailEditDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  nominee_relationship: sanitizeFormFieldValue(e.target.value),
+                                }
+                              : prev
+                          )
+                        }
+                        placeholder="—"
+                        disabled={detailSaveBusy}
+                      />
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Insurance Provider</dt>
-                    <dd>{insuranceProviderDisplay}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{insuranceProviderDisplay}</dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Hero CPA</dt>
-                    <dd>{heroCpaSalesDisplay}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{heroCpaSalesDisplay}</dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Policy#</dt>
-                    <dd>{ins?.policy_num?.trim() ? ins.policy_num : "—"}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{ins?.policy_num?.trim() ? ins.policy_num : "—"}</dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>CPA Provider</dt>
-                    <dd>{cpaProviderSalesDisplay}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{cpaProviderSalesDisplay}</dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>CPA Policy#</dt>
-                    <dd>{cpaPolicySalesDisplay}</dd>
+                    <dd className="add-sales-in-process-dd--readonly">{cpaPolicySalesDisplay}</dd>
                   </div>
                 </dl>
               </div>

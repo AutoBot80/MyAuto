@@ -1527,6 +1527,7 @@ def _click_alliance_download_certificate(
         uploads_root.mkdir(parents=True, exist_ok=True)
         dest = uploads_root / dest_name
         download.save_as(str(dest))
+        download.delete()
         _append_cpa_log(log_path, f"NOTE certificate PDF saved uploads/{subfolder}/{dest.name}")
         return True
     except Exception as exc:

@@ -12,8 +12,11 @@ from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
 from app.repositories.add_sales_staging import fetch_staging_payload, list_in_process_staging_rows
 from app.repositories.master_ref import list_cpa_portals, list_portal_insurers
+from app.schemas.add_sales_staging_patch import PatchAddSalesStagingPayloadRequest
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
+from app.services.add_sales_staging_patch_service import patch_add_sales_staging_payload
+from app.validation.text_limits import enforce_max_text_depth
 
 router = APIRouter(prefix="/add-sales", tags=["add-sales"])
 
@@ -118,6 +121,32 @@ def get_add_sales_staging_payload(
     if not payload:
         raise HTTPException(status_code=404, detail="Staging not found or not accessible for this dealer.")
     return {"staging_id": staging_id.strip(), "payload_json": payload}
+
+
+@router.patch("/staging/{staging_id}/payload")
+def patch_add_sales_staging_payload_endpoint(
+    staging_id: str,
+    req: PatchAddSalesStagingPayloadRequest,
+    dealer_id: int | None = Query(None, ge=1),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Merge operator edits into ``payload_json`` (In-process Sales Details whitelist)."""
+    try:
+        uuid.UUID((staging_id or "").strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="staging_id must be a UUID") from e
+    enforce_max_text_depth(req.model_dump())
+    did = resolve_dealer_id(principal, dealer_id)
+    try:
+        return patch_add_sales_staging_payload(
+            staging_id=staging_id.strip(),
+            dealer_id=did,
+            req=req,
+        )
+    except ValueError as e:
+        msg = str(e).strip() or "Update failed"
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg) from e
 
 
 @router.get("/dealer-cpa-context")
