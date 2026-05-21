@@ -587,10 +587,17 @@ def compute_insurance_master_insert_snapshot(
         else ("staging_payload.insurance (numeric parse)" if idv_f is not None else "none")
     )
 
-    policy_broker = _str_or_none(ins_staging.get("policy_broker"), 255)
-    field_sources["policy_broker"] = (
-        "staging_payload.insurance" if policy_broker else "none (not in staging)"
-    )
+    st_broker = _str_or_none(ins_staging.get("policy_broker"), 255)
+    if not insurer and st_broker:
+        insurer = st_broker
+        field_sources["insurer"] = "staging_payload.insurance.policy_broker (fallback)"
+        policy_broker = None
+        field_sources["policy_broker"] = "none (value moved to insurer)"
+    else:
+        policy_broker = st_broker
+        field_sources["policy_broker"] = (
+            "staging_payload.insurance" if policy_broker else "none (not in staging)"
+        )
 
     insurance_year = date.today().year
     field_sources["insurance_year"] = "derived: date.today().year (server calendar year)"

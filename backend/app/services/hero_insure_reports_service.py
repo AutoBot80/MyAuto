@@ -548,6 +548,26 @@ def _misp_nav_roots(page: Page) -> list[Any]:
     return _hero_misp_page_and_frame_roots(page, purpose="nav")
 
 
+def _frame_dump_on_error(
+    page: Page,
+    reason: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """Write frame dump for debugging when navigation/controls fail."""
+    try:
+        from app.services.fill_hero_insurance_service import _append_hero_misp_frame_dump
+
+        _append_hero_misp_frame_dump(
+            page,
+            reason=reason,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+    except Exception as exc:
+        _ins_log(ocr_output_dir, subfolder, "NOTE", f"frame dump skipped ({reason}): {exc!s}")
+
+
 def _misp_on_print_policy_search_page(page: Page) -> bool:
     try:
         u = (page.url or "").lower()
@@ -1185,6 +1205,7 @@ def run_hero_insure_reports(
             if product_sel is not None:
                 break
         if product_sel is None:
+            _frame_dump_on_error(page, "product_select_not_found", ocr_output_dir, subfolder)
             raise RuntimeError("Product <select> not found (ddlProduct)")
 
         opts = _collect_option_labels(product_sel)
@@ -1203,6 +1224,7 @@ def run_hero_insure_reports(
             if pol_in is not None:
                 break
         if pol_in is None:
+            _frame_dump_on_error(page, "policy_no_input_not_found", ocr_output_dir, subfolder)
             raise RuntimeError("Policy No. field not found (txtPolicyNo)")
 
         if commit_insurance_master and not pn:
@@ -1220,10 +1242,14 @@ def run_hero_insure_reports(
             if go_loc is not None:
                 break
         if go_loc is None:
-            g = page.locator('input[type="submit"][value="Go" i]').first
-            if g.count() > 0 and g.is_visible(timeout=1000):
-                go_loc = g
+            try:
+                g = page.locator('input[type="submit"][value="Go" i]').first
+                if g.count() > 0 and g.is_visible(timeout=1000):
+                    go_loc = g
+            except Exception:
+                pass
         if go_loc is None:
+            _frame_dump_on_error(page, "go_button_not_found", ocr_output_dir, subfolder)
             raise RuntimeError("Go button not found (btnGO)")
         go_loc.click(timeout=tmo, force=True)
         _ins_log(ocr_output_dir, subfolder, "NOTE", "Go clicked")
@@ -1279,6 +1305,7 @@ def run_hero_insure_reports(
                     print_grid = c
                     break
         if print_grid is None:
+            _frame_dump_on_error(page, "grid_print_not_found", ocr_output_dir, subfolder)
             raise RuntimeError("Grid Print (btnPrintPolicy) not found after Go")
 
         _ins_log(ocr_output_dir, subfolder, "NOTE", "clicking first Print (search grid) — opens Print Policy Certificates")
@@ -1559,6 +1586,8 @@ def run_hero_insure_reports(
     except Exception as exc:
         msg = str(exc).strip() or repr(exc)
         _ins_log(ocr_output_dir, subfolder, "ERROR", msg)
+        if "detached" in msg.lower():
+            _frame_dump_on_error(page, "frame_detached_error", ocr_output_dir, subfolder)
         logger.exception("%s failed", _PREFIX)
         return {**out, "error": msg}
     finally:

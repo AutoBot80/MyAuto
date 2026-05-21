@@ -8450,6 +8450,12 @@ def _hero_misp_click_issue_policy(
             except Exception:
                 continue
     if not clicked:
+        _append_hero_misp_frame_dump(
+            page,
+            reason="submit_issue_policy_not_found",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
         return (
             "final_policy: proposal preview Submit (ctl00_ContentPlaceHolder1_btnSubmit) or "
             "Issue Policy control not found or not clickable (production ENVIRONMENT)."
