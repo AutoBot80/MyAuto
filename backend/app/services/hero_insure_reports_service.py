@@ -488,74 +488,6 @@ def _unique_out_path(dest: Path, out_name: str) -> Path:
     return p
 
 
-def _run_second_print_and_collect_downloads(
-    page: Page,
-    p2: Any,
-    tmo: int,
-    ocr_output_dir: Path | None,
-    subfolder: str | None,
-) -> list:
-    try:
-        if page.is_closed():
-            _ins_log(ocr_output_dir, subfolder, "NOTE", "second Print skipped: page already closed")
-            return []
-    except Exception:
-        pass
-    _raw_ms = int(INSURANCE_ACTION_TIMEOUT_MS or 12_000)
-    _download_wait_sec = float(min(300, max(90, max(1, _raw_ms // 1000) * 3)))
-    _collected: list = []
-
-    def _on_download(d: Any) -> None:
-        _collected.append(d)
-
-    try:
-        page.context.on("download", _on_download)
-    except Exception as exc:
-        _ins_log(ocr_output_dir, subfolder, "NOTE", f"download listener setup failed: {exc!s}")
-        return []
-    _suppress_window_print(page)
-    try:
-        try:
-            p2.click(timeout=tmo, force=True)
-        except Exception as first_click_err:
-            if "closed" in str(first_click_err).lower():
-                _ins_log(ocr_output_dir, subfolder, "NOTE", f"second Print click failed (page closed): {first_click_err!s}")
-                return []
-            p2.click(timeout=tmo, force=True)
-        _deadline = time.time() + _download_wait_sec
-        while time.time() < _deadline:
-            page.wait_for_timeout(120)
-            if len(_collected) >= 1:
-                page.wait_for_timeout(850)
-                break
-        else:
-            if not _collected:
-                try:
-                    page.wait_for_timeout(2500)
-                except Exception:
-                    pass
-    finally:
-        try:
-            page.context.remove_listener("download", _on_download)
-        except Exception:
-            pass
-    return _collected
-
-
-def _score_insurance_download_candidate(dl: Any) -> int:
-    """Prefer real PDFs (same idea as DMS run-report download scoring)."""
-    try:
-        s = (dl.suggested_filename or "").lower()
-    except Exception:
-        s = ""
-    if s.endswith(".pdf"):
-        return 100
-    # Stray temp names (DMS / portals sometimes)
-    if s and re.match(r"^[0-9a-f-]{20,}([.][^/]*)?$", s, re.I):
-        return 1
-    return 10
-
-
 def _collect_option_labels(sel: Any) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     try:
@@ -839,64 +771,6 @@ def _misp_policy_schedule_url_from_context(page: Page, popup: Page | None) -> st
     return None
 
 
-def _misp_poll_new_policy_schedule_page(
-    context: Any,
-    page: Page,
-    popup: Page | None,
-    ocr_output_dir: Path | None,
-    subfolder: str | None,
-    *,
-    max_sec: float = 10.0,
-) -> Any | None:
-    """
-    The AllPrintPolicy cert view often returns HTML that includes
-    ``window.open('.../Policy/PolicySchedule.aspx', '…', '…')`` (see ``misp_pdf_frame_debug_*.txt``). That
-    opens a **new** top-level page: same origin/session as the cert flow, not a generic one-size URL. Poll
-    the browser **context** for a page whose URL contains **PolicySchedule**.
-    """
-    deadline = time.time() + max(2.0, min(45.0, max_sec))
-    waker = page
-    if popup is not None and not popup.is_closed():
-        waker = popup
-    while time.time() < deadline:
-        try:
-            for p in context.pages:
-                if p is None:
-                    continue
-                try:
-                    if p.is_closed():
-                        continue
-                except Exception:
-                    continue
-                u = (p.url or "")
-                ulow = u.lower()
-                if "policyschedule" not in ulow:
-                    continue
-                if p in (page, popup):
-                    which = "main" if p is page else "cert"
-                    _ins_log(
-                        ocr_output_dir,
-                        subfolder,
-                        "NOTE",
-                        f"MISP: {which} tab navigated to PolicySchedule — {u[:220]}",
-                    )
-                else:
-                    _ins_log(
-                        ocr_output_dir,
-                        subfolder,
-                        "NOTE",
-                        f"MISP: PolicySchedule window (window.open / new tab) — {u[:220]}",
-                    )
-                return p
-        except Exception:
-            pass
-        try:
-            waker.wait_for_timeout(250)
-        except Exception:
-            time.sleep(0.25)
-    return None
-
-
 def _misp_goto_policy_schedule_in_sidebar(
     page: Page, *, tmo: int, ocr_output_dir: Path | None, subfolder: str | None
 ) -> bool:
@@ -936,73 +810,6 @@ def _misp_goto_policy_schedule_in_sidebar(
                     except Exception:
                         pass
                 return True
-    return False
-
-
-def _misp_goto_policy_schedule_for_save(
-    page: Page,
-    popup: Page | None,
-    tmo: int,
-    ocr_output_dir: Path | None,
-    subfolder: str | None,
-) -> bool:
-    """
-    After the cert/Print steps, go to **PolicySchedule.aspx** (full policy/schedule as in the printed
-    view) so :func:`_try_playwright_page_pdf` or download can use that document, not only AllPrint/PrintDetails.
-
-    **MISP_GOTO_POLICY_SCHEDULE** — if set, full URL to go to. Otherwise: derive from context URLs, or
-    click **Policy Schedule** in the nav. Callers run :func:`_misp_poll_new_policy_schedule_page` first when a
-    ``PolicySchedule`` tab is opened without an explicit query (session-bound, as in the AllPrintPolicy HTML).
-    """
-    direct = (os.environ.get("MISP_GOTO_POLICY_SCHEDULE") or "").strip()
-    if direct:
-        _ins_log(ocr_output_dir, subfolder, "NOTE", f"MISP_GOTO_POLICY_SCHEDULE: {direct[:100]}")
-        try:
-            page.bring_to_front()  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        try:
-            page.goto(direct, timeout=min(60000, tmo * 4), wait_until="domcontentloaded")
-        except Exception as exc:
-            _ins_log(ocr_output_dir, subfolder, "ERROR", f"goto MISP_GOTO_POLICY_SCHEDULE: {exc!s}")
-            return False
-        _ins_log(ocr_output_dir, subfolder, "NOTE", "MISP: on PolicySchedule (MISP_GOTO_* URL)")
-        return True
-
-    derived = _misp_policy_schedule_url_from_context(page, popup)
-    if derived:
-        _ins_log(ocr_output_dir, subfolder, "NOTE", f"MISP: goto PolicySchedule derived URL: {derived[:200]}")
-        try:
-            page.bring_to_front()  # type: ignore[attr-defined]
-        except Exception:
-            pass
-        try:
-            page.goto(derived, timeout=min(60000, tmo * 4), wait_until="domcontentloaded")
-        except Exception as exc:
-            _ins_log(ocr_output_dir, subfolder, "ERROR", f"PolicySchedule goto (derived): {exc!s}")
-        else:
-            try:
-                page.wait_for_url(
-                    re.compile(r"PolicySchedule|policyschedule", re.I), timeout=30_000
-                )
-            except Exception:
-                try:
-                    page.wait_for_timeout(2000)
-                except Exception:
-                    pass
-            _ins_log(ocr_output_dir, subfolder, "NOTE", "MISP: on PolicySchedule (derived URL)")
-            return True
-    if _misp_goto_policy_schedule_in_sidebar(
-        page, tmo=tmo, ocr_output_dir=ocr_output_dir, subfolder=subfolder
-    ):
-        u = ""
-        try:
-            u = (page.url or "")[:220]
-        except Exception:
-            pass
-        if "policyschedule" in u.lower():
-            return True
-        _ins_log(ocr_output_dir, subfolder, "NOTE", "MISP: sidebar PolicySchedule click but URL not matched")
     return False
 
 
@@ -1116,107 +923,143 @@ def _find_print_policy_row_button(root) -> Any:
     return None
 
 
-def _find_print_policy_certificates_applet_print(popup: Page) -> Any:
-    for sel in (
-        "input[id*='btnAppRej']",
-        "input[name*='btnAppRej']",
-        "#gvPrintPolicy input.button1[value=Print]",
-        "table#gvPrintPolicy input[value=Print]",
-        'input[type="submit"][value="Print"]',
-        'input[type="button"][value="Print"]',
-        'input[value="Print"]',
-    ):
-        try:
-            loc = popup.locator(sel)
-            n = min(loc.count(), 10)
-            for i in range(n):
-                el = loc.nth(i)
-                if el.is_visible(timeout=1000):
-                    return el
-        except Exception:
-            continue
+def _misp_direct_url_pdf_approach(
+    *,
+    page: Page,
+    popup: Any,
+    dest: Path,
+    pn: str,
+    subfolder: str | None,
+    ocr_output_dir: Path | None,
+    tmo: int,
+) -> dict[str, Any]:
+    """
+    DIRECT URL APPROACH: Skip second Print button entirely.
+    
+    1. Extract PID/query from popup URL
+    2. Close popup immediately (no interaction with Print buttons inside)
+    3. Navigate directly to PolicySchedule.aspx with the extracted parameters
+    4. Use page.pdf() to capture the certificate
+    
+    Returns: {"ok": True/False, "error": str|None, "pdf_path": str|None}
+    """
+    import urllib.parse
+    
+    out: dict[str, Any] = {"ok": False, "error": None, "pdf_path": None}
+    
     try:
-        b = popup.get_by_role("button", name=re.compile(r"^Print$", re.I))
-        if b.count() > 0 and b.first.is_visible(timeout=2000):
-            return b.first
-    except Exception:
-        pass
-    return None
-
-
-def _misp_cert_download_first_wait_sec() -> float:
-    try:
-        v = float((os.environ.get("HERO_MISP_CERT_DL_WAIT_SEC") or "35").strip())
-    except ValueError:
-        v = 35.0
-    return max(8.0, min(120.0, v))
-
-
-def _misp_context_extra_pages_for_cert(
-    context: Any, page: Page, popup: Page | None
-) -> list[tuple[str, Any]]:
-    """
-    New windows (often the real certificate, or a PDF host) that are not the search tab / AllPrintPolicy.
-    """
-    out: list[tuple[str, Any]] = []
-    seen: set[int] = set()
-    for p in context.pages:
-        if p is page or p is popup:
-            continue
+        # Step 1: Extract URL info from popup
+        popup_url = ""
         try:
-            if p.is_closed():
-                continue
+            popup_url = popup.url or ""
         except Exception:
-            continue
-        k = id(p)
-        if k in seen:
-            continue
-        seen.add(k)
+            pass
+        
+        if not popup_url:
+            return {**out, "error": "direct_url: popup URL is empty"}
+        
+        _ins_log(ocr_output_dir, subfolder, "NOTE", f"direct_url: popup URL = {popup_url[:300]!r}")
+        
+        # Step 2: Close popup immediately - we don't need it anymore
         try:
-            u = (p.url or "").strip()
-        except Exception:
-            u = ""
-        if u.lower().startswith(("about:blank", "chrome://", "edge://", "devtools:")):
-            continue
-        out.append((f"misp_context_extra_{len(out)}", p))
-    return out
-
-
-def _misp_pages_for_print_to_pdf_in_order(
-    page: Page, ap_target: Any, context: Any, popup: Page | None
-) -> list[tuple[str, Any]]:
-    """
-    Order **Playwright** ``page.pdf`` targets. After the second **Print**, the true certificate is often
-    a **file download** (not this list), a **new** tab, or the **AllPrintPolicy** / cert view in the
-    pop-up — not a full **PrintPolicyDetails** shell. Extra context pages and the cert pop-up go first;
-    the main insurance tab (sidebar + #content-bar) is last so we do not default to the “print page” U.I.
-    """
-    out: list[tuple[str, Any]] = []
-    seen: set[int] = set()
-
-    def _add(label: str, p: Any) -> None:
-        if p is None:
-            return
+            if not popup.is_closed():
+                popup.close()
+            _ins_log(ocr_output_dir, subfolder, "NOTE", "direct_url: closed popup immediately")
+        except Exception as exc:
+            _ins_log(ocr_output_dir, subfolder, "NOTE", f"direct_url: popup close: {exc!s}")
+        
+        # Step 3: Build PolicySchedule.aspx URL from popup URL
+        # The popup URL typically contains the Policy folder path and query params (PID, etc.)
+        policy_schedule_url = None
+        
+        # Try to derive PolicySchedule.aspx URL by replacing the page name
+        if "/Policy/" in popup_url:
+            # Replace whatever.aspx with PolicySchedule.aspx, keeping query string
+            policy_schedule_url = re.sub(
+                r"(/Policy/)([^/?#]+\.aspx)",
+                r"\1PolicySchedule.aspx",
+                popup_url,
+                count=1,
+                flags=re.I,
+            )
+        
+        if not policy_schedule_url or policy_schedule_url == popup_url:
+            # Fallback: try to construct from base URL + query
+            parsed = urllib.parse.urlparse(popup_url)
+            if parsed.query:
+                # Build PolicySchedule URL with same query params
+                base = f"{parsed.scheme}://{parsed.netloc}"
+                # Try common paths
+                for path_prefix in ["/prod/apps/V1/2W/Policy/", "/Policy/"]:
+                    test_url = f"{base}{path_prefix}PolicySchedule.aspx?{parsed.query}"
+                    policy_schedule_url = test_url
+                    break
+        
+        if not policy_schedule_url:
+            return {**out, "error": "direct_url: could not derive PolicySchedule.aspx URL from popup"}
+        
+        _ins_log(ocr_output_dir, subfolder, "NOTE", f"direct_url: navigating to {policy_schedule_url[:300]!r}")
+        
+        # Step 4: Open PolicySchedule.aspx in a NEW tab (don't navigate main page)
+        # This way we can close the tab after PDF capture and leave main page untouched
+        ps_page = None
         try:
-            if p.is_closed():
-                return
+            ps_page = page.context.new_page()
+            ps_page.goto(policy_schedule_url, timeout=30_000, wait_until="domcontentloaded")
+        except Exception as exc:
+            if ps_page is not None:
+                try:
+                    ps_page.close()
+                except Exception:
+                    pass
+            return {**out, "error": f"direct_url: navigation failed: {exc!s}"}
+        
+        try:
+            ps_page.wait_for_load_state("networkidle", timeout=15_000)
         except Exception:
-            return
-        k = id(p)
-        if k in seen:
-            return
-        seen.add(k)
-        out.append((label, p))
-
-    for tag, p in _misp_context_extra_pages_for_cert(context, page, popup):
-        _add(tag, p)
-    if ap_target is not page:
-        # Pop-up may navigate to a certificate view; try it before the heavy PrintPolicyDetails tab.
-        _add("misp_all_print_policy_popup", ap_target)
-        _add("misp_insurance_main", page)
-    else:
-        _add("misp_page", page)
-    return out
+            pass
+        
+        # Small settle time for any dynamic content
+        try:
+            ps_page.wait_for_timeout(2000)
+        except Exception:
+            pass
+        
+        _ins_log(ocr_output_dir, subfolder, "NOTE", f"direct_url: on PolicySchedule page (new tab): {ps_page.url[:200]!r}")
+        
+        # Step 5: Generate output path and use page.pdf() on the new tab
+        mob = _mobile_prefix_from_subfolder(subfolder)
+        safe_pn = re.sub(r"[^\w\-.]+", "_", pn)[:80]
+        out_name = _insurance_pdf_out_name(mob, safe_pn, subfolder)
+        out_path = _unique_out_path(dest, out_name)
+        
+        # Try page.pdf() on the PolicySchedule tab
+        pdf_success = _try_playwright_page_pdf(
+            ps_page,
+            out_path,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            tag="direct_url_policy_schedule",
+        )
+        
+        # Step 6: Close the PolicySchedule tab (regardless of success)
+        try:
+            if ps_page is not None and not ps_page.is_closed():
+                ps_page.close()
+                _ins_log(ocr_output_dir, subfolder, "NOTE", "direct_url: closed PolicySchedule tab")
+        except Exception as exc:
+            _ins_log(ocr_output_dir, subfolder, "NOTE", f"direct_url: close PolicySchedule tab: {exc!s}")
+        
+        if pdf_success:
+            _ins_log(ocr_output_dir, subfolder, "NOTE", f"direct_url: PDF saved successfully: {out_path!s}")
+            return {"ok": True, "error": None, "pdf_path": str(out_path)}
+        
+        # If page.pdf() didn't produce valid PDF, log and return error
+        _ins_log(ocr_output_dir, subfolder, "NOTE", "direct_url: page.pdf() did not produce valid PDF")
+        return {**out, "error": "direct_url: page.pdf() did not produce valid PDF"}
+        
+    except Exception as exc:
+        return {**out, "error": f"direct_url: {exc!s}"}
 
 
 def run_hero_insure_reports(
@@ -1443,255 +1286,24 @@ def run_hero_insure_reports(
             except Exception:
                 pass
 
-        ap_target = popup if popup is not None else page
-        p2 = _find_print_policy_certificates_applet_print(ap_target)
-        if p2 is None and ap_target is not page:
-            p2 = _find_print_policy_certificates_applet_print(page)
-        if p2 is None:
-            raise RuntimeError("Second Print not found in Print Policy Certificates (popup or main)")
+        # Direct URL approach: extract PID from popup URL and navigate directly to
+        # PolicySchedule.aspx to capture PDF (no second Print button, no print dialogs)
+        if popup is None:
+            raise RuntimeError("No popup window opened after first Print — cannot extract PID for direct URL approach")
 
-        mob = _mobile_prefix_from_subfolder(subfolder)
-        safe_pn = re.sub(r"[^\w\-.]+", "_", pn)[:80]
-        out_name = _insurance_pdf_out_name(mob, safe_pn, subfolder)
-        out_path = _unique_out_path(dest, out_name)
-
-        raw = (os.environ.get("HERO_MISP_PDF_STRATEGY") or "auto").strip().lower()
-        if raw in ("", "auto", "playwright_first"):
-            strategy = "auto"
-        elif raw in ("download", "dl", "browser", "file"):
-            strategy = "download"
-        elif raw in ("playwright", "pdf", "print_to_pdf", "chromium", "edge"):
-            strategy = "playwright"
-        else:
-            strategy = "auto"
-            _ins_log(ocr_output_dir, subfolder, "NOTE", f"unknown HERO_MISP_PDF_STRATEGY={raw!r}, using auto")
-
-        # Track extra windows to close on success (popup, PolicySchedule tab, etc.)
-        _extra_windows_to_close: list[Any] = []
-        if popup is not None:
-            _extra_windows_to_close.append(popup)
-
-        def _commit_and_return() -> dict[str, Any]:
-            _ins_log(ocr_output_dir, subfolder, "NOTE", f"PDF saved: {out_path!s}")
-            # Close ALL extra windows (popup, PolicySchedule tab, etc.) before returning
-            for win in _extra_windows_to_close:
-                try:
-                    if win is not None and win is not page and not win.is_closed():
-                        win.close()
-                except Exception:
-                    pass
-            return {"ok": True, "error": None, "pdf_path": str(out_path)}
-
-        if strategy in ("auto", "playwright"):
-            dls: list = []
-
-            def _misp_on_down(d: Any) -> None:
-                dls.append(d)
-
-            _ins_log(
-                ocr_output_dir,
-                subfolder,
-                "NOTE",
-                "MISP: second Print (certificate) — file download or page.pdf (insurance main tab first, not the AllPrintPolicy grid only)",
-            )
-            _suppress_window_print(page)
-            if popup is not None:
-                _suppress_window_print(popup)
-            try:
-                try:
-                    page.context.on("download", _misp_on_down)
-                except Exception as exc:
-                    _ins_log(ocr_output_dir, subfolder, "NOTE", f"download listener: {exc!s}")
-                try:
-                    p2.click(timeout=tmo, force=True)
-                except Exception:
-                    p2.click(timeout=tmo, force=True)
-                t_deadline = time.time() + _misp_cert_download_first_wait_sec()
-                while time.time() < t_deadline and not dls:
-                    try:
-                        page.wait_for_timeout(200)
-                    except Exception:
-                        break
-                if dls:
-                    try:
-                        best = max(dls, key=_score_insurance_download_candidate)
-                    except Exception:
-                        best = dls[-1]
-                    best.save_as(str(out_path))
-                    if _pdf_file_looks_valid(out_path):
-                        return _commit_and_return()
-                    try:
-                        out_path.unlink()
-                    except OSError:
-                        pass
-                    _ins_log(
-                        ocr_output_dir,
-                        subfolder,
-                        "NOTE",
-                        "MISP: first download not a valid PDF, trying print-to-PDF on page",
-                    )
-            finally:
-                try:
-                    page.context.remove_listener("download", _misp_on_down)
-                except Exception:
-                    pass
-
-            ps_tab = _misp_poll_new_policy_schedule_page(
-                page.context, page, popup, ocr_output_dir, subfolder, max_sec=12.0
-            )
-            if ps_tab is not None and not ps_tab.is_closed():
-                _extra_windows_to_close.append(ps_tab)
-                _suppress_window_print(ps_tab)
-                _ins_log(
-                    ocr_output_dir,
-                    subfolder,
-                    "NOTE",
-                    "MISP: trying page.pdf on PolicySchedule tab (from server window.open or navigation)",
-                )
-                if _try_playwright_page_pdf(
-                    ps_tab,
-                    out_path,
-                    ocr_output_dir=ocr_output_dir,
-                    subfolder=subfolder,
-                    tag="misp_policy_schedule_tab",
-                ):
-                    return _commit_and_return()
-
-            if _misp_goto_policy_schedule_for_save(
-                page, popup, tmo, ocr_output_dir, subfolder
-            ):
-                try:
-                    if popup is not None and not popup.is_closed() and popup != page:
-                        popup.close()
-                except Exception:
-                    pass
-                popup = None
-                ap_target = page
-                try:
-                    page.wait_for_load_state("networkidle", timeout=30_000)
-                except Exception:
-                    pass
-                try:
-                    page.wait_for_timeout(2000)
-                except Exception:
-                    pass
-                _ins_log(
-                    ocr_output_dir,
-                    subfolder,
-                    "NOTE",
-                    "MISP: try print-to-PDF on PolicySchedule (save to uploads) before other MISP pages",
-                )
-                if not page.is_closed() and _try_playwright_page_pdf(
-                    page,
-                    out_path,
-                    ocr_output_dir=ocr_output_dir,
-                    subfolder=subfolder,
-                    tag="misp_policy_schedule",
-                ):
-                    return _commit_and_return()
-
-            try:
-                if popup is not None:
-                    popup.wait_for_load_state("domcontentloaded", timeout=20_000)
-            except Exception:
-                pass
-            try:
-                page.wait_for_load_state("domcontentloaded", timeout=20_000)
-            except Exception:
-                pass
-            try:
-                page.wait_for_timeout(2000)
-            except Exception:
-                pass
-            for _settle in range(4):
-                n_emb = 0
-                for tp2 in (page, ap_target) if ap_target is not page else (page,):
-                    if tp2 is None or tp2.is_closed():
-                        continue
-                    try:
-                        n_emb = max(
-                            n_emb,
-                            tp2.locator("embed:visible, object:visible, iframe:visible").count(),
-                        )
-                    except Exception:
-                        pass
-                if n_emb > 0:
-                    break
-                try:
-                    page.wait_for_timeout(1000)
-                except Exception:
-                    break
-            _dbg: list[tuple[str, Any]] = [("misp_print_target", ap_target)]
-            if ap_target is not page and page is not None and not page.is_closed():
-                _dbg.append(("misp_insurance_page", page))
-            for ep in _misp_context_extra_pages_for_cert(page.context, page, popup):
-                _dbg.append((ep[0], ep[1]))
-            _maybe_misp_frame_html_debug(_dbg, ocr_output_dir, subfolder)
-            _ins_log(ocr_output_dir, subfolder, "NOTE", "try Playwright page.pdf (extra tabs + pop-up first, insurance shell last; embed/iframe clip preferred)")
-            for tag, tp in _misp_pages_for_print_to_pdf_in_order(page, ap_target, page.context, popup):
-                if tp.is_closed():
-                    continue
-                if _try_playwright_page_pdf(
-                    tp,
-                    out_path,
-                    ocr_output_dir=ocr_output_dir,
-                    subfolder=subfolder,
-                    tag=tag,
-                ):
-                    return _commit_and_return()
-            if strategy == "playwright":
-                raise RuntimeError(
-                    "playwright: page.pdf could not write a valid PDF (use Edge/Chrome; MISP may need the certificate visible in the window)."
-                )
-
-        if strategy in ("auto", "download"):
-            _ins_log(ocr_output_dir, subfolder, "NOTE", "try browser file download (second Print, DMS-style poll)")
-            _collected = _run_second_print_and_collect_downloads(
-                page, p2, tmo, ocr_output_dir, subfolder
-            )
-            if _collected:
-                if len(_collected) > 1:
-                    _ins_log(
-                        ocr_output_dir,
-                        subfolder,
-                        "NOTE",
-                        f"{len(_collected)} download event(s) — best PDF (DMS-style)",
-                    )
-                try:
-                    dl = max(_collected, key=_score_insurance_download_candidate)
-                except Exception:
-                    dl = _collected[-1]
-                for d in _collected:
-                    if d is not dl:
-                        try:
-                            d.cancel()
-                        except Exception:
-                            pass
-                dl.save_as(str(out_path))
-                return _commit_and_return()
-
-        if strategy == "auto":
-            _ins_log(ocr_output_dir, subfolder, "NOTE", "no download; retry page.pdf after settle (main first)")
-            try:
-                page.wait_for_timeout(2000)
-            except Exception:
-                pass
-            for tag, tp in _misp_pages_for_print_to_pdf_in_order(page, ap_target, page.context, popup):
-                if tp.is_closed():
-                    continue
-                if _try_playwright_page_pdf(
-                    tp,
-                    out_path,
-                    ocr_output_dir=ocr_output_dir,
-                    subfolder=subfolder,
-                    tag=f"{tag}_late",
-                ):
-                    return _commit_and_return()
-
-        raise RuntimeError(
-            "Could not save policy PDF: set HERO_MISP_PDF_STRATEGY=playwright or =download, "
-            "or ensure the Print Policy view shows the certificate (Edge/Chrome) before/after the second Print."
+        direct_result = _misp_direct_url_pdf_approach(
+            page=page,
+            popup=popup,
+            dest=dest,
+            pn=pn,
+            subfolder=subfolder,
+            ocr_output_dir=ocr_output_dir,
+            tmo=tmo,
         )
+        if direct_result.get("ok"):
+            return {**out, **direct_result}
+
+        raise RuntimeError(f"Direct URL PDF capture failed: {direct_result.get('error')}")
     except Exception as exc:
         msg = str(exc).strip() or repr(exc)
         _ins_log(ocr_output_dir, subfolder, "ERROR", msg)
@@ -1700,24 +1312,13 @@ def run_hero_insure_reports(
         logger.exception("%s failed", _PREFIX)
         return {**out, "error": msg}
     finally:
-        # Close all extra windows tracked during execution
-        try:
-            for win in _extra_windows_to_close:
-                try:
-                    if win is not None and win is not page and not win.is_closed():
-                        win.close()
-                except Exception:
-                    pass
-        except NameError:
-            # _extra_windows_to_close not defined yet (early failure)
-            pass
-        # Fallback: close popup directly if not already closed
+        # Close popup if still open (direct URL approach closes it, but this handles error cases)
         if popup is not None:
             try:
                 if not popup.is_closed() and popup != page:
                     popup.close()
-            except Exception as exc:
-                _ins_log(ocr_output_dir, subfolder, "NOTE", f"close applet window: {exc!s}")
+            except Exception:
+                pass
 
 
 def hero_insure_reports_service(
