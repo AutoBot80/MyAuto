@@ -249,10 +249,10 @@ export function AddSalesInProcessPanel({
     try {
       await refreshList();
       await reloadDealerCpaContext();
-      setPanelRefreshToken((t) => t + 1);
     } catch (e) {
       setLoadErr(e instanceof Error ? e.message : "Refresh failed.");
     } finally {
+      setPanelRefreshToken((t) => t + 1);
       setIsPanelRefreshing(false);
     }
   }, [isPanelRefreshing, refreshList, reloadDealerCpaContext]);
@@ -425,10 +425,11 @@ export function AddSalesInProcessPanel({
       setRowMsg(null);
       try {
         await fn();
-        await refreshList();
       } catch (e) {
         setRowMsg(e instanceof Error ? e.message : String(e));
       } finally {
+        await refreshList();
+        setPanelRefreshToken((t) => t + 1);
         setBusyRowId(null);
         onRowActionEnd();
       }
@@ -619,7 +620,6 @@ export function AddSalesInProcessPanel({
                               const res = await fillHeroInsuranceLocal({ staging_id: r.staging_id });
                               if (!res.success) throw new Error(res.error ?? "Generate Insurance failed.");
                               dispatchPrintJobsFromApi(res.print_jobs);
-                              setPanelRefreshToken((t) => t + 1);
                             });
                           }}
                         >
@@ -655,7 +655,6 @@ export function AddSalesInProcessPanel({
                                   ? `CPA Insurance completed. Certificate: ${res.certificate_number}`
                                   : "CPA Insurance completed."
                               );
-                              setPanelRefreshToken((t) => t + 1);
                             });
                           }}
                         >

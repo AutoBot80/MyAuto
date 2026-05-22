@@ -692,11 +692,71 @@ def _hero_insurance_log_page_diagnostics(
     )
 
 
+_FRAME_DOM_ELEMENTS_JS = r"""() => {
+  const clip = (s, n) => {
+    const t = (s || '').toString().replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n) + '…' : t;
+  };
+  const vis = (el) => {
+    if (!el) return false;
+    try {
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 1 && r.height > 1;
+    } catch (e) { return false; }
+  };
+  const out = { inputs: [], buttons: [], selects: [] };
+  const cap = { inputs: 25, buttons: 20, selects: 12 };
+  try {
+    for (const el of document.querySelectorAll('input')) {
+      if (out.inputs.length >= cap.inputs) break;
+      if (!vis(el)) continue;
+      const row = { type: (el.type || '').toLowerCase(), id: el.id || '', name: el.name || '' };
+      if (el.type === 'checkbox' || el.type === 'radio') {
+        row.checked = !!el.checked;
+      } else if (el.type !== 'file') {
+        row.value = clip(el.value, 60);
+      } else {
+        row.files = el.files ? el.files.length : 0;
+      }
+      row.disabled = !!el.disabled;
+      out.inputs.push(row);
+    }
+  } catch (e) { out.inputs.push({ error: String(e).slice(0, 80) }); }
+  try {
+    for (const el of document.querySelectorAll('button, input[type="button"], input[type="submit"]')) {
+      if (out.buttons.length >= cap.buttons) break;
+      if (!vis(el)) continue;
+      out.buttons.push({
+        tag: (el.tagName || '').toLowerCase(),
+        id: el.id || '',
+        text: clip(el.innerText || el.value || '', 80),
+        disabled: !!el.disabled,
+      });
+    }
+  } catch (e) { out.buttons.push({ error: String(e).slice(0, 80) }); }
+  try {
+    for (const el of document.querySelectorAll('select')) {
+      if (out.selects.length >= cap.selects) break;
+      if (!vis(el)) continue;
+      let sel = '';
+      try {
+        const i = el.selectedIndex;
+        if (i >= 0 && el.options[i]) sel = clip(el.options[i].textContent, 60);
+      } catch (e2) {}
+      out.selects.push({ id: el.id || '', name: el.name || '', selected: sel, disabled: !!el.disabled });
+    }
+  } catch (e) { out.selects.push({ error: String(e).slice(0, 80) }); }
+  return out;
+}"""
+
+
 def _collect_hero_misp_frame_dump_lines(page) -> list[str]:
     """
-    One line per frame: URL, optional frame name, and a compact **meta** object (2W/Postback hints, **Model**
-    ``<select>`` ids) for selector tuning. Used by :func:`_write_hero_misp_frame_dump_file` — not inlined in
-    ``Playwright_insurance.txt``.
+    One line per frame: URL, optional frame name, a compact **meta** object (2W/Postback hints, **Model**
+    ``<select>`` ids), and visible DOM elements (inputs, buttons, selects) for selector tuning.
+    Used by :func:`_write_hero_misp_frame_dump_file` — not inlined in ``Playwright_insurance.txt``.
     """
     out: list[str] = []
     frs: list = []
@@ -756,6 +816,18 @@ def _collect_hero_misp_frame_dump_lines(page) -> list[str]:
             else:
                 meta = {"evaluate_error": err_s[:200]}
         line += f" meta={meta!s}"
+        dom_blob = ""
+        try:
+            dom_data = fr.evaluate(_FRAME_DOM_ELEMENTS_JS)  # type: ignore[union-attr]
+            dom_blob = json.dumps(dom_data, ensure_ascii=False)
+            if len(dom_blob) > 80_000:
+                dom_blob = dom_blob[:80_000] + "…[truncated]"
+        except Exception as dom_exc:
+            err_dom = str(dom_exc)
+            if "detached" not in err_dom.lower():
+                dom_blob = f"{{\"dom_error\": \"{err_dom[:120]}\"}}"
+        if dom_blob:
+            line += f"\n    elements={dom_blob}"
         out.append(line)
     out.insert(0, f"--- Hero MISP frame dump: frames={len(frs)} ---")
     return out
@@ -1114,6 +1186,8 @@ def _kyc_shared_consent_joint_cta_then_settle_before_vin(
     kyc_fr,
     *,
     timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
 ) -> str | None:
     """
     Shared post-prep KYC tail for **verified-banner** and **upload** branches: consent checkbox, then **one**
@@ -1127,6 +1201,12 @@ def _kyc_shared_consent_joint_cta_then_settle_before_vin(
         _wait_load_optional(page, min(25_000, to))
         _t(page, 400)
         return None
+    _append_hero_misp_frame_dump(
+        page,
+        reason="kyc_cta_not_found_after_consent",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     return (
         "KYC: no primary CTA (Proceed / policy issuance / KYC Verification / …) found after consent. "
         "Complete KYC manually or check CTA visibility."
@@ -1169,7 +1249,13 @@ def _kyc_post_mobile_entry_branch(
             "Hero Insurance: post-mobile — verified AADHAAR / policy issuance banner; "
             "consent then Proceed (CTA should read Proceed after mobile)."
         )
-        return _kyc_shared_consent_joint_cta_then_settle_before_vin(page, kyc_fr, timeout_ms=to)
+        return _kyc_shared_consent_joint_cta_then_settle_before_vin(
+            page,
+            kyc_fr,
+            timeout_ms=to,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
 
     logger.info(
         "Hero Insurance: post-mobile — first pass (AADHAAR CARD) did not show verified message; "
@@ -1209,7 +1295,11 @@ def _kyc_post_mobile_entry_branch(
     if err_upload:
         return err_upload
     return _kyc_shared_consent_joint_cta_then_settle_before_vin(
-        page, _kyc_preferred_kyc_frame(page), timeout_ms=to
+        page,
+        _kyc_preferred_kyc_frame(page),
+        timeout_ms=to,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
     )
 
 
@@ -1268,15 +1358,29 @@ def _kyc_try_check_consent_chkagree_on_root(root, *, via: str) -> bool:
             cb = root.locator(sel).first
             if cb.count() == 0:
                 continue
+            try:
+                cb.scroll_into_view_if_needed(timeout=3_000)
+            except Exception:
+                pass
             if not cb.is_visible(timeout=1_200):
+                logger.debug(
+                    "Hero Insurance: consent chkagree sel=%r found but not visible after scroll (%s).",
+                    sel,
+                    via,
+                )
                 continue
             if not cb.is_checked():
                 try:
-                    cb.scroll_into_view_if_needed(timeout=3_000)
-                except Exception:
-                    pass
-                cb.check(timeout=6_000, force=True)
-                _kyc_dispatch_checkbox_dom_events(cb)
+                    cb.check(timeout=6_000, force=True)
+                    _kyc_dispatch_checkbox_dom_events(cb)
+                except Exception as chk_exc:
+                    logger.debug(
+                        "Hero Insurance: consent chkagree sel=%r check failed (%s): %s",
+                        sel,
+                        via,
+                        chk_exc,
+                    )
+                    continue
             logger.info(
                 "Hero Insurance: consent chkagree ready before KYC primary CTA (%s).",
                 via,
@@ -1426,14 +1530,18 @@ def _kyc_ensure_consent_checked_before_kyc_cta(page, kyc_fr=None) -> None:
 
     def _check_cb(cb, *, via: str) -> bool:
         try:
-            if not cb.is_visible(timeout=900):
-                return False
-            if cb.is_checked():
-                return True
             try:
                 cb.scroll_into_view_if_needed(timeout=3_000)
             except Exception:
                 pass
+            if not cb.is_visible(timeout=900):
+                logger.debug(
+                    "Hero Insurance: consent checkbox not visible after scroll (%s).",
+                    via,
+                )
+                return False
+            if cb.is_checked():
+                return True
             cb.check(timeout=6_000, force=True)
             _kyc_dispatch_checkbox_dom_events(cb)
             logger.info(
@@ -1441,7 +1549,12 @@ def _kyc_ensure_consent_checked_before_kyc_cta(page, kyc_fr=None) -> None:
                 via,
             )
             return True
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "Hero Insurance: consent checkbox check failed (%s): %s",
+                via,
+                exc,
+            )
             return False
 
     for root in roots:
@@ -5723,6 +5836,16 @@ def _proposal_step_select_fuzzy(
                     if tag != "SELECT":
                         last = f"id {_suf!r} is {tag}, not SELECT"
                         continue
+                    pre_snap = _read_locator_value_snapshot(loc)
+                    pre_st = (pre_snap.get("selected_text") or "").strip()
+                    if pre_st and _proposal_expected_matches_readback(q, pre_st):
+                        _proposal_log(
+                            ocr_output_dir,
+                            subfolder,
+                            step_id,
+                            f"select already correct id_suffix={_suf!r} readback={pre_st!r} (skip selection)",
+                        )
+                        return None
                     # MISP **Marital Status** — try canonical labels; portal may spell **Single** as **SIngle**.
                     if cph1_id_suffix == "ddlMaritalStatus" and q in (
                         "Married",
@@ -5908,6 +6031,16 @@ def _proposal_step_select_fuzzy(
         except Exception:
             continue
         loc = el
+        pre_snap = _read_locator_value_snapshot(loc)
+        pre_st = (pre_snap.get("selected_text") or "").strip()
+        if pre_st and _proposal_expected_matches_readback(q, pre_st):
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                f"select already correct label_pattern={lp[:48]!r} readback={pre_st!r} (skip selection)",
+            )
+            return None
         _lp_match = "model" if step_id == "model_name" else "default"
         _lp_fuzzy = (
             MISP_PROPOSAL_MODEL_FUZZY_FLOOR
@@ -5949,22 +6082,6 @@ def _proposal_step_select_fuzzy(
             f"select ok label_pattern={lp[:48]!r} readback={st!r}",
         )
         return None
-    wdump = _write_hero_misp_frame_dump_file(
-        page,
-        reason=f"proposal_select_fuzzy step={step_id!s} {last!s}"[:200],
-        ocr_output_dir=ocr_output_dir,
-        subfolder=subfolder,
-    )
-    if wdump and ocr_output_dir and (subfolder or "").strip():
-        try:
-            append_playwright_insurance_line_or_dealer_fallback(
-                ocr_output_dir,
-                (subfolder or "").strip(),
-                "NOTE",
-                f"insurance frame dump (separate file): {wdump} — proposal_select_fuzzy: {last!s}"[:8_000],
-            )
-        except Exception:
-            pass
     return f"{step_id}: {last}"
 
 

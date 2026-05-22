@@ -294,12 +294,30 @@ def write_insurance_form_values(
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _playwright_insurance_log_filename() -> str:
+    """Generate timestamped filename for this run: ``Playwright_insurance_DDMMYYYY_HHMMSS.txt``."""
+    ts = datetime.now(_IST_TZ).strftime("%d%m%Y_%H%M%S")
+    return f"Playwright_insurance_{ts}.txt"
+
+
+def _find_latest_playwright_insurance_log(folder: Path) -> Path | None:
+    """Find the most recently modified ``Playwright_insurance*.txt`` in ``folder``, or None."""
+    try:
+        files = list(folder.glob("Playwright_insurance*.txt"))
+        if not files:
+            return None
+        return max(files, key=lambda p: p.stat().st_mtime)
+    except Exception:
+        return None
+
+
 def reset_playwright_insurance_log(ocr_output_dir: Path | None, subfolder: str | None) -> None:
-    """Start a fresh ``Playwright_insurance.txt`` for this run (same folder convention as DMS traces)."""
+    """Start a fresh timestamped ``Playwright_insurance_DDMMYYYY_HHMMSS.txt`` for this run."""
     if not ocr_output_dir or not subfolder or not str(subfolder).strip():
         return
     safe = safe_subfolder_name(subfolder)
-    path = Path(ocr_output_dir).resolve() / safe / "Playwright_insurance.txt"
+    fname = _playwright_insurance_log_filename()
+    path = Path(ocr_output_dir).resolve() / safe / fname
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as fp:
@@ -307,7 +325,7 @@ def reset_playwright_insurance_log(ocr_output_dir: Path | None, subfolder: str |
             fp.write(f"started_ist={_insurance_log_ts_ist()}\n")
             fp.write(f"subfolder={safe!r}\n\n--- trace ---\n")
     except OSError as exc:
-        logger.warning("Insurance: could not reset Playwright_insurance.txt: %s", exc)
+        logger.warning("Insurance: could not reset %s: %s", fname, exc)
 
 
 def write_playwright_insurance_auxiliary_text(
@@ -344,16 +362,22 @@ def append_playwright_insurance_line(
     prefix: str,
     message: str,
 ) -> None:
-    """Append one IST timestamped line to ``ocr_output/<dealer>/<subfolder>/Playwright_insurance.txt``."""
+    """Append one IST timestamped line to the latest ``Playwright_insurance_*.txt`` in the subfolder."""
     if not ocr_output_dir or not subfolder or not str(subfolder).strip():
         return
     if not (message or "").strip():
         return
     safe = safe_subfolder_name(subfolder)
-    path = Path(ocr_output_dir).resolve() / safe / "Playwright_insurance.txt"
+    folder = Path(ocr_output_dir).resolve() / safe
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        is_new = not path.is_file()
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    path = _find_latest_playwright_insurance_log(folder)
+    is_new = path is None
+    if is_new:
+        path = folder / _playwright_insurance_log_filename()
+    try:
         with open(path, "a", encoding="utf-8") as fp:
             if is_new:
                 fp.write("Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)\n\n")
@@ -361,7 +385,7 @@ def append_playwright_insurance_line(
                 fp.write(f"subfolder={safe!r}\n\n--- trace ---\n")
             fp.write(f"{_insurance_log_ts_ist()} [{prefix}] {message}\n")
     except OSError as exc:
-        logger.warning("Insurance: could not write Playwright_insurance.txt: %s", exc)
+        logger.warning("Insurance: could not write %s: %s", path.name if path else "log", exc)
 
 
 def append_playwright_insurance_diag_dealer_fallback(
