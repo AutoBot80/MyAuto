@@ -263,6 +263,28 @@ def fetch_staging_subfolder(staging_id: str, dealer_id: int) -> str | None:
     return s or None
 
 
+def sales_id_from_staging_payload(p: dict[str, Any]) -> int | None:
+    """
+    Read ``sales_id`` from a staging ``payload_json`` dict.
+
+    Create Invoice may persist ``sales_id`` as a JSON number or string.
+    """
+    raw = p.get("sales_id")
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw > 0 else None
+    if isinstance(raw, float) and raw.is_integer():
+        n = int(raw)
+        return n if n > 0 else None
+    s = str(raw).strip()
+    if s.isdigit():
+        return int(s)
+    return None
+
+
 def resolve_sales_id_from_staging(staging_id: str, dealer_id: int) -> int | None:
     """
     Resolve ``sales_master.sales_id`` for a committed/draft staging row.
@@ -273,9 +295,9 @@ def resolve_sales_id_from_staging(staging_id: str, dealer_id: int) -> int | None
     p = fetch_staging_payload(staging_id, dealer_id)
     if not p:
         return None
-    raw_sid = (p.get("sales_id") or "").strip()
-    if raw_sid.isdigit():
-        return int(raw_sid)
+    sid = sales_id_from_staging_payload(p)
+    if sid is not None:
+        return sid
     try:
         cid = int(p.get("customer_id") or 0)
         vid = int(p.get("vehicle_id") or 0)
