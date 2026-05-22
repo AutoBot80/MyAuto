@@ -5838,7 +5838,9 @@ def _proposal_step_select_fuzzy(
                         continue
                     pre_snap = _read_locator_value_snapshot(loc)
                     pre_st = (pre_snap.get("selected_text") or "").strip()
-                    if pre_st and _proposal_expected_matches_readback(q, pre_st):
+                    pre_st_lower = pre_st.lower()
+                    is_placeholder = pre_st_lower in ("--select--", "select", "-select-", "")
+                    if pre_st and not is_placeholder and _proposal_expected_matches_readback(q, pre_st):
                         _proposal_log(
                             ocr_output_dir,
                             subfolder,
@@ -6033,7 +6035,9 @@ def _proposal_step_select_fuzzy(
         loc = el
         pre_snap = _read_locator_value_snapshot(loc)
         pre_st = (pre_snap.get("selected_text") or "").strip()
-        if pre_st and _proposal_expected_matches_readback(q, pre_st):
+        pre_st_lower = pre_st.lower()
+        is_placeholder = pre_st_lower in ("--select--", "select", "-select-", "")
+        if pre_st and not is_placeholder and _proposal_expected_matches_readback(q, pre_st):
             _proposal_log(
                 ocr_output_dir,
                 subfolder,
@@ -9093,7 +9097,26 @@ def _hero_misp_fill_proposal_and_review(
         cph1_id_suffix="ddlModelName",
     )
     if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+        txt_model_ok = False
+        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+            try:
+                txt_loc = _proposal_cph1_locator(root, "txtModelName")
+                if txt_loc.count() == 0:
+                    continue
+                txt_val = _proposal_read_input_value_best_effort(txt_loc.first)
+                if txt_val:
+                    _proposal_log(
+                        ocr_output_dir,
+                        subfolder,
+                        "model_name",
+                        f"txtModelName text input already filled: {txt_val!r} (no select; skip)",
+                    )
+                    txt_model_ok = True
+                    break
+            except Exception:
+                continue
+        if not txt_model_ok:
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     # Date of Registration — skipped; left for the operator to fill manually.
     # err = _proposal_step_date_of_registration_today(
