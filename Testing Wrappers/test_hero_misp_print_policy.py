@@ -43,9 +43,9 @@ logger = logging.getLogger("test_hero_misp_print_policy")
 
 # --- Edit these for your test sale ---
 DEALER_FOLDER = "100001"
-SALE_SUBFOLDER = "9784542030_250426"  # 10-digit mobile + _ddmmyy; used for logs + PDF naming
-INSURER = "ICICI Lombard General Insurance"
-POLICY_NUM = "3005/56488939/11870/000"
+SALE_SUBFOLDER = "9057397169_210526"  # 10-digit mobile + _ddmmyy; used for logs + PDF naming
+INSURER = "The New India Assurance Co. Ltd"
+VIN = "MBLHAW509T5D11433"  # VIN/Frame No. for search
 # Absolute overrides (empty = use repo-relative Uploaded scans / ocr_output)
 UPLOADS_DIR_OVERRIDE = ""
 OCR_OUTPUT_DIR_OVERRIDE = ""
@@ -93,7 +93,7 @@ def main() -> int:
     logger.info("ocr_output:   %s", ocr_out)
     logger.info("subfolder:    %s", SALE_SUBFOLDER)
     logger.info("insurer:      %s", INSURER)
-    logger.info("policy_num:   %s", POLICY_NUM)
+    logger.info("vin:          %s", VIN)
 
     page, err = open_misp_page_sign_in_and_2w_only(
         base, ocr_output_dir=ocr_out, subfolder=SALE_SUBFOLDER
@@ -106,7 +106,7 @@ def main() -> int:
         out = run_hero_insure_reports(
             page,
             insurer=INSURER,
-            policy_num=POLICY_NUM,
+            vin=VIN,
             uploads_dir=uploads,
             ocr_output_dir=ocr_out,
             subfolder=SALE_SUBFOLDER,

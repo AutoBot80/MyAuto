@@ -68,10 +68,29 @@ _CSS_PRINT_IN_GRID = (
     f'input[id*="btnPrintPolicy"]',
     'input.button1[type="submit"][value="Print"]',
 )
+# VIN / Frame No. input selectors (fallback when policy_num is empty)
+_INP_FRAME_NO = f"#{_CPH1}_txtFrameNo"
+_NAME_FRAME_NO = r"ctl00$ContentPlaceHolder1$txtFrameNo"
 
 
 def _misp_tmo() -> int:
     return max(3000, int(INSURANCE_ACTION_TIMEOUT_MS or 12_000))
+
+
+def _suppress_window_print(page_or_popup: Any) -> None:
+    """Override window.print() and other print triggers to prevent system print dialogs from MISP website."""
+    try:
+        page_or_popup.evaluate("""(() => {
+            window.print = () => {};
+            // Also block document.execCommand('print')
+            const origExec = document.execCommand.bind(document);
+            document.execCommand = (cmd, ...args) => {
+                if (cmd && cmd.toLowerCase() === 'print') return false;
+                return origExec(cmd, ...args);
+            };
+        })()""")
+    except Exception:
+        pass
 
 
 def _norm_ws(s: str) -> str:
@@ -387,9 +406,25 @@ def _try_playwright_page_pdf(
 ) -> bool:
     """
     Save the policy view using Playwright ``Page.pdf``: ``emulate_media(print)`` to apply @media print
-    (often hides nav/buttons), then try **clipped** regions (iframes + ContentPlaceHolder) so we do not
-    get only the “outer applet with Print buttons” shell. **Edge/Chrome** via the same ``chromium`` channel.
+    (often hides nav/buttons). Full-page PDF only (Playwright does not support ``clip`` for PDFs).
+    **Edge/Chrome** via the same ``chromium`` channel.
     """
+    try:
+        if target.is_closed():
+            _ins_log(ocr_output_dir, subfolder, "NOTE", f"page.pdf ({tag}): page already closed")
+            return False
+    except Exception:
+        pass
+    try:
+        target.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        pass
+    try:
+        if target.is_closed():
+            _ins_log(ocr_output_dir, subfolder, "NOTE", f"page.pdf ({tag}): page closed after load wait")
+            return False
+    except Exception:
+        pass
     p = out_path
     p.parent.mkdir(parents=True, exist_ok=True)
     abspath = str(p.resolve())
@@ -401,53 +436,47 @@ def _try_playwright_page_pdf(
             _media_toggled = True
         except Exception as emx:
             _ins_log(ocr_output_dir, subfolder, "NOTE", f"emulate_media(print) skipped: {emx!s}")
-        for clip in _misp_pdf_clip_candidates(target):
-            if p.is_file():
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-            kw: dict = {
-                "path": abspath,
-                "print_background": True,
-                "format": "A4",
-                "margin": margin,
-            }
-            if clip is not None:
-                kw["clip"] = clip
-            clip_lbl = "full" if clip is None else f"clip w={int(clip.get('width', 0))} h={int(clip.get('height', 0))}"
+        if p.is_file():
             try:
-                target.pdf(**kw)
-            except Exception as ex:
-                _ins_log(ocr_output_dir, subfolder, "NOTE", f"page.pdf ({tag}) {clip_lbl}: {ex!s}")
-                continue
-            if not _pdf_file_looks_valid(p):
-                _ins_log(
-                    ocr_output_dir,
-                    subfolder,
-                    "NOTE",
-                    f"page.pdf ({tag}) {clip_lbl}: invalid/too small — {p!s}",
-                )
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-                continue
+                p.unlink()
+            except OSError:
+                pass
+        kw: dict = {
+            "path": abspath,
+            "print_background": True,
+            "format": "A4",
+            "margin": margin,
+        }
+        try:
+            target.pdf(**kw)
+        except Exception as ex:
+            _ins_log(ocr_output_dir, subfolder, "NOTE", f"page.pdf ({tag}): {ex!s}")
+            return False
+        if not _pdf_file_looks_valid(p):
             _ins_log(
                 ocr_output_dir,
                 subfolder,
                 "NOTE",
-                f"page.pdf ({tag}) {clip_lbl} -> {p!s} (print media + region)",
+                f"page.pdf ({tag}): invalid/too small — {p!s}",
             )
-            return True
+            try:
+                p.unlink()
+            except OSError:
+                pass
+            return False
+        _ins_log(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            f"page.pdf ({tag}) -> {p!s} (print media, full page)",
+        )
+        return True
     finally:
         if _media_toggled:
             try:
                 target.emulate_media(media="screen")
             except Exception:
                 pass
-    return False
-
 
 def _unique_out_path(dest: Path, out_name: str) -> Path:
     p = (dest / out_name).resolve()
@@ -466,6 +495,12 @@ def _run_second_print_and_collect_downloads(
     ocr_output_dir: Path | None,
     subfolder: str | None,
 ) -> list:
+    try:
+        if page.is_closed():
+            _ins_log(ocr_output_dir, subfolder, "NOTE", "second Print skipped: page already closed")
+            return []
+    except Exception:
+        pass
     _raw_ms = int(INSURANCE_ACTION_TIMEOUT_MS or 12_000)
     _download_wait_sec = float(min(300, max(90, max(1, _raw_ms // 1000) * 3)))
     _collected: list = []
@@ -473,11 +508,19 @@ def _run_second_print_and_collect_downloads(
     def _on_download(d: Any) -> None:
         _collected.append(d)
 
-    page.context.on("download", _on_download)
+    try:
+        page.context.on("download", _on_download)
+    except Exception as exc:
+        _ins_log(ocr_output_dir, subfolder, "NOTE", f"download listener setup failed: {exc!s}")
+        return []
+    _suppress_window_print(page)
     try:
         try:
             p2.click(timeout=tmo, force=True)
-        except Exception:
+        except Exception as first_click_err:
+            if "closed" in str(first_click_err).lower():
+                _ins_log(ocr_output_dir, subfolder, "NOTE", f"second Print click failed (page closed): {first_click_err!s}")
+                return []
             p2.click(timeout=tmo, force=True)
         _deadline = time.time() + _download_wait_sec
         while time.time() < _deadline:
@@ -1012,6 +1055,39 @@ def _find_policy_no_input(root) -> Any:
     return None
 
 
+def _find_vin_input(root) -> Any:
+    """Find VIN / Frame No. input field on PrintPolicyDetails page."""
+    for spec in (
+        _INP_FRAME_NO,
+        f"input[name='{_NAME_FRAME_NO}']",
+    ):
+        try:
+            loc = root.locator(spec)
+            if loc.count() > 0 and loc.first.is_visible(timeout=1000):
+                return loc.first
+        except Exception:
+            continue
+    for css in (
+        "input[id*='FrameNo' i]",
+        "input[id*='Frame' i]",
+        "input[title*='Frame' i]",
+        "input[name*='Frame' i]",
+        "input[title*='Chassis' i]",
+        "input[title*='VIN' i]",
+        "input[name*='Chassis' i]",
+        "input[name*='VIN' i]",
+        "input[id*='Chassis' i]",
+        "input[id*='VIN' i]",
+    ):
+        try:
+            loc = root.locator(css)
+            if loc.count() > 0 and loc.first.is_visible(timeout=300):
+                return loc.first
+        except Exception:
+            continue
+    return None
+
+
 def _find_go_button(root) -> Any:
     for spec in (
         _BTN_GO,
@@ -1147,7 +1223,7 @@ def run_hero_insure_reports(
     page: Page,
     *,
     insurer: str,
-    policy_num: str,
+    vin: str,
     uploads_dir: Path,
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
@@ -1161,9 +1237,12 @@ def run_hero_insure_reports(
 ) -> dict[str, Any]:
     """
     On the MISP **Insurance** tab: navigate to **Print Policy** search (**PrintPolicyDetails** /
-    **AllPrintPolicy**), **Product** + **Policy No.** + **Go**. When ``commit_insurance_master`` is set
-    (Generate Insurance production path), scrape **Total Premium** from the grid and **INSERT**
-    ``insurance_master`` before printing.
+    **AllPrintPolicy**), **Product** + **Frame No.** (VIN) + **Go**.
+
+    Always searches by **VIN/Frame No.** — the ``vin`` parameter is required.
+
+    When ``commit_insurance_master`` is set (Generate Insurance production path), scrape **Total Premium**
+    from the grid and **INSERT** ``insurance_master`` before printing.
 
     Then: first grid **Print** (opens **Print Policy Certificates**), second **Print** in that window,
     save PDF (never ``page.pdf`` the search grid alone). **Preferred:** :meth:`Page.pdf` (Edge/Chrome).
@@ -1179,10 +1258,11 @@ def run_hero_insure_reports(
         "pdf_path": None,
         "grid_scrape": None,
     }
-    pn = (policy_num or "").strip()
-    if not pn and not commit_insurance_master:
-        _ins_log(ocr_output_dir, subfolder, "NOTE", "skipped: policy_num empty")
-        return {**out, "error": "skipped: policy_num empty"}
+    vin_val = (vin or "").strip()
+    pn = ""  # Policy number scraped from grid (if commit_insurance_master) or empty
+    if not vin_val:
+        _ins_log(ocr_output_dir, subfolder, "NOTE", "skipped: vin is empty")
+        return {**out, "error": "skipped: vin is empty"}
     if page is None or page.is_closed():
         return {**out, "error": "MISP page is missing or closed"}
 
@@ -1195,6 +1275,34 @@ def run_hero_insure_reports(
     popup: Page | None = None
     try:
         page.set_default_timeout(tmo)
+        # Block window.print() and document.execCommand('print') globally for all pages in this context
+        _print_block_script = """(() => {
+            window.print = () => {};
+            const origExec = document.execCommand.bind(document);
+            document.execCommand = (cmd, ...args) => {
+                if (cmd && cmd.toLowerCase() === 'print') return false;
+                return origExec(cmd, ...args);
+            };
+        })()"""
+        try:
+            page.context.add_init_script(_print_block_script)
+        except Exception as exc:
+            _ins_log(ocr_output_dir, subfolder, "NOTE", f"add_init_script for print block: {exc!s}")
+        # Also suppress on the existing main page (add_init_script only affects NEW pages)
+        try:
+            page.evaluate(_print_block_script)
+        except Exception:
+            pass
+        # Auto-dismiss any JS dialogs (alert/confirm/prompt) that could block execution
+        def _auto_dismiss_dialog(dialog: Any) -> None:
+            try:
+                dialog.dismiss()
+            except Exception:
+                pass
+        try:
+            page.on("dialog", _auto_dismiss_dialog)
+        except Exception:
+            pass
         _misp_navigate_to_print_policy_search(
             page, tmo=tmo, ocr_output_dir=ocr_output_dir, subfolder=subfolder
         )
@@ -1219,23 +1327,18 @@ def run_hero_insure_reports(
         _ins_log(ocr_output_dir, subfolder, "NOTE", f"Product: {pick!r} (insurer={insurer!r})")
         product_sel.select_option(label=pick, timeout=tmo)
 
-        pol_in = None
+        # Always search by VIN/Frame No.
+        vin_in = None
         for root in _misp_form_roots(page):
-            pol_in = _find_policy_no_input(root)
-            if pol_in is not None:
+            vin_in = _find_vin_input(root)
+            if vin_in is not None:
                 break
-        if pol_in is None:
-            _frame_dump_on_error(page, "policy_no_input_not_found", ocr_output_dir, subfolder)
-            raise RuntimeError("Policy No. field not found (txtPolicyNo)")
-
-        if commit_insurance_master and not pn:
-            return {
-                **out,
-                "error": "commit_insurance_master: policy_num empty (needed for Go search)",
-            }
-        pol_in.fill("", timeout=2000)
-        pol_in.fill(pn, timeout=2000)
-        _ins_log(ocr_output_dir, subfolder, "NOTE", f"Policy No. filled: {pn!r}")
+        if vin_in is None:
+            _frame_dump_on_error(page, "vin_input_not_found", ocr_output_dir, subfolder)
+            raise RuntimeError("Frame No. field not found (txtFrameNo)")
+        vin_in.fill("", timeout=2000)
+        vin_in.fill(vin_val, timeout=2000)
+        _ins_log(ocr_output_dir, subfolder, "NOTE", f"Frame No. filled: {vin_val!r}")
 
         go_loc = None
         for root in _misp_form_roots(page):
@@ -1287,8 +1390,6 @@ def run_hero_insure_reports(
             scraped_pn = (grid_scrape or {}).get("policy_num")
             if scraped_pn:
                 pn = str(scraped_pn).strip()
-        elif not pn:
-            return {**out, "error": "skipped: policy_num empty"}
 
         print_grid = None
         for root in _misp_form_roots(page):
@@ -1309,6 +1410,7 @@ def run_hero_insure_reports(
             _frame_dump_on_error(page, "grid_print_not_found", ocr_output_dir, subfolder)
             raise RuntimeError("Grid Print (btnPrintPolicy) not found after Go")
 
+        _suppress_window_print(page)
         _ins_log(ocr_output_dir, subfolder, "NOTE", "clicking first Print (search grid) — opens Print Policy Certificates")
         try:
             with page.context.expect_page(timeout=30_000) as pi:
@@ -1334,6 +1436,12 @@ def run_hero_insure_reports(
                 pass
             u_pop = (popup.url or "")[:200]
             _ins_log(ocr_output_dir, subfolder, "NOTE", f"Print Policy Certificates window: {u_pop!r}")
+            _suppress_window_print(popup)
+            # Auto-dismiss dialogs on popup too
+            try:
+                popup.on("dialog", _auto_dismiss_dialog)
+            except Exception:
+                pass
 
         ap_target = popup if popup is not None else page
         p2 = _find_print_policy_certificates_applet_print(ap_target)
@@ -1358,25 +1466,20 @@ def run_hero_insure_reports(
             strategy = "auto"
             _ins_log(ocr_output_dir, subfolder, "NOTE", f"unknown HERO_MISP_PDF_STRATEGY={raw!r}, using auto")
 
+        # Track extra windows to close on success (popup, PolicySchedule tab, etc.)
+        _extra_windows_to_close: list[Any] = []
+        if popup is not None:
+            _extra_windows_to_close.append(popup)
+
         def _commit_and_return() -> dict[str, Any]:
             _ins_log(ocr_output_dir, subfolder, "NOTE", f"PDF saved: {out_path!s}")
-            # Printing moved to Add Sales "Print Forms & Queue RTO" (ordered batch). Save-only here.
-            # try:
-            #     schedule_misp_hero_post_pdf(out_path)
-            #     _ins_log(
-            #         ocr_output_dir,
-            #         subfolder,
-            #         "NOTE",
-            #         f"post-save: system print UI (MISP): {out_path!s}",
-            #     )
-            # except Exception as exc:
-            #     logger.warning("%s: schedule_misp_hero_post_pdf: %s", _PREFIX, exc)
-            #     _ins_log(
-            #         ocr_output_dir,
-            #         subfolder,
-            #         "NOTE",
-            #         f"schedule_misp_hero_post_pdf skipped: {exc!s}",
-            #     )
+            # Close ALL extra windows (popup, PolicySchedule tab, etc.) before returning
+            for win in _extra_windows_to_close:
+                try:
+                    if win is not None and win is not page and not win.is_closed():
+                        win.close()
+                except Exception:
+                    pass
             return {"ok": True, "error": None, "pdf_path": str(out_path)}
 
         if strategy in ("auto", "playwright"):
@@ -1391,6 +1494,9 @@ def run_hero_insure_reports(
                 "NOTE",
                 "MISP: second Print (certificate) — file download or page.pdf (insurance main tab first, not the AllPrintPolicy grid only)",
             )
+            _suppress_window_print(page)
+            if popup is not None:
+                _suppress_window_print(popup)
             try:
                 try:
                     page.context.on("download", _misp_on_down)
@@ -1434,6 +1540,8 @@ def run_hero_insure_reports(
                 page.context, page, popup, ocr_output_dir, subfolder, max_sec=12.0
             )
             if ps_tab is not None and not ps_tab.is_closed():
+                _extra_windows_to_close.append(ps_tab)
+                _suppress_window_print(ps_tab)
                 _ins_log(
                     ocr_output_dir,
                     subfolder,
@@ -1592,6 +1700,18 @@ def run_hero_insure_reports(
         logger.exception("%s failed", _PREFIX)
         return {**out, "error": msg}
     finally:
+        # Close all extra windows tracked during execution
+        try:
+            for win in _extra_windows_to_close:
+                try:
+                    if win is not None and win is not page and not win.is_closed():
+                        win.close()
+                except Exception:
+                    pass
+        except NameError:
+            # _extra_windows_to_close not defined yet (early failure)
+            pass
+        # Fallback: close popup directly if not already closed
         if popup is not None:
             try:
                 if not popup.is_closed() and popup != page:
