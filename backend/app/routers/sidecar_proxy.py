@@ -12,6 +12,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
   - ``/sidecar/vahan/row-result``  → report per-row result (completed/failed/pending)
   - ``/sidecar/upload-artifacts`` → multipart upload into uploads, ocr, or challans tree (syncs to S3)
+  - ``/sidecar/push-sale-bundle`` → single ZIP body for Print/Queue RTO push (avoids multipart WAF)
   - ``/sidecar/subdealer-challan/*`` → resolve / per-line prepare / order-context / order-checkpoint / finalize (no local ``DATABASE_URL``)
 
 All endpoints are JWT-protected via ``get_principal`` / ``resolve_dealer_id``.
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from app.config import (
@@ -216,6 +217,16 @@ class UploadArtifactResponse(BaseModel):
 class SyncSaleFolderS3Request(BaseModel):
     dealer_id: int
     subfolder: str
+
+
+class PushSaleBundleResponse(BaseModel):
+    ok: bool
+    subfolder: str | None = None
+    files_written: int = 0
+    files_failed: int = 0
+    files_s3_failed: int = 0
+    error: str | None = None
+    details: list[dict[str, Any]] = []
 
 
 def _sanitize_sidecar_rel_path(raw: str) -> str:
@@ -769,6 +780,49 @@ async def upload_artifacts(
         ec2_written=True,
         s3_synced=s3_synced,
         s3_error=s3_error,
+    )
+
+
+@router.post("/push-sale-bundle", response_model=PushSaleBundleResponse)
+async def push_sale_bundle(
+    request: Request,
+    dealer_id: int = Query(...),
+    subfolder: str = Query(...),
+    principal: Principal = Depends(get_principal),
+) -> PushSaleBundleResponse:
+    """
+    Single-request ZIP upload for Print/Queue RTO push (avoids multipart WAF blocks).
+
+    Query: ``dealer_id``, ``subfolder``. Body: raw ``application/zip`` bytes.
+    Members should be ``{subfolder}/<filename>`` (or bare filenames, attached to subfolder).
+    """
+    from app.services.sale_folder_bundle_upload import apply_uploads_zip_bundle
+
+    did = resolve_dealer_id(principal, dealer_id)
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty body")
+    ct = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if ct and ct not in ("application/zip", "application/x-zip-compressed", "application/octet-stream"):
+        raise HTTPException(
+            status_code=400,
+            detail='Content-Type must be application/zip or application/octet-stream',
+        )
+    root = get_uploads_dir(did)
+    try:
+        result = apply_uploads_zip_bundle(did, subfolder, body, root)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if result.get("error") and not result.get("files_written"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return PushSaleBundleResponse(
+        ok=bool(result.get("ok")),
+        subfolder=result.get("subfolder"),
+        files_written=int(result.get("files_written") or 0),
+        files_failed=int(result.get("files_failed") or 0),
+        files_s3_failed=int(result.get("files_s3_failed") or 0),
+        error=result.get("error"),
+        details=list(result.get("details") or []),
     )
 
 

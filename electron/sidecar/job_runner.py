@@ -21,8 +21,10 @@ import tempfile
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 from pathlib import Path
 
 
@@ -591,6 +593,62 @@ def _multipart_upload_file(
     return parsed
 
 
+def _build_print_rto_zip(files: list[Path], subfolder: str) -> Path:
+    """ZIP selected uploads as ``{subfolder}/<filename>`` for ``/sidecar/push-sale-bundle``."""
+    fd, name = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    zip_path = Path(name)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in files:
+            if f.is_file():
+                zf.write(f, f"{subfolder}/{f.name}")
+    return zip_path
+
+
+def _push_sale_bundle_upload(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    subfolder: str,
+    zip_path: Path,
+    timeout: int = 600,
+) -> dict:
+    """POST one ZIP to ``/sidecar/push-sale-bundle`` (raw body, no multipart)."""
+    data = zip_path.read_bytes()
+    q = urllib.parse.urlencode({"dealer_id": int(dealer_id), "subfolder": subfolder})
+    url = f"{api_url.rstrip('/')}/sidecar/push-sale-bundle?{q}"
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/zip",
+            "Authorization": f"Bearer {jwt}",
+            "User-Agent": "DealerSaathi-Sidecar/1.0",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _get_api_download_opener().open(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        body_text = ""
+        try:
+            body_text = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        detail = body_text[:500]
+        raise RuntimeError(f"push-sale-bundle failed HTTP {exc.code}: {detail}") from exc
+    try:
+        parsed = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        parsed = {"ok": False, "error": raw[:500]}
+    if not parsed.get("ok"):
+        err = parsed.get("error") or raw[:500]
+        raise RuntimeError(f"push-sale-bundle rejected: {err}")
+    return parsed
+
+
 def _upload_http_code(exc: Exception) -> int | None:
     m = re.search(r"HTTP (\d{3})", str(exc))
     if not m:
@@ -828,6 +886,172 @@ def _upload_uploads_file_list(
         pending = still_failed
 
     return uploaded, failed, s3_failed
+
+
+def _upload_print_rto_bundle_backup(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    files: list[Path],
+    subfolder: str,
+    *,
+    ocr_dir: Path | None = None,
+    log_subfolder: str | None = None,
+) -> tuple[int, int, int]:
+    """Backup: one ZIP via ``/sidecar/push-sale-bundle`` when per-file multipart fails."""
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
+
+    file_list = [f for f in files if f.is_file()]
+    if not file_list:
+        return 0, 0, 0
+
+    if ocr_dir is not None and log_subfolder:
+        append_print_rto_queue_line(
+            ocr_dir,
+            log_subfolder,
+            "PUSH",
+            f"push-sale-bundle backup: {len(file_list)} file(s) in one ZIP",
+        )
+
+    zip_path: Path | None = None
+    try:
+        zip_path = _build_print_rto_zip(file_list, subfolder)
+        max_attempts = 6
+        last_exc: Exception | None = None
+        for attempt in range(max_attempts):
+            try:
+                result = _push_sale_bundle_upload(
+                    api_url, jwt, dealer_id, subfolder, zip_path
+                )
+                written = int(result.get("files_written") or 0)
+                s3_failed = int(result.get("files_s3_failed") or 0)
+                http_fail = max(0, len(file_list) - written)
+                if ocr_dir is not None and log_subfolder:
+                    for row in result.get("details") or []:
+                        rel = row.get("rel_path") or "?"
+                        if row.get("ok"):
+                            if row.get("s3_synced", True):
+                                append_print_rto_queue_line(
+                                    ocr_dir,
+                                    log_subfolder,
+                                    "PUSH",
+                                    f"OK uploads/{rel} (bundle EC2+S3)",
+                                )
+                            else:
+                                s3_err = str(row.get("s3_error") or "S3 sync failed")[:300]
+                                append_print_rto_queue_line(
+                                    ocr_dir,
+                                    log_subfolder,
+                                    "PUSH",
+                                    f"EC2 OK S3 FAIL uploads/{rel}: {s3_err}",
+                                )
+                        else:
+                            append_print_rto_queue_line(
+                                ocr_dir,
+                                log_subfolder,
+                                "PUSH",
+                                f"FAIL uploads/{rel}: {row.get('error', 'bundle extract failed')}",
+                            )
+                    append_print_rto_queue_line(
+                        ocr_dir,
+                        log_subfolder,
+                        "PUSH",
+                        f"push-sale-bundle backup: written={written} http_fail={http_fail} s3_fail={s3_failed}",
+                    )
+                return written, http_fail, s3_failed
+            except Exception as exc:
+                last_exc = exc
+                http_code = _upload_http_code(exc)
+                if http_code == 404 and ocr_dir is not None and log_subfolder:
+                    append_print_rto_queue_line(
+                        ocr_dir,
+                        log_subfolder,
+                        "PUSH",
+                        "push-sale-bundle not on server (404); backup unavailable",
+                    )
+                    return 0, len(file_list), 0
+                if attempt < max_attempts - 1:
+                    delay = _upload_retry_sleep(attempt, http_code)
+                    if ocr_dir is not None and log_subfolder:
+                        append_print_rto_queue_line(
+                            ocr_dir,
+                            log_subfolder,
+                            "PUSH",
+                            f"retry push-sale-bundle in {delay:.0f}s "
+                            f"(attempt {attempt + 2}/{max_attempts}, HTTP {http_code or 'err'})",
+                        )
+                    time.sleep(delay)
+        if last_exc is not None and ocr_dir is not None and log_subfolder:
+            append_print_rto_queue_line(
+                ocr_dir,
+                log_subfolder,
+                "PUSH",
+                f"FAIL push-sale-bundle backup: {str(last_exc)[:500]}",
+            )
+        return 0, len(file_list), 0
+    finally:
+        if zip_path is not None:
+            try:
+                zip_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _upload_print_rto_push(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    uploads_root: Path,
+    files: list[Path],
+    subfolder: str,
+    *,
+    ocr_dir: Path | None = None,
+    log_subfolder: str | None = None,
+) -> tuple[int, int, int]:
+    """
+    Print/Queue RTO push: per-file ``upload-artifacts`` first, ZIP bundle backup on failure.
+    """
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
+
+    file_list = [f for f in files if f.is_file()]
+    if not file_list:
+        return 0, 0, 0
+
+    uploaded, failed, s3_failed = _upload_uploads_file_list(
+        api_url,
+        jwt,
+        dealer_id,
+        uploads_root,
+        file_list,
+        ocr_dir=ocr_dir,
+        log_subfolder=log_subfolder,
+        print_rto=True,
+    )
+    if failed == 0:
+        return uploaded, failed, s3_failed
+
+    if ocr_dir is not None and log_subfolder:
+        append_print_rto_queue_line(
+            ocr_dir,
+            log_subfolder,
+            "PUSH",
+            f"per-file upload: ec2_ok={uploaded} http_fail={failed}; trying push-sale-bundle backup",
+        )
+
+    b_up, b_fail, b_s3 = _upload_print_rto_bundle_backup(
+        api_url,
+        jwt,
+        dealer_id,
+        file_list,
+        subfolder,
+        ocr_dir=ocr_dir,
+        log_subfolder=log_subfolder,
+    )
+    total = len(file_list)
+    if b_fail == 0 and b_up >= total:
+        return total, 0, max(s3_failed, b_s3)
+    still_fail = max(0, total - max(uploaded, b_up))
+    return max(uploaded, b_up), still_fail, max(s3_failed, b_s3)
 
 
 def _upload_rto_row_log_if_present(api_url: str, jwt: str, dealer_id: int, row: dict) -> None:
@@ -1097,15 +1321,15 @@ def _upload_sale_artifacts(
         )
         for p in selected:
             append_print_rto_queue_line(ocr_dir, safe, "PUSH", f"  selected: {p.name}")
-        up_ok, up_http_fail, up_s3_fail = _upload_uploads_file_list(
+        up_ok, up_http_fail, up_s3_fail = _upload_print_rto_push(
             api_url,
             jwt,
             dealer_id,
             u_root,
             selected,
+            safe,
             ocr_dir=ocr_dir,
             log_subfolder=safe,
-            print_rto=True,
         )
         ocr_ok, ocr_http_fail, ocr_s3_fail = 0, 0, 0
         append_print_rto_queue_line(

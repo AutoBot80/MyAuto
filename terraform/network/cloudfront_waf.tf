@@ -79,7 +79,8 @@ resource "aws_wafv2_web_acl" "cloudfront" {
 
   # Exclude body-inspection rules that false-positive on multipart file uploads
   # (image/PDF binary data triggers SizeRestrictions_BODY, CrossSiteScripting_BODY,
-  #  etc.). Scoped to /uploads, /textract, and /subdealer-challan paths only so all
+  #  etc.). Scoped to /uploads, /textract, /subdealer-challan, and /sidecar (Electron
+  #  upload-artifacts / push-sale-bundle) so all other routes stay fully protected.
   #  other routes stay fully protected.
   rule {
     name     = "AWSManagedRulesCommonRuleSet"
@@ -137,6 +138,19 @@ resource "aws_wafv2_web_acl" "cloudfront" {
                     }
                   }
                 }
+                statement {
+                  byte_match_statement {
+                    search_string         = "/sidecar"
+                    positional_constraint = "STARTS_WITH"
+                    field_to_match {
+                      uri_path {}
+                    }
+                    text_transformation {
+                      priority = 0
+                      type     = "LOWERCASE"
+                    }
+                  }
+                }
               }
             }
           }
@@ -151,7 +165,7 @@ resource "aws_wafv2_web_acl" "cloudfront" {
     }
   }
 
-  # Separate rule: apply CommonRuleSet to /uploads, /textract, and /subdealer-challan
+  # Separate rule: apply CommonRuleSet to /uploads, /textract, /subdealer-challan, /sidecar
   # paths but exclude the body-inspection rules that break multipart binary uploads.
   rule {
     name     = "CommonRuleSetUploadsExclusions"
@@ -216,6 +230,19 @@ resource "aws_wafv2_web_acl" "cloudfront" {
             statement {
               byte_match_statement {
                 search_string         = "/subdealer-challan"
+                positional_constraint = "STARTS_WITH"
+                field_to_match {
+                  uri_path {}
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "LOWERCASE"
+                }
+              }
+            }
+            statement {
+              byte_match_statement {
+                search_string         = "/sidecar"
                 positional_constraint = "STARTS_WITH"
                 field_to_match {
                   uri_path {}

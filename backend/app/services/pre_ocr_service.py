@@ -99,13 +99,13 @@ def _for_ocr_pdf_basename(root_slot_filename: str) -> str:
         return Path(root_slot_filename).name
     return f"{Path(root_slot_filename).stem}.pdf"
 
-# Details sheet — Chassis Pencil Mark crop (fractions of page width/height on the oriented JPEG).
-# Default: **top-right quadrant** (right half × top half), where the pencil-mark box typically sits.
+# Details sheet — Chassis Pencil Mark crop (fractions of **paper** width/height, after paper detection).
+# Default: right half × top 20%, where the pencil-mark box sits on the standard Sales Detail Sheet.
 PENCIL_MARK_FILENAME = "pencil_mark.jpeg"
 PENCIL_MARK_X0_FRAC = float(os.getenv("PENCIL_MARK_X0_FRAC", "0.5"))
 PENCIL_MARK_X1_FRAC = float(os.getenv("PENCIL_MARK_X1_FRAC", "1.0"))
 PENCIL_MARK_Y0_FRAC = float(os.getenv("PENCIL_MARK_Y0_FRAC", "0.0"))
-PENCIL_MARK_Y1_FRAC = float(os.getenv("PENCIL_MARK_Y1_FRAC", "0.5"))
+PENCIL_MARK_Y1_FRAC = float(os.getenv("PENCIL_MARK_Y1_FRAC", "0.20"))
 # When "1", find the dense dark horizontal rubbing inside the quadrant ROI (see :func:`_detect_pencil_rubbing_tight_bbox`).
 PENCIL_MARK_TIGHT_DETECT = os.getenv("PENCIL_MARK_TIGHT_DETECT", "1").lower() not in ("0", "false", "no")
 
@@ -499,6 +499,124 @@ def _replace_page_block_in_full_text(full_text: str, page_0: int, new_page_text:
     return full_text + f"\n\n--- Page {page_num} ---\n{new_page_text}"
 
 
+def _detect_paper_bounds(img_bgr) -> tuple[int, int, int, int] | None:
+    """
+    Detect the Sales Detail Sheet paper in a photo that may have background visible.
+
+    Photos often show desk/dashboard around the paper. This function finds the white/light
+    rectangular paper region so pencil mark crop coordinates can be calculated relative
+    to the paper, not the full image.
+
+    Returns (x, y, w, h) bounding box of the paper, or None if detection fails
+    (caller should fall back to treating the whole image as the paper).
+    """
+    import cv2
+    import numpy as np
+
+    h, w = img_bgr.shape[:2]
+    if h < 100 or w < 100:
+        return None
+
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    _, thresh = cv2.threshold(blur, 190, 255, cv2.THRESH_BINARY)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    closed = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    best: tuple[int, int, int, int] | None = None
+    best_area = 0
+    min_area = 0.15 * w * h
+
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < min_area:
+            continue
+        bx, by, bw, bh = cv2.boundingRect(c)
+        if bw < 80 or bh < 80:
+            continue
+        ar = bh / float(bw) if bw > 0 else 0
+        if not (0.8 < ar < 2.5):
+            continue
+        if area > best_area:
+            best_area = area
+            best = (bx, by, bw, bh)
+
+    if best is None:
+        return None
+
+    bx, by, bw, bh = best
+    bbox_area = bw * bh
+    img_area = w * h
+    if bbox_area < 0.20 * img_area:
+        return None
+    if bbox_area > 0.92 * img_area:
+        return None
+
+    return best
+
+
+def _crop_to_paper_region(crop_bgr) -> tuple[int, int, int, int] | None:
+    """
+    Find the paper region within an already-cropped pencil mark image.
+
+    When the initial crop includes background (e.g., dark dashboard above paper),
+    this function finds where the white paper actually starts and returns
+    coordinates to trim to just the paper portion.
+
+    Returns (x, y, w, h) of the paper region, or None if not detected.
+    """
+    import cv2
+    import numpy as np
+
+    h, w = crop_bgr.shape[:2]
+    if h < 20 or w < 20:
+        return None
+
+    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+
+    row_means = np.mean(gray, axis=1)
+
+    paper_thresh = 180
+    paper_rows = row_means > paper_thresh
+
+    if not np.any(paper_rows):
+        paper_thresh = 160
+        paper_rows = row_means > paper_thresh
+        if not np.any(paper_rows):
+            return None
+
+    paper_indices = np.where(paper_rows)[0]
+    if len(paper_indices) < 10:
+        return None
+
+    y_start = int(paper_indices[0])
+    y_end = int(paper_indices[-1]) + 1
+
+    if y_end - y_start < 20:
+        return None
+
+    col_means = np.mean(gray[y_start:y_end, :], axis=0)
+    paper_cols = col_means > paper_thresh
+    if not np.any(paper_cols):
+        return (0, y_start, w, y_end - y_start)
+
+    paper_col_indices = np.where(paper_cols)[0]
+    x_start = int(paper_col_indices[0])
+    x_end = int(paper_col_indices[-1]) + 1
+
+    pad = 5
+    x_start = max(0, x_start - pad)
+    x_end = min(w, x_end + pad)
+    y_start = max(0, y_start - pad)
+    y_end = min(h, y_end + pad)
+
+    return (x_start, y_start, x_end - x_start, y_end - y_start)
+
+
 def _trim_pencil_bbox_to_dark_ink(roi_bgr, x: int, y: int, w: int, h: int) -> tuple[int, int, int, int]:
     """Shrink a bbox to pixels that are not near-white (drops thin outer frame / margins)."""
     import cv2
@@ -605,10 +723,14 @@ def extract_details_chassis_pencil_mark_jpeg(page_jpeg_bytes: bytes) -> bytes | 
     """
     Crop the **Chassis Pencil Mark** region from a full Details sheet page (JPEG bytes).
 
-    First selects the **top-right quadrant** (right half × top half by default) via
-    :data:`PENCIL_MARK_*_FRAC`, then — when :data:`PENCIL_MARK_TIGHT_DETECT` is enabled — locates the
-    dark horizontal **rubbing** block inside that ROI (threshold + morphology + contour scoring) and
-    trims to non-white ink. If detection fails, keeps the full quadrant crop.
+    For photos with background visible, first detects the paper boundaries using
+    :func:`_detect_paper_bounds`, then calculates crop coordinates relative to the paper
+    (not the full image). Falls back to treating the whole image as the paper if
+    detection fails.
+
+    Within the paper region, selects the pencil mark area (right half × top 20% by default)
+    via :data:`PENCIL_MARK_*_FRAC`. When :data:`PENCIL_MARK_TIGHT_DETECT` is enabled, further
+    locates the dark horizontal rubbing block and trims to non-white ink.
 
     Never raises: failures return ``None`` (optional artifact; must not abort upload/OCR).
     """
@@ -626,12 +748,35 @@ def extract_details_chassis_pencil_mark_jpeg(page_jpeg_bytes: bytes) -> bytes | 
         if h < 80 or w < 80:
             return None
 
-        x0 = int(max(0, min(w - 1, PENCIL_MARK_X0_FRAC * w)))
-        x1 = int(max(x0 + 1, min(w, PENCIL_MARK_X1_FRAC * w)))
-        y0 = int(max(0, min(h - 1, PENCIL_MARK_Y0_FRAC * h)))
-        y1 = int(max(y0 + 1, min(h, PENCIL_MARK_Y1_FRAC * h)))
+        paper = _detect_paper_bounds(img)
+        if paper is not None:
+            px, py, pw, ph = paper
+            logger.debug("pencil_mark: detected paper bounds x=%d y=%d w=%d h=%d", px, py, pw, ph)
+        else:
+            px, py, pw, ph = 0, 0, w, h
+            logger.debug("pencil_mark: no paper detected, using full image %dx%d", w, h)
+
+        x0 = px + int(max(0, min(pw - 1, PENCIL_MARK_X0_FRAC * pw)))
+        x1 = px + int(max(1, min(pw, PENCIL_MARK_X1_FRAC * pw)))
+        y0 = py + int(max(0, min(ph - 1, PENCIL_MARK_Y0_FRAC * ph)))
+        y1 = py + int(max(1, min(ph, PENCIL_MARK_Y1_FRAC * ph)))
+
+        x0 = max(0, min(w - 1, x0))
+        x1 = max(x0 + 1, min(w, x1))
+        y0 = max(0, min(h - 1, y0))
+        y1 = max(y0 + 1, min(h, y1))
 
         crop = img[y0:y1, x0:x1]
+        if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
+            return None
+
+        paper_region = _crop_to_paper_region(crop)
+        if paper_region is not None:
+            prx, pry, prw, prh = paper_region
+            if prw >= 20 and prh >= 20:
+                crop = crop[pry : pry + prh, prx : prx + prw]
+                logger.debug("pencil_mark: trimmed to paper region %dx%d", prw, prh)
+
         if crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
             return None
 
