@@ -8903,6 +8903,13 @@ def _hero_misp_final_policy_details_commit(
     policy_hint = _normalize_policy_num_for_db((values.get("policy_num") or "").strip()) if values else None
     if not policy_hint:
         policy_hint = _hero_misp_parse_policy_num_from_print_policy_cert_page(page)
+    if policy_hint:
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            f"post_submit_print_policy: scraped policy_num={policy_hint!r}",
+        )
 
     try:
         _append_hero_misp_frame_dump(

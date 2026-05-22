@@ -116,7 +116,7 @@ def _longest_prefix_product_label(insurer: str, option_labels: list[str]) -> str
     ins = _norm_ws(insurer)
     if not ins:
         return None
-    ins_l = ins.lower()
+    ins_l = ins.lower().rstrip(".")
     best: str | None = None
     best_len = -1
     for raw in option_labels:
@@ -125,7 +125,8 @@ def _longest_prefix_product_label(insurer: str, option_labels: list[str]) -> str
             "select", "select one", "-", "--select--", "choose",
         ):
             continue
-        if ins_l.startswith(lab.lower()) and len(lab) > best_len:
+        lab_l = lab.lower().rstrip(".")
+        if (ins_l.startswith(lab_l) or lab_l.startswith(ins_l)) and len(lab) > best_len:
             best_len = len(lab)
             best = lab
     return best
