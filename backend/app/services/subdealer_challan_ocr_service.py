@@ -121,22 +121,54 @@ def _extract_challan_no(full_text: str, key_value_pairs: list[dict[str, str]]) -
     return None
 
 
+def _header_cell_is_engine_column(low: str) -> bool:
+    """Engine column: Engine No, Eng, Engg, etc. (OCR shortenings and typos)."""
+    t = (low or "").strip().lower()
+    if not t:
+        return False
+    if _header_cell_is_chassis_column(t):
+        return False
+    return bool(re.search(r"\b(?:eng(?:ine|g)?)\b", t))
+
+
 def _header_cell_is_chassis_column(low: str) -> bool:
-    """Chassis / VIN column: Chassis No, Frame No, VIN, etc."""
-    if "chassis" in low:
-        return True
-    if re.search(r"\bframe\b", low):
-        return True
-    if re.search(r"\bvin\b", low):
-        return True
-    return False
+    """Chassis / VIN column: Chassis, Chasis, Frame, VIN, Cha, Chas, Chess, etc."""
+    t = (low or "").strip().lower()
+    if not t:
+        return False
+    return bool(
+        re.search(
+            r"\b(?:"
+            r"chass?is|"
+            r"chasis|"
+            r"frame|"
+            r"vin|"
+            r"chas?|"
+            r"chess"
+            r")\b",
+            t,
+        )
+    )
+
+
+def _joined_row_has_engine_signal(joined_lower: str) -> bool:
+    return bool(re.search(r"\b(?:eng(?:ine|g)?)\b", joined_lower))
 
 
 def _joined_row_has_chassis_signal(joined_lower: str) -> bool:
-    return (
-        "chassis" in joined_lower
-        or bool(re.search(r"\bframe\b", joined_lower))
-        or bool(re.search(r"\bvin\b", joined_lower))
+    t = joined_lower or ""
+    return bool(
+        re.search(
+            r"\b(?:"
+            r"chass?is|"
+            r"chasis|"
+            r"frame|"
+            r"vin|"
+            r"chas?|"
+            r"chess"
+            r")\b",
+            t,
+        )
     )
 
 
@@ -145,7 +177,7 @@ def _header_row_engine_chassis_indices(header_row: list[str]) -> tuple[int, int]
     cha_i: int | None = None
     for i, cell in enumerate(header_row):
         low = (cell or "").lower()
-        if "engine" in low and "chassis" not in low:
+        if _header_cell_is_engine_column(low):
             eng_i = i
         if _header_cell_is_chassis_column(low):
             cha_i = i
@@ -162,8 +194,8 @@ def _find_engine_chassis_table(
         for hi, row in enumerate(table):
             if not row:
                 continue
-            joined = " ".join(row).lower()
-            if "engine" in joined and _joined_row_has_chassis_signal(joined):
+            joined = " ".join(str(c or "") for c in row).lower()
+            if _joined_row_has_engine_signal(joined) and _joined_row_has_chassis_signal(joined):
                 if _header_row_engine_chassis_indices(row):
                     return table, hi
     return None
@@ -272,7 +304,7 @@ def _collect_vehicle_lines_from_tables(
             if not row:
                 continue
             joined = " ".join(str(c or "") for c in row).lower()
-            if "engine" in joined and _joined_row_has_chassis_signal(joined):
+            if _joined_row_has_engine_signal(joined) and _joined_row_has_chassis_signal(joined):
                 if _header_row_engine_chassis_indices(row):
                     header_row_index = hi
                     break
@@ -286,6 +318,63 @@ def _collect_vehicle_lines_from_tables(
             lines.extend(_rows_from_table_merged_headers(grid_l, sr, ei, ci))
             used_loose = True
     return lines, used_strict, used_loose
+
+
+def _extract_vehicle_lines_from_textract(
+    tx: dict[str, Any],
+) -> tuple[list[dict[str, str]], bool, bool, bool, int, int]:
+    """
+    Collect vehicle rows per Textract page (TABLE first, then LINE fallback per page).
+
+    Returns ``(lines, used_strict, used_loose, used_line_fallback, continuation_recovered, dup_removed)``.
+    """
+    per_page = tx.get("per_page")
+    if per_page:
+        pages: list[dict[str, Any]] = list(per_page)
+    else:
+        pages = [
+            {
+                "full_text": (tx.get("full_text") or "").strip(),
+                "tables": tx.get("tables") or [],
+            }
+        ]
+
+    raw_lines: list[dict[str, str]] = []
+    used_strict = False
+    used_loose = False
+    used_line_fallback = False
+
+    for page in pages:
+        page_tables = page.get("tables") or []
+        page_text = (page.get("full_text") or "").strip()
+        table_lines, us, ul = _collect_vehicle_lines_from_tables(page_tables)
+        used_strict = used_strict or us
+        used_loose = used_loose or ul
+        if table_lines:
+            raw_lines.extend(table_lines)
+            continue
+        fb_lines, _ = _fallback_lines_from_full_text(page_text)
+        if fb_lines:
+            used_line_fallback = True
+            raw_lines.extend(fb_lines)
+
+    count_after_pages = len(raw_lines)
+    pages_processed = int(tx.get("pages_processed") or 0)
+    continuation_recovered = 0
+
+    if pages_processed > 1:
+        merged_text = (tx.get("full_text") or "").strip()
+        fb_merged, _ = _fallback_lines_from_full_text(merged_text)
+        if fb_merged:
+            raw_lines.extend(fb_merged)
+
+    lines, dup_n = dedupe_challan_lines(raw_lines)
+    if pages_processed > 1:
+        continuation_recovered = max(0, len(lines) - count_after_pages)
+        if continuation_recovered > 0:
+            used_line_fallback = True
+
+    return lines, used_strict, used_loose, used_line_fallback, continuation_recovered, dup_n
 
 
 def _rows_from_table_merged_headers(
@@ -312,40 +401,6 @@ def _invoice_from_table_column_zero(table: list[list[str]], start_row: int) -> s
         if inv:
             vals.append(inv)
     return _dominant_invoice_from_tokens(vals)
-
-
-def _token_is_alnum_id(s: str) -> bool:
-    t = (s or "").strip()
-    return bool(t) and bool(re.match(r"^[A-Za-z0-9]+$", t))
-
-
-def _model_details_column_offset(parts: list[str]) -> int | None:
-    """
-    Return starting index of (invoice, frame/vin, engine, …) within a whitespace-split LINE.
-    None if this line does not look like a Model Details-style data row.
-    """
-    n = len(parts)
-    if n < 3:
-        return None
-
-    def vin_like(i: int) -> bool:
-        if i < 0 or i >= n:
-            return False
-        t = sanitize_challan_line_field(parts[i])
-        return 11 <= len(t) <= 19 and _token_is_alnum_id(parts[i])
-
-    def engine_like(i: int) -> bool:
-        if i < 0 or i >= n:
-            return False
-        t = sanitize_challan_line_field(parts[i])
-        return 6 <= len(t) <= 22 and _token_is_alnum_id(parts[i])
-
-    # Optional leading S.No. column: <sno> <invoice> <vin> <engine> …
-    if n >= 5 and parts[0].isdigit() and vin_like(2) and engine_like(3):
-        return 1
-    if n >= 3 and vin_like(1) and engine_like(2):
-        return 0
-    return None
 
 
 def _vertical_model_details_field_start(lines: list[str]) -> int | None:
@@ -454,6 +509,17 @@ def _parse_vertical_model_details_lines(full_text: str) -> tuple[list[dict[str, 
     return out_lines, inv_one
 
 
+def _parse_horizontal_chassis_engine_pair(parts: list[str]) -> dict[str, str] | None:
+    """Two-token line: chassis/frame then engine (KAMAN-style continuation pages)."""
+    if len(parts) != 2:
+        return None
+    cha = sanitize_challan_line_field(parts[0] or "")
+    eng = sanitize_challan_line_field(parts[1] or "")
+    if _is_hero_chassis_frame_token(cha) and _is_hero_engine_token(eng):
+        return {"engine_no": eng, "chassis_no": cha, "status": "queued"}
+    return None
+
+
 def _parse_horizontal_model_details_lines(full_text: str) -> tuple[list[dict[str, str]], str | None]:
     """One logical row per LINE: ``<invoice> <frame> <engine> …`` (whitespace-separated)."""
     out_lines: list[dict[str, str]] = []
@@ -463,17 +529,29 @@ def _parse_horizontal_model_details_lines(full_text: str) -> tuple[list[dict[str
         if not line:
             continue
         parts = re.split(r"\s+", line)
-        off = _model_details_column_offset(parts)
-        if off is None:
+        pair = _parse_horizontal_chassis_engine_pair(parts)
+        if pair is not None:
+            out_lines.append(pair)
             continue
-        inv = sanitize_challan_line_field(parts[off] or "")
-        cha = sanitize_challan_line_field(parts[off + 1] or "")
-        eng = sanitize_challan_line_field(parts[off + 2] or "")
-        if not eng and not cha:
+        cha_i: int | None = None
+        eng_i: int | None = None
+        for i, part in enumerate(parts):
+            san = sanitize_challan_line_field(part)
+            if cha_i is None and _is_hero_chassis_frame_token(san):
+                cha_i = i
+            elif eng_i is None and _is_hero_engine_token(san):
+                eng_i = i
+        if cha_i is None or eng_i is None or cha_i == eng_i:
             continue
+        cha = sanitize_challan_line_field(parts[cha_i])
+        eng = sanitize_challan_line_field(parts[eng_i])
+        for i, part in enumerate(parts):
+            if i in (cha_i, eng_i):
+                continue
+            inv_cand = sanitize_challan_line_field(part)
+            if _is_excise_invoice_like_token(inv_cand):
+                invoices.append(inv_cand)
         out_lines.append({"engine_no": eng, "chassis_no": cha, "status": "queued"})
-        if inv:
-            invoices.append(inv)
     inv_one = _dominant_invoice_from_tokens(invoices)
     return out_lines, inv_one
 
@@ -526,7 +604,7 @@ def _invoice_column_index_for_table(table: list[list[str]], header_row_index: in
         if not row:
             return None
         joined = " ".join(str(c or "") for c in row).lower()
-        if "frame" in joined and "engine" in joined:
+        if _joined_row_has_chassis_signal(joined) and _joined_row_has_engine_signal(joined):
             v0 = sanitize_challan_line_field(row[0] or "")
             if v0 and _is_excise_invoice_like_token(v0):
                 return 0
@@ -731,30 +809,31 @@ def parse_subdealer_challan(
     ocr_date_missing = not date_raw
     iso, ddmmyyyy = parse_challan_date_to_iso(date_raw)
 
-    lines: list[dict[str, str]] = []
-    dup_n = 0
-    used_line_fallback = False
-    used_table_loose = False
     fallback_inv: str | None = None
 
-    table_lines, _used_strict, used_table_loose = _collect_vehicle_lines_from_tables(tables)
-    if table_lines:
-        lines, dup_n = dedupe_challan_lines(table_lines)
-        if dup_n:
-            out["warnings"].append(
-                f"Removed {dup_n} duplicate row(s) with the same engine and chassis numbers."
-            )
-        if not challan_no:
-            found = _find_engine_chassis_table(tables)
-            if found:
-                grid, hi = found
-                challan_no = _challan_no_from_repeated_invoice(grid, hi)
-            elif used_table_loose:
-                loose = _find_loose_model_details_table(tables)
-                if loose is not None:
-                    grid_l, sr, _, _ = loose
-                    challan_no = _invoice_from_table_column_zero(grid_l, sr)
+    lines, _used_strict, used_table_loose, used_line_fallback, continuation_recovered, dup_n = (
+        _extract_vehicle_lines_from_textract(tx)
+    )
 
+    if dup_n:
+        out["warnings"].append(
+            f"Removed {dup_n} duplicate row(s) with the same engine and chassis numbers."
+        )
+    if continuation_recovered > 0:
+        out["warnings"].append(
+            f"Recovered {continuation_recovered} vehicle row(s) from continuation text "
+            "not fully captured in TABLE blocks."
+        )
+    if lines and not challan_no:
+        found = _find_engine_chassis_table(tables)
+        if found:
+            grid, hi = found
+            challan_no = _challan_no_from_repeated_invoice(grid, hi)
+        elif used_table_loose:
+            loose = _find_loose_model_details_table(tables)
+            if loose is not None:
+                grid_l, sr, _, _ = loose
+                challan_no = _invoice_from_table_column_zero(grid_l, sr)
     if not lines:
         fb_lines, fallback_inv = _fallback_lines_from_full_text(full_text)
         if fb_lines:

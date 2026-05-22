@@ -111,10 +111,19 @@ def merge_challan_textract_page_results(page_results: list[dict[str, Any]]) -> d
         rr = r.get("raw_response") or {}
         block_count += int(rr.get("BlockCount") or 0)
 
+    per_page = [
+        {
+            "full_text": (r.get("full_text") or "").strip(),
+            "tables": r.get("tables") or [],
+        }
+        for r in successful
+    ]
+
     return {
         "full_text": "\n".join(full_text_parts),
         "key_value_pairs": key_value_pairs,
         "tables": tables,
+        "per_page": per_page,
         "raw_response": {
             "BlockCount": block_count,
             "PagesProcessed": len(page_results),
@@ -136,7 +145,17 @@ def extract_challan_textract(document_bytes: bytes) -> dict[str, Any]:
     """
     page_jpegs = _pdf_multipage_jpegs_if_needed(document_bytes)
     if page_jpegs is None:
-        return analyze_document_forms_and_tables(document_bytes)
+        result = analyze_document_forms_and_tables(document_bytes)
+        if not result.get("error"):
+            result["per_page"] = [
+                {
+                    "full_text": (result.get("full_text") or "").strip(),
+                    "tables": result.get("tables") or [],
+                }
+            ]
+        result.setdefault("pages_processed", 1 if not result.get("error") else 0)
+        result.setdefault("pages_failed", 1 if result.get("error") else 0)
+        return result
 
     logger.info("challan Textract: multi-page PDF split into %s page(s)", len(page_jpegs))
     page_results = [analyze_document_forms_and_tables(jpg) for jpg in page_jpegs]

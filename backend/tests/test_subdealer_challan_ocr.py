@@ -9,10 +9,13 @@ from app.services.subdealer_challan_ocr_service import (
     _challan_no_from_repeated_invoice,
     _collect_vehicle_lines_from_tables,
     _dominant_invoice_from_tokens,
+    _extract_vehicle_lines_from_textract,
     _find_engine_chassis_table,
     _find_loose_model_details_table,
     _header_cell_is_chassis_column,
+    _header_cell_is_engine_column,
     _invoice_from_table_column_zero,
+    _parse_horizontal_model_details_lines,
     _parse_vertical_model_details_lines,
     _rows_from_table,
     _rows_from_table_merged_headers,
@@ -165,6 +168,43 @@ class TestHeaderChassisSynonyms(unittest.TestCase):
     def test_vin_word_boundary(self) -> None:
         self.assertTrue(_header_cell_is_chassis_column("vin no."))
         self.assertFalse(_header_cell_is_chassis_column("engine"))
+
+    def test_chassis_shortenings_and_typos(self) -> None:
+        for label in (
+            "Chassis No",
+            "CHASIS NO",
+            "Frame No",
+            "VIN",
+            "cha",
+            "chas no",
+            "chess no",
+        ):
+            with self.subTest(label=label):
+                self.assertTrue(_header_cell_is_chassis_column(label))
+
+    def test_engine_shortenings(self) -> None:
+        for label in ("Engine No", "Eng", "engg no", "ENG NO."):
+            with self.subTest(label=label):
+                self.assertTrue(_header_cell_is_engine_column(label))
+
+    def test_engine_not_chassis(self) -> None:
+        self.assertFalse(_header_cell_is_chassis_column("engine"))
+        self.assertFalse(_header_cell_is_engine_column("chassis"))
+
+    def test_find_table_with_short_headers(self) -> None:
+        tables = [
+            [
+                ["chas no", "eng no", "material"],
+                ["MBLHAW520THE03790", "HA11F6THE78918", "HSPLMTSSCFIRBK"],
+            ]
+        ]
+        found = _find_engine_chassis_table(tables)
+        self.assertIsNotNone(found)
+        grid, hi = found
+        rows = _rows_from_table(grid, hi)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["chassis_no"], "MBLHAW520THE03790")
+        self.assertEqual(rows[0]["engine_no"], "HA11F6THE78918")
 
 
 class TestLooseMergedModelDetailsTable(unittest.TestCase):
@@ -459,6 +499,87 @@ class TestParseSubdealerChallanMocked(unittest.TestCase):
         self.assertEqual(out["challan_no"], inv)
         # Repeated MB/HA pairs dedupe to two rows; plus two distinct truncated-ID rows.
         self.assertEqual(len(out["lines"]), 4)
+
+
+class TestHorizontalChassisEnginePair(unittest.TestCase):
+    def test_two_token_kaman_line(self) -> None:
+        text = "MBLHAW479THE57862 HA11F6THE58442"
+        lines, _ = _parse_horizontal_model_details_lines(text)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["chassis_no"], "MBLHAW479THE57862")
+        self.assertEqual(lines[0]["engine_no"], "HA11F6THE58442")
+
+    def test_three_token_challan8_continuation_line(self) -> None:
+        text = "MBLHAW523THE03766 HA11F6THE78863 HSPLMTSSCFIRBK"
+        lines, _ = _parse_horizontal_model_details_lines(text)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["chassis_no"], "MBLHAW523THE03766")
+        self.assertEqual(lines[0]["engine_no"], "HA11F6THE78863")
+
+
+def _synthetic_page1_table(n_body: int = 46) -> list[list[str]]:
+    header = ["Frame No", "Engine No", "Material"]
+    body = [
+        [f"MBLHAW520THE{n:05d}", f"HA11F6THE{n:05d}", "HSPLMTSSCFIRBK"]
+        for n in range(n_body)
+    ]
+    return [header, *body]
+
+
+class TestMultipageContinuationExtract(unittest.TestCase):
+    def test_per_page_table_plus_line_continuation(self) -> None:
+        page1_tbl = _synthetic_page1_table(46)
+        page2_lines = "\n".join(
+            [
+                "MBLHAW523THE03766 HA11F6THE78863 HSPLMTSSCFIRBK",
+                "MBLHAW523THE03783 HA11F6THE78929 HSPLMTSSCFIRBK",
+                "MBLHAW523THE03816 HA11F6THE78883 HSPLMTSSCFIRBK",
+                "MBLHAW523THE04030 HA11F6THE78856 HSPLMTSSCFITGB",
+            ]
+        )
+        tx = {
+            "full_text": page2_lines,
+            "tables": [page1_tbl],
+            "pages_processed": 2,
+            "per_page": [
+                {"full_text": "", "tables": [page1_tbl]},
+                {"full_text": page2_lines, "tables": []},
+            ],
+        }
+        lines, _, _, used_fb, recovered, _ = _extract_vehicle_lines_from_textract(tx)
+        self.assertEqual(len(lines), 50)
+        self.assertTrue(used_fb)
+        self.assertGreaterEqual(recovered, 0)
+        self.assertEqual(lines[-1]["chassis_no"], "MBLHAW523THE04030")
+
+    @patch("app.services.subdealer_challan_ocr_service.extract_challan_textract")
+    def test_parse_subdealer_challan_multipage_50_rows(self, mock_tx) -> None:
+        page1_tbl = _synthetic_page1_table(46)
+        page2_lines = "\n".join(
+            [
+                "MBLHAW523THE03766 HA11F6THE78863 HSPLMTSSCFIRBK",
+                "MBLHAW523THE03783 HA11F6THE78929 HSPLMTSSCFIRBK",
+                "MBLHAW523THE03816 HA11F6THE78883 HSPLMTSSCFIRBK",
+                "MBLHAW523THE04030 HA11F6THE78856 HSPLMTSSCFITGB",
+            ]
+        )
+        mock_tx.return_value = {
+            "error": None,
+            "full_text": page2_lines,
+            "key_value_pairs": [],
+            "tables": [page1_tbl],
+            "pages_processed": 2,
+            "pages_failed": 0,
+            "per_page": [
+                {"full_text": "", "tables": [page1_tbl]},
+                {"full_text": page2_lines, "tables": []},
+            ],
+        }
+        out = parse_subdealer_challan(b"x", write_artifacts=False)
+        self.assertIsNone(out.get("error"))
+        self.assertEqual(len(out["lines"]), 50)
+        warns = " ".join(out.get("warnings") or [])
+        self.assertIn("Multi-page PDF (2 pages)", warns)
 
 
 if __name__ == "__main__":

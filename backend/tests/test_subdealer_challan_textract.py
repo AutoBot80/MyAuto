@@ -47,6 +47,9 @@ class TestMergeChallanTextractPageResults(unittest.TestCase):
         self.assertEqual(merged["full_text"], "page one\npage two")
         self.assertEqual(len(merged["key_value_pairs"]), 2)
         self.assertEqual(len(merged["tables"]), 2)
+        self.assertEqual(len(merged["per_page"]), 2)
+        self.assertEqual(merged["per_page"][0]["full_text"], "page one")
+        self.assertEqual(merged["per_page"][1]["tables"], [[["h2"], ["r2"]]])
         self.assertEqual(merged["pages_processed"], 2)
         self.assertEqual(merged["pages_failed"], 0)
         self.assertEqual(merged["raw_response"]["BlockCount"], 15)
@@ -120,6 +123,7 @@ class TestExtractChallanTextractMultipage(unittest.TestCase):
         self.assertIn("p1", out["full_text"])
         self.assertIn("p2", out["full_text"])
         self.assertEqual(len(out["tables"]), 2)
+        self.assertEqual(len(out["per_page"]), 2)
 
     @patch("app.services.subdealer_challan_textract.analyze_document_forms_and_tables")
     def test_single_page_pdf_passes_through(self, mock_analyze) -> None:
@@ -138,8 +142,10 @@ class TestExtractChallanTextractMultipage(unittest.TestCase):
             "tables": [],
             "raw_response": {},
         }
-        extract_challan_textract(single)
+        out = extract_challan_textract(single)
         mock_analyze.assert_called_once_with(single)
+        self.assertEqual(len(out["per_page"]), 1)
+        self.assertEqual(out["per_page"][0]["full_text"], "one")
 
 
 class TestParseMultipageWarning(unittest.TestCase):
