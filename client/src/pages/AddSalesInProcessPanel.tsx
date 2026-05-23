@@ -203,7 +203,7 @@ export function AddSalesInProcessPanel({
   const [detailPayload, setDetailPayload] = useState<Record<string, unknown> | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
-  const [rowMsg, setRowMsg] = useState<string | null>(null);
+  const [rowMsg, setRowMsg] = useState<{ text: string; success: boolean } | null>(null);
   const [elig, setElig] = useState<CreateInvoiceEligibilityResponse | null>(null);
   const [eligLoading, setEligLoading] = useState(false);
 
@@ -328,7 +328,7 @@ export function AddSalesInProcessPanel({
       await patchAddSalesStagingPayload(selectedId, dealerId, draftToPatchBody(detailEditDraft));
       setPanelRefreshToken((t) => t + 1);
       await refreshList();
-      setRowMsg("Changes saved.");
+      setRowMsg({ text: "Changes saved.", success: true });
     } catch (e) {
       setDetailErr(e instanceof Error ? e.message : "Could not save changes.");
     } finally {
@@ -413,11 +413,12 @@ export function AddSalesInProcessPanel({
   const wrapRowAction = useCallback(
     async (stagingId: string, fn: () => Promise<void>) => {
       if (busyRowId != null || pageActionsBusy) {
-        setRowMsg(
-          pageActionsBusy
+        setRowMsg({
+          text: pageActionsBusy
             ? "Another sale action is still running. Wait for it to finish, then try again."
-            : "This row is busy. Wait for the current action to finish."
-        );
+            : "This row is busy. Wait for the current action to finish.",
+          success: false,
+        });
         return;
       }
       setBusyRowId(stagingId);
@@ -426,7 +427,7 @@ export function AddSalesInProcessPanel({
       try {
         await fn();
       } catch (e) {
-        setRowMsg(e instanceof Error ? e.message : String(e));
+        setRowMsg({ text: e instanceof Error ? e.message : String(e), success: false });
       } finally {
         await refreshList();
         setPanelRefreshToken((t) => t + 1);
@@ -528,8 +529,11 @@ export function AddSalesInProcessPanel({
         </p>
       )}
       {rowMsg && (
-        <p className="add-sales-in-process-err" role="status">
-          {rowMsg}
+        <p
+          className={rowMsg.success ? "add-sales-in-process-ok" : "add-sales-in-process-err"}
+          role="status"
+        >
+          {rowMsg.text}
         </p>
       )}
       <div className="add-sales-in-process-split">
@@ -650,11 +654,12 @@ export function AddSalesInProcessPanel({
                                 })
                               );
                               if (!res.success) throw new Error(res.error ?? "CPA Insurance failed.");
-                              setRowMsg(
-                                res.certificate_number
+                              setRowMsg({
+                                text: res.certificate_number
                                   ? `CPA Insurance completed. Certificate: ${res.certificate_number}`
-                                  : "CPA Insurance completed."
-                              );
+                                  : "CPA Insurance completed.",
+                                success: true,
+                              });
                             });
                           }}
                         >
@@ -699,7 +704,7 @@ export function AddSalesInProcessPanel({
                               if (!result.success) {
                                 throw new Error(result.statusLines.join(" ") || result.error || "Print / Queue RTO failed.");
                               }
-                              setRowMsg(result.statusLines.join(" "));
+                              setRowMsg({ text: result.statusLines.join(" "), success: true });
                             });
                           }}
                         >

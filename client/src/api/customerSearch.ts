@@ -2,6 +2,14 @@ import { getAccessToken } from "../auth/token";
 import { apiFetch, getBaseUrl } from "./client";
 import { DEALER_ID } from "./dealerId";
 
+export interface InsuranceByVehicleEntry {
+  insurer: string | null;
+  policy_num: string | null;
+  policy_from: string | null;
+  policy_to: string | null;
+  nominee_gender: string | null;
+}
+
 export interface CustomerSearchResult {
   found: boolean;
   customer: {
@@ -10,6 +18,7 @@ export interface CustomerSearchResult {
     mobile: string | null;
     mobile_number: number | null;
     alt_phone_num: string | null;
+    care_of: string | null;
     address: string | null;
     pin: string | null;
     city: string | null;
@@ -27,18 +36,11 @@ export interface CustomerSearchResult {
     plate_num: string | null;
     chassis: string | null;
     date_of_purchase: string | null;
+    invoice_number: string | null;
     file_location: string | null;
   }>;
-  insurance_by_vehicle: Record<
-    number,
-    {
-      insurer: string | null;
-      policy_num: string | null;
-      policy_from: string | null;
-      policy_to: string | null;
-      nominee_gender: string | null;
-    }
-  >;
+  insurance_by_vehicle: Record<number, InsuranceByVehicleEntry>;
+  cpa_by_vehicle: Record<number, InsuranceByVehicleEntry>;
   message?: string;
 }
 
@@ -47,6 +49,15 @@ export interface FormVahanViewResult {
   columns: string[];
   row: Record<string, string | number | null> | null;
 }
+
+export const VAHAN_DISPLAY_COLUMNS = [
+  { key: "dealer_name", label: "Dealer Name" },
+  { key: "rto", label: "RTO" },
+  { key: "billing_date", label: "Billing Date" },
+  { key: "model", label: "Vehicle Model" },
+  { key: "chassis", label: "Chassis" },
+  { key: "engine", label: "Engine" },
+] as const;
 
 export async function searchCustomer(opts: {
   mobile?: string | null;

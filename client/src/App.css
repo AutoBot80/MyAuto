@@ -526,6 +526,16 @@
   color: #b00020;
 }
 
+.add-sales-in-process-ok {
+  margin: 0;
+  font-size: 13px;
+  color: #166534;
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
 .add-sales-in-process-detail-body {
   display: flex;
   flex-direction: column;
@@ -2273,6 +2283,14 @@
   flex: 1;
 }
 
+.view-customer-details-grid--compact {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
+.view-customer-detail-item--address {
+  grid-column: 1 / -1;
+}
+
 .view-customer-detail-item {
   display: flex;
   flex-direction: column;
@@ -3014,6 +3032,12 @@
   color: #b91c1c;
 }
 
+.app-panel-status--success {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+}
+
 /* Process status bar (AI Reader Queue) */
 .app-process-status-bar {
   display: flex;
@@ -3681,6 +3705,13 @@
 .challans-processed-table-wrap .app-table thead th,
 .challans-processed-table-wrap .app-table tbody td {
   padding: 5px 10px;
+}
+
+.challans-processed-table-wrap .app-table .challans-proc-col--transport {
+  width: 4.5rem;
+  max-width: 4.5rem;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .challans-processed-table-wrap .app-table tbody td.challans-proc-err {

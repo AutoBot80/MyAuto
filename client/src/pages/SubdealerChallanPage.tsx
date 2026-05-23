@@ -98,6 +98,13 @@ function formatPreparedOverTotal(r: ChallanMasterProcessedRow): string {
   return `${p}/${t}`;
 }
 
+function formatTransportCostDisplay(r: ChallanMasterProcessedRow): string {
+  if (!r.add_transport_cost) return "—";
+  const n = Number(r.transport_cost_per_vehicle);
+  if (!Number.isFinite(n)) return "—";
+  return Number.isInteger(n) ? String(n) : String(n);
+}
+
 /**
  * Detail lines for one master row, sorted by **Status** A–Z (case-insensitive), e.g. Committed, Failed, Queued, Ready.
  * Tie-break: staging line id. Retry uses this with an explicit batch id because row click does not fire when pressing Retry (`stopPropagation`).
@@ -1327,10 +1334,12 @@ export function SubdealerChallanPage({
                 <table className="app-table">
                   <thead>
                     <tr>
-                      <th scope="col">From dealer</th>
                       <th scope="col">To dealer</th>
                       <th scope="col">Challan date</th>
                       <th scope="col">Challan number</th>
+                      <th scope="col" className="challans-proc-col--transport" title="Transport cost per vehicle">
+                        Transport
+                      </th>
                       <th scope="col" title="Vehicles prepared vs total in this batch">
                         Vehicles Prepared
                       </th>
@@ -1368,10 +1377,10 @@ export function SubdealerChallanPage({
                             }
                           }}
                         >
-                          <td>{formatDealerDisplay(r.from_dealer_name, r.from_dealer_id)}</td>
                           <td>{formatDealerDisplay(r.to_dealer_name, r.to_dealer_id)}</td>
                           <td>{formatChallanDateDisplay(r.challan_date)}</td>
                           <td>{(r.challan_book_num || "").trim() || "—"}</td>
+                          <td className="challans-proc-col--transport">{formatTransportCostDisplay(r)}</td>
                           <td>{formatPreparedOverTotal(r)}</td>
                           <td>{(r.dms_order_number || "").trim() || "—"}</td>
                           <td>

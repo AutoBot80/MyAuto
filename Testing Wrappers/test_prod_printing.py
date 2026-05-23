@@ -22,6 +22,7 @@ from this folder (repo root must be the parent of ``Testing Wrappers``).
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import shutil
@@ -36,17 +37,33 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("test_prod_printing")
 
 # Hard-coded scan folder and PDF basename (no extension, or include ``.pdf``).
-PRINT_TEST_DIR = r"C:\Users\arya_\OneDrive\Desktop\My Auto.AI\Uploaded scans\100001\9784542030_250426"
-PRINT_TEST_ONLY = "9784542030_Insurance_27042026"
+PRINT_TEST_DIR = r"D:\Saathi\Uploaded scans\100001\9057397169_210526"
+PRINT_TEST_ONLY = "9057397169_Insurance"
 
 
 def main() -> int:
-    pdf_dir = Path(PRINT_TEST_DIR)
+    ap = argparse.ArgumentParser(description="Electron PDF print smoke test.")
+    ap.add_argument("--dir", default=PRINT_TEST_DIR, help="Folder containing PDF(s)")
+    ap.add_argument("--only", default=PRINT_TEST_ONLY, help="Basename of one PDF to print")
+    ap.add_argument(
+        "--silent",
+        action="store_true",
+        help="Set SAATHI_PRINT_TEST_SILENT=1 (no print dialog)",
+    )
+    ap.add_argument(
+        "--dialog",
+        action="store_true",
+        help="Force SAATHI_PRINT_TEST_SILENT=0 (system print dialog)",
+    )
+    args = ap.parse_args()
+
+    pdf_dir = Path(args.dir)
     if not pdf_dir.is_dir():
-        logger.error("Folder not found: %s", PRINT_TEST_DIR)
+        logger.error("Folder not found: %s", pdf_dir)
         return 1
 
-    target_name = PRINT_TEST_ONLY if PRINT_TEST_ONLY.lower().endswith(".pdf") else f"{PRINT_TEST_ONLY}.pdf"
+    only = (args.only or "").strip()
+    target_name = only if only.lower().endswith(".pdf") else f"{only}.pdf"
     target_path = pdf_dir / target_name
     if not target_path.is_file():
         logger.error("PDF not found: %s", target_path)
@@ -64,10 +81,21 @@ def main() -> int:
         return 1
 
     env = os.environ.copy()
-    env["SAATHI_PRINT_TEST_DIR"] = PRINT_TEST_DIR
-    env["SAATHI_PRINT_TEST_ONLY"] = PRINT_TEST_ONLY
+    env["SAATHI_PRINT_TEST_DIR"] = str(pdf_dir)
+    env["SAATHI_PRINT_TEST_ONLY"] = only
+    if args.dialog:
+        env["SAATHI_PRINT_TEST_SILENT"] = "0"
+    elif args.silent:
+        env["SAATHI_PRINT_TEST_SILENT"] = "1"
+    else:
+        env.pop("SAATHI_PRINT_TEST_SILENT", None)
 
-    logger.info("Starting Electron print smoke (SAATHI_PRINT_TEST_DIR + SAATHI_PRINT_TEST_ONLY)...")
+    logger.info(
+        "Starting Electron print smoke (dir=%s only=%s silent=%s)...",
+        pdf_dir,
+        only,
+        env.get("SAATHI_PRINT_TEST_SILENT", "(unset)"),
+    )
     logger.info("Working directory: %s", _ELECTRON)
 
     r = subprocess.run([npm, "run", "dev"], cwd=str(_ELECTRON), env=env)

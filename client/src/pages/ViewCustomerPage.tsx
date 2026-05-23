@@ -3,11 +3,14 @@ import {
   searchCustomer,
   getFormVahanView,
   openDocumentFileInNewTab,
+  VAHAN_DISPLAY_COLUMNS,
   type CustomerSearchResult,
   type FormVahanViewResult,
+  type InsuranceByVehicleEntry,
 } from "../api/customerSearch";
 import { apiFetch } from "../api/client";
 import { DEALER_ID } from "../api/dealerId";
+import { formatDdMmmYyyyIst } from "../utils/formatIstDate";
 import { loadViewCustomer, saveViewCustomer } from "../utils/viewCustomerStorage";
 
 interface ViewCustomerPageProps {
@@ -24,6 +27,55 @@ function getInitialState(initialMobile: string) {
     result: stored.result,
     selectedVehicleId: stored.selectedVehicleId,
   };
+}
+
+function formatMobileAlternate(
+  cust: NonNullable<CustomerSearchResult["customer"]>
+): string {
+  const mob =
+    cust.mobile ??
+    (cust.mobile_number != null ? String(cust.mobile_number) : null);
+  const alt = cust.alt_phone_num?.trim() || null;
+  const parts = [mob, alt].filter((p): p is string => Boolean(p && String(p).trim()));
+  return parts.length > 0 ? parts.join(" · ") : "—";
+}
+
+function formatVahanCell(key: string, value: string | number | null | undefined): string {
+  if (value == null || value === "") return "—";
+  if (key === "billing_date") return formatDdMmmYyyyIst(value);
+  return String(value);
+}
+
+function PolicyCoverageTile({
+  title,
+  record,
+  emptyMessage,
+}: {
+  title: string;
+  record: InsuranceByVehicleEntry | null | undefined;
+  emptyMessage: string;
+}) {
+  return (
+    <div className="view-customer-tile">
+      <h4 className="view-customer-tile-title">{title}</h4>
+      {record ? (
+        <dl className="view-customer-tile-dl">
+          <dt>Provider</dt>
+          <dd>{record.insurer ?? "—"}</dd>
+          <dt>Policy ID</dt>
+          <dd>{record.policy_num ?? "—"}</dd>
+          <dt>From</dt>
+          <dd>
+            {record.policy_from ?? "—"}
+            <span style={{ margin: "0 10px", color: "#667" }}>To</span>
+            {record.policy_to ?? "—"}
+          </dd>
+        </dl>
+      ) : (
+        <p className="view-customer-tile-empty">{emptyMessage}</p>
+      )}
+    </div>
+  );
 }
 
 export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: ViewCustomerPageProps) {
@@ -94,12 +146,16 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
   const cust = result?.found ? result.customer : null;
   const vehicles = result?.vehicles ?? [];
   const insMap = result?.insurance_by_vehicle ?? {};
+  const cpaMap = result?.cpa_by_vehicle ?? {};
   const selectedVehicle = selectedVehicleId
     ? vehicles.find((v) => v.vehicle_id === selectedVehicleId)
     : vehicles[0];
   const selectedFileLocation = selectedVehicle?.file_location ?? null;
   const selectedIns = selectedVehicle
     ? insMap[selectedVehicle.vehicle_id]
+    : null;
+  const selectedCpa = selectedVehicle
+    ? cpaMap[selectedVehicle.vehicle_id]
     : null;
   const selectedCustomerId = cust?.customer_id ?? null;
   const selectedVehicleKey = selectedVehicle?.vehicle_id ?? null;
@@ -172,38 +228,20 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
       {cust && (
         <section className="view-customer-details">
           <div className="view-customer-details-inner">
-            <div className="view-customer-details-grid">
+            <div className="view-customer-details-grid view-customer-details-grid--compact">
               <div className="view-customer-detail-item">
                 <span className="vc-label">Name</span>
                 <span className="vc-value">{cust.name ?? "—"}</span>
               </div>
               <div className="view-customer-detail-item">
-                <span className="vc-label">Mobile</span>
-                <span className="vc-value">
-                  {cust.mobile ?? cust.mobile_number ?? "—"}
-                </span>
+                <span className="vc-label">Mobile / Alternate</span>
+                <span className="vc-value">{formatMobileAlternate(cust)}</span>
               </div>
               <div className="view-customer-detail-item">
-                <span className="vc-label">DOB</span>
-                <span className="vc-value">{cust.date_of_birth ?? "—"}</span>
+                <span className="vc-label">C/O</span>
+                <span className="vc-value">{cust.care_of?.trim() || "—"}</span>
               </div>
-              <div className="view-customer-detail-item">
-                <span className="vc-label">Alternate</span>
-                <span className="vc-value">{cust.alt_phone_num ?? "—"}</span>
-              </div>
-              <div className="view-customer-detail-item">
-                <span className="vc-label">Financier</span>
-                <span className="vc-value">{cust.financier ?? "—"}</span>
-              </div>
-              <div className="view-customer-detail-item">
-                <span className="vc-label">Marital Status</span>
-                <span className="vc-value">{cust.marital_status ?? "—"}</span>
-              </div>
-              <div className="view-customer-detail-item">
-                <span className="vc-label">Nominee Gender</span>
-                <span className="vc-value">{selectedIns?.nominee_gender ?? "—"}</span>
-              </div>
-              <div className="view-customer-detail-item">
+              <div className="view-customer-detail-item view-customer-detail-item--address">
                 <span className="vc-label">Address</span>
                 <span className="vc-value">
                   {[cust.address, cust.city, cust.state, cust.pin]
@@ -237,6 +275,7 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
                   <th>Colour</th>
                   <th>Plate No.</th>
                   <th>Date of Purchase</th>
+                  <th>Invoice No.</th>
                 </tr>
               </thead>
               <tbody>
@@ -252,6 +291,7 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
                     <td>{v.colour ?? "—"}</td>
                     <td>{v.plate_num ?? "—"}</td>
                     <td>{v.date_of_purchase ?? "—"}</td>
+                    <td>{v.invoice_number?.trim() || "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -260,32 +300,19 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
         </section>
       )}
 
-      {/* Insurance & Service tiles (when vehicle selected or only one) */}
+      {/* Insurance & CPA tiles */}
       {selectedVehicle && (
         <section className="view-customer-tiles">
-          <div className="view-customer-tile">
-            <h4 className="view-customer-tile-title">Insurance</h4>
-            {selectedIns ? (
-              <dl className="view-customer-tile-dl">
-                <dt>Provider</dt>
-                <dd>{selectedIns.insurer ?? "—"}</dd>
-                <dt>Policy ID</dt>
-                <dd>{selectedIns.policy_num ?? "—"}</dd>
-                <dt>From</dt>
-                <dd>
-                  {selectedIns.policy_from ?? "—"}
-                  <span style={{ margin: "0 10px", color: "#667" }}>To</span>
-                  {selectedIns.policy_to ?? "—"}
-                </dd>
-              </dl>
-            ) : (
-              <p className="view-customer-tile-empty">No insurance record</p>
-            )}
-          </div>
-          <div className="view-customer-tile">
-            <h4 className="view-customer-tile-title">Service</h4>
-            <p className="view-customer-tile-empty">—</p>
-          </div>
+          <PolicyCoverageTile
+            title="Insurance"
+            record={selectedIns}
+            emptyMessage="No insurance record"
+          />
+          <PolicyCoverageTile
+            title="CPA"
+            record={selectedCpa}
+            emptyMessage="No CPA record"
+          />
         </section>
       )}
 
@@ -294,23 +321,22 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
           <div className="view-customer-vahan-wrap">
             {formVahanLoading ? (
               <p className="view-customer-tile-empty">Loading Vahan values…</p>
-            ) : !formVahan?.found || !formVahan.row || formVahan.columns.length === 0 ? (
+            ) : !formVahan?.found || !formVahan.row ? (
               <p className="view-customer-tile-empty">No Vahan view row available for this vehicle.</p>
             ) : (
               <table className="view-customer-vahan-table">
                 <thead>
                   <tr>
-                    {formVahan.columns.map((column) => (
-                      <th key={column}>{column}</th>
+                    {VAHAN_DISPLAY_COLUMNS.map(({ key, label }) => (
+                      <th key={key}>{label}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    {formVahan.columns.map((column) => {
-                      const value = formVahan.row?.[column];
-                      return <td key={column}>{value == null || value === "" ? "—" : String(value)}</td>;
-                    })}
+                    {VAHAN_DISPLAY_COLUMNS.map(({ key }) => (
+                      <td key={key}>{formatVahanCell(key, formVahan.row?.[key])}</td>
+                    ))}
                   </tr>
                 </tbody>
               </table>

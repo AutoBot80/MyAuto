@@ -127,8 +127,11 @@ export async function dispatchPrintJobsFromApi(
   if (typeof window === "undefined") return { ok: true, printed: 0 };
   const fn = window.electronAPI?.print?.printPdfsFromUrls;
   if (!fn) return { ok: true, printed: 0 };
+  const silent = getSilentPrintEnabled();
   const printOpts = {
-    silent: getSilentPrintEnabled(),
+    silent,
+    /** When Silent print is off: auto-click Print on the dialog and close Sumatra per PDF. */
+    dialogAssist: !silent,
     background: options?.awaitCompletion !== true,
   };
   const failureLog = options?.failureLog;

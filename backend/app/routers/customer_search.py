@@ -8,10 +8,22 @@ from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
-from app.repositories.form_vahan import get_by_customer_vehicle as get_form_vahan_by_customer_vehicle
+from app.repositories.form_vahan import (
+    VAHAN_DISPLAY_KEYS,
+    get_display_row_by_customer_vehicle,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/customer-search", tags=["customer-search"])
+
+
+def _format_insurance_policy_dates(row: dict) -> dict:
+    r = dict(row)
+    if r.get("policy_from"):
+        r["policy_from"] = r["policy_from"].strftime("%d-%m-%Y")
+    if r.get("policy_to"):
+        r["policy_to"] = r["policy_to"].strftime("%d-%m-%Y")
+    return r
 
 
 @router.get("/search")
@@ -135,7 +147,7 @@ def search_customer(
                 """
                 SELECT customer_id, name, mobile_number, address, pin, city, state,
                        date_of_birth, alt_phone_num, profession, financier, marital_status,
-                       gender
+                       gender, care_of
                 FROM customer_master
                 WHERE customer_id = %s
                 """,
@@ -163,6 +175,7 @@ def search_customer(
                        vm.engine,
                        vm.year_of_mfg,
                        sm.file_location,
+                       sm.invoice_number,
                        sm.billing_date AS date_of_purchase
                 FROM sales_master sm
                 JOIN vehicle_master vm ON vm.vehicle_id = sm.vehicle_id
@@ -183,6 +196,7 @@ def search_customer(
             # Insurance per vehicle (latest by insurance_year)
             vehicle_ids = [v["vehicle_id"] for v in vehicles]
             ins_map: dict[int, dict] = {}
+            cpa_map: dict[int, dict] = {}
             if vehicle_ids:
                 cur.execute(
                     """
@@ -195,18 +209,29 @@ def search_customer(
                     (cid, vehicle_ids),
                 )
                 for row in cur.fetchall():
-                    r = dict(row)
-                    if r.get("policy_from"):
-                        r["policy_from"] = r["policy_from"].strftime("%d-%m-%Y")
-                    if r.get("policy_to"):
-                        r["policy_to"] = r["policy_to"].strftime("%d-%m-%Y")
+                    r = _format_insurance_policy_dates(dict(row))
                     ins_map[r["vehicle_id"]] = r
+
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (vehicle_id) vehicle_id, insurer, policy_num, policy_from, policy_to, nominee_gender
+                    FROM insurance_master
+                    WHERE customer_id = %s AND vehicle_id = ANY(%s)
+                      AND insurance_type = 'CPA'
+                    ORDER BY vehicle_id, insurance_year DESC NULLS LAST
+                    """,
+                    (cid, vehicle_ids),
+                )
+                for row in cur.fetchall():
+                    r = _format_insurance_policy_dates(dict(row))
+                    cpa_map[r["vehicle_id"]] = r
 
             return {
                 "found": True,
                 "customer": customer,
                 "vehicles": vehicles,
                 "insurance_by_vehicle": ins_map,
+                "cpa_by_vehicle": cpa_map,
             }
     except HTTPException:
         raise
@@ -222,12 +247,12 @@ def get_form_vahan_row(
     customer_id: int = Query(..., description="Customer ID"),
     vehicle_id: int = Query(..., description="Vehicle ID"),
 ) -> dict:
-    """Return the form_vahan_view row for one customer/vehicle pair."""
+    """Return the six-column View Customer Vahan display row for one customer/vehicle pair."""
     try:
-        row = get_form_vahan_by_customer_vehicle(customer_id, vehicle_id)
+        row = get_display_row_by_customer_vehicle(customer_id, vehicle_id)
         if not row:
             return {"found": False, "columns": [], "row": None}
-        columns = list(row.keys())
+        columns = list(VAHAN_DISPLAY_KEYS)
         return {"found": True, "columns": columns, "row": row}
     except Exception as e:
         logger.exception("customer_search form-vahan failed")

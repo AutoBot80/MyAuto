@@ -399,6 +399,7 @@ export function AddSalesPage({
   const [isFillInsuranceLoading, setIsFillInsuranceLoading] = useState(false);
   const [isPrintFormsLoading, setIsPrintFormsLoading] = useState(false);
   const [printFormsStatus, setPrintFormsStatus] = useState<string | null>(null);
+  const [printFormsStatusSuccess, setPrintFormsStatusSuccess] = useState(false);
   const [fillInsuranceStatus, setFillInsuranceStatus] = useState<string | null>(null);
   /** Create Invoice (DMS) allowed only after Submit Info and when sales_master has no invoice# for this sale. */
   const [createInvoiceEligibilityLoading, setCreateInvoiceEligibilityLoading] = useState(false);
@@ -805,6 +806,7 @@ export function AddSalesPage({
     setDmsRunEndedWithError(false);
     setFillInsuranceStatus(null);
     setPrintFormsStatus(null);
+    setPrintFormsStatusSuccess(false);
     setHasSubmittedInfo(false);
     setHasPrintedForms(false);
     setLastSubmittedCustomerId(null);
@@ -1548,6 +1550,8 @@ export function AddSalesPage({
 
     setIsPrintFormsLoading(true);
     setPrintFormsStatus(null);
+    setPrintFormsStatusSuccess(false);
+    setPrintFormsStatusSuccess(false);
 
     try {
       const result = await runPrintQueueRtoFlow({
@@ -1575,6 +1579,7 @@ export function AddSalesPage({
         setPendingScannerArchiveMove(null);
       }
       setPrintFormsStatus(result.statusLines.join(" "));
+      setPrintFormsStatusSuccess(result.success);
     } finally {
       setIsPrintFormsLoading(false);
     }
@@ -2482,7 +2487,11 @@ export function AddSalesPage({
               )}
               {printFormsStatus && (
                 <div className="add-sales-v2-print-forms-row">
-                  <StatusMessage message={printFormsStatus} className="app-panel-status" role="status" />
+                  <StatusMessage
+                    message={printFormsStatus}
+                    className={`app-panel-status ${printFormsStatusSuccess ? "app-panel-status--success" : "app-panel-status--error"}`}
+                    role="status"
+                  />
                 </div>
               )}
               <div className="add-sales-v2-rto-actions add-sales-v2-print-forms-actions">
