@@ -13,7 +13,10 @@ from app.repositories.add_sales_staging import (
 from app.schemas.add_sales_staging_patch import PatchAddSalesStagingPayloadRequest
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
-from app.services.utility_functions import normalize_nominee_relationship_value
+from app.services.utility_functions import (
+    normalize_nominee_relationship_value,
+    sanitize_details_sheet_insurer_value,
+)
 
 
 def _str_or_none(val: Any, max_len: int | None = None) -> str | None:
@@ -52,6 +55,13 @@ def _build_patch_from_request(req: PatchAddSalesStagingPayloadRequest) -> dict[s
             patch["vehicle"] = veh_patch
     if req.insurance is not None:
         ins_patch: dict[str, Any] = {}
+        if "insurer" in req.insurance.model_fields_set:
+            raw_ins = req.insurance.insurer
+            if raw_ins is None:
+                ins_patch["insurer"] = None
+            else:
+                ok = sanitize_details_sheet_insurer_value(_str_or_none(raw_ins, 255))
+                ins_patch["insurer"] = ok
         if "nominee_name" in req.insurance.model_fields_set:
             ins_patch["nominee_name"] = _str_or_none(req.insurance.nominee_name)
         if "nominee_relationship" in req.insurance.model_fields_set:

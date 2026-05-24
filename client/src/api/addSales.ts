@@ -106,6 +106,7 @@ export interface PatchAddSalesStagingPayloadBody {
     battery_no?: string | null;
   };
   insurance?: {
+    insurer?: string | null;
     nominee_name?: string | null;
     nominee_relationship?: string | null;
   };

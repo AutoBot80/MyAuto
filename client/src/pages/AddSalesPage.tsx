@@ -30,6 +30,7 @@ import {
   fetchAddSalesStagingPayload,
   fetchCreateInvoiceEligibility,
   fetchDealerCpaContext,
+  patchAddSalesStagingPayload,
   type CreateInvoiceEligibilityResponse,
   type CpaInsurerPortalRow,
 } from "../api/addSales";
@@ -874,13 +875,18 @@ export function AddSalesPage({
 
   useEffect(() => {
     if (!portalInsurers.length) return;
-    const eff = effectivePortalInsurer(extractedInsurance?.insurer, preferInsurer, portalInsurers);
+    const freshSale = !savedTo || String(savedTo).trim() === "";
+    const eff = effectivePortalInsurer(
+      freshSale ? undefined : extractedInsurance?.insurer,
+      preferInsurer,
+      portalInsurers
+    );
     if (eff == null) return;
     const cur = (extractedInsurance?.insurer ?? "").trim();
-    if (cur !== eff) {
+    if (freshSale || cur !== eff) {
       setExtractedInsurance((prev) => ({ ...(prev ?? {}), insurer: eff }));
     }
-  }, [portalInsurers, preferInsurer, extractedInsurance?.insurer]);
+  }, [portalInsurers, preferInsurer, extractedInsurance?.insurer, savedTo]);
 
   /** Allowed: letters, digits, space, hyphen, period, slash, comma. No other special characters. */
   const ALLOWED_CHAR_REGEX = /^[a-zA-Z0-9\s\-./,]*$/;
@@ -1400,6 +1406,13 @@ export function AddSalesPage({
     setIsFillInsuranceLoading(true);
     setFillInsuranceStatus(null);
     try {
+      const selectedInsurer = (extractedInsurance?.insurer ?? "").trim();
+      const sid = lastStagingId?.trim();
+      if (sid && dealerId > 0 && selectedInsurer) {
+        await patchAddSalesStagingPayload(sid, dealerId, {
+          insurance: { insurer: selectedInsurer },
+        });
+      }
       const insuranceRes = await fillHeroInsuranceLocal(
         lastStagingId
           ? { staging_id: lastStagingId }
@@ -2401,6 +2414,14 @@ export function AddSalesPage({
                             onChange={(e) => {
                               const v = e.target.value;
                               setExtractedInsurance((prev) => ({ ...(prev ?? {}), insurer: v }));
+                              const patchSid = lastStagingId?.trim();
+                              if (patchSid && dealerId > 0 && v.trim()) {
+                                void patchAddSalesStagingPayload(patchSid, dealerId, {
+                                  insurance: { insurer: v },
+                                }).catch(() => {
+                                  /* GI will patch again before fill */
+                                });
+                              }
                             }}
                           >
                             {portalInsurers.map((name) => (

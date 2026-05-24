@@ -514,9 +514,9 @@ def _float_env(name: str, default: float) -> float:
 
 
 # KYC insurer match: ``fuzzy_best_option_label`` min score (global default 0.42 is often too strict for typos).
-KYC_INSURER_FUZZY_MIN_SCORE = _float_env("KYC_INSURER_FUZZY_MIN_SCORE", 0.28)
+KYC_INSURER_FUZZY_MIN_SCORE = _float_env("KYC_INSURER_FUZZY_MIN_SCORE", 0.80)
 # Fallback when fuzzy returns None: ``difflib.SequenceMatcher`` on normalized insurer vs focused/display text.
-KYC_INSURER_DISPLAY_SEQUENCE_MIN = _float_env("KYC_INSURER_DISPLAY_SEQUENCE_MIN", 0.48)
+KYC_INSURER_DISPLAY_SEQUENCE_MIN = _float_env("KYC_INSURER_DISPLAY_SEQUENCE_MIN", 0.80)
 # When ``dealer_ref.prefer_insurer`` is set, require at least this ``SequenceMatcher`` ratio vs the merged
 # details insurer (``master_ref``-aligned) before replacing with the dealer string. High default: insurers are
 # normalized; lower the env var only for unusual short prefer aliases.

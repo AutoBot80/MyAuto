@@ -24,6 +24,7 @@ class PatchAddSalesStagingVehicle(BaseModel):
 class PatchAddSalesStagingInsurance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    insurer: str | None = Field(None, max_length=255)
     nominee_name: str | None = Field(None, max_length=512)
     nominee_relationship: str | None = Field(None, max_length=128)
 

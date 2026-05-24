@@ -7971,6 +7971,102 @@ def _hero_misp_dismiss_proposal_overlay_modals(
     return False
 
 
+_BAJAJ_MAME_CONTINUE_WITHOUT_COVER_RX = re.compile(
+    r"Continue\s+Without\s+Cover",
+    re.I,
+)
+
+
+def _hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
+    page,
+    *,
+    timeout_ms: int = 8_000,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> bool:
+    """
+    Bajaj only: after **Proposal Preview**, MISP may show **Motor Accidental Medical Expenses Cover
+    Exclusion Alert** — click **Continue Without Cover** (not **Add Cover**).
+    """
+    to = min(int(timeout_ms), 20_000)
+    roots: list = [page]
+    try:
+        for fr in page.frames:
+            if not fr.is_detached():
+                roots.append(fr)
+    except Exception:
+        pass
+    for root in roots:
+        try:
+            hit = root.get_by_role("button", name=_BAJAJ_MAME_CONTINUE_WITHOUT_COVER_RX)
+            for i in range(min(hit.count(), 8)):
+                el = hit.nth(i)
+                if el.is_visible(timeout=min(2_500, to)):
+                    try:
+                        el.scroll_into_view_if_needed(timeout=1_000)
+                    except Exception:
+                        pass
+                    el.click(timeout=to, force=True)
+                    if ocr_output_dir and (subfolder or "").strip():
+                        append_playwright_insurance_line(
+                            ocr_output_dir,
+                            (subfolder or "").strip(),
+                            "NOTE",
+                            "proposal_review: Bajaj — clicked Continue Without Cover (role=button)",
+                        )
+                    _t(page, 450)
+                    _wait_load_optional(page, min(5_000, to))
+                    return True
+        except Exception:
+            pass
+        for sel in (
+            "button:has-text('Continue Without Cover')",
+            "input[type='button'][value*='Continue Without Cover' i]",
+            "input[type='submit'][value*='Continue Without Cover' i]",
+            "a:has-text('Continue Without Cover')",
+        ):
+            try:
+                loc = root.locator(sel)
+                n = min(int(loc.count()), 6)
+                for i in range(n):
+                    btn = loc.nth(i)
+                    if btn.is_visible(timeout=min(2_500, to)):
+                        try:
+                            btn.scroll_into_view_if_needed(timeout=1_000)
+                        except Exception:
+                            pass
+                        btn.click(timeout=to, force=True)
+                        if ocr_output_dir and (subfolder or "").strip():
+                            append_playwright_insurance_line(
+                                ocr_output_dir,
+                                (subfolder or "").strip(),
+                                "NOTE",
+                                "proposal_review: Bajaj — clicked Continue Without Cover (locator)",
+                            )
+                        _t(page, 450)
+                        _wait_load_optional(page, min(5_000, to))
+                        return True
+            except Exception:
+                continue
+        try:
+            el = root.get_by_text(_BAJAJ_MAME_CONTINUE_WITHOUT_COVER_RX).first
+            if el.is_visible(timeout=min(2_500, to)):
+                el.click(timeout=to, force=True)
+                if ocr_output_dir and (subfolder or "").strip():
+                    append_playwright_insurance_line(
+                        ocr_output_dir,
+                        (subfolder or "").strip(),
+                        "NOTE",
+                        "proposal_review: Bajaj — clicked Continue Without Cover (text)",
+                    )
+                _t(page, 450)
+                _wait_load_optional(page, min(5_000, to))
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _hero_misp_i_agree_after_vin_submit(
     page,
     *,
@@ -9324,6 +9420,9 @@ def _hero_misp_fill_proposal_and_review(
     _is_national_insurance = bool(
         re.search(r"national\s+insurance", (values.get("insurer") or ""), re.IGNORECASE)
     )
+    _is_bajaj_insurance = bool(
+        re.search(r"\bbajaj\b", (values.get("insurer") or ""), re.IGNORECASE)
+    )
     # MispPolicy add-on grid: **ND Cover** is the top row; **ND Plus Cover** is directly below.
     # Do not use plain ``Nil\s*Depreciation`` for ND Cover — it matches **Nil Depreciation Plus** on the next row.
     # **Mutual exclusion:** checking one row clears the other; unchecking one does **not** clear the other.
@@ -9370,19 +9469,19 @@ def _hero_misp_fill_proposal_and_review(
         )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
-    # RTI (chkroicover) is not offered on every insurer’s proposal grid (e.g. The New
-    # India Assurance); optional skip when the row/checkbox is absent.
+    # RTI (chkroicover): unchecked for all insurers (NIC + others). Row may be absent on some grids;
+    # optional skip except Bajaj — must find control to uncheck or fail with frame dump.
     err = _proposal_addon_checkbox_id_or_label(
         page,
         "chkroicover",
-        not _is_national_insurance,
+        False,
         "addon_rti",
         r"RTI\s*Cover|RTI\s*&?\s*Cover|R\.?T\.?I\.?\s*Cover|Return\s+to\s+Invoice|"
         r"Return\s*to\s*Invoice\s*\(?\s*RTI|Invoice\s*Cover|Cover\s*[-–]?\s*RTI|ROI",
         ocr_output_dir,
         subfolder,
         timeout_ms=pt,
-        optional=True,
+        optional=not _is_bajaj_insurance,
     )
     if err:
         return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
@@ -9603,6 +9702,21 @@ def _hero_misp_fill_proposal_and_review(
         return _proposal_fail(ocr_output_dir, subfolder, f"proposal_review: {exc!s}", page=page)
 
     _t(page, 600)
+    if _is_bajaj_insurance:
+        if not _hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
+            page,
+            timeout_ms=min(12_000, pt),
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        ):
+            return _proposal_fail(
+                ocr_output_dir,
+                subfolder,
+                "proposal_review: Bajaj MAME cover exclusion alert — Continue Without Cover not found",
+                page=page,
+            )
+        _t(page, 400)
+
     _wait_load_optional(page, min(25_000, pt * 5))
     for _pr_root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:

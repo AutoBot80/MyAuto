@@ -85,7 +85,16 @@ def _apply_staging_insurance_overlay(values: dict, staging_payload: dict | None)
         if t:
             values[key] = t
 
-    take_if_empty("insurer", ins.get("insurer"))
+    # Operator / Submit Info / PATCH insurer in staging wins over view and OCR for this GI run.
+    st_ins_raw = ins.get("insurer")
+    if st_ins_raw is not None:
+        st_ins = sanitize_details_sheet_insurer_value(
+            clean_text(st_ins_raw) if isinstance(st_ins_raw, str) else clean_text(str(st_ins_raw))
+        )
+        if st_ins:
+            values["insurer"] = st_ins
+    else:
+        take_if_empty("insurer", ins.get("insurer"))
     take_if_empty("dob", cust.get("date_of_birth") or cust.get("dob") or ins.get("dob"))
     take_if_empty("nominee_name", ins.get("nominee_name") or cust.get("nominee_name"))
     take_if_empty(

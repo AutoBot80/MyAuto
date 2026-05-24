@@ -115,6 +115,12 @@ function isLocalPdfPath(s: string): boolean {
   return false;
 }
 
+/** Temp bundle from sidecar ``build_local_rto_print_jobs`` — delete after print. */
+function isRtoPrintBundleTempPath(pdfPath: string): boolean {
+  const base = pdfPath.split(/[/\\]/).pop() ?? "";
+  return base.startsWith("saathi-rto-print-") && base.toLowerCase().endsWith(".pdf");
+}
+
 export async function printPdfsFromPresignedUrls(
   items: PresignedPrintItem[],
   options?: PdfPrintOptions | string
@@ -143,10 +149,12 @@ export async function printPdfsFromPresignedUrls(
             ? "Gate Pass"
             : item.kind === "cpa"
               ? "CPA"
-              : item.filename ?? "Document";
+              : item.kind === "rto_print_bundle"
+                ? "RTO print bundle"
+                : item.filename ?? "Document";
     let tmpPath: string | null = null;
+    let pdfPath: string | null = null;
     try {
-      let pdfPath: string;
       if (isLocalPdfPath(item.presigned_url)) {
         pdfPath = item.presigned_url.trim().startsWith("file://")
           ? fileURLToPath(item.presigned_url.trim())
@@ -189,6 +197,8 @@ export async function printPdfsFromPresignedUrls(
     } finally {
       if (tmpPath) {
         unlink(tmpPath).catch(() => {});
+      } else if (pdfPath && isRtoPrintBundleTempPath(pdfPath)) {
+        unlink(pdfPath).catch(() => {});
       }
     }
   }

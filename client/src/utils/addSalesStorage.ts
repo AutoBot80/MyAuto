@@ -207,7 +207,18 @@ export function loadAddSalesForm(): AddSalesStored {
           if (s) ins.nominee_age = s;
           else delete ins.nominee_age;
         }
-        return ins as AddSalesStored["extractedInsurance"];
+        const out = ins as AddSalesStored["extractedInsurance"];
+        const savedToVal =
+          parsed.savedTo === null || parsed.savedTo === undefined
+            ? null
+            : typeof parsed.savedTo === "string"
+              ? parsed.savedTo.trim() || null
+              : null;
+        if (!savedToVal && out && typeof out === "object") {
+          const { insurer: _drop, ...rest } = out as Record<string, unknown>;
+          return Object.keys(rest).length > 0 ? (rest as AddSalesStored["extractedInsurance"]) : null;
+        }
+        return out;
       })(),
     };
   } catch {
@@ -219,6 +230,11 @@ export function saveAddSalesForm(data: Partial<AddSalesStored>): void {
   try {
     const current = loadAddSalesForm();
     const merged = { ...current, ...data };
+    const savedToVal = merged.savedTo != null && String(merged.savedTo).trim() !== "" ? merged.savedTo : null;
+    if (!savedToVal && merged.extractedInsurance && typeof merged.extractedInsurance === "object") {
+      const { insurer: _drop, ...rest } = merged.extractedInsurance as Record<string, unknown>;
+      merged.extractedInsurance = Object.keys(rest).length > 0 ? (rest as AddSalesStored["extractedInsurance"]) : null;
+    }
     sessionStorage.setItem(KEY, JSON.stringify(merged));
   } catch {
     // ignore

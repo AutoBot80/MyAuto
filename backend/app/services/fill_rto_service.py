@@ -701,6 +701,27 @@ def resolve_print_rto_push_upload_paths(
     return out
 
 
+def _merge_pdfs_to_temp(paths: list[Path], *, subfolder: str) -> Path:
+    """Merge ordered PDFs into one temp file for a single Electron print dialog."""
+    import tempfile
+
+    import fitz
+
+    safe = re.sub(r"[^\w\-]", "_", (subfolder or "default").strip()) or "default"
+    ts = int(time.time() * 1000)
+    out = Path(tempfile.gettempdir()) / f"saathi-rto-print-{safe}-{ts}.pdf"
+    merged = fitz.open()
+    try:
+        for p in paths:
+            doc = fitz.open(str(p))
+            merged.insert_pdf(doc, from_page=0, to_page=-1)
+            doc.close()
+        merged.save(str(out))
+    finally:
+        merged.close()
+    return out
+
+
 def build_local_rto_print_jobs(
     sale_dir: Path,
     *,
@@ -709,7 +730,7 @@ def build_local_rto_print_jobs(
     gate_pass_pdf: Path,
 ) -> tuple[list[dict[str, str]], list[str]]:
     """
-    Ordered print jobs for local Electron print: sale_certificate, insurance, optional cpa, gate_pass.
+    Single merged print job for local Electron print (sale_certificate → insurance → optional cpa → gate_pass).
 
     Returns ``(print_jobs, missing_required_labels)``.
     """
@@ -729,17 +750,21 @@ def build_local_rto_print_jobs(
     if missing:
         return [], missing
 
-    ordered: list[tuple[Path, str]] = [
-        (sale_pdf.resolve(), "sale_certificate"),
-        (ins_pdf.resolve(), "insurance"),
+    ordered_paths: list[Path] = [
+        sale_pdf.resolve(),
+        ins_pdf.resolve(),
     ]
     if cpa_pdf is not None and cpa_pdf.is_file():
-        ordered.append((cpa_pdf.resolve(), "cpa"))
-    ordered.append((gate_pass_pdf.resolve(), "gate_pass"))
+        ordered_paths.append(cpa_pdf.resolve())
+    ordered_paths.append(gate_pass_pdf.resolve())
 
+    merged_path = _merge_pdfs_to_temp(ordered_paths, subfolder=subfolder)
     jobs = [
-        {"filename": p.name, "presigned_url": str(p), "kind": kind}
-        for p, kind in ordered
+        {
+            "filename": merged_path.name,
+            "presigned_url": str(merged_path),
+            "kind": "rto_print_bundle",
+        }
     ]
     return jobs, []
 
