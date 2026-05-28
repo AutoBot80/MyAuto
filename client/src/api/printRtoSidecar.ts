@@ -38,6 +38,30 @@ async function runSidecarJob(
   return { success: true, data };
 }
 
+export async function pullAadharScanJpegsFromServer(
+  req: UploadSaleFolderRequest
+): Promise<UploadSaleFolderResponse> {
+  const subfolder = (req.subfolder || "").trim();
+  if (!subfolder || req.dealer_id <= 0) {
+    return { success: false, error: "dealer_id and subfolder are required." };
+  }
+  const r = await runSidecarJob(
+    "pull_aadhar_scan_jpegs",
+    { dealer_id: req.dealer_id, subfolder },
+    SYNC_TIMEOUT_MS
+  );
+  if (!r.success) {
+    return { success: false, error: r.error };
+  }
+  const d = r.data ?? {};
+  return {
+    success: true,
+    files_downloaded: Number(d.files_downloaded ?? 0),
+    files_failed: Number(d.files_failed ?? 0),
+    subfolder: String(d.subfolder ?? subfolder),
+  };
+}
+
 export async function pullSaleScanAssetsFromServer(
   req: UploadSaleFolderRequest
 ): Promise<UploadSaleFolderResponse> {

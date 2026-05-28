@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
+from app.repositories.add_sales_invoices import list_recent_sales_invoices
 from app.repositories.add_sales_staging import fetch_staging_payload, list_in_process_staging_rows
 from app.repositories.master_ref import list_cpa_portals, list_portal_insurers
 from app.schemas.add_sales_staging_patch import PatchAddSalesStagingPayloadRequest
@@ -28,6 +29,43 @@ def _digits_mobile(mobile: str) -> int | None:
     if len(digits) > 0:
         return int(digits)
     return None
+
+
+def _has_cpa_insurance_master_row(cur: Any, customer_id: int, vehicle_id: int) -> bool:
+    """True when ``insurance_master`` has a CPA row for this sale and current calendar year."""
+    cur.execute(
+        """
+        SELECT im.insurance_id
+        FROM insurance_master im
+        WHERE im.customer_id = %s
+          AND im.vehicle_id = %s
+          AND im.insurance_year = %s
+          AND im.insurance_type = 'CPA'
+        LIMIT 1
+        """,
+        (int(customer_id), int(vehicle_id), date.today().year),
+    )
+    row = cur.fetchone()
+    return row is not None and row.get("insurance_id") is not None
+
+
+def _cpa_alliance_insurance_eligibility(*, has_cpa_row: bool, ids_resolved: bool) -> dict[str, object]:
+    if not ids_resolved:
+        return {
+            "cpa_alliance_insurance_enabled": False,
+            "cpa_alliance_insurance_reason": (
+                "Customer and vehicle master IDs are required for CPA Insurance."
+            ),
+        }
+    if has_cpa_row:
+        return {
+            "cpa_alliance_insurance_enabled": False,
+            "cpa_alliance_insurance_reason": "CPA insurance is already recorded for this sale.",
+        }
+    return {
+        "cpa_alliance_insurance_enabled": True,
+        "cpa_alliance_insurance_reason": None,
+    }
 
 
 def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
@@ -105,6 +143,27 @@ def list_add_sales_in_process(
     return {"count": len(ser), "rows": ser}
 
 
+@router.get("/invoices")
+def list_add_sales_invoices(
+    dealer_id: int | None = Query(None, ge=1),
+    days: int = Query(7, ge=1, le=365),
+    mobile: str | None = Query(None, max_length=MAX_TEXT_CHARS, description="Customer mobile"),
+    chassis: str | None = Query(None, max_length=MAX_TEXT_CHARS, description="Chassis / VIN partial or wildcard"),
+    engine: str | None = Query(None, max_length=MAX_TEXT_CHARS, description="Engine partial or wildcard"),
+    principal: Principal = Depends(get_principal),
+) -> dict[str, Any]:
+    """Committed ``sales_master`` rows for Add Sales Invoices tab (last ``days`` IST days on billing_date)."""
+    did = resolve_dealer_id(principal, dealer_id)
+    rows = list_recent_sales_invoices(
+        dealer_id=did,
+        days=days,
+        mobile=mobile,
+        chassis=chassis,
+        engine=engine,
+    )
+    return {"count": len(rows), "rows": rows}
+
+
 @router.get("/staging/{staging_id}/payload")
 def get_add_sales_staging_payload(
     staging_id: str,
@@ -169,6 +228,7 @@ def _eligibility_by_customer_vehicle_ids(customer_id: int, vehicle_id: int) -> d
     conn = get_connection()
     srow = None
     ins_row = None
+    has_cpa_row = False
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -181,6 +241,7 @@ def _eligibility_by_customer_vehicle_ids(customer_id: int, vehicle_id: int) -> d
                 (customer_id, vehicle_id),
             )
             srow = cur.fetchone()
+            has_cpa_row = _has_cpa_insurance_master_row(cur, customer_id, vehicle_id)
 
             if srow is not None:
                 inv_chk = (srow.get("invoice_number") or "")
@@ -205,6 +266,7 @@ def _eligibility_by_customer_vehicle_ids(customer_id: int, vehicle_id: int) -> d
 
     resolved_cid = int(customer_id)
     resolved_vid = int(vehicle_id)
+    cpa_fields = _cpa_alliance_insurance_eligibility(has_cpa_row=has_cpa_row, ids_resolved=True)
 
     if srow is None:
         return {
@@ -220,6 +282,7 @@ def _eligibility_by_customer_vehicle_ids(customer_id: int, vehicle_id: int) -> d
             ),
             "resolved_customer_id": resolved_cid,
             "resolved_vehicle_id": resolved_vid,
+            **cpa_fields,
         }
 
     inv_raw = srow["invoice_number"]
@@ -247,6 +310,7 @@ def _eligibility_by_customer_vehicle_ids(customer_id: int, vehicle_id: int) -> d
         "generate_insurance_reason": gen_reason,
         "resolved_customer_id": resolved_cid,
         "resolved_vehicle_id": resolved_vid,
+        **cpa_fields,
     }
 
 
@@ -291,8 +355,12 @@ def get_create_invoice_eligibility(
     ``(customer_id, vehicle_id)``, **or** the row exists but ``invoice_number`` is blank (bad commit).
 
     **Generate Insurance:** enabled only when a **``sales_master``** row exists, **and** an invoice is
-    recorded (non-blank ``invoice_number``), **and** no ``insurance_master`` row for that pair has a
+    recorded (non-blank ``invoice_number``), **and** no ``insurance_master`` **Main** row for that pair has a
     non-empty ``policy_num``.
+
+    **CPA Insurance:** enabled when resolved ``(customer_id, vehicle_id)`` exist and no ``insurance_master``
+    row exists for that pair with ``insurance_type = 'CPA'`` and ``insurance_year`` equal to the current
+    calendar year (same key as Alliance CPA commit).
 
     When **customer_id** and **vehicle_id** are both provided, eligibility is resolved from ``sales_master`` /
     ``insurance_master`` only (ignores chassis / engine / mobile). Prefer this after a successful Create Invoice
@@ -318,6 +386,7 @@ def get_create_invoice_eligibility(
     crow = None
     srow = None
     ins_row = None
+    has_cpa_row = False
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -341,6 +410,7 @@ def get_create_invoice_eligibility(
             if vrow and crow:
                 vid = vrow["vehicle_id"]
                 cid = crow["customer_id"]
+                has_cpa_row = _has_cpa_insurance_master_row(cur, cid, vid)
                 cur.execute(
                     """
                     SELECT invoice_number
@@ -390,8 +460,11 @@ def get_create_invoice_eligibility(
             "generate_insurance_reason": "Create Invoice before Generating Insurance",
             "resolved_customer_id": None,
             "resolved_vehicle_id": None,
+            **_cpa_alliance_insurance_eligibility(has_cpa_row=False, ids_resolved=False),
             **cpa_x,
         }
+
+    cpa_fields = _cpa_alliance_insurance_eligibility(has_cpa_row=has_cpa_row, ids_resolved=True)
 
     if srow is None:
         return {
@@ -407,6 +480,7 @@ def get_create_invoice_eligibility(
             ),
             "resolved_customer_id": resolved_cid,
             "resolved_vehicle_id": resolved_vid,
+            **cpa_fields,
             **cpa_x,
         }
 
@@ -435,5 +509,6 @@ def get_create_invoice_eligibility(
         "generate_insurance_reason": gen_reason,
         "resolved_customer_id": resolved_cid,
         "resolved_vehicle_id": resolved_vid,
+        **cpa_fields,
         **cpa_x,
     }

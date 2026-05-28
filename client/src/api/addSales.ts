@@ -21,6 +21,9 @@ export interface CreateInvoiceEligibilityResponse {
   hero_cpi?: string | null;
   dealer_cpa_insurer?: string | null;
   cpa_alliance_portal_enabled?: boolean;
+  /** False when ``insurance_master`` already has a CPA row for this sale and current calendar year. */
+  cpa_alliance_insurance_enabled?: boolean;
+  cpa_alliance_insurance_reason?: string | null;
   /** ``master_ref`` insurers with ``comments = 'Y'`` (portal dropdown). */
   portal_insurers?: string[] | null;
 }
@@ -81,6 +84,43 @@ export async function fetchAddSalesInProcess(
 ): Promise<{ count: number; rows: AddSalesInProcessRow[] }> {
   const q = new URLSearchParams({ dealer_id: String(dealerId), days: String(days) });
   return apiFetch<{ count: number; rows: AddSalesInProcessRow[] }>(`/add-sales/in-process?${q.toString()}`);
+}
+
+/** Row from ``GET /add-sales/invoices`` (committed sales_master, last N IST days). */
+export interface AddSalesInvoiceRow {
+  sales_id: number;
+  customer_name: string | null;
+  mobile: string | null;
+  model: string | null;
+  invoice_date: string | null;
+  invoice_number: string | null;
+  insurance_policy_num: string | null;
+  cpa_policy_num: string | null;
+  file_location: string | null;
+}
+
+export type FetchAddSalesInvoicesParams = {
+  days?: number;
+  mobile?: string | null;
+  chassis?: string | null;
+  engine?: string | null;
+};
+
+export async function fetchAddSalesInvoices(
+  dealerId: number,
+  opts: FetchAddSalesInvoicesParams = {}
+): Promise<{ count: number; rows: AddSalesInvoiceRow[] }> {
+  const q = new URLSearchParams({
+    dealer_id: String(dealerId),
+    days: String(opts.days ?? 7),
+  });
+  const m = (opts.mobile ?? "").trim();
+  const c = (opts.chassis ?? "").trim();
+  const e = (opts.engine ?? "").trim();
+  if (m) q.set("mobile", m);
+  if (c) q.set("chassis", c);
+  if (e) q.set("engine", e);
+  return apiFetch<{ count: number; rows: AddSalesInvoiceRow[] }>(`/add-sales/invoices?${q.toString()}`);
 }
 
 export async function fetchAddSalesStagingPayload(

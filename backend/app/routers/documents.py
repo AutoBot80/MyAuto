@@ -30,6 +30,47 @@ def _safe_subfolder(name: str | None) -> str | None:
     return safe if safe else None
 
 
+FOR_OCR_SUBDIR = "for_OCR"
+_FOR_OCR_AADHAR_FILENAMES = frozenset(
+    {"Aadhar_front.jpg", "Aadhar_back.jpg", "Aadhar.jpg"}
+)
+
+
+def _resolve_uploads_file(
+    did: int,
+    rel: str,
+    requested_name: str,
+) -> FileResponse | RedirectResponse:
+    """Serve one uploads-relative path from local disk or S3 presigned redirect."""
+    parts = [p for p in rel.split("/") if p and p not in {".", ".."}]
+    local_path = get_uploads_dir(did)
+    for part in parts:
+        local_path = local_path / part
+    if local_path.is_file():
+        logger.info("get_document: local disk dealer_id=%s rel=%s", did, rel)
+        return FileResponse(
+            local_path,
+            filename=requested_name,
+            content_disposition_type="inline",
+        )
+    if STORAGE_USE_S3:
+        url = presigned_uploads_get_by_rel_path(did, rel)
+        if not url:
+            logger.warning(
+                "get_document: not on disk or S3 dealer_id=%s rel=%s",
+                did,
+                rel,
+            )
+            raise HTTPException(status_code=404, detail="File not found")
+        logger.info(
+            "get_document: S3 redirect dealer_id=%s rel=%s (file absent on local disk)",
+            did,
+            rel,
+        )
+        return RedirectResponse(url=url, status_code=307)
+    raise HTTPException(status_code=404, detail="File not found")
+
+
 @router.get("/{subfolder}", response_class=HTMLResponse)
 def browse_documents(
     subfolder: str,
@@ -105,6 +146,29 @@ def list_documents(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+@router.get("/{subfolder}/for_ocr/{filename}", response_model=None)
+def get_document_for_ocr(
+    subfolder: str,
+    filename: str,
+    principal: Principal = Depends(get_principal),
+    dealer_id: int | None = Query(None, description="Dealer ID; uses token dealer if omitted"),
+):
+    """Serve Aadhaar JPEGs still under ``for_OCR/`` before post-OCR promotes them to the sale root."""
+    did = resolve_dealer_id(principal, dealer_id)
+    safe_sub = _safe_subfolder(subfolder)
+    if not safe_sub:
+        raise HTTPException(status_code=400, detail="Invalid subfolder")
+    if not filename or "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    requested_name = Path(filename).name
+    if requested_name != filename or requested_name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if requested_name not in _FOR_OCR_AADHAR_FILENAMES:
+        raise HTTPException(status_code=404, detail="File not found")
+    rel = f"{safe_sub}/{FOR_OCR_SUBDIR}/{requested_name}"
+    return _resolve_uploads_file(did, rel, requested_name)
+
+
 @router.get("/{subfolder}/{filename}")
 def get_document(
     subfolder: str,
@@ -127,30 +191,4 @@ def get_document(
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     rel = f"{safe_sub}/{requested_name}"
-    local_path = get_uploads_dir(did) / safe_sub / requested_name
-    # Prefer EC2/local disk when the file is present (sidecar pull, no S3 presigned redirect).
-    if local_path.is_file():
-        logger.info("get_document: local disk dealer_id=%s rel=%s", did, rel)
-        return FileResponse(
-            local_path,
-            filename=requested_name,
-            content_disposition_type="inline",
-        )
-
-    if STORAGE_USE_S3:
-        url = presigned_uploads_get_by_rel_path(did, rel)
-        if not url:
-            logger.warning(
-                "get_document: not on disk or S3 dealer_id=%s rel=%s",
-                did,
-                rel,
-            )
-            raise HTTPException(status_code=404, detail="File not found")
-        logger.info(
-            "get_document: S3 redirect dealer_id=%s rel=%s (file absent on local disk)",
-            did,
-            rel,
-        )
-        return RedirectResponse(url=url, status_code=307)
-
-    raise HTTPException(status_code=404, detail="File not found")
+    return _resolve_uploads_file(did, rel, requested_name)

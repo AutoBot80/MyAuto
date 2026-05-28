@@ -34,6 +34,8 @@ import {
   type CreateInvoiceEligibilityResponse,
   type CpaInsurerPortalRow,
 } from "../api/addSales";
+import { pullAadharScanJpegsFromServer } from "../api/printRtoSidecar";
+import { isElectron } from "../electron";
 import { runPrintQueueRtoFlow } from "../utils/printQueueRtoFlow";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { markBulkLoadSuccess } from "../api/bulkLoads";
@@ -47,6 +49,7 @@ import {
   sanitizeOptionalFormField,
 } from "../utils/formFieldSanitize";
 import { AddSalesInProcessPanel } from "./AddSalesInProcessPanel";
+import { AddSalesInvoicesPanel } from "./AddSalesInvoicesPanel";
 import { StatusMessage } from "../components/StatusMessage";
 import { usePageVisible } from "../hooks/usePageVisible";
 import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
@@ -408,6 +411,8 @@ export function AddSalesPage({
   const [createInvoiceEligibilityReason, setCreateInvoiceEligibilityReason] = useState<string | null>(null);
   const [generateInsuranceEnabled, setGenerateInsuranceEnabled] = useState(false);
   const [generateInsuranceReason, setGenerateInsuranceReason] = useState<string | null>(null);
+  const [cpaAllianceInsuranceEnabled, setCpaAllianceInsuranceEnabled] = useState(false);
+  const [cpaAllianceInsuranceReason, setCpaAllianceInsuranceReason] = useState<string | null>(null);
   const [cpaAlliancePortalEnabled, setCpaAlliancePortalEnabled] = useState(false);
   const [cpaInsurers, setCpaInsurers] = useState<CpaInsurerPortalRow[]>([]);
   /** ``master_ref`` INSURER rows with ``comments = 'Y'`` (Section 3 dropdown). */
@@ -466,7 +471,7 @@ export function AddSalesPage({
     );
   });
   const [formResetKey, setFormResetKey] = useState(0);
-  const [addSalesPageTab, setAddSalesPageTab] = useState<"add-sales" | "in-process">("add-sales");
+  const [addSalesPageTab, setAddSalesPageTab] = useState<"add-sales" | "in-process" | "invoices">("add-sales");
   const [inProcessActionStagingId, setInProcessActionStagingId] = useState<string | null>(null);
   const [inProcessBadgeCount, setInProcessBadgeCount] = useState(0);
 
@@ -708,6 +713,8 @@ export function AddSalesPage({
       setCreateInvoiceEligibilityReason(null);
       setGenerateInsuranceEnabled(false);
       setGenerateInsuranceReason(null);
+      setCpaAllianceInsuranceEnabled(false);
+      setCpaAllianceInsuranceReason(null);
       setCreateInvoiceCompleted(false);
       setGenerateInsuranceCompleted(false);
       return;
@@ -730,6 +737,8 @@ export function AddSalesPage({
       );
       setGenerateInsuranceEnabled(false);
       setGenerateInsuranceReason(null);
+      setCpaAllianceInsuranceEnabled(false);
+      setCpaAllianceInsuranceReason(null);
       return;
     }
     try {
@@ -749,6 +758,8 @@ export function AddSalesPage({
       setCreateInvoiceEligibilityReason(res.reason);
       setGenerateInsuranceEnabled(res.generate_insurance_enabled);
       setGenerateInsuranceReason(res.generate_insurance_reason);
+      setCpaAllianceInsuranceEnabled(Boolean(res.cpa_alliance_insurance_enabled));
+      setCpaAllianceInsuranceReason(res.cpa_alliance_insurance_reason ?? null);
       applyDealerCpaFromApiSlice(res);
       mergeDmsVehicleWithEligibilityInvoice(setDmsScrapedVehicle, res);
       if (res.resolved_customer_id != null) {
@@ -765,6 +776,10 @@ export function AddSalesPage({
       setGenerateInsuranceEnabled(false);
       setGenerateInsuranceReason(
         e instanceof Error ? e.message : "Could not verify insurance eligibility for this sale."
+      );
+      setCpaAllianceInsuranceEnabled(false);
+      setCpaAllianceInsuranceReason(
+        e instanceof Error ? e.message : "Could not verify CPA insurance eligibility for this sale."
       );
       setHeroCpi(null);
       setCpaAlliancePortalEnabled(false);
@@ -818,6 +833,8 @@ export function AddSalesPage({
     setCreateInvoiceEligibilityReason(null);
     setGenerateInsuranceEnabled(false);
     setGenerateInsuranceReason(null);
+    setCpaAllianceInsuranceEnabled(false);
+    setCpaAllianceInsuranceReason(null);
     setCreateInvoiceCompleted(false);
     setGenerateInsuranceCompleted(false);
     setCpaAlliancePortalEnabled(false);
@@ -1301,6 +1318,8 @@ export function AddSalesPage({
           setCreateInvoiceEligibilityReason(res.reason);
           setGenerateInsuranceEnabled(res.generate_insurance_enabled);
           setGenerateInsuranceReason(res.generate_insurance_reason);
+          setCpaAllianceInsuranceEnabled(Boolean(res.cpa_alliance_insurance_enabled));
+          setCpaAllianceInsuranceReason(res.cpa_alliance_insurance_reason ?? null);
           applyDealerCpaFromApiSlice(res);
           mergeDmsVehicleWithEligibilityInvoice(setDmsScrapedVehicle, res);
           if (res.resolved_customer_id != null) setLastSubmittedCustomerId(res.resolved_customer_id);
@@ -1432,6 +1451,7 @@ export function AddSalesPage({
         await reloadInsuranceFromStaging();
         if (
           cpaAlliancePortalEnabled &&
+          cpaAllianceInsuranceEnabled &&
           savedTo &&
           dealerId > 0 &&
           !hasSuppliedInsuranceDoc
@@ -1496,6 +1516,12 @@ export function AddSalesPage({
       setFillInsuranceStatus("CPA Alliance is disabled while dealer Hero CPI is Y.");
       return;
     }
+    if (!cpaAllianceInsuranceEnabled) {
+      setFillInsuranceStatus(
+        cpaAllianceInsuranceReason ?? "CPA Insurance is not available for this sale."
+      );
+      return;
+    }
     setIsFillCpaInsuranceLoading(true);
     setFillInsuranceStatus(null);
     try {
@@ -1523,6 +1549,7 @@ export function AddSalesPage({
       setFillInsuranceStatus(e instanceof Error ? e.message : "CPA Insurance failed.");
     } finally {
       setIsFillCpaInsuranceLoading(false);
+      void refreshCreateInvoiceEligibility();
     }
   };
 
@@ -1702,6 +1729,7 @@ export function AddSalesPage({
     !cpaAlliancePortalEnabled ||
     !cpaInsurers.length ||
     !cpaSelectedPortalUrl ||
+    !cpaAllianceInsuranceEnabled ||
     dealerId <= 0 ||
     siteUrlsLoading ||
     !!siteUrlsError;
@@ -1743,8 +1771,16 @@ export function AddSalesPage({
   );
 
   return (
-    <div className={`add-sales-v2${addSalesPageTab === "in-process" ? " add-sales-v2--in-process-tab" : ""}`}>
-      <nav className="challans-subtabs" role="tablist" aria-label="New Sales and In-process tabs">
+    <div
+      className={`add-sales-v2${
+        addSalesPageTab === "in-process"
+          ? " add-sales-v2--in-process-tab"
+          : addSalesPageTab === "invoices"
+            ? " add-sales-v2--invoices-tab"
+            : ""
+      }`}
+    >
+      <nav className="challans-subtabs" role="tablist" aria-label="Add Sales tabs">
         <button
           type="button"
           role="tab"
@@ -1769,6 +1805,15 @@ export function AddSalesPage({
             </span>
           ) : null}
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={addSalesPageTab === "invoices"}
+          className={`challans-subtab ${addSalesPageTab === "invoices" ? "active" : ""}`}
+          onClick={() => setAddSalesPageTab("invoices")}
+        >
+          Invoices
+        </button>
       </nav>
       <div
         className={`add-sales-in-process-tab-panel${
@@ -1789,6 +1834,13 @@ export function AddSalesPage({
           onRowActionEnd={() => setInProcessActionStagingId(null)}
           onInProcessCountChange={setInProcessBadgeCount}
         />
+      </div>
+      <div
+        className={`add-sales-invoices-tab-panel${
+          addSalesPageTab !== "invoices" ? " add-sales-tab-panel--hidden" : ""
+        }`}
+      >
+        <AddSalesInvoicesPanel dealerId={dealerId} invoicesTabActive={addSalesPageTab === "invoices"} />
       </div>
       <main className={`add-sales-v2-main ${addSalesPageTab !== "add-sales" ? "add-sales-tab-panel--hidden" : ""}`}>
         <div className="add-sales-v2-three-col">
@@ -1884,11 +1936,20 @@ export function AddSalesPage({
                           stagingId: lastStagingId,
                           preferInsurer,
                         });
-                        const submitStatusMsg = "Saved";
-                        setSubmitStatus(submitStatusMsg);
+                        let submitStatusMsg = "Saved";
                         setHasSubmittedInfo(true);
                         if (submitRes?.staging_id != null && String(submitRes.staging_id).trim())
                           setLastStagingId(String(submitRes.staging_id).trim());
+                        if (isElectron() && savedTo?.trim()) {
+                          const pull = await pullAadharScanJpegsFromServer({
+                            dealer_id: dealerId,
+                            subfolder: savedTo.trim(),
+                          });
+                          if (!pull.success) {
+                            submitStatusMsg = `Saved. Warning: could not download Aadhaar scans — ${pull.error ?? "unknown"}`;
+                          }
+                        }
+                        setSubmitStatus(submitStatusMsg);
                         const stored = loadAddSalesForm();
                         if (stored.reprocessBulkLoadId != null && savedTo) {
                           try {
@@ -2477,6 +2538,9 @@ export function AddSalesPage({
                         ? "CPA portal is not enabled or no insurers are configured for this dealer."
                         : !cpaSelectedPortalUrl
                           ? "No CPA row has a valid https URL in master_ref.comments."
+                          : !cpaAllianceInsuranceEnabled
+                            ? cpaAllianceInsuranceReason ??
+                              "CPA Insurance is not available for this sale."
                           : !submitInfoActionsComplete || !hasCommittedSaleIds
                             ? "Complete Submit Info and Create Invoice first."
                             : undefined

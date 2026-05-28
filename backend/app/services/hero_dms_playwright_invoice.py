@@ -2355,6 +2355,35 @@ def _attach_vehicle_to_bkg(
         r.append(page)
         return r
 
+    def _is_create_invoice_ready(selectors: list[str]) -> bool:
+        """True when Create Invoice control is visible and enabled on any root."""
+        for root in _all_roots():
+            for css in selectors:
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() == 0:
+                        continue
+                    if not loc.is_visible(timeout=250):
+                        continue
+                    if not loc.is_enabled(timeout=250):
+                        continue
+                    disabledish = loc.evaluate(
+                        """el => {
+                            if (!el) return true;
+                            if (el.disabled === true) return true;
+                            const aria = (el.getAttribute('aria-disabled') || '').toLowerCase();
+                            if (aria === 'true') return true;
+                            const cls = String(el.className || '');
+                            return cls.includes('ui-state-disabled');
+                        }"""
+                    )
+                    if disabledish:
+                        continue
+                    return True
+                except Exception:
+                    continue
+        return False
+
     def _dump_frame_on_element_not_found(reason: str, row_n: int, selectors_tried: list[str]) -> None:
         """
         Dump frame/element information when an element is not found (rows >= 2).
@@ -4151,17 +4180,38 @@ def _attach_vehicle_to_bkg(
             "[aria-label*='Create Invoice' i]",
             "[title*='Create Invoice' i]",
         ]
+        _ci_ready = False
+        for _ci_wait_i in range(10):  # 500ms * 10 = 5s max readiness window
+            if _is_create_invoice_ready(_ci_selectors):
+                _ci_ready = True
+                note(
+                    "attach_vehicle_to_bkg: Create Invoice became enabled "
+                    f"after Apply Campaign wait attempt {_ci_wait_i + 1}/10."
+                )
+                break
+            note(
+                "attach_vehicle_to_bkg: waiting for Create Invoice to enable "
+                f"after Apply Campaign ({_ci_wait_i + 1}/10)."
+            )
+            _ac_err_live = _detect_siebel_error_popup(page, content_frame_selector)
+            if _ac_err_live:
+                note(f"attach_vehicle_to_bkg: Siebel error after Apply Campaign → {_ac_err_live!r:.300}")
+                return False, f"Siebel error after Apply Campaign: {_ac_err_live[:200]}", {}
+            _safe_page_wait(page, 500, log_label=f"wait_create_invoice_enable_{_ci_wait_i}")
+        if not _ci_ready:
+            return (
+                False,
+                "Could not click 'Create Invoice' button (still disabled after Apply Campaign wait).",
+                {},
+            )
         for root in _all_roots():
             if _ci_clicked:
                 break
             for css in _ci_selectors:
                 try:
                     loc = root.locator(css).first
-                    if loc.count() > 0 and loc.is_visible(timeout=700):
-                        try:
-                            loc.click(timeout=_tmo)
-                        except Exception:
-                            loc.click(timeout=_tmo, force=True)
+                    if loc.count() > 0 and loc.is_visible(timeout=700) and loc.is_enabled(timeout=700):
+                        loc.click(timeout=_tmo)
                         _ci_clicked = True
                         break
                 except Exception:
@@ -4177,10 +4227,19 @@ def _attach_vehicle_to_bkg(
                             const r = el.getBoundingClientRect();
                             return r.width > 0 && r.height > 0;
                         };
+                        const enabled = (el) => {
+                            if (!el) return false;
+                            if (el.disabled === true) return false;
+                            const aria = String(el.getAttribute('aria-disabled') || '').toLowerCase();
+                            if (aria === 'true') return false;
+                            const cls = String(el.className || '');
+                            if (cls.includes('ui-state-disabled')) return false;
+                            return true;
+                        };
                         const all = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
                         for (const el of all) {
                             const t = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim();
-                            if (/create\\s*invoice/i.test(t) && vis(el)) { el.click(); return true; }
+                            if (/create\\s*invoice/i.test(t) && vis(el) && enabled(el)) { el.click(); return true; }
                         }
                         return false;
                     }""")

@@ -478,6 +478,7 @@ export function AddSalesInProcessPanel({
     !cpaAlliancePortalEnabled ||
     !(cpaInsurersFromElig?.length) ||
     !cpaSelectedPortalUrl ||
+    !(elig?.cpa_alliance_insurance_enabled ?? false) ||
     dealerId <= 0 ||
     !!siteUrlsLoading ||
     !!siteUrlsError;
@@ -637,7 +638,11 @@ export function AddSalesInProcessPanel({
                             cpaDisabledForRow(r)
                               ? !rowHasCommittedIds(r) && selectedId !== r.staging_id
                                 ? "Select this row or run Create Invoice first (customer/vehicle IDs required)."
-                                : "CPA Insurance is not available for this sale."
+                                : selectedId === r.staging_id &&
+                                    elig?.cpa_alliance_insurance_reason &&
+                                    !(elig?.cpa_alliance_insurance_enabled ?? false)
+                                  ? elig.cpa_alliance_insurance_reason
+                                  : "CPA Insurance is not available for this sale."
                               : "Open CPA Alliance portal for this sale."
                           }
                           onClick={(e) => {

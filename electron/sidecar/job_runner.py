@@ -1156,6 +1156,171 @@ def _api_download_uploads_file(
         raise RuntimeError(_http_error_detail(exc, url)) from exc
 
 
+def _api_download_uploads_for_ocr_file(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    subfolder: str,
+    filename: str,
+    dest: Path,
+    timeout: int = 180,
+) -> None:
+    """GET ``/documents/{subfolder}/for_ocr/{filename}`` (deferred post-OCR staging)."""
+    from urllib.parse import quote
+
+    safe_sub = quote((subfolder or "").strip(), safe="")
+    safe_fn = quote(Path(filename).name, safe="")
+    url = f"{api_url.rstrip('/')}/documents/{safe_sub}/for_ocr/{safe_fn}?dealer_id={int(dealer_id)}"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {jwt}"},
+        method="GET",
+    )
+    try:
+        with _get_api_download_opener().open(req, timeout=timeout) as resp:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(resp.read())
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(_http_error_detail(exc, url)) from exc
+
+
+def _pull_named_upload_files_from_server(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    subfolder: str,
+    uploads_dir: Path,
+    filenames: list[str],
+    *,
+    skip_if_local_non_empty: bool = False,
+) -> dict[str, int]:
+    """Download explicit filenames from sale root into local ``Uploaded scans`` (no Print RTO log)."""
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+
+    safe = _safe_subfolder_name(subfolder)
+    local_dir = uploads_dir / safe
+    local_dir.mkdir(parents=True, exist_ok=True)
+    downloaded = 0
+    failed = 0
+    skipped = 0
+    for name in filenames:
+        basename = Path(name).name
+        if not basename:
+            continue
+        dest = local_dir / basename
+        if skip_if_local_non_empty and dest.is_file() and dest.stat().st_size > 0:
+            skipped += 1
+            continue
+        try:
+            _api_download_uploads_file(api_url, jwt, dealer_id, safe, basename, dest)
+            downloaded += 1
+            logging.info("pull named upload: %s -> %s", basename, dest)
+        except Exception as exc:
+            failed += 1
+            logging.warning("pull named upload failed %s: %s", basename, exc)
+    return {
+        "downloads_uploaded": downloaded,
+        "downloads_failed": failed,
+        "downloads_skipped": skipped,
+    }
+
+
+def _local_aadhar_scans_satisfied(local_dir: Path) -> bool:
+    back = local_dir / "Aadhar_back.jpg"
+    if not back.is_file() or back.stat().st_size < 1:
+        return False
+    front = local_dir / "Aadhar_front.jpg"
+    legacy = local_dir / "Aadhar.jpg"
+    if front.is_file() and front.stat().st_size > 0:
+        return True
+    return legacy.is_file() and legacy.stat().st_size > 0
+
+
+def _download_aadhar_scan_to_local(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    safe_subfolder: str,
+    local_dir: Path,
+    basename: str,
+    *,
+    skip_if_local_non_empty: bool = True,
+) -> bool:
+    """Download one Aadhaar JPEG to sale root; try ``for_OCR/`` when absent at root."""
+    dest = local_dir / basename
+    if skip_if_local_non_empty and dest.is_file() and dest.stat().st_size > 0:
+        return True
+    try:
+        _api_download_uploads_file(api_url, jwt, dealer_id, safe_subfolder, basename, dest)
+        return True
+    except Exception as root_exc:
+        logging.info(
+            "aadhar pull root miss %s: %s; trying for_OCR",
+            basename,
+            root_exc,
+        )
+    try:
+        _api_download_uploads_for_ocr_file(
+            api_url, jwt, dealer_id, safe_subfolder, basename, dest
+        )
+        return True
+    except Exception as exc:
+        logging.warning("aadhar pull failed %s: %s", basename, exc)
+        return False
+
+
+def _pull_aadhar_scan_jpegs_from_server(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    subfolder: str,
+    uploads_dir: Path,
+) -> dict[str, int | str | bool]:
+    """Pull canonical Aadhaar JPEGs for Submit Info (sale root; ``for_OCR`` fallback)."""
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.page_classifier import (
+        FILENAME_AADHAR_BACK,
+        FILENAME_AADHAR_FRONT,
+        LEGACY_AADHAR_FRONT_JPG,
+    )
+
+    safe = _safe_subfolder_name(subfolder)
+    local_dir = uploads_dir / safe
+    local_dir.mkdir(parents=True, exist_ok=True)
+    downloaded = 0
+    failed = 0
+    for basename in (FILENAME_AADHAR_FRONT, FILENAME_AADHAR_BACK):
+        had = (local_dir / basename).is_file() and (local_dir / basename).stat().st_size > 0
+        if _download_aadhar_scan_to_local(
+            api_url, jwt, dealer_id, safe, local_dir, basename
+        ):
+            if not had and (local_dir / basename).is_file():
+                downloaded += 1
+        else:
+            failed += 1
+    front_path = local_dir / FILENAME_AADHAR_FRONT
+    legacy_path = local_dir / LEGACY_AADHAR_FRONT_JPG
+    if not (
+        (front_path.is_file() and front_path.stat().st_size > 0)
+        or (legacy_path.is_file() and legacy_path.stat().st_size > 0)
+    ):
+        had_legacy = legacy_path.is_file() and legacy_path.stat().st_size > 0
+        if _download_aadhar_scan_to_local(
+            api_url, jwt, dealer_id, safe, local_dir, LEGACY_AADHAR_FRONT_JPG
+        ):
+            if not had_legacy and legacy_path.is_file():
+                downloaded += 1
+        else:
+            failed += 1
+    ok = _local_aadhar_scans_satisfied(local_dir)
+    return {
+        "downloads_uploaded": downloaded,
+        "downloads_failed": failed,
+        "subfolder": safe,
+        "aadhar_ok": ok,
+    }
+
+
 def _pull_sale_subfolder_from_server(
     api_url: str,
     jwt: str,
@@ -1631,6 +1796,45 @@ def _dispatch_pull_sale_scan_assets_impl(params: dict) -> dict:
         "files_failed": total_fail,
         "log_file": LOG_FILENAME,
         **pull_stats,
+    }
+
+
+def _dispatch_pull_aadhar_scan_jpegs_impl(params: dict) -> dict:
+    """Pull Aadhaar JPEGs from server → local sale root (Submit Info; no Print RTO log)."""
+    api_url, jwt = _require_api_credentials(params)
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    if not subfolder:
+        return {"success": False, "error": "subfolder is required"}
+    from app.config import get_uploads_dir
+
+    uploads_dir = get_uploads_dir(dealer_id)
+    pull_stats = _pull_aadhar_scan_jpegs_from_server(
+        api_url, jwt, dealer_id, subfolder, uploads_dir
+    )
+    safe = str(pull_stats.get("subfolder") or subfolder)
+    total_down = int(pull_stats.get("downloads_uploaded") or 0)
+    total_fail = int(pull_stats.get("downloads_failed") or 0)
+    aadhar_ok = bool(pull_stats.get("aadhar_ok"))
+    if not aadhar_ok:
+        err = (
+            "Could not download Aadhaar scans (need Aadhar_back.jpg and "
+            "Aadhar_front.jpg or Aadhar.jpg on server)."
+        )
+        return {
+            "success": False,
+            "error": err,
+            "subfolder": safe,
+            "files_downloaded": total_down,
+            "files_failed": total_fail,
+            **{k: v for k, v in pull_stats.items() if k not in ("aadhar_ok",)},
+        }
+    return {
+        "success": True,
+        "subfolder": safe,
+        "files_downloaded": total_down,
+        "files_failed": total_fail,
+        **{k: v for k, v in pull_stats.items() if k not in ("aadhar_ok",)},
     }
 
 
@@ -3176,6 +3380,13 @@ def dispatch(payload: dict) -> dict:
         }
     if job_type == "pull_sale_scan_assets":
         data = _dispatch_pull_sale_scan_assets_impl(params)
+        return {
+            "success": bool(data.get("success")),
+            "data": data,
+            "error": data.get("error"),
+        }
+    if job_type == "pull_aadhar_scan_jpegs":
+        data = _dispatch_pull_aadhar_scan_jpegs_impl(params)
         return {
             "success": bool(data.get("success")),
             "data": data,

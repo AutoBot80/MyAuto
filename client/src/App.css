@@ -445,6 +445,75 @@
   overflow: hidden;
 }
 
+.add-sales-v2--invoices-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.add-sales-v2--invoices-tab > .add-sales-invoices-tab-panel:not(.add-sales-tab-panel--hidden) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.add-sales-invoices {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 4px 12px;
+  box-sizing: border-box;
+}
+
+.add-sales-invoices-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  flex: 0 0 auto;
+}
+
+.add-sales-invoices-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  flex: 0 0 auto;
+}
+
+.add-sales-invoices-hint {
+  font-size: 13px;
+  color: #4a5f73;
+}
+
+.add-sales-invoices-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid #c5d9ed;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.add-sales-invoices-table th,
+.add-sales-invoices-table td {
+  white-space: nowrap;
+}
+
+.add-sales-invoices-scans-cell {
+  text-align: center;
+  width: 3.5rem;
+}
+
+.add-sales-invoices-folder-btn {
+  margin: 0 auto;
+  padding: 4px;
+}
+
 .add-sales-v2--in-process-tab .add-sales-in-process {
   flex: 1 1 auto;
   min-height: 0;
