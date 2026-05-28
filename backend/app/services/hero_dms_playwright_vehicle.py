@@ -6594,7 +6594,8 @@ def _siebel_goto_vehicle_list_and_search(
         em = (error_msg or "").strip()
         return error_msg if em else None
 
-    _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
+    # _goto(page, vehicle_url, "vehicle_list", nav_timeout_ms=nav_timeout_ms)
+    # Surgical hotfix: skip forced Vehicle List navigation; continue on current page/tab.
     _wait_for_vehicle_find_applet_ready(
         page,
         content_frame_selector=content_frame_selector,

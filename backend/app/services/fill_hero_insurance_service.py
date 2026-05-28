@@ -117,6 +117,8 @@ HERO_MISP_MODEL_NAME_CPH1_SUFFIXES = (
 
 # Fuzzy option pick for model uses substring / token overlap (OCR/DB name vs MISP option wording).
 MISP_PROPOSAL_MODEL_FUZZY_FLOOR = 0.1
+# Financier names are often short aliases in DB vs long legal-name labels in MISP.
+MISP_PROPOSAL_FINANCER_FUZZY_FLOOR = 0.35
 
 # Return from ``_proposal_step_checkbox_by_cph1_id`` when no control matched (caller may use label/regex fallback).
 PROPOSAL_CHECKBOX_ID_NOT_FOUND = "__proposal_checkbox_id_not_found__"
@@ -2733,6 +2735,35 @@ def _norm_misp_model_key(s: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _norm_misp_financer_key(s: str) -> str:
+    """Normalize financier labels while removing legal suffix noise for robust short-vs-long matching."""
+    t = normalize_for_fuzzy_match(s)
+    t = t.replace("&", " and ")
+    t = re.sub(r"[^a-z0-9]+", " ", t)
+    toks = [x for x in t.split() if x]
+    drop = {
+        "ltd",
+        "limited",
+        "pvt",
+        "private",
+        "co",
+        "company",
+        "corporation",
+        "corp",
+        "finance",
+        "financial",
+        "services",
+        "service",
+        "investment",
+        "investments",
+        "credit",
+        "bank",
+    }
+    kept = [x for x in toks if x not in drop]
+    base = kept or toks
+    return " ".join(base).strip()
+
+
 def _pick_misp_model_option_label(
     query: str,
     candidates: list[str],
@@ -2776,6 +2807,43 @@ def _pick_misp_model_option_label(
         return best_l
     return fuzzy_best_option_label(
         query, candidates, min_score=MISP_PROPOSAL_MODEL_FUZZY_FLOOR
+    )
+
+
+def _pick_misp_financer_option_label(query: str, candidates: list[str]) -> str | None:
+    """Match short financier aliases to long legal-name dropdown labels."""
+    if not (query or "").strip() or not candidates:
+        return None
+    nq = _norm_misp_financer_key(query)
+    if not nq:
+        return fuzzy_best_option_label(
+            query, candidates, min_score=MISP_PROPOSAL_FINANCER_FUZZY_FLOOR
+        )
+    qt = [w for w in nq.split() if len(w) >= 2]
+    scored: list[tuple[float, str]] = []
+    for c in candidates:
+        t = (c or "").strip()
+        if not t or _misp_ddl_option_text_is_placeholder(t):
+            continue
+        nc = _norm_misp_financer_key(t)
+        if not nc:
+            continue
+        if len(nq) >= 3 and nq in nc:
+            sc = 0.99
+        elif len(nc) >= 3 and nc in nq:
+            sc = 0.90
+        else:
+            hit = sum(1 for w in qt if w in nc) if qt else 0
+            tok_ratio = (hit / max(len(qt), 1)) if qt else 0.0
+            sc = 0.65 * tok_ratio + 0.35 * difflib.SequenceMatcher(None, nq, nc).ratio()
+        scored.append((sc, t))
+    if scored:
+        scored.sort(key=lambda x: (-x[0], -len(x[1])))
+        best_s, best_l = scored[0]
+        if best_s >= MISP_PROPOSAL_FINANCER_FUZZY_FLOOR:
+            return best_l
+    return fuzzy_best_option_label(
+        query, candidates, min_score=MISP_PROPOSAL_FINANCER_FUZZY_FLOOR
     )
 
 
@@ -2861,6 +2929,8 @@ def _select_option_fuzzy_in_select(
             if not pick:
                 if option_match == "model":
                     pick = _pick_misp_model_option_label(q_strip, candidates)
+                elif option_match == "financer":
+                    pick = _pick_misp_financer_option_label(q_strip, candidates)
                 if not pick:
                     pick = fuzzy_best_option_label(
                         q_strip, candidates, min_score=fuzzy_min_score
@@ -2868,6 +2938,8 @@ def _select_option_fuzzy_in_select(
         else:
             if option_match == "model":
                 pick = _pick_misp_model_option_label(q_strip, candidates)
+            elif option_match == "financer":
+                pick = _pick_misp_financer_option_label(q_strip, candidates)
             else:
                 pick = None
             if not pick:
@@ -5557,6 +5629,40 @@ def _proposal_expected_matches_readback(expected: str, readback: str) -> bool:
     return bool(pick)
 
 
+def _proposal_model_expected_matches_readback(expected: str, readback: str) -> bool:
+    """
+    Proposal Model Name tolerance:
+    accept richer portal variants when expected model tokens are present
+    (e.g. "SPLENDOR +" vs "Splendor Plus I3S DRSC FI").
+    """
+    if _proposal_expected_matches_readback(expected, readback):
+        return True
+    e_raw = (expected or "").strip().lower().replace("+", " plus ")
+    r_raw = (readback or "").strip().lower().replace("+", " plus ")
+    e_tokens = [t for t in re.split(r"[^a-z0-9]+", e_raw) if t]
+    r_tokens = [t for t in re.split(r"[^a-z0-9]+", r_raw) if t]
+    if not e_tokens or not r_tokens:
+        return False
+    return set(e_tokens).issubset(set(r_tokens))
+
+
+def _proposal_financer_expected_matches_readback(expected: str, readback: str) -> bool:
+    """Accept short financier aliases when readback is a longer legal-name variant."""
+    if _proposal_expected_matches_readback(expected, readback):
+        return True
+    e_key = _norm_misp_financer_key(expected)
+    r_key = _norm_misp_financer_key(readback)
+    if not e_key or not r_key:
+        return False
+    if e_key == r_key or e_key in r_key or r_key in e_key:
+        return True
+    e_tokens = [t for t in e_key.split() if len(t) >= 2]
+    if not e_tokens:
+        return False
+    hit = sum(1 for t in e_tokens if t in r_key)
+    return (hit / len(e_tokens)) >= 0.6
+
+
 def _proposal_first_label_control_locator(page, label_pattern: str):
     """First visible control matching ``get_by_label`` across proposal roots (page + nav iframe + frames)."""
     rx = re.compile(label_pattern, re.I)
@@ -5813,6 +5919,9 @@ def _proposal_step_select_fuzzy(
     if cph1_id_suffix and cph1_id_suffix in HERO_MISP_MODEL_NAME_CPH1_SUFFIXES:
         cph1_opt_match = "model"
         cph1_fuzzy_floor = MISP_PROPOSAL_MODEL_FUZZY_FLOOR
+    elif cph1_id_suffix == "ddlFinancerName" or step_id == "financer_name":
+        cph1_opt_match = "financer"
+        cph1_fuzzy_floor = MISP_PROPOSAL_FINANCER_FUZZY_FLOOR
     if cph1_id_suffix:
         _suffixes: tuple[str, ...] = (cph1_id_suffix,)
         if cph1_id_suffix == "ddlNomineeRelation":
@@ -5840,7 +5949,16 @@ def _proposal_step_select_fuzzy(
                     pre_st = (pre_snap.get("selected_text") or "").strip()
                     pre_st_lower = pre_st.lower()
                     is_placeholder = pre_st_lower in ("--select--", "select", "-select-", "")
-                    if pre_st and not is_placeholder and _proposal_expected_matches_readback(q, pre_st):
+                    _match_fn = (
+                        _proposal_model_expected_matches_readback
+                        if step_id == "model_name"
+                        else (
+                            _proposal_financer_expected_matches_readback
+                            if step_id == "financer_name"
+                            else _proposal_expected_matches_readback
+                        )
+                    )
+                    if pre_st and not is_placeholder and _match_fn(q, pre_st):
                         _proposal_log(
                             ocr_output_dir,
                             subfolder,
@@ -5866,7 +5984,7 @@ def _proposal_step_select_fuzzy(
                                 loc.select_option(label=lbl, timeout=timeout_ms, force=True)
                                 snap = _read_locator_value_snapshot(loc)
                                 st = (snap.get("selected_text") or "").strip()
-                                if _proposal_expected_matches_readback(q, st):
+                                if _match_fn(q, st):
                                     _proposal_log(
                                         ocr_output_dir,
                                         subfolder,
@@ -5885,7 +6003,7 @@ def _proposal_step_select_fuzzy(
                                     loc.select_option(label=lbl, timeout=timeout_ms, force=True)
                                     snap = _read_locator_value_snapshot(loc)
                                     st = (snap.get("selected_text") or "").strip()
-                                    if _proposal_expected_matches_readback(q, st):
+                                    if _match_fn(q, st):
                                         _proposal_log(
                                             ocr_output_dir,
                                             subfolder,
@@ -5903,7 +6021,7 @@ def _proposal_step_select_fuzzy(
                                 )
                                 snap = _read_locator_value_snapshot(loc)
                                 st = (snap.get("selected_text") or "").strip()
-                                if _proposal_expected_matches_readback(q, st):
+                                if _match_fn(q, st):
                                     _proposal_log(
                                         ocr_output_dir,
                                         subfolder,
@@ -5917,7 +6035,7 @@ def _proposal_step_select_fuzzy(
                                 loc.select_option(value="1", timeout=timeout_ms, force=True)
                                 snap = _read_locator_value_snapshot(loc)
                                 st = (snap.get("selected_text") or "").strip()
-                                if _proposal_expected_matches_readback(q, st):
+                                if _match_fn(q, st):
                                     _proposal_log(
                                         ocr_output_dir,
                                         subfolder,
@@ -5951,7 +6069,7 @@ def _proposal_step_select_fuzzy(
                                     loc.select_option(label=lbl, timeout=timeout_ms, force=True)
                                     snap = _read_locator_value_snapshot(loc)
                                     st = (snap.get("selected_text") or "").strip()
-                                    if _proposal_expected_matches_readback(q, st):
+                                    if _match_fn(q, st):
                                         _proposal_log(
                                             ocr_output_dir,
                                             subfolder,
@@ -5970,7 +6088,7 @@ def _proposal_step_select_fuzzy(
                                     )
                                     snap = _read_locator_value_snapshot(loc)
                                     st = (snap.get("selected_text") or "").strip()
-                                    if _proposal_expected_matches_readback(q, st):
+                                    if _match_fn(q, st):
                                         _proposal_log(
                                             ocr_output_dir,
                                             subfolder,
@@ -6006,7 +6124,7 @@ def _proposal_step_select_fuzzy(
                             f"input did not match a specific option or input was empty)",
                         )
                         return None
-                    if not _proposal_expected_matches_readback(q, st):
+                    if not _match_fn(q, st):
                         return (
                             f"{step_id}: readback mismatch expected={q!r} selected_text={st!r} "
                             f"(id_suffix={_suf!r})"
@@ -6037,7 +6155,16 @@ def _proposal_step_select_fuzzy(
         pre_st = (pre_snap.get("selected_text") or "").strip()
         pre_st_lower = pre_st.lower()
         is_placeholder = pre_st_lower in ("--select--", "select", "-select-", "")
-        if pre_st and not is_placeholder and _proposal_expected_matches_readback(q, pre_st):
+        _match_fn = (
+            _proposal_model_expected_matches_readback
+            if step_id == "model_name"
+            else (
+                _proposal_financer_expected_matches_readback
+                if step_id == "financer_name"
+                else _proposal_expected_matches_readback
+            )
+        )
+        if pre_st and not is_placeholder and _match_fn(q, pre_st):
             _proposal_log(
                 ocr_output_dir,
                 subfolder,
@@ -6045,11 +6172,19 @@ def _proposal_step_select_fuzzy(
                 f"select already correct label_pattern={lp[:48]!r} readback={pre_st!r} (skip selection)",
             )
             return None
-        _lp_match = "model" if step_id == "model_name" else "default"
+        _lp_match = (
+            "model"
+            if step_id == "model_name"
+            else ("financer" if step_id == "financer_name" else "default")
+        )
         _lp_fuzzy = (
             MISP_PROPOSAL_MODEL_FUZZY_FLOOR
             if _lp_match == "model"
-            else float(KYC_INSURER_FUZZY_MIN_SCORE)
+            else (
+                MISP_PROPOSAL_FINANCER_FUZZY_FLOOR
+                if _lp_match == "financer"
+                else float(KYC_INSURER_FUZZY_MIN_SCORE)
+            )
         )
         lp_match_out: dict[str, Any] = {}
         if not _select_option_fuzzy_in_select(
@@ -6074,7 +6209,7 @@ def _proposal_step_select_fuzzy(
                 f"input did not match a specific option or input was empty)",
             )
             return None
-        if not _proposal_expected_matches_readback(q, st):
+        if not _match_fn(q, st):
             return (
                 f"{step_id}: readback mismatch expected={q!r} selected_text={st!r} "
                 f"(after label pattern {lp!r})"
