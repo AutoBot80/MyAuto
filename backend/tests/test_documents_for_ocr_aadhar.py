@@ -19,8 +19,9 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     def _uploads_dir(dealer_id: int) -> Path:
         return uploads
 
-    monkeypatch.setattr("app.config.get_uploads_dir", _uploads_dir)
     from app.main import app
+    from app.routers import documents as documents_router
+    monkeypatch.setattr(documents_router, "get_uploads_dir", _uploads_dir)
 
     return TestClient(app)
 
