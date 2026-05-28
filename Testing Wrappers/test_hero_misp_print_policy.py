@@ -46,6 +46,7 @@ DEALER_FOLDER = "100001"
 SALE_SUBFOLDER = "9057397169_210526"  # 10-digit mobile + _ddmmyy; used for logs + PDF naming
 INSURER = "The New India Assurance Co. Ltd"
 VIN = "MBLHAW509T5D11433"  # VIN/Frame No. for search
+POLICY_NUM_HINT = ""  # optional fallback policy no. from post-submit PrintPolicy page
 # Absolute overrides (empty = use repo-relative Uploaded scans / ocr_output)
 UPLOADS_DIR_OVERRIDE = ""
 OCR_OUTPUT_DIR_OVERRIDE = ""
@@ -94,6 +95,7 @@ def main() -> int:
     logger.info("subfolder:    %s", SALE_SUBFOLDER)
     logger.info("insurer:      %s", INSURER)
     logger.info("vin:          %s", VIN)
+    logger.info("policy_hint:  %s", POLICY_NUM_HINT or "(none)")
 
     page, err = open_misp_page_sign_in_and_2w_only(
         base, ocr_output_dir=ocr_out, subfolder=SALE_SUBFOLDER
@@ -107,6 +109,7 @@ def main() -> int:
             page,
             insurer=INSURER,
             vin=VIN,
+            policy_num_hint=POLICY_NUM_HINT or None,
             uploads_dir=uploads,
             ocr_output_dir=ocr_out,
             subfolder=SALE_SUBFOLDER,

@@ -2481,7 +2481,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if not _precheck_third_level_tabs_loaded:
         note(
             f"{log_prefix}: third-level tabs (PreCheck/PDI) NOT loaded after Pre-check tab click — "
-            "attempting chassis/VIN drilldown recovery (Vehicle List re-search, no forced GotoView URL)."
+            "chassis/VIN recovery re-navigation is disabled (skipping Vehicle List re-search)."
         )
         _dump_frames_and_elements_for_debug(
             page, content_frame_selector=content_frame_selector,
@@ -2491,18 +2491,21 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
 
         _chassis_rec = False
         if scraped is not None:
-            _chassis_rec = _recover_serial_detail_via_left_chassis_vin(
-                page,
-                scraped,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                note=note,
-                log_prefix=log_prefix,
-                vehicle_url=vehicle_url,
-                frame_partial=frame_partial,
-                engine_partial=engine_partial,
-                nav_timeout_ms=nav_timeout_ms,
-            )
+            # Intentionally disabled: this recovery path re-navigates via vehicle_url and
+            # adds delay when third-level tabs are missing.
+            # _chassis_rec = _recover_serial_detail_via_left_chassis_vin(
+            #     page,
+            #     scraped,
+            #     action_timeout_ms=action_timeout_ms,
+            #     content_frame_selector=content_frame_selector,
+            #     note=note,
+            #     log_prefix=log_prefix,
+            #     vehicle_url=vehicle_url,
+            #     frame_partial=frame_partial,
+            #     engine_partial=engine_partial,
+            #     nav_timeout_ms=nav_timeout_ms,
+            # )
+            note(f"{log_prefix}: chassis/VIN recovery disabled (no Vehicle List re-navigation).")
         else:
             note(f"{log_prefix}: chassis/VIN recovery skipped — no scraped vehicle context.")
         if _chassis_rec:
@@ -3296,26 +3299,30 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
             note(
                 f"{log_prefix}: third_level_tab_poll exhausted (wait_for_function) — "
                 f"last={_last_tabs!r} url={_poll_exhaust_url!r}. "
-                "PDI tab still missing; dumping DOM. Optional chassis/VIN drilldown recovery (no GotoView URL)."
+                "PDI tab still missing; dumping DOM. Chassis/VIN recovery re-navigation is disabled."
             )
             _dump_frames_and_elements_for_debug(
                 page, content_frame_selector=content_frame_selector,
                 output_dir=_debug_dump_dir, label="pdi_tab_poll_exhausted",
                 note=note, log_prefix=log_prefix,
             )
+            _pdi_recovered = False
             if scraped is not None:
-                if _recover_serial_detail_via_left_chassis_vin(
-                    page,
-                    scraped,
-                    action_timeout_ms=action_timeout_ms,
-                    content_frame_selector=content_frame_selector,
-                    note=note,
-                    log_prefix=log_prefix,
-                    vehicle_url=vehicle_url,
-                    frame_partial=frame_partial,
-                    engine_partial=engine_partial,
-                    nav_timeout_ms=nav_timeout_ms,
-                ):
+                # Intentionally disabled: this recovery path does full Vehicle List
+                # re-search and currently causes delay without useful recovery.
+                # if _recover_serial_detail_via_left_chassis_vin(
+                #     page,
+                #     scraped,
+                #     action_timeout_ms=action_timeout_ms,
+                #     content_frame_selector=content_frame_selector,
+                #     note=note,
+                #     log_prefix=log_prefix,
+                #     vehicle_url=vehicle_url,
+                #     frame_partial=frame_partial,
+                #     engine_partial=engine_partial,
+                #     nav_timeout_ms=nav_timeout_ms,
+                # ):
+                if _pdi_recovered:
                     _tl_found2 = False
                     _roots2 = list(_roots())
                     _pdi2_deadline = time.monotonic() + 6.0
@@ -3338,6 +3345,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                             continue
                         except Exception:
                             continue
+                note(f"{log_prefix}: PDI chassis/VIN recovery disabled (no Vehicle List re-navigation).")
 
     note(f"{log_prefix}: proceeding to PDI tab lookup.")
 

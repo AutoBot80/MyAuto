@@ -1067,6 +1067,7 @@ def run_hero_insure_reports(
     *,
     insurer: str,
     vin: str,
+    policy_num_hint: str | None = None,
     uploads_dir: Path,
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
@@ -1083,6 +1084,7 @@ def run_hero_insure_reports(
     **AllPrintPolicy**), **Product** + **Frame No.** (VIN) + **Go**.
 
     Always searches by **VIN/Frame No.** — the ``vin`` parameter is required.
+    ``policy_num_hint`` is optional and only used as a fallback until a grid-scraped policy number is available.
 
     When ``commit_insurance_master`` is set (Generate Insurance production path), scrape **Total Premium**
     from the grid and **INSERT** ``insurance_master`` before printing.
@@ -1102,7 +1104,7 @@ def run_hero_insure_reports(
         "grid_scrape": None,
     }
     vin_val = (vin or "").strip()
-    pn = ""  # Policy number scraped from grid (if commit_insurance_master) or empty
+    pn = (policy_num_hint or "").strip()
     if not vin_val:
         _ins_log(ocr_output_dir, subfolder, "NOTE", "skipped: vin is empty")
         return {**out, "error": "skipped: vin is empty"}
@@ -1148,6 +1150,12 @@ def run_hero_insure_reports(
             pass
         _misp_navigate_to_print_policy_search(
             page, tmo=tmo, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+        )
+        _ins_log(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "print_policy_details: navigation complete; preparing Product/Frame No./Go",
         )
         _ins_log(ocr_output_dir, subfolder, "NOTE", f"on Print Policy URL: {page.url[:200]!r}")
 

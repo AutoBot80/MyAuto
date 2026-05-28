@@ -10103,7 +10103,8 @@ def main_process(
                     hrep = run_hero_insure_reports(
                         page,
                         insurer=str(_ins).strip(),
-                        policy_num=str(_pn).strip() if _pn else "",
+                        vin=(values.get("full_chassis") or values.get("frame_no") or "").strip(),
+                        policy_num_hint=str(_pn).strip() if _pn else "",
                         uploads_dir=get_uploads_dir(_did) / subfolder,
                         ocr_output_dir=ocr_output_dir,
                         subfolder=subfolder,
