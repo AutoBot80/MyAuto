@@ -160,3 +160,26 @@ def test_main_process_does_not_call_update_after_issue(mock_page):
     print_rep.assert_called_once()
     assert print_rep.call_args.kwargs.get("commit_insurance_master") is True
     assert not hasattr(fhi, "update_insurance_master_policy_after_issue")
+
+
+def test_proposal_fail_with_addon_dump_writes_addon_then_frame_dump(mock_page):
+    with patch.object(fhi, "_append_proposal_addon_dom_dump") as addon_dump:
+        with patch.object(fhi, "_append_hero_misp_frame_dump") as frame_dump:
+            with patch.object(fhi, "append_playwright_insurance_line"):
+                err, payload = fhi._proposal_fail_with_addon_dump(
+                    "/tmp/ocr",
+                    "sale1",
+                    "addon_rim_safeguard: checkbox not found",
+                    page=mock_page,
+                )
+    assert err == "addon_rim_safeguard: checkbox not found"
+    assert payload == {}
+    addon_dump.assert_called_once()
+    frame_dump.assert_called_once()
+
+
+def test_proposal_addon_dom_dump_js_targets_checkboxes():
+    assert "input[type=\"checkbox\"]" in fhi._PROPOSAL_ADDON_DOM_DUMP_JS
+    assert "checkboxes" in fhi._PROPOSAL_ADDON_DOM_DUMP_JS
+    assert "rowText" in fhi._PROPOSAL_ADDON_DOM_DUMP_JS
+

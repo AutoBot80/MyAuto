@@ -953,6 +953,65 @@ _KYC_POST_UPLOAD_DOM_DUMP_JS = r"""() => {
 }"""
 
 
+_PROPOSAL_ADDON_DOM_DUMP_JS = r"""() => {
+  const clip = (s, n) => {
+    const t = (s || '').toString().replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n) + '…' : t;
+  };
+  const vis = (el) => {
+    if (!el) return false;
+    try {
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 1 && r.height > 1;
+    } catch (e) { return false; }
+  };
+  const rowText = (el) => {
+    try {
+      const parts = [];
+      let n = el;
+      for (let i = 0; i < 14 && n; i++) {
+        const t = (n.innerText || '').trim();
+        if (t) parts.push(t.slice(0, 500));
+        n = n.parentElement;
+      }
+      return clip(parts.join('\\n'), 400);
+    } catch (e) { return ''; }
+  };
+  const out = { checkboxes: [] };
+  const cap = 120;
+  try {
+    for (const el of document.querySelectorAll('input[type="checkbox"]')) {
+      if (out.checkboxes.length >= cap) break;
+      if (!vis(el)) continue;
+      let labelFor = '';
+      let labelText = '';
+      try {
+        const cid = el.id || '';
+        if (cid) {
+          const lab = document.querySelector('label[for="' + cid.replace(/"/g, '') + '"]');
+          if (lab) {
+            labelFor = cid;
+            labelText = clip(lab.innerText || lab.textContent, 120);
+          }
+        }
+      } catch (e2) {}
+      out.checkboxes.push({
+        id: el.id || '',
+        name: el.name || '',
+        checked: !!el.checked,
+        disabled: !!el.disabled,
+        labelFor: labelFor,
+        labelText: labelText,
+        rowText: rowText(el),
+      });
+    }
+  } catch (e) { out.checkboxes.push({ error: String(e).slice(0, 120) }); }
+  return out;
+}"""
+
+
 def _collect_kyc_post_upload_form_controls_dump_lines(page) -> list[str]:
     """Per-frame inputs / buttons / selects / labels after KYC file attach (operator selector tuning)."""
     out: list[str] = ["--- KYC post-upload form controls (per frame) ---"]
@@ -997,6 +1056,77 @@ def _append_kyc_post_upload_dom_dump(
         subfolder=subfolder,
         lines=lines,
     )
+
+
+def _collect_proposal_addon_dom_dump_lines(page) -> list[str]:
+    """Per-frame visible proposal add-on checkboxes (operator selector tuning when add-on wiring fails)."""
+    out: list[str] = ["--- MISP proposal add-on checkboxes (per frame) ---"]
+    try:
+        frs = [f for f in page.frames if not f.is_detached()][:24]
+    except Exception as exc:
+        return [f"frames_enumeration_error={exc!s}"]
+    out.append(f"frame_count={len(frs)}")
+    for i, fr in enumerate(frs):
+        u = ""
+        nm = ""
+        try:
+            u = ((getattr(fr, "url", None) or "")[:420])
+            nm = (getattr(fr, "name", None) or "")
+        except Exception:
+            pass
+        line = f"  [{i}] name={nm!r} url={u!r}"
+        try:
+            data = fr.evaluate(_PROPOSAL_ADDON_DOM_DUMP_JS)  # type: ignore[union-attr]
+            blob = json.dumps(data, ensure_ascii=False)
+            if len(blob) > 140_000:
+                blob = blob[:140_000] + "…[truncated]"
+            line += f"\n    checkboxes={blob}"
+        except Exception as exc:
+            line += f"\n    checkboxes_evaluate_error={exc!s}"
+        out.append(line)
+    return out
+
+
+def _append_proposal_addon_dom_dump(
+    page,
+    *,
+    reason: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    """Proposal add-on checkbox dump when an add-on control is missing or unstable."""
+    lines = _collect_proposal_addon_dom_dump_lines(page)
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", (reason or "proposal_addon").strip())[:100].strip("._-")
+    if not slug:
+        slug = "proposal_addon"
+    _append_hero_misp_frame_dump(
+        page,
+        reason=f"proposal_addon_{slug}",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+        lines=lines,
+    )
+
+
+def _proposal_fail_with_addon_dump(
+    ocr_output_dir,
+    subfolder,
+    msg: str,
+    *,
+    page: Any = None,
+) -> tuple[str | None, dict[str, Any]]:
+    """Write proposal add-on checkbox dump, then standard proposal failure frame dump + ERROR log."""
+    if page is not None and ocr_output_dir and (subfolder or "").strip():
+        try:
+            _append_proposal_addon_dom_dump(
+                page,
+                reason=str(msg)[:180],
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+            )
+        except Exception:
+            pass
+    return _proposal_fail(ocr_output_dir, subfolder, msg, page=page)
 
 
 def _append_hero_misp_frame_dump(
@@ -8314,8 +8444,11 @@ def _normalize_policy_num_for_db(raw: str) -> str | None:
     if not t:
         return None
     t = re.sub(r"\s+", " ", t)
+    if len(t) > 24 and "/" in t:
+        while len(t) > 24 and "/" in t:
+            t = t.split("/", 1)[1]
     if len(t) > 24:
-        t = t[:24]
+        t = t[-24:]
     return t or None
 
 
@@ -8834,6 +8967,17 @@ def _hero_misp_click_issue_policy(
     return None
 
 
+def _hero_misp_on_final_policy_cert_page(page) -> bool:
+    """**PrintPolicy.aspx** cert grid (post-issue final policy page), not the search grid."""
+    try:
+        u = (page.url or "").lower()
+    except Exception:
+        return False
+    if re.search(r"printpolicydetails\.aspx|allprintpolicy\.aspx", u):
+        return False
+    return "printpolicy.aspx" in u
+
+
 def _hero_misp_wait_post_submit_print_policy_page(page, *, timeout_ms: int) -> None:
     """After proposal **Submit**, MISP lands on **PrintPolicy.aspx** (certificates) or **PrintPolicyDetails.aspx**."""
     to = max(2_000, int(timeout_ms))
@@ -8854,23 +8998,32 @@ def _hero_misp_wait_post_submit_print_policy_page(page, *, timeout_ms: int) -> N
         pass
 
 
+def _policy_num_from_print_policy_cert_body(body: str) -> str | None:
+    """Parse policy number from **PrintPolicy.aspx** cert page body (e.g. ``#MD/BAGIC/…`` or ``#9000…``)."""
+    if not body:
+        return None
+    chunk = body[:80_000]
+    for pat in (
+        re.compile(r"#([A-Za-z0-9][A-Za-z0-9/\-]{7,47})"),
+        re.compile(r"#(\d{10,24})\b"),
+        re.compile(r"Policy\s*(?:Number|No\.?)\s*[:\s#]*(\d{10,24})", re.I),
+        re.compile(r"\b(\d{15,24})\b"),
+    ):
+        m = pat.search(chunk)
+        if m:
+            cand = _normalize_policy_num_for_db(m.group(1).strip())
+            if cand:
+                return cand
+    return None
+
+
 def _hero_misp_parse_policy_num_from_print_policy_cert_page(page) -> str | None:
     """Best-effort policy number from **PrintPolicy.aspx** (e.g. insurer line with ``#9000…``)."""
     try:
         body = (page.locator("body").first.inner_text(timeout=8_000) or "")[:80_000]
     except Exception:
         return None
-    for pat in (
-        re.compile(r"#(\d{10,24})\b"),
-        re.compile(r"Policy\s*(?:Number|No\.?)\s*[:\s#]*(\d{10,24})", re.I),
-        re.compile(r"\b(\d{15,24})\b"),
-    ):
-        m = pat.search(body)
-        if m:
-            cand = _normalize_policy_num_for_db(m.group(1).strip())
-            if cand:
-                return cand
-    return None
+    return _policy_num_from_print_policy_cert_body(body)
 
 
 def _hero_misp_goto_print_policy_details_search(
@@ -8894,27 +9047,49 @@ def _hero_misp_goto_print_policy_details_search(
             f"print_policy_details: already on search page url={u[:180]!r}",
         )
         return
-    derived = re.sub(
-        r"PrintPolicy\.aspx",
-        "PrintPolicyDetails.aspx",
-        u,
-        count=1,
-        flags=re.I,
-    )
-    if derived != u and "PrintPolicyDetails.aspx" in derived:
+
+    from app.services.hero_insure_reports_service import _misp_open_all_print_policy
+
+    if re.search(r"PrintPolicy\.aspx", u, re.I):
         append_playwright_insurance_line(
             ocr_output_dir,
             subfolder,
             "NOTE",
-            "print_policy_details: goto PrintPolicyDetails.aspx (from PrintPolicy.aspx URL)",
+            "final_policy: navigating Policy Issuance → Print Policy (sidebar)",
         )
         try:
-            page.goto(derived, timeout=min(60_000, to * 5), wait_until="domcontentloaded")
+            _misp_open_all_print_policy(
+                page, tmo=to, ocr_output_dir=ocr_output_dir, subfolder=subfolder
+            )
         except Exception as exc:
-            logger.warning("Hero Insurance: goto PrintPolicyDetails: %s", exc)
-        _wait_load_optional(page, min(20_000, to * 3))
+            logger.warning("Hero Insurance: sidebar Print Policy nav: %s", exc)
+        try:
+            u_after = (page.url or "").strip()
+        except Exception:
+            u_after = ""
+        if re.search(r"PrintPolicyDetails\.aspx|AllPrintPolicy\.aspx", u_after, re.I):
+            return
+
+        derived = re.sub(
+            r"PrintPolicy\.aspx",
+            "PrintPolicyDetails.aspx",
+            u,
+            count=1,
+            flags=re.I,
+        )
+        if derived != u and "PrintPolicyDetails.aspx" in derived:
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "final_policy: sidebar nav did not reach search page — fallback goto PrintPolicyDetails.aspx",
+            )
+            try:
+                page.goto(derived, timeout=min(60_000, to * 5), wait_until="domcontentloaded")
+            except Exception as exc:
+                logger.warning("Hero Insurance: goto PrintPolicyDetails: %s", exc)
+            _wait_load_optional(page, min(20_000, to * 3))
         return
-    from app.services.hero_insure_reports_service import _misp_open_all_print_policy
 
     _misp_open_all_print_policy(
         page, tmo=to, ocr_output_dir=ocr_output_dir, subfolder=subfolder
@@ -9131,7 +9306,16 @@ def _hero_misp_final_policy_details_commit(
         subfolder=subfolder,
     )
     if click_err:
-        return click_err, {}
+        if _hero_misp_on_final_policy_cert_page(page):
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "final_policy: Submit not confirmed but PrintPolicy cert page present — "
+                "issue succeeded, continuing",
+            )
+        else:
+            return click_err, {}
 
     _hero_misp_wait_post_submit_print_policy_page(page, timeout_ms=pt)
     try:
@@ -9589,7 +9773,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
         _t(page, 600)
         err = _proposal_addon_checkbox_id_or_label(
             page,
@@ -9602,7 +9786,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
         _t(page, 800)
     else:
         err = _proposal_addon_checkbox_id_or_label(
@@ -9616,7 +9800,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
     # RTI (chkroicover): unchecked for all insurers (NIC + others). Row may be absent on some grids;
     # optional skip except Bajaj — must find control to uncheck or fail with frame dump.
     err = _proposal_addon_checkbox_id_or_label(
@@ -9632,7 +9816,7 @@ def _hero_misp_fill_proposal_and_review(
         optional=not _is_bajaj_insurance,
     )
     if err:
-        return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+        return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
     _rsa_addon_pat = (
         r"^RSA$|RSA\s*cover|RSA\s*Cover|Road\s*Side\s*Assist|Roadside\s*Assist"
     )
@@ -9640,7 +9824,47 @@ def _hero_misp_fill_proposal_and_review(
         r"Emergency\s*Medical\s*Expenses?|Emergency\s*Medical|Medical\s*Emergency|"
         r"Emerg(?:ency)?\.?\s*Medical|Medical\s*Expenses?\s*\(?\s*Emerg|EME\b"
     )
-    if _is_national_insurance:
+    _rim_safeguard_pat = r"Rim\s*Safeguard|RIM\s*Safeguard"
+    _discounts_pat = r"^Discounts$|\bDiscounts\b"
+    _tppd_pat = r"TPPD\s*Limited|\bTPPD\b"
+    if _is_bajaj_insurance:
+        for _r in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+            _proposal_scroll_root_to_bottom(_r)
+        _t(page, 400)
+        for _id_suffix, _step_id, _label_pat in (
+            ("chkRimSafeguard", "addon_rim_safeguard", _rim_safeguard_pat),
+            ("chkRSA", "addon_rsa", _rsa_addon_pat),
+            ("chkDiscount", "addon_discounts", _discounts_pat),
+            ("chkTPPD", "addon_tppd_limited", _tppd_pat),
+        ):
+            err = _proposal_addon_checkbox_id_or_label(
+                page,
+                _id_suffix,
+                True,
+                _step_id,
+                _label_pat,
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+                optional=False,
+            )
+            if err:
+                return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
+            _t(page, 500)
+        err = _proposal_addon_checkbox_id_or_label(
+            page,
+            "chkEME",
+            False,
+            "addon_emergency_medical",
+            _eme_addon_pat,
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+            optional=True,
+        )
+        if err:
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
+    elif _is_national_insurance:
         err = _proposal_step_checkbox_uncheck_if_present(
             page,
             _rsa_addon_pat,
@@ -9650,7 +9874,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
         err = _proposal_step_checkbox_uncheck_if_present(
             page,
             _eme_addon_pat,
@@ -9660,7 +9884,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
     else:
         # RSA / EME rows are not on every non-NIC grid (e.g. The New India Assurance);
         # optional when absent — same as RTI.
@@ -9676,7 +9900,7 @@ def _hero_misp_fill_proposal_and_review(
             optional=True,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
         err = _proposal_addon_checkbox_id_or_label(
             page,
             "chkEME",
@@ -9689,7 +9913,7 @@ def _hero_misp_fill_proposal_and_review(
             optional=True,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
 
     _opt_uncheck = (HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX or "").strip()
     if _opt_uncheck:
@@ -9702,7 +9926,7 @@ def _hero_misp_fill_proposal_and_review(
             timeout_ms=pt,
         )
         if err:
-            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
 
     # Re-assert ND Plus Cover for NIC after all other addon toggles which may
     # have triggered ASP.NET postbacks that reset the addon grid.
@@ -9720,7 +9944,7 @@ def _hero_misp_fill_proposal_and_review(
                 timeout_ms=pt,
             )
             if err:
-                return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+                return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
             _t(page, 400)
             err = _proposal_addon_checkbox_id_or_label(
                 page,
@@ -9733,7 +9957,7 @@ def _hero_misp_fill_proposal_and_review(
                 timeout_ms=pt,
             )
             if err:
-                return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+                return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
             _t(page, 600)
             _nd_plus_still_ok = False
             for _root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
