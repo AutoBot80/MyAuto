@@ -97,6 +97,36 @@ def test_final_policy_commit_post_submit_only_in_production(mock_page):
     assert scrape == {"policy_num": policy_hint}
 
 
+def test_nominee_name_waits_300ms_before_tab_commit(mock_page):
+    el = MagicMock()
+    el.is_visible.return_value = True
+    el.evaluate.return_value = "INPUT"
+    loc = MagicMock()
+    loc.count.return_value = 1
+    loc.first = el
+    with patch.object(fhi, "_hero_misp_page_and_frame_roots", return_value=[mock_page]):
+        with patch.object(fhi, "_proposal_cph1_locator", return_value=loc):
+            with patch.object(fhi, "_proposal_scroll_visible"):
+                with patch.object(fhi, "_proposal_fill_nominee_field") as fill_nom:
+                    with patch.object(fhi, "_read_locator_value_snapshot", return_value={"value": "Ravi Kumar"}):
+                        with patch.object(fhi, "_proposal_read_input_value_best_effort", return_value="Ravi Kumar"):
+                            with patch.object(fhi, "_proposal_log"):
+                                err = fhi._proposal_step_fill_input(
+                                    mock_page,
+                                    (r"Nominee\s*Name",),
+                                    "Ravi Kumar",
+                                    "nominee_name",
+                                    None,
+                                    None,
+                                    timeout_ms=5_000,
+                                    cph1_id_suffix="txtNomineeName",
+                                )
+    assert err is None
+    fill_nom.assert_called_once()
+    mock_page.wait_for_timeout.assert_any_call(300)
+    el.press.assert_called_with("Tab")
+
+
 def test_main_process_does_not_call_update_after_issue(mock_page):
     pre = {
         "success": True,

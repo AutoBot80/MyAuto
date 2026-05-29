@@ -6290,6 +6290,19 @@ def _proposal_step_fill_input(
                     _proposal_fill_nominee_field(page, el, v, timeout_ms=timeout_ms, key_delay=40)
                 elif cph1_id_suffix == "txtNomineeName":
                     _proposal_fill_nominee_field(page, el, v, timeout_ms=timeout_ms, key_delay=30)
+                    # WebForms: let keystrokes settle before Tab commit (avoid revert on blur).
+                    try:
+                        page.wait_for_timeout(300)
+                    except Exception:
+                        time.sleep(0.3)
+                    try:
+                        el.press("Tab")
+                    except Exception:
+                        try:
+                            page.keyboard.press("Tab")
+                        except Exception:
+                            pass
+                    _t(page, 180)
                 elif _nominee:
                     el.fill("", timeout=timeout_ms, force=True)
                     el.fill(v, timeout=timeout_ms, force=True)
