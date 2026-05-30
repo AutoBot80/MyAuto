@@ -206,3 +206,50 @@ def test_proposal_addon_checkbox_require_cph1_id_skips_label_fallback(mock_page)
     assert "required CPH1 checkbox id='chkRim'" in err
     label_cb.assert_not_called()
 
+
+def test_bajaj_tppd_visibility_defaults_to_chkTPPDLim(mock_page):
+    with patch.object(fhi, "_hero_misp_page_and_frame_roots", return_value=[mock_page]):
+        with patch.object(fhi, "_proposal_cph1_locator") as loc_fn:
+            loc_fn.return_value.count.return_value = 1
+            with patch.object(
+                fhi,
+                "_proposal_first_visible_locator_nth",
+                return_value=MagicMock(),
+            ):
+                assert fhi._proposal_bajaj_tppd_checkbox_visible(
+                    mock_page, tppd_label_pat=r"^TPPD"
+                )
+            loc_fn.assert_called_with(mock_page, "chkTPPDLim")
+
+
+def test_bajaj_mame_dismiss_skips_when_alert_not_shown(mock_page):
+    with patch.object(fhi, "_hero_misp_try_click_bajaj_mame_continue_once", return_value=False):
+        with patch.object(fhi, "_hero_misp_bajaj_mame_alert_visible", return_value=False):
+            with patch.object(fhi, "_t"):
+                with patch.object(fhi, "append_playwright_insurance_line") as log:
+                    ok = fhi._hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
+                        mock_page,
+                        timeout_ms=500,
+                        ocr_output_dir="/tmp/ocr",
+                        subfolder="sale1",
+                    )
+    assert ok is True
+    notes = [str(c[0][3]) for c in log.call_args_list if c[0][2] == "NOTE"]
+    assert any("skip" in n.lower() and "mame" in n.lower() for n in notes)
+
+
+def test_bajaj_mame_dismiss_polls_until_click(mock_page):
+    side_effects = [False, True]
+    with patch.object(
+        fhi,
+        "_hero_misp_try_click_bajaj_mame_continue_once",
+        side_effect=side_effects,
+    ) as click_try:
+        with patch.object(fhi, "_t"):
+            ok = fhi._hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
+                mock_page,
+                timeout_ms=5_000,
+            )
+    assert ok is True
+    assert click_try.call_count == 2
+

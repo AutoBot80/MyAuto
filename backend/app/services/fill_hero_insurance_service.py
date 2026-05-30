@@ -6879,7 +6879,7 @@ def _proposal_bajaj_tppd_checkbox_visible(
     page,
     *,
     tppd_label_pat: str,
-    id_suffixes: tuple[str, ...] = ("chkTPPD", "chkTPPDLimited", "chkTppdLimited"),
+    id_suffixes: tuple[str, ...] = ("chkTPPDLim",),
 ) -> bool:
     """True when TPPD Limited is on the proposal form (injected after Discounts postback)."""
     for id_suffix in id_suffixes:
@@ -6893,7 +6893,6 @@ def _proposal_bajaj_tppd_checkbox_visible(
                     return True
             except Exception:
                 continue
-    rx = re.compile(tppd_label_pat, re.I | re.M)
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = root.locator('input[type="checkbox"][id*="TPPD" i]')
@@ -6903,24 +6902,6 @@ def _proposal_bajaj_tppd_checkbox_visible(
                     return True
         except Exception:
             pass
-        try:
-            cbs = root.locator('input[type="checkbox"]')
-            n = cbs.count()
-        except Exception:
-            continue
-        for i in range(min(n, 160)):
-            cb = cbs.nth(i)
-            try:
-                if not cb.is_visible(timeout=300):
-                    continue
-                t = _proposal_checkbox_context_text(cb)
-                if not t.strip():
-                    continue
-                first_line = (t.split("\n")[0] if t else "").strip()
-                if rx.search(first_line):
-                    return True
-            except Exception:
-                continue
     return False
 
 
@@ -8339,19 +8320,52 @@ _BAJAJ_MAME_CONTINUE_WITHOUT_COVER_RX = re.compile(
     re.I,
 )
 
+_BAJAJ_MAME_ALERT_BODY_RX = re.compile(
+    r"Motor\s+Accidental\s+Medical|MAME|Exclusion\s+Alert|Cover\s+Exclusion",
+    re.I,
+)
 
-def _hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
-    page,
-    *,
-    timeout_ms: int = 8_000,
-    ocr_output_dir: Path | None = None,
-    subfolder: str | None = None,
-) -> bool:
-    """
-    Bajaj only: after **Proposal Preview**, MISP may show **Motor Accidental Medical Expenses Cover
-    Exclusion Alert** — click **Continue Without Cover** (not **Add Cover**).
-    """
-    to = min(int(timeout_ms), 20_000)
+_BAJAJ_MAME_MODAL_DUMP_JS = r"""() => {
+  const clip = (s, n) => {
+    const t = (s || '').toString().replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n) + '…' : t;
+  };
+  const vis = (el) => {
+    if (!el) return false;
+    try {
+      const st = window.getComputedStyle(el);
+      if (st.display === 'none' || st.visibility === 'hidden') return false;
+      const r = el.getBoundingClientRect();
+      return r.width > 1 && r.height > 1;
+    } catch (e) { return false; }
+  };
+  const out = { buttons: [], modals: [] };
+  try {
+    for (const el of document.querySelectorAll(
+      'button, input[type="button"], input[type="submit"], a.btn, .modal button'
+    )) {
+      if (out.buttons.length >= 40) break;
+      if (!vis(el)) continue;
+      out.buttons.push({
+        tag: (el.tagName || '').toLowerCase(),
+        id: el.id || '',
+        type: (el.type || '').toLowerCase(),
+        text: clip(el.innerText || el.value || '', 120),
+      });
+    }
+  } catch (e) { out.buttons.push({ error: String(e).slice(0, 120) }); }
+  try {
+    for (const el of document.querySelectorAll('.modal, [role="dialog"], .modal-dialog')) {
+      if (out.modals.length >= 8) break;
+      if (!vis(el)) continue;
+      out.modals.push({ className: clip(el.className, 120), text: clip(el.innerText, 400) });
+    }
+  } catch (e) { out.modals.push({ error: String(e).slice(0, 120) }); }
+  return out;
+}"""
+
+
+def _hero_misp_bajaj_mame_modal_roots(page) -> list:
     roots: list = [page]
     try:
         for fr in page.frames:
@@ -8359,12 +8373,68 @@ def _hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
                 roots.append(fr)
     except Exception:
         pass
-    for root in roots:
+    return roots
+
+
+def _hero_misp_bajaj_mame_alert_visible(page) -> bool:
+    for root in _hero_misp_bajaj_mame_modal_roots(page):
+        try:
+            if root.get_by_text(_BAJAJ_MAME_ALERT_BODY_RX).first.is_visible(timeout=400):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _append_bajaj_mame_modal_dump(
+    page,
+    *,
+    reason: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> None:
+    lines: list[str] = ["--- Bajaj MAME modal dump (per frame) ---"]
+    for i, root in enumerate(_hero_misp_bajaj_mame_modal_roots(page)[:24]):
+        u = ""
+        try:
+            u = ((getattr(root, "url", None) or "")[:420])
+        except Exception:
+            pass
+        line = f"  [{i}] url={u!r}"
+        try:
+            data = root.evaluate(_BAJAJ_MAME_MODAL_DUMP_JS)  # type: ignore[union-attr]
+            blob = json.dumps(data, ensure_ascii=False)
+            if len(blob) > 140_000:
+                blob = blob[:140_000] + "…[truncated]"
+            line += f"\n    modal={blob}"
+        except Exception as exc:
+            line += f"\n    modal_evaluate_error={exc!s}"
+        lines.append(line)
+    _append_hero_misp_frame_dump(
+        page,
+        reason=f"bajaj_mame_modal_{reason}",
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+        lines=lines,
+    )
+
+
+def _hero_misp_try_click_bajaj_mame_continue_once(
+    page,
+    *,
+    click_timeout_ms: int,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> bool:
+    """One pass: click **Continue Without Cover** if visible in any frame."""
+    to = min(int(click_timeout_ms), 20_000)
+    vis_ms = min(800, to)
+    for root in _hero_misp_bajaj_mame_modal_roots(page):
         try:
             hit = root.get_by_role("button", name=_BAJAJ_MAME_CONTINUE_WITHOUT_COVER_RX)
             for i in range(min(hit.count(), 8)):
                 el = hit.nth(i)
-                if el.is_visible(timeout=min(2_500, to)):
+                if el.is_visible(timeout=vis_ms):
                     try:
                         el.scroll_into_view_if_needed(timeout=1_000)
                     except Exception:
@@ -8387,13 +8457,14 @@ def _hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
             "input[type='button'][value*='Continue Without Cover' i]",
             "input[type='submit'][value*='Continue Without Cover' i]",
             "a:has-text('Continue Without Cover')",
+            ".modal button:has-text('Continue Without Cover')",
         ):
             try:
                 loc = root.locator(sel)
                 n = min(int(loc.count()), 6)
                 for i in range(n):
                     btn = loc.nth(i)
-                    if btn.is_visible(timeout=min(2_500, to)):
+                    if btn.is_visible(timeout=vis_ms):
                         try:
                             btn.scroll_into_view_if_needed(timeout=1_000)
                         except Exception:
@@ -8413,7 +8484,7 @@ def _hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
                 continue
         try:
             el = root.get_by_text(_BAJAJ_MAME_CONTINUE_WITHOUT_COVER_RX).first
-            if el.is_visible(timeout=min(2_500, to)):
+            if el.is_visible(timeout=vis_ms):
                 el.click(timeout=to, force=True)
                 if ocr_output_dir and (subfolder or "").strip():
                     append_playwright_insurance_line(
@@ -8427,6 +8498,51 @@ def _hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
                 return True
         except Exception:
             continue
+    return False
+
+
+def _hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
+    page,
+    *,
+    timeout_ms: int = 8_000,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> bool:
+    """
+    Bajaj only: after **Proposal Preview**, MISP may show **Motor Accidental Medical Expenses Cover
+    Exclusion Alert** — click **Continue Without Cover** (not **Add Cover**).
+
+    Polls until ``timeout_ms`` for the modal button. When alert body never appears, skip (not an error).
+    """
+    to = min(int(timeout_ms), 20_000)
+    deadline = time.time() + to / 1000.0
+    while time.time() < deadline:
+        if _hero_misp_try_click_bajaj_mame_continue_once(
+            page,
+            click_timeout_ms=to,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        ):
+            return True
+        _t(page, 450)
+    if not _hero_misp_bajaj_mame_alert_visible(page):
+        if ocr_output_dir and (subfolder or "").strip():
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                (subfolder or "").strip(),
+                "NOTE",
+                "proposal_review: Bajaj — skip: MAME cover exclusion alert not shown",
+            )
+        return True
+    try:
+        _append_bajaj_mame_modal_dump(
+            page,
+            reason="continue_without_cover_not_found",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+    except Exception:
+        pass
     return False
 
 
@@ -9961,41 +10077,21 @@ def _hero_misp_fill_proposal_and_review(
         )
         if err:
             return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
-        # Phase 3 — TPPD (control id revealed after Discounts; try common suffixes then label).
-        _tppd_checked = False
-        for _tppd_id in ("chkTPPD", "chkTPPDLimited", "chkTppdLimited"):
-            err = _proposal_addon_checkbox_id_or_label(
-                page,
-                _tppd_id,
-                True,
-                "addon_tppd_limited",
-                _tppd_pat,
-                ocr_output_dir,
-                subfolder,
-                timeout_ms=pt,
-                optional=False,
-                require_cph1_id=True,
-            )
-            if err is None:
-                _tppd_checked = True
-                break
-            if "required CPH1 checkbox id=" not in err:
-                return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
-        if not _tppd_checked:
-            err = _proposal_addon_checkbox_id_or_label(
-                page,
-                "chkTPPD",
-                True,
-                "addon_tppd_limited",
-                _tppd_pat,
-                ocr_output_dir,
-                subfolder,
-                timeout_ms=pt,
-                optional=False,
-                require_cph1_id=False,
-            )
-            if err:
-                return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
+        # Phase 3 — TPPD Limited (id chkTPPDLim; injected after Discounts postback).
+        err = _proposal_addon_checkbox_id_or_label(
+            page,
+            "chkTPPDLim",
+            True,
+            "addon_tppd_limited",
+            _tppd_pat,
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+            optional=False,
+            require_cph1_id=True,
+        )
+        if err:
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
         _t(page, 500)
         err = _proposal_addon_checkbox_id_or_label(
             page,
@@ -10219,7 +10315,7 @@ def _hero_misp_fill_proposal_and_review(
     except Exception as exc:
         return _proposal_fail(ocr_output_dir, subfolder, f"proposal_review: {exc!s}", page=page)
 
-    _t(page, 600)
+    _t(page, 800)
     if _is_bajaj_insurance:
         if not _hero_misp_dismiss_bajaj_mame_cover_exclusion_alert(
             page,
