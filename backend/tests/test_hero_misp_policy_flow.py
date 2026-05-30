@@ -183,3 +183,26 @@ def test_proposal_addon_dom_dump_js_targets_checkboxes():
     assert "checkboxes" in fhi._PROPOSAL_ADDON_DOM_DUMP_JS
     assert "rowText" in fhi._PROPOSAL_ADDON_DOM_DUMP_JS
 
+
+def test_proposal_addon_checkbox_require_cph1_id_skips_label_fallback(mock_page):
+    with patch.object(
+        fhi,
+        "_proposal_step_checkbox_by_cph1_id",
+        return_value=fhi.PROPOSAL_CHECKBOX_ID_NOT_FOUND,
+    ):
+        with patch.object(fhi, "_proposal_step_checkbox") as label_cb:
+            err = fhi._proposal_addon_checkbox_id_or_label(
+                mock_page,
+                "chkRim",
+                True,
+                "addon_rim_safeguard",
+                r"Rim\s*Safeguard",
+                None,
+                None,
+                timeout_ms=5_000,
+                require_cph1_id=True,
+            )
+    assert err is not None
+    assert "required CPH1 checkbox id='chkRim'" in err
+    label_cb.assert_not_called()
+

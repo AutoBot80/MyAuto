@@ -6827,11 +6827,15 @@ def _proposal_addon_checkbox_id_or_label(
     *,
     timeout_ms: int,
     optional: bool = False,
+    require_cph1_id: bool = False,
 ) -> str | None:
     """Prefer stable CPH1 id from MispPolicy scrape; fall back to row/label regex.
 
     When ``optional`` is True and neither the CPH1 control nor a label/row match exists
     (insurer-specific proposal grids omit the add-on), log skip and return success.
+
+    When ``require_cph1_id`` is True, never use label fallback (Bajaj Addons/Others panels
+    embed all row labels in shared ancestor text — regex matches cause false positives).
     """
     r = _proposal_step_checkbox_by_cph1_id(
         page,
@@ -6845,6 +6849,11 @@ def _proposal_addon_checkbox_id_or_label(
     if r is None:
         return None
     if r == PROPOSAL_CHECKBOX_ID_NOT_FOUND:
+        if require_cph1_id:
+            return (
+                f"{step_id}: required CPH1 checkbox id={id_suffix!r} not found "
+                f"(label fallback disabled)"
+            )
         err = _proposal_step_checkbox(
             page,
             label_pattern,
@@ -6864,6 +6873,82 @@ def _proposal_addon_checkbox_id_or_label(
             return None
         return err
     return r
+
+
+def _proposal_bajaj_tppd_checkbox_visible(
+    page,
+    *,
+    tppd_label_pat: str,
+    id_suffixes: tuple[str, ...] = ("chkTPPD", "chkTPPDLimited", "chkTppdLimited"),
+) -> bool:
+    """True when TPPD Limited is on the proposal form (injected after Discounts postback)."""
+    for id_suffix in id_suffixes:
+        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+            try:
+                loc = _proposal_cph1_locator(root, id_suffix)
+                if loc.count() == 0:
+                    continue
+                cb = _proposal_first_visible_locator_nth(loc, max_n=4, vis_timeout_ms=400)
+                if cb is not None:
+                    return True
+            except Exception:
+                continue
+    rx = re.compile(tppd_label_pat, re.I | re.M)
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        try:
+            loc = root.locator('input[type="checkbox"][id*="TPPD" i]')
+            if loc.count() > 0:
+                cb = _proposal_first_visible_locator_nth(loc, max_n=4, vis_timeout_ms=400)
+                if cb is not None:
+                    return True
+        except Exception:
+            pass
+        try:
+            cbs = root.locator('input[type="checkbox"]')
+            n = cbs.count()
+        except Exception:
+            continue
+        for i in range(min(n, 160)):
+            cb = cbs.nth(i)
+            try:
+                if not cb.is_visible(timeout=300):
+                    continue
+                t = _proposal_checkbox_context_text(cb)
+                if not t.strip():
+                    continue
+                first_line = (t.split("\n")[0] if t else "").strip()
+                if rx.search(first_line):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _proposal_wait_bajaj_tppd_checkbox(
+    page,
+    *,
+    tppd_label_pat: str,
+    timeout_ms: int,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> str | None:
+    """Poll until TPPD Limited appears after Discounts ASP.NET postback."""
+    wait_ms = min(max(int(timeout_ms), 4_000), 15_000)
+    deadline = time.time() + wait_ms / 1000.0
+    while time.time() < deadline:
+        if _proposal_bajaj_tppd_checkbox_visible(page, tppd_label_pat=tppd_label_pat):
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                "addon_tppd_limited_wait",
+                "TPPD Limited checkbox visible after Discounts postback",
+            )
+            return None
+        _t(page, 450)
+    return (
+        f"addon_tppd_limited_wait: TPPD Limited checkbox not visible after Discounts "
+        f"postback ({wait_ms}ms)"
+    )
 
 
 def _proposal_step_nominee_gender_radio(
@@ -9826,31 +9911,92 @@ def _hero_misp_fill_proposal_and_review(
     )
     _rim_safeguard_pat = r"Rim\s*Safeguard|RIM\s*Safeguard"
     _discounts_pat = r"^Discounts$|\bDiscounts\b"
-    _tppd_pat = r"TPPD\s*Limited|\bTPPD\b"
+    _tppd_pat = r"^TPPD\s*Limited|^TPPD\b"
     if _is_bajaj_insurance:
         for _r in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
             _proposal_scroll_root_to_bottom(_r)
         _t(page, 400)
-        for _id_suffix, _step_id, _label_pat in (
-            ("chkRimSafeguard", "addon_rim_safeguard", _rim_safeguard_pat),
-            ("chkRSA", "addon_rsa", _rsa_addon_pat),
-            ("chkDiscount", "addon_discounts", _discounts_pat),
-            ("chkTPPD", "addon_tppd_limited", _tppd_pat),
+        # Phase 1 — Addons section: id-only (shared panel text breaks label regex).
+        for _id_suffix, _step_id in (
+            ("chkRim", "addon_rim_safeguard"),
+            ("chkRSA", "addon_rsa"),
         ):
             err = _proposal_addon_checkbox_id_or_label(
                 page,
                 _id_suffix,
                 True,
                 _step_id,
-                _label_pat,
+                _rim_safeguard_pat if _step_id == "addon_rim_safeguard" else _rsa_addon_pat,
                 ocr_output_dir,
                 subfolder,
                 timeout_ms=pt,
                 optional=False,
+                require_cph1_id=True,
             )
             if err:
                 return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
             _t(page, 500)
+        # Phase 2 — Others: Discounts triggers postback that injects TPPD Limited row.
+        err = _proposal_addon_checkbox_id_or_label(
+            page,
+            "chkDiscounts",
+            True,
+            "addon_discounts",
+            _discounts_pat,
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=pt,
+            optional=False,
+            require_cph1_id=True,
+        )
+        if err:
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
+        _t(page, 600)
+        err = _proposal_wait_bajaj_tppd_checkbox(
+            page,
+            tppd_label_pat=_tppd_pat,
+            timeout_ms=pt,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+        if err:
+            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
+        # Phase 3 — TPPD (control id revealed after Discounts; try common suffixes then label).
+        _tppd_checked = False
+        for _tppd_id in ("chkTPPD", "chkTPPDLimited", "chkTppdLimited"):
+            err = _proposal_addon_checkbox_id_or_label(
+                page,
+                _tppd_id,
+                True,
+                "addon_tppd_limited",
+                _tppd_pat,
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+                optional=False,
+                require_cph1_id=True,
+            )
+            if err is None:
+                _tppd_checked = True
+                break
+            if "required CPH1 checkbox id=" not in err:
+                return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
+        if not _tppd_checked:
+            err = _proposal_addon_checkbox_id_or_label(
+                page,
+                "chkTPPD",
+                True,
+                "addon_tppd_limited",
+                _tppd_pat,
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+                optional=False,
+                require_cph1_id=False,
+            )
+            if err:
+                return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
+        _t(page, 500)
         err = _proposal_addon_checkbox_id_or_label(
             page,
             "chkEME",
