@@ -1167,7 +1167,9 @@ export function SubdealerChallanPage({
                         <th scope="col">Order no.</th>
                         <th scope="col">Invoice no.</th>
                         <th scope="col">Created</th>
-                        <th scope="col">Total discount</th>
+                        <th scope="col" className="challans-proc-col--amount">
+                          Total cost (ex-showroom)
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1196,7 +1198,9 @@ export function SubdealerChallanPage({
                             <td>{(r.order_number || "").trim() || "—"}</td>
                             <td>{(r.invoice_number || "").trim() || "—"}</td>
                             <td>{formatLatestRunDisplay(r.created_at)}</td>
-                            <td>{formatInrAmount(r.total_discount)}</td>
+                            <td className="challans-proc-col--amount">
+                              {formatInrAmount(r.total_ex_showroom_price)}
+                            </td>
                           </tr>
                         );
                       })}

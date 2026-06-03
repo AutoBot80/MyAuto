@@ -26,6 +26,8 @@ export interface CreateInvoiceEligibilityResponse {
   cpa_alliance_insurance_reason?: string | null;
   /** ``master_ref`` insurers with ``comments = 'Y'`` (portal dropdown). */
   portal_insurers?: string[] | null;
+  /** ``master_ref`` FINANCER ``ref_value`` rows (Section 2 financier dropdown). */
+  financiers?: string[] | null;
 }
 
 export type FetchCreateInvoiceEligibilityParams =
@@ -53,7 +55,12 @@ export async function fetchCreateInvoiceEligibility(
 /** Subset of eligibility CPA fields from ``GET /add-sales/dealer-cpa-context`` (no sale keys). */
 export type DealerCpaContextResponse = Pick<
   CreateInvoiceEligibilityResponse,
-  "cpa_insurers" | "hero_cpi" | "dealer_cpa_insurer" | "cpa_alliance_portal_enabled" | "portal_insurers"
+  | "cpa_insurers"
+  | "hero_cpi"
+  | "dealer_cpa_insurer"
+  | "cpa_alliance_portal_enabled"
+  | "portal_insurers"
+  | "financiers"
 >;
 
 export async function fetchDealerCpaContext(dealerId: number): Promise<DealerCpaContextResponse> {

@@ -62,6 +62,7 @@ from app.services.hero_dms_shared_utilities import (
     _try_click_generate_booking,
 )
 from app.services.hero_dms_playwright_vehicle import (
+    _MIN_PLAUSIBLE_EX_SHOWROOM,
     _looks_like_ex_showroom_price,
     _siebel_run_vehicle_serial_detail_precheck_pdi,
     scrape_siebel_vehicle_row,
@@ -146,6 +147,291 @@ def _scrape_total_ex_showroom_after_price_allocate(
         except Exception:
             continue
     return ""
+
+
+_JS_SCRAPE_ORDER_LINE_TOTAL_COST = """() => {
+  const norm = (s) => String(s || "").replace(/\\s+/g, " ").trim();
+  const valFromTd = (td) => {
+    if (!td) return "";
+    const tit = norm(td.getAttribute("title") || "");
+    if (tit) return tit;
+    const a = td.querySelector("a.drilldown, a");
+    if (a) {
+      const at = norm(a.textContent || "");
+      if (at) return at;
+    }
+    return norm(td.textContent || "");
+  };
+  const seen = new Set();
+  const out = [];
+  const push = (td) => {
+    if (!td || seen.has(td)) return;
+    seen.add(td);
+    const v = valFromTd(td);
+    if (v) out.push({ id: String(td.getAttribute("id") || ""), value: v });
+  };
+  document.querySelectorAll("td[id$='_l_Total_Cost'], td[id*='_l_Total_Cost']").forEach(push);
+  const tbody =
+    document.querySelector("table#s_1_l tbody") ||
+    document.querySelector("table.ui-jqgrid-btable#s_1_l tbody");
+  if (tbody) {
+    tbody.querySelectorAll("td[id$='_l_Total_Cost'], td[id*='_l_Total_Cost']").forEach(push);
+  }
+  return out;
+}"""
+
+
+_JS_SCRAPE_INVOICE_LIST_AMOUNT = """() => {
+  const norm = (s) => String(s || "").replace(/\\s+/g, " ").trim();
+  const valFromTd = (td) => {
+    if (!td) return "";
+    const tit = norm(td.getAttribute("title") || "");
+    if (tit) return tit;
+    const a = td.querySelector("a.drilldown, a");
+    if (a) {
+      const at = norm(a.textContent || "");
+      if (at) return at;
+    }
+    return norm(td.textContent || "");
+  };
+  const suffixes = ["_l_Round_Off_Amount", "_l_Total_Amount"];
+  const pickRows = (tbody) => {
+    if (!tbody) return [];
+    let rows = Array.from(tbody.querySelectorAll("tr.jqgrow"));
+    if (rows.length === 0) {
+      rows = Array.from(tbody.querySelectorAll("tr[role='row']")).filter((tr) => {
+        if (!tr || tr.querySelector("th")) return false;
+        if (tr.closest && tr.closest("thead")) return false;
+        return tr.querySelector("td");
+      });
+    }
+    return rows;
+  };
+  const tbodies = [];
+  const tPrimary = document.querySelector("table#s_2_l tbody");
+  if (tPrimary) tbodies.push(tPrimary);
+  document.querySelectorAll("table.ui-jqgrid-btable#s_2_l tbody, #gbox_s_2_l table.ui-jqgrid-btable tbody").forEach((tb) => {
+    if (tb && tbodies.indexOf(tb) < 0) tbodies.push(tb);
+  });
+  const out = [];
+  const seen = new Set();
+  for (const tbody of tbodies) {
+    const rows = pickRows(tbody);
+    for (const tr of rows) {
+      if (tr.classList && tr.classList.contains("jqgfirstrow")) continue;
+      for (const suf of suffixes) {
+        const td =
+          tr.querySelector("td[id$='" + suf + "']") ||
+          tr.querySelector("td[id*='"+ suf + "']");
+        if (!td || seen.has(td)) continue;
+        seen.add(td);
+        const v = valFromTd(td);
+        if (v) {
+          out.push({
+            id: String(td.getAttribute("id") || ""),
+            column: suf.replace("_l_", ""),
+            value: v,
+          });
+        }
+      }
+      if (out.length > 0) break;
+    }
+    if (out.length > 0) break;
+  }
+  return out;
+}"""
+
+
+def _scrape_invoice_list_amount_after_create_invoice(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+) -> str:
+    """
+    Best-effort invoice total from ``table#s_2_l`` after **Create Invoice**.
+
+    Prefers ``Round_Off_Amount`` (``1_s_2_l_Round_Off_Amount``), then ``Total_Amount``.
+    """
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        try:
+            raw = root.evaluate(_JS_SCRAPE_INVOICE_LIST_AMOUNT)
+            if not isinstance(raw, list):
+                continue
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                v = str(item.get("value") or "").strip()
+                if v:
+                    return v
+        except Exception:
+            continue
+    return ""
+
+
+def list_invoice_list_amount_cells(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+) -> list[dict[str, str]]:
+    """Invoice list ``s_2_l`` amount cells for diagnostics / test wrappers."""
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    merged: list[dict[str, str]] = []
+    seen_keys: set[str] = set()
+    for root in roots:
+        try:
+            raw = root.evaluate(_JS_SCRAPE_INVOICE_LIST_AMOUNT)
+            if not isinstance(raw, list):
+                continue
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                cid = str(item.get("id") or "").strip()
+                col = str(item.get("column") or "").strip()
+                val = str(item.get("value") or "").strip()
+                if not val:
+                    continue
+                key = cid or f"{col}:{val}"
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                merged.append({"id": cid, "column": col, "value": val})
+        except Exception:
+            continue
+    return merged
+
+
+def _scrape_order_line_total_cost(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+) -> str:
+    """
+    Best-effort **Total_Cost** from the order line / My Orders jqGrid (``td[id*='_l_Total_Cost']``).
+
+    Reads ``title`` then drilldown/text — no ``vis()`` gate (wide grids scroll columns off-screen).
+    Returns the first cell value when multiple exist (order-level aggregate on multi-VIN).
+    """
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    for root in roots:
+        try:
+            raw = root.evaluate(_JS_SCRAPE_ORDER_LINE_TOTAL_COST)
+            if not isinstance(raw, list):
+                continue
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                v = str(item.get("value") or "").strip()
+                if v:
+                    return v
+        except Exception:
+            continue
+    return ""
+
+
+def list_order_line_total_cost_cells(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+) -> list[dict[str, str]]:
+    """All ``Total_Cost`` cells (id + value) for diagnostics / test wrappers."""
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    merged: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for root in roots:
+        try:
+            raw = root.evaluate(_JS_SCRAPE_ORDER_LINE_TOTAL_COST)
+            if not isinstance(raw, list):
+                continue
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                cid = str(item.get("id") or "").strip()
+                val = str(item.get("value") or "").strip()
+                if not val:
+                    continue
+                key = cid or val
+                if key in seen_ids:
+                    continue
+                seen_ids.add(key)
+                merged.append({"id": cid, "value": val})
+        except Exception:
+            continue
+    return merged
+
+
+def _merge_ex_showroom_extra_from_invoice_list(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    extra: dict,
+    note,
+) -> None:
+    """Non-blocking: set ``vehicle_ex_showroom_cost`` from invoice list ``s_2_l`` after Create Invoice."""
+    from app.services.add_subdealer_challan_commit_service import _coerce_ex_showroom_scalar
+
+    try:
+        _raw = _scrape_invoice_list_amount_after_create_invoice(
+            page, content_frame_selector=content_frame_selector
+        )
+        _px = _coerce_ex_showroom_scalar(_raw)
+        if _raw and _px is not None and _px >= _MIN_PLAUSIBLE_EX_SHOWROOM:
+            extra["vehicle_ex_showroom_cost"] = _raw
+            extra["vehicle_price"] = _raw
+            note(
+                f"attach_vehicle_to_bkg: scraped invoice list amount (ex-showroom)={_raw!r} "
+                "after Create Invoice."
+            )
+        else:
+            note(
+                "attach_vehicle_to_bkg: invoice list amount not scraped or not numeric after "
+                f"Create Invoice (best-effort, raw={_raw!r})."
+            )
+    except Exception as _ex_scrape_exc:
+        note(
+            "attach_vehicle_to_bkg: invoice list amount scrape skipped after exception "
+            f"(best-effort): {_ex_scrape_exc!r}"
+        )
+
+
+# Legacy alias (order-line Total_Cost path retired from attach).
+_merge_ex_showroom_extra_from_total_cost = _merge_ex_showroom_extra_from_invoice_list
 
 
 _ATTACH_LINE_ITEMS_MAX = 100
@@ -2319,10 +2605,9 @@ def _attach_vehicle_to_bkg(
     4. Click ``Order:<order#>`` link → **Apply Campaign** → **Create Invoice** when
        ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is True (``ENVIRONMENT=prod`` in ``.env``).
 
-    After **Allocate All**, best-effort scrape of **Total (Ex-showroom)** into ``extra_dict`` as
-    ``vehicle_price`` / ``vehicle_ex_showroom_cost`` (for ``vehicle_master.vehicle_ex_showroom_price``).
-    Multiple lines: also ``order_line_ex_showroom`` (list of per-row chassis + price). Ex-showroom is read
-    only after **Price All** + **Allocate All** (not during the add-line loop).
+    After **Create Invoice** (prod only), best-effort scrape of **Round Off Amount** / **Amount** from
+    the invoice list grid ``s_2_l`` into ``vehicle_price`` / ``vehicle_ex_showroom_cost`` (challan
+    ``challan_master.total_ex_showroom_price``). Dev/test skip Create Invoice and this scrape.
 
     ``attach_line_items`` (optional): list of dicts with ``full_chassis`` / ``vin`` / ``frame_num`` and optional
     ``line_item_discount`` / ``discount``. If omitted, a single line is built from ``full_chassis`` +
@@ -3911,75 +4196,26 @@ def _attach_vehicle_to_bkg(
             return False, f"Siebel error after Allocate All: {_aa_err[:200]}", {}
 
         _extra: dict = {}
-        try:
-            _safe_page_wait(page, 1200, log_label="after_allocate_all_before_ex_showroom_scrape")
-            _scroll_line_items_grid_right()
-            _safe_page_wait(page, 300, log_label="after_scroll_right_for_ex_showroom")
-            _n_lines = len(_scrape_lines)
-            if _n_lines > 1:
-                _rows_out: list[dict[str, str]] = []
-                for _rn in range(1, _n_lines + 1):
-                    _vin_rb = _read_vin_from_order_line_row(
-                        page, row_n=_rn, content_frame_selector=content_frame_selector
-                    )
-                    _ex_r = _scrape_ex_showroom_for_order_line_row(
-                        page, row_n=_rn, content_frame_selector=content_frame_selector
-                    )
-                    _exp_ch = (_scrape_lines[_rn - 1].get("full_chassis") or "").strip()
-                    _rows_out.append(
-                        {
-                            "full_chassis": (_vin_rb.strip() or _exp_ch),
-                            "vehicle_ex_showroom_cost": (_ex_r or "").strip(),
-                        }
-                    )
-                    if _ex_r and _looks_like_ex_showroom_price(_ex_r):
-                        note(
-                            f"attach_vehicle_to_bkg: row {_rn} Ex-showroom={_ex_r!r}, VIN readback={_vin_rb!r}."
-                        )
-                    else:
-                        note(
-                            f"attach_vehicle_to_bkg: row {_rn} Ex-showroom missing or not numeric ({_ex_r!r}); "
-                            f"VIN readback={_vin_rb!r}."
-                        )
-                _extra["order_line_ex_showroom"] = _rows_out
-                _first_price = ""
-                for _r in _rows_out:
-                    _p = (_r.get("vehicle_ex_showroom_cost") or "").strip()
-                    if _p and _looks_like_ex_showroom_price(_p):
-                        _first_price = _p
-                        break
-                if _first_price:
-                    _extra["vehicle_ex_showroom_cost"] = _first_price
-                    _extra["vehicle_price"] = _first_price
-                    note(
-                        f"attach_vehicle_to_bkg: primary Total (Ex-showroom) from first valid line={_first_price!r}."
-                    )
-                else:
-                    note(
-                        "attach_vehicle_to_bkg: no per-row Ex-showroom passed validation after multi-line scrape "
-                        "(best-effort)."
-                    )
-            else:
-                _ex_raw = _scrape_total_ex_showroom_after_price_allocate(
-                    page, content_frame_selector=content_frame_selector
-                )
-                if _ex_raw and _looks_like_ex_showroom_price(_ex_raw):
-                    _extra["vehicle_ex_showroom_cost"] = _ex_raw
-                    _extra["vehicle_price"] = _ex_raw
-                    _extra["order_line_ex_showroom"] = [
-                        {
-                            "full_chassis": (_scrape_lines[0].get("full_chassis") or "").strip(),
-                            "vehicle_ex_showroom_cost": _ex_raw,
-                        }
-                    ]
-                    note(f"attach_vehicle_to_bkg: scraped Total (Ex-showroom)={_ex_raw!r} after Price All + Allocate All.")
-                else:
-                    note(
-                        "attach_vehicle_to_bkg: Total (Ex-showroom) not scraped or not numeric after Allocate All "
-                        "(best-effort)."
-                    )
-        except Exception as _ex_scrape_exc:
-            note(f"attach_vehicle_to_bkg: ex-showroom scrape skipped after exception (best-effort): {_ex_scrape_exc!r}")
+        # Legacy ex-showroom scrape (input / per-row pager) — disabled; Total_Cost runs after Create Invoice.
+        # try:
+        #     _safe_page_wait(page, 1200, log_label="after_allocate_all_before_ex_showroom_scrape")
+        #     _scroll_line_items_grid_right()
+        #     _safe_page_wait(page, 300, log_label="after_scroll_right_for_ex_showroom")
+        #     _n_lines = len(_scrape_lines)
+        #     if _n_lines > 1:
+        #         _rows_out: list[dict[str, str]] = []
+        #         for _rn in range(1, _n_lines + 1):
+        #             _vin_rb = _read_vin_from_order_line_row(
+        #                 page, row_n=_rn, content_frame_selector=content_frame_selector
+        #             )
+        #             _ex_r = _scrape_ex_showroom_for_order_line_row(
+        #                 page, row_n=_rn, content_frame_selector=content_frame_selector
+        #             )
+        #             ...
+        #     else:
+        #         _ex_raw = _scrape_total_ex_showroom_after_price_allocate(...)
+        # except Exception as _ex_scrape_exc:
+        #     note(...)
 
         if _fin:
             _fo_post, _fe_post = _fill_order_finance_after_vin_attach(
@@ -4260,6 +4496,13 @@ def _attach_vehicle_to_bkg(
         if _ci_err:
             note(f"attach_vehicle_to_bkg: Siebel error after Create Invoice → {_ci_err!r:.300}")
             return False, f"Siebel error after Create Invoice: {_ci_err[:200]}", {}
+        _safe_page_wait(page, 300, log_label="after_create_invoice_before_invoice_amount_scrape")
+        _merge_ex_showroom_extra_from_invoice_list(
+            page,
+            content_frame_selector=content_frame_selector,
+            extra=_extra,
+            note=note,
+        )
     else:
         note(
             "attach_vehicle_to_bkg: Create Invoice not auto-clicked "

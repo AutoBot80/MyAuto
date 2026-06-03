@@ -12,7 +12,12 @@ from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
 from app.repositories.add_sales_invoices import list_recent_sales_invoices
 from app.repositories.add_sales_staging import fetch_staging_payload, list_in_process_staging_rows
-from app.repositories.master_ref import list_cpa_portals, list_portal_insurers
+from app.repositories.master_ref import (
+    REF_TYPE_FINANCER,
+    list_cpa_portals,
+    list_portal_insurers,
+    list_ref_values,
+)
 from app.schemas.add_sales_staging_patch import PatchAddSalesStagingPayloadRequest
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
@@ -83,6 +88,7 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         "dealer_cpa_insurer": None,
         "cpa_alliance_portal_enabled": False,
         "portal_insurers": [],
+        "financiers": [],
     }
     if dealer_id is None or int(dealer_id) < 1:
         return blank
@@ -90,6 +96,7 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
     try:
         portals = list_cpa_portals(conn)
         portal_insurers = list_portal_insurers(conn)
+        financiers = list_ref_values(conn, REF_TYPE_FINANCER)
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT hero_cpi, cpa_insurer FROM dealer_ref WHERE dealer_id = %s LIMIT 1",
@@ -119,6 +126,7 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         "dealer_cpa_insurer": dcpa,
         "cpa_alliance_portal_enabled": enabled,
         "portal_insurers": portal_insurers,
+        "financiers": financiers,
     }
 
 

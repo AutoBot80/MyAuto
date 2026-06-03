@@ -58,11 +58,14 @@ import {
   buildSection2FullAddress,
   composeCareOf,
   formatDobDigitsInput,
-  isValidDdMmYyyy,
   normalizeDobToDdMmYyyy,
   parseAddressLine2,
   parseCareOfFromCombined,
 } from "../utils/section2CustomerFormat";
+import {
+  getSection2ValidationErrors,
+  type Section2FieldError,
+} from "../utils/section2Validation";
 import { isPlaceholderCustomerMobileDigits } from "../utils/customerMobile";
 import {
   cpaPolicyFromInsuranceRaw,
@@ -71,8 +74,6 @@ import {
 /** Shown under Upload documents while upload or OCR polling runs; counts down toward 00m:00s. */
 const ADD_SALES_OCR_COUNTDOWN_START_SEC = 40;
 
-type Section2FieldError = { field: string; message: string };
-
 function section2FieldLabel(field: string): string {
   const labels: Record<string, string> = {
     customer_mobile: "Customer Mobile",
@@ -80,6 +81,8 @@ function section2FieldLabel(field: string): string {
     name: "Name",
     gender: "Gender",
     address: "Address",
+    address_line2: "Address (City, State, PIN)",
+    financier: "Financier",
     dob: "DOB",
     care_of: "C/O",
     aadhar: "Aadhaar (last 4 digits)",
@@ -420,6 +423,12 @@ export function AddSalesPage({
   const [cpaInsurers, setCpaInsurers] = useState<CpaInsurerPortalRow[]>([]);
   /** ``master_ref`` INSURER rows with ``comments = 'Y'`` (Section 3 dropdown). */
   const [portalInsurers, setPortalInsurers] = useState<string[]>([]);
+  /** ``master_ref`` FINANCER rows (Section 2 financier dropdown). */
+  const [masterRefFinanciers, setMasterRefFinanciers] = useState<string[]>([]);
+  const [section2ValidationErrors, setSection2ValidationErrors] = useState<Section2FieldError[]>([]);
+  const [section2SubmitAttempted, setSection2SubmitAttempted] = useState(false);
+  const [addressLine2Input, setAddressLine2Input] = useState("");
+  const addressLine2DirtyRef = useRef(false);
   const [dealerCpaInsurer, setDealerCpaInsurer] = useState<string | null>(null);
   const [heroCpi, setHeroCpi] = useState<string | null>(null);
   const [isFillCpaInsuranceLoading, setIsFillCpaInsuranceLoading] = useState(false);
@@ -506,6 +515,7 @@ export function AddSalesPage({
     | "dealer_cpa_insurer"
     | "cpa_alliance_portal_enabled"
     | "portal_insurers"
+    | "financiers"
   >;
 
   const applyDealerCpaFromApiSlice = useCallback((res: CpaEligibilitySlice) => {
@@ -516,6 +526,8 @@ export function AddSalesPage({
     setDealerCpaInsurer(cpa.dealerCpa);
     const pi = res.portal_insurers;
     setPortalInsurers(Array.isArray(pi) ? pi.map((x) => String(x).trim()).filter(Boolean) : []);
+    const fin = res.financiers;
+    setMasterRefFinanciers(Array.isArray(fin) ? fin.map((x) => String(x).trim()).filter(Boolean) : []);
   }, []);
 
   const resolvedCpaPortal = useMemo(
@@ -530,6 +542,7 @@ export function AddSalesPage({
       setDealerCpaInsurer(null);
       setCpaInsurers([]);
       setPortalInsurers([]);
+      setMasterRefFinanciers([]);
       setCpaAlliancePortalEnabled(false);
       return;
     }
@@ -545,6 +558,7 @@ export function AddSalesPage({
           setDealerCpaInsurer(null);
           setCpaInsurers([]);
           setPortalInsurers([]);
+          setMasterRefFinanciers([]);
           setCpaAlliancePortalEnabled(false);
         }
       }
@@ -596,6 +610,7 @@ export function AddSalesPage({
       if (cust && typeof cust === "object" && !Array.isArray(cust)) {
         const rec = cust as Record<string, unknown>;
         setExtractedCustomer(mapApiCustomerToExtracted(rec));
+        addressLine2DirtyRef.current = false;
         const mobRaw = rec.mobile_number ?? rec.mobile;
         if (mobRaw != null) {
           const digits = String(mobRaw).replace(/\D/g, "").slice(-10);
@@ -788,6 +803,7 @@ export function AddSalesPage({
       setCpaAlliancePortalEnabled(false);
       setCpaInsurers([]);
       setPortalInsurers([]);
+      setMasterRefFinanciers([]);
       setDealerCpaInsurer(null);
     } finally {
       setCreateInvoiceEligibilityLoading(false);
@@ -843,9 +859,14 @@ export function AddSalesPage({
     setCpaAlliancePortalEnabled(false);
     setCpaInsurers([]);
     setPortalInsurers([]);
+    setMasterRefFinanciers([]);
     setDealerCpaInsurer(null);
     setHeroCpi(null);
     setIsFillCpaInsuranceLoading(false);
+    setSection2ValidationErrors([]);
+    setSection2SubmitAttempted(false);
+    setAddressLine2Input("");
+    addressLine2DirtyRef.current = false;
     setFormResetKey((k) => k + 1);
   };
 
@@ -908,107 +929,24 @@ export function AddSalesPage({
     }
   }, [portalInsurers, preferInsurer, extractedInsurance?.insurer, savedTo]);
 
-  /** Allowed: letters, digits, space, hyphen, period, slash, comma. No other special characters. */
-  const ALLOWED_CHAR_REGEX = /^[a-zA-Z0-9\s\-./,]*$/;
-  const isBlank = (val: string | undefined | null): boolean =>
-    val == null || String(val).trim() === "" || String(val).trim() === "—";
-  const hasDisallowedSpecialChars = (val: string | undefined | null): boolean =>
-    val != null && String(val).trim() !== "" && !ALLOWED_CHAR_REGEX.test(String(val).trim());
+  const clearSection2Validation = useCallback(() => {
+    setSection2ValidationErrors([]);
+    setSection2SubmitAttempted(false);
+  }, []);
 
-  const isValidNomineeAgeVal = (val: string | undefined | null): boolean => {
-    if (val == null || String(val).trim() === "") return true;
-    const s = String(val).trim();
-    if (!/^\d+$/.test(s)) return false;
-    const n = parseInt(s, 10);
-    return n >= 1 && n <= 150;
-  };
+  const section2FieldInvalid = useCallback(
+    (field: string) =>
+      section2SubmitAttempted && section2ValidationErrors.some((e) => e.field === field),
+    [section2SubmitAttempted, section2ValidationErrors]
+  );
 
-  const getSection2ValidationErrors = (): Section2FieldError[] => {
-    /** Field-level Section 2 messages only after a successful upload (same moment `savedTo` is set). */
-    if (!savedTo || String(savedTo).trim() === "") {
-      return [];
-    }
+  const section2ErrorsToShow = section2SubmitAttempted ? section2ValidationErrors : [];
 
-    const m = new Map<string, string>();
-    const setErr = (field: string, message: string) => {
-      if (!m.has(field)) m.set(field, message);
-    };
-
-    if (!/^\d{10}$/.test(mobile.trim())) {
-      setErr("customer_mobile", "Enter exactly 10 digits.");
+  useEffect(() => {
+    if (!addressLine2DirtyRef.current) {
+      setAddressLine2Input(buildAddressLine2(extractedCustomer));
     }
-    if (!/^\d{10}$/.test((c?.alt_phone_num ?? "").trim())) {
-      setErr("alternate_no", "Enter exactly 10 digits.");
-    }
-    if (!isValidDdMmYyyy(c?.date_of_birth)) {
-      setErr("dob", "Enter a valid date in DD/MM/YYYY format.");
-    }
-    if (!(c?.care_of ?? "").trim()) {
-      setErr("care_of", "C/O is required.");
-    }
-    if (!/^\d{4}$/.test((c?.aadhar_id ?? "").trim())) {
-      setErr("aadhar", "Enter the last 4 digits of Aadhaar.");
-    }
-
-    const requiredEmpty: { field: string; label: string; value: string | undefined }[] = [
-      { field: "name", label: "Name", value: c?.name },
-      { field: "gender", label: "Gender", value: c?.gender },
-      { field: "address", label: "Address", value: c ? buildSection2FullAddress(c) : undefined },
-      { field: "key_no", label: "Key no.", value: v?.key_no },
-      { field: "chassis_no", label: "Chassis No.", value: v?.frame_no },
-      { field: "engine_no", label: "Engine no.", value: v?.engine_no },
-      { field: "battery_no", label: "Battery no.", value: v?.battery_no },
-      { field: "profession", label: "Customer Profession", value: ins?.profession },
-      { field: "marital_status", label: "Customer Marital Status", value: ins?.marital_status },
-      { field: "nominee_name", label: "Nominee Name", value: ins?.nominee_name },
-      { field: "nominee_age", label: "Nominee Age", value: ins?.nominee_age },
-      { field: "nominee_relationship", label: "Relationship", value: ins?.nominee_relationship },
-      { field: "nominee_gender", label: "Nominee Gender", value: ins?.nominee_gender },
-    ];
-    for (const { field, label, value } of requiredEmpty) {
-      if (value == null || String(value).trim() === "" || String(value).trim() === "—") {
-        setErr(field, `${label} is required.`);
-      }
-    }
-
-    const veh: { field: string; label: string; value: string | undefined }[] = [
-      { field: "key_no", label: "Key no.", value: v?.key_no },
-      { field: "chassis_no", label: "Chassis No.", value: v?.frame_no },
-      { field: "engine_no", label: "Engine no.", value: v?.engine_no },
-      { field: "battery_no", label: "Battery no.", value: v?.battery_no },
-    ];
-    for (const { field, label, value } of veh) {
-      if (!isBlank(value) && hasDisallowedSpecialChars(value)) {
-        setErr(field, `${label} must not contain special characters.`);
-      }
-    }
-
-    const insFields: { field: string; label: string; value: string | undefined }[] = [
-      { field: "profession", label: "Customer Profession", value: ins?.profession },
-      { field: "marital_status", label: "Customer Marital Status", value: ins?.marital_status },
-      { field: "nominee_name", label: "Nominee Name", value: ins?.nominee_name },
-      { field: "nominee_age", label: "Nominee Age", value: ins?.nominee_age },
-      { field: "nominee_relationship", label: "Relationship", value: ins?.nominee_relationship },
-      { field: "nominee_gender", label: "Nominee Gender", value: ins?.nominee_gender },
-    ];
-    for (const { field, label, value } of insFields) {
-      if (field === "nominee_age") {
-        if (!isBlank(value)) {
-          if (!isValidNomineeAgeVal(value)) {
-            setErr(field, "Nominee Age must be a number between 1 and 150.");
-          } else if (hasDisallowedSpecialChars(value)) {
-            setErr(field, `${label} must not contain special characters.`);
-          }
-        }
-      } else if (!isBlank(value) && hasDisallowedSpecialChars(value)) {
-        setErr(field, `${label} must not contain special characters.`);
-      }
-    }
-
-    return Array.from(m.entries()).map(([field, message]) => ({ field, message }));
-  };
-
-  const section2ValidationErrors = getSection2ValidationErrors();
+  }, [extractedCustomer, formResetKey]);
 
   const mobileRow = (
     <div className="app-field-row">
@@ -1022,12 +960,12 @@ export function AddSalesPage({
           placeholder="9876543210"
           value={mobile}
           onChange={(e) => {
+            clearSection2Validation();
             const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
             setMobile(digits);
           }}
           aria-invalid={
-            (mobile.length > 0 && !isMobileValid) ||
-            section2ValidationErrors.some((e) => e.field === "customer_mobile")
+            (mobile.length > 0 && !isMobileValid) || section2FieldInvalid("customer_mobile")
           }
         />
       </label>
@@ -1046,13 +984,14 @@ export function AddSalesPage({
           placeholder="9876543210"
           value={c?.alt_phone_num ?? ""}
           onChange={(e) => {
+            clearSection2Validation();
             const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
             setExtractedCustomer((prev) => ({
               ...(prev ?? {}),
               alt_phone_num: digits,
             }));
           }}
-          aria-invalid={section2ValidationErrors.some((e) => e.field === "alternate_no")}
+          aria-invalid={section2FieldInvalid("alternate_no")}
         />
       </label>
     </div>
@@ -1697,7 +1636,6 @@ export function AddSalesPage({
     pageActionsBusy ||
     !c ||
     (!manualFormOnly && !insuranceReadByTextract) ||
-    section2ValidationErrors.length > 0 ||
     !!extractionError ||
     submitInfoActionsComplete;
 
@@ -1928,19 +1866,36 @@ export function AddSalesPage({
                         setSubmitStatus("Waiting for insurance details from document.");
                         return;
                       }
-                      if (section2ValidationErrors.length > 0) {
+                      const parsedLine2 = parseAddressLine2(addressLine2Input);
+                      const customerForSubmit: ExtractedCustomerDetails = { ...c, ...parsedLine2 };
+                      setExtractedCustomer(customerForSubmit);
+                      const validationErrors = getSection2ValidationErrors({
+                        savedTo,
+                        mobile,
+                        customer: customerForSubmit,
+                        vehicle: v ?? null,
+                        insurance: ins ?? null,
+                        addressLine2Input,
+                        masterRefFinanciers,
+                        includeInsuranceFields: manualFormOnly || insuranceReadByTextract,
+                      });
+                      if (validationErrors.length > 0) {
+                        setSection2ValidationErrors(validationErrors);
+                        setSection2SubmitAttempted(true);
                         setSubmitStatus(
-                          section2ValidationErrors
+                          validationErrors
                             .map((e) => `${section2FieldLabel(e.field)}: ${e.message}`)
                             .join(" · ")
                         );
                         return;
                       }
+                      setSection2ValidationErrors([]);
+                      setSection2SubmitAttempted(false);
                       setIsSubmitting(true);
                       setSubmitStatus(null);
                       try {
                         const submitRes = await submitInfo({
-                          customer: c,
+                          customer: customerForSubmit,
                           vehicle: v ?? null,
                           insurance: ins ?? null,
                           mobile,
@@ -1983,11 +1938,11 @@ export function AddSalesPage({
                 <div className="add-sales-v2-fields-row add-sales-v2-fields-row--section2-identity">
                   <div className="add-sales-v2-input-wrap add-sales-v2-input-mobile">
                     {mobileRow}
-                    <Section2FieldError field="customer_mobile" errors={section2ValidationErrors} />
+                    <Section2FieldError field="customer_mobile" errors={section2ErrorsToShow} />
                   </div>
                   <div className="add-sales-v2-input-wrap add-sales-v2-input-alt">
                     {alternateMobileRow}
-                    <Section2FieldError field="alternate_no" errors={section2ValidationErrors} />
+                    <Section2FieldError field="alternate_no" errors={section2ErrorsToShow} />
                   </div>
                 </div>
                 <div
@@ -2000,7 +1955,7 @@ export function AddSalesPage({
                     <span className="add-sales-v2-status-text">Waiting for insurance details from document.</span>
                   </div>
                 )}
-                {extractionComplete && savedTo && (insuranceReadByTextract || manualFormOnly) && section2ValidationErrors.length > 0 && (
+                {extractionComplete && savedTo && section2SubmitAttempted && section2ValidationErrors.length > 0 && (
                   <div className="add-sales-v2-status-row add-sales-v2-status-row--error" role="alert">
                     <ul className="add-sales-v2-validation-list">
                       {section2ValidationErrors.map((e) => (
@@ -2011,7 +1966,7 @@ export function AddSalesPage({
                     </ul>
                   </div>
                 )}
-                {submitStatus && (!savedTo || ((insuranceReadByTextract || manualFormOnly) && section2ValidationErrors.length === 0)) && (
+                {submitStatus && (!savedTo || !section2SubmitAttempted || section2ValidationErrors.length === 0) && (
                   <div className={`add-sales-v2-status-row ${submitStatus === "Saved" ? "add-sales-v2-status-row--success" : "add-sales-v2-status-row--error"}`}>
                     <StatusMessage message={submitStatus} className="add-sales-v2-status-text" role="status" />
                   </div>
@@ -2035,17 +1990,18 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={c?.name ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
                               name: sanitizeFormFieldInputValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
                           autoComplete="name"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "name")}
+                          aria-invalid={section2FieldInvalid("name")}
                         />
-                        <Section2FieldError field="name" errors={section2ValidationErrors} />
+                        <Section2FieldError field="name" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--full">
@@ -2055,6 +2011,7 @@ export function AddSalesPage({
                           className="add-sales-v2-dl-input add-sales-v2-dl-input--care-of-free"
                           value={c?.care_of ?? ""}
                           onChange={(e) => {
+                            clearSection2Validation();
                             const raw = sanitizeFormFieldInputValue(e.target.value);
                             const parsed = parseCareOfFromCombined(raw);
                             const has = raw.trim() !== "";
@@ -2068,9 +2025,9 @@ export function AddSalesPage({
                           placeholder="C/o Father's Name"
                           autoComplete="off"
                           spellCheck={false}
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "care_of")}
+                          aria-invalid={section2FieldInvalid("care_of")}
                         />
-                        <Section2FieldError field="care_of" errors={section2ValidationErrors} />
+                        <Section2FieldError field="care_of" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--full add-sales-v2-dl-customer-line--address">
@@ -2080,6 +2037,7 @@ export function AddSalesPage({
                           className="add-sales-v2-dl-input add-sales-v2-dl-input--address-line1"
                           value={buildAddressLine1(c)}
                           onChange={(e) => {
+                            clearSection2Validation();
                             const line1 = sanitizeFormFieldInputValue(e.target.value);
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
@@ -2093,15 +2051,18 @@ export function AddSalesPage({
                             }));
                           }}
                           placeholder="House, street, locality"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "address")}
+                          aria-invalid={section2FieldInvalid("address")}
                         />
                         <input
                           className="add-sales-v2-dl-input add-sales-v2-dl-input--address-line2"
-                          value={buildAddressLine2(c)}
+                          value={addressLine2Input}
                           onChange={(e) => {
-                            const parsed = parseAddressLine2(
-                              sanitizeFormFieldInputValue(e.target.value)
-                            );
+                            clearSection2Validation();
+                            addressLine2DirtyRef.current = true;
+                            setAddressLine2Input(sanitizeFormFieldInputValue(e.target.value));
+                          }}
+                          onBlur={() => {
+                            const parsed = parseAddressLine2(addressLine2Input);
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
                               city: parsed.city,
@@ -2110,9 +2071,10 @@ export function AddSalesPage({
                             }));
                           }}
                           placeholder="City, State, PIN"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "address")}
+                          aria-invalid={section2FieldInvalid("address_line2")}
                         />
-                        <Section2FieldError field="address" errors={section2ValidationErrors} />
+                        <Section2FieldError field="address" errors={section2ErrorsToShow} />
+                        <Section2FieldError field="address_line2" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--dob-gender">
@@ -2121,17 +2083,18 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input add-sales-v2-dl-input--gender-narrow"
                           value={c?.gender ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
                               gender: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
                           autoComplete="sex"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "gender")}
+                          aria-invalid={section2FieldInvalid("gender")}
                         />
-                        <Section2FieldError field="gender" errors={section2ValidationErrors} />
+                        <Section2FieldError field="gender" errors={section2ErrorsToShow} />
                       </dd>
                       <dt>DOB</dt>
                       <dd className="add-sales-v2-dd--dob-full">
@@ -2141,16 +2104,17 @@ export function AddSalesPage({
                           inputMode="numeric"
                           autoComplete="bday"
                           value={c?.date_of_birth ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
                               date_of_birth: formatDobDigitsInput(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="DD/MM/YYYY"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "dob")}
+                          aria-invalid={section2FieldInvalid("dob")}
                         />
-                        <Section2FieldError field="dob" errors={section2ValidationErrors} />
+                        <Section2FieldError field="dob" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--full">
@@ -2163,6 +2127,7 @@ export function AddSalesPage({
                           maxLength={4}
                           value={c?.aadhar_id ?? ""}
                           onChange={(e) => {
+                            clearSection2Validation();
                             const digits = e.target.value.replace(/\D/g, "").slice(0, 4);
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
@@ -2170,9 +2135,9 @@ export function AddSalesPage({
                             }));
                           }}
                           placeholder="0000"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "aadhar")}
+                          aria-invalid={section2FieldInvalid("aadhar")}
                         />
-                        <Section2FieldError field="aadhar" errors={section2ValidationErrors} />
+                        <Section2FieldError field="aadhar" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                   </dl>
@@ -2185,23 +2150,46 @@ export function AddSalesPage({
                     <div className="add-sales-v2-dl-row">
                       <dt>Financier</dt>
                       <dd>
-                        <input
-                          className="add-sales-v2-dl-input"
-                          value={ins?.financier ?? ""}
-                          onChange={(e) =>
-                            setExtractedInsurance((prev) => ({
-                              ...(prev ?? {}),
-                              financier: sanitizeFormFieldInputValue(e.target.value),
-                            }))
-                          }
-                          placeholder="—"
-                          autoComplete="off"
-                        />
-                        {isHeroBajajFinancierForStaging(oemId, ins?.financier) && (
-                          <p className="add-sales-v2-field-note">
-                            This financier will be logged in systems as Hinduja.
-                          </p>
-                        )}
+                        {(() => {
+                          const financierVal = (ins?.financier ?? "").trim();
+                          const financierInList =
+                            financierVal === "" || masterRefFinanciers.includes(financierVal);
+                          return (
+                            <>
+                              <select
+                                className="add-sales-v2-dl-input"
+                                value={financierInList ? financierVal : ""}
+                                onChange={(e) => {
+                                  clearSection2Validation();
+                                  const v = e.target.value.trim();
+                                  setExtractedInsurance((prev) => ({
+                                    ...(prev ?? {}),
+                                    financier: v || undefined,
+                                  }));
+                                }}
+                                aria-invalid={section2FieldInvalid("financier")}
+                              >
+                                <option value="">—</option>
+                                {masterRefFinanciers.map((f) => (
+                                  <option key={f} value={f}>
+                                    {f}
+                                  </option>
+                                ))}
+                              </select>
+                              {!financierInList && financierVal ? (
+                                <p className="add-sales-v2-field-note">
+                                  Detected «{financierVal}» — select a financier from the list.
+                                </p>
+                              ) : null}
+                              <Section2FieldError field="financier" errors={section2ErrorsToShow} />
+                              {isHeroBajajFinancierForStaging(oemId, ins?.financier) && (
+                                <p className="add-sales-v2-field-note">
+                                  This financier will be logged in systems as Hinduja.
+                                </p>
+                              )}
+                            </>
+                          );
+                        })()}
                       </dd>
                     </div>
                   </dl>
@@ -2220,16 +2208,17 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={v?.key_no ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedVehicle((prev) => ({
                               ...(prev ?? {}),
                               key_no: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "key_no")}
+                          aria-invalid={section2FieldInvalid("key_no")}
                         />
-                        <Section2FieldError field="key_no" errors={section2ValidationErrors} />
+                        <Section2FieldError field="key_no" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
@@ -2238,16 +2227,17 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={v?.frame_no ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedVehicle((prev) => ({
                               ...(prev ?? {}),
                               frame_no: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "chassis_no")}
+                          aria-invalid={section2FieldInvalid("chassis_no")}
                         />
-                        <Section2FieldError field="chassis_no" errors={section2ValidationErrors} />
+                        <Section2FieldError field="chassis_no" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
@@ -2256,16 +2246,17 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={v?.engine_no ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedVehicle((prev) => ({
                               ...(prev ?? {}),
                               engine_no: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "engine_no")}
+                          aria-invalid={section2FieldInvalid("engine_no")}
                         />
-                        <Section2FieldError field="engine_no" errors={section2ValidationErrors} />
+                        <Section2FieldError field="engine_no" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
@@ -2274,16 +2265,17 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={v?.battery_no ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedVehicle((prev) => ({
                               ...(prev ?? {}),
                               battery_no: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "battery_no")}
+                          aria-invalid={section2FieldInvalid("battery_no")}
                         />
-                        <Section2FieldError field="battery_no" errors={section2ValidationErrors} />
+                        <Section2FieldError field="battery_no" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                   </dl>
@@ -2302,16 +2294,17 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={ins?.profession ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),
                               profession: sanitizeFormFieldInputValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "profession")}
+                          aria-invalid={section2FieldInvalid("profession")}
                         />
-                        <Section2FieldError field="profession" errors={section2ValidationErrors} />
+                        <Section2FieldError field="profession" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
@@ -2320,16 +2313,17 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={ins?.marital_status ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),
                               marital_status: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "marital_status")}
+                          aria-invalid={section2FieldInvalid("marital_status")}
                         />
-                        <Section2FieldError field="marital_status" errors={section2ValidationErrors} />
+                        <Section2FieldError field="marital_status" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
@@ -2338,16 +2332,17 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={ins?.nominee_name ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),
                               nominee_name: sanitizeFormFieldInputValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "nominee_name")}
+                          aria-invalid={section2FieldInvalid("nominee_name")}
                         />
-                        <Section2FieldError field="nominee_name" errors={section2ValidationErrors} />
+                        <Section2FieldError field="nominee_name" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
@@ -2360,14 +2355,15 @@ export function AddSalesPage({
                           pattern="[0-9]*"
                           value={ins?.nominee_age ?? ""}
                           onChange={(e) => {
+                            clearSection2Validation();
                             const v = sanitizeNomineeAgeInput(e.target.value);
                             setExtractedInsurance((prev) => ({ ...(prev ?? {}), nominee_age: v }));
                           }}
                           placeholder="e.g. 30"
                           title="Numbers only (1–150)"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "nominee_age")}
+                          aria-invalid={section2FieldInvalid("nominee_age")}
                         />
-                        <Section2FieldError field="nominee_age" errors={section2ValidationErrors} />
+                        <Section2FieldError field="nominee_age" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
@@ -2376,16 +2372,17 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={ins?.nominee_gender ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),
                               nominee_gender: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "nominee_gender")}
+                          aria-invalid={section2FieldInvalid("nominee_gender")}
                         />
-                        <Section2FieldError field="nominee_gender" errors={section2ValidationErrors} />
+                        <Section2FieldError field="nominee_gender" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                     <div className="add-sales-v2-dl-row">
@@ -2394,16 +2391,17 @@ export function AddSalesPage({
                         <input
                           className="add-sales-v2-dl-input"
                           value={ins?.nominee_relationship ?? ""}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            clearSection2Validation();
                             setExtractedInsurance((prev) => ({
                               ...(prev ?? {}),
                               nominee_relationship: sanitizeFormFieldValue(e.target.value),
-                            }))
-                          }
+                            }));
+                          }}
                           placeholder="—"
-                          aria-invalid={section2ValidationErrors.some((e) => e.field === "nominee_relationship")}
+                          aria-invalid={section2FieldInvalid("nominee_relationship")}
                         />
-                        <Section2FieldError field="nominee_relationship" errors={section2ValidationErrors} />
+                        <Section2FieldError field="nominee_relationship" errors={section2ErrorsToShow} />
                       </dd>
                     </div>
                   </dl>

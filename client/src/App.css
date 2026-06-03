@@ -3834,6 +3834,12 @@
   white-space: nowrap;
 }
 
+.challans-processed-table-wrap .app-table .challans-proc-col--amount {
+  text-align: right;
+  white-space: nowrap;
+  min-width: 7.5rem;
+}
+
 .challans-processed-table-wrap .app-table tbody td.challans-proc-err {
   white-space: normal;
   max-width: 320px;

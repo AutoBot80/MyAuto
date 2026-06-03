@@ -19,6 +19,7 @@ import {
 import { pullAadharScansForInsurance } from "../utils/ensureAadharScansBeforeInsurance";
 import { runPrintQueueRtoFlow } from "../utils/printQueueRtoFlow";
 import { buildDisplayAddress } from "../types";
+import { buildSection2FullAddress } from "../utils/section2CustomerFormat";
 import type { ExtractedCustomerDetails, ExtractedInsuranceDetails, ExtractedVehicleDetails } from "../types";
 import { cpaPolicyFromInsuranceRaw } from "../utils/insuranceDisplay";
 import { sanitizeFormFieldInputValue, sanitizeFormFieldValue } from "../utils/formFieldSanitize";
@@ -113,8 +114,14 @@ function buildDraftFromPayload(payload: Record<string, unknown> | null): InProce
   const cust = payloadCustomer((payload.customer as Record<string, unknown>) ?? null);
   const veh = payloadVehicle((payload.vehicle as Record<string, unknown>) ?? null);
   const ins = payloadInsurance((payload.insurance as Record<string, unknown>) ?? null);
-  const address =
-    cust?.address?.trim() ? cust.address : cust ? buildDisplayAddress(cust) : "";
+  const full = cust ? buildSection2FullAddress(cust) : "";
+  const address = full.trim()
+    ? full.trim()
+    : cust?.address?.trim()
+      ? cust.address
+      : cust
+        ? buildDisplayAddress(cust)
+        : "";
   return {
     care_of: cust?.care_of?.trim() ?? "",
     address: address.trim(),
@@ -702,7 +709,10 @@ export function AddSalesInProcessPanel({
                                 customer: {
                                   name: cust?.name,
                                   care_of: cust?.care_of,
-                                  address: cust?.address ?? buildDisplayAddress(cust),
+                                  address:
+                                    (cust ? buildSection2FullAddress(cust) : "") ||
+                                    cust?.address ||
+                                    buildDisplayAddress(cust),
                                   city: cust?.city,
                                   state: cust?.state,
                                   pin_code: cust?.pin_code,

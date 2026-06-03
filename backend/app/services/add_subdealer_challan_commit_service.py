@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -11,6 +12,13 @@ from app.db import get_connection
 from app.repositories.vehicle_inventory import update_discount_and_ex_showroom
 
 logger = logging.getLogger(__name__)
+
+
+def scraped_total_ex_showroom_from_vehicle_out(vehicle_out: dict[str, Any]) -> float | None:
+    """DMS scrape aggregate (``vehicle_ex_showroom_cost`` / ``vehicle_price``) for challan master total."""
+    return _coerce_ex_showroom_scalar(
+        vehicle_out.get("vehicle_ex_showroom_cost") or vehicle_out.get("vehicle_price")
+    )
 
 
 def commit_challan_masters(
@@ -24,9 +32,14 @@ def commit_challan_masters(
     invoice_number: str | None,
     add_transport_cost: bool = False,
     transport_cost_per_vehicle: float | None = None,
+    total_ex_showroom_price: float | None = None,
 ) -> int:
     """
     Insert or update challan_master (totals from vehicle_inventory_master) and challan_details links.
+
+    When ``total_ex_showroom_price`` is set (DMS ``Total_Cost`` scrape), it is written to
+    ``challan_master.total_ex_showroom_price`` instead of summing inventory lines. Discount still
+    comes from inventory.
 
     When ``order_number`` is non-empty, rows matching ``dealer_from`` + that order number are treated
     as one challan: keep the **oldest** ``challan_id``, ``UPDATE`` it with new totals / invoice / book,
@@ -69,6 +82,12 @@ def commit_challan_masters(
                 total_disc_f = float(total_disc)
             else:
                 total_disc_f = float(total_disc or 0)
+
+            if total_ex_showroom_price is not None:
+                try:
+                    total_ex_f = float(total_ex_showroom_price)
+                except (TypeError, ValueError):
+                    pass
 
             created = datetime.now(timezone.utc)
             challan_id: int
@@ -217,11 +236,16 @@ def commit_challan_masters(
 def _coerce_ex_showroom_scalar(val: Any) -> float | None:
     if val is None:
         return None
-    s = str(val).replace(",", "").strip()
+    s = str(val).strip()
     if not s:
         return None
+    s = re.sub(r"^(?:Rs\.?|INR)\s*", "", s, flags=re.I)
+    s = s.replace(",", "")
+    cleaned = re.sub(r"[^\d.]", "", s)
+    if not cleaned:
+        return None
     try:
-        return float(s)
+        return float(cleaned)
     except (TypeError, ValueError):
         return None
 
@@ -246,6 +270,20 @@ def update_inventory_ex_showroom_from_order_scrape(
     try:
         raw = vehicle_out.get("order_line_ex_showroom")
         if raw is None:
+            if len(inventory_line_ids) == 1:
+                px = _coerce_ex_showroom_scalar(
+                    vehicle_out.get("vehicle_ex_showroom_cost") or vehicle_out.get("vehicle_price")
+                )
+                if px is not None:
+                    try:
+                        update_discount_and_ex_showroom(int(inventory_line_ids[0]), ex_showroom_price=px)
+                    except Exception as exc:
+                        logger.warning(
+                            "update_inventory_ex_showroom_from_order_scrape: single-line update failed "
+                            "iid=%s: %s",
+                            inventory_line_ids[0],
+                            exc,
+                        )
             return
         # Minimal: single total on vehicle_price updates all lines equally (fallback).
         vp = vehicle_out.get("vehicle_price") or vehicle_out.get("total_amount")

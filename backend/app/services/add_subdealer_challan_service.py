@@ -38,6 +38,7 @@ from app.repositories.vehicle_inventory import (
 )
 from app.services.add_subdealer_challan_commit_service import (
     commit_challan_masters,
+    scraped_total_ex_showroom_from_vehicle_out,
     update_inventory_ex_showroom_from_order_scrape,
 )
 from app.services.fill_hero_dms_service import (
@@ -335,6 +336,7 @@ def _run_order_phase(
     oid = (veh_out.get("order_number") or "").strip() or None
     iid_inv = (veh_out.get("invoice_number") or "").strip() or None
 
+    _scraped_ex = scraped_total_ex_showroom_from_vehicle_out(veh_out)
     cid = commit_challan_masters(
         challan_date=challan_date,
         challan_book_num=challan_book,
@@ -345,6 +347,7 @@ def _run_order_phase(
         invoice_number=iid_inv,
         add_transport_cost=add_tc,
         transport_cost_per_vehicle=None if not add_tc else tcp,
+        total_ex_showroom_price=_scraped_ex,
     )
     out_partial["challan_id"] = cid
     for r in final_rows:
@@ -690,6 +693,7 @@ def sidecar_finalize_order_playwright_result(
             invoice_number=iid_inv,
             add_transport_cost=add_tc,
             transport_cost_per_vehicle=None if not add_tc else tcp_fin,
+            total_ex_showroom_price=scraped_total_ex_showroom_from_vehicle_out(veh_partial),
         )
         out["challan_id"] = int(cid)
         for r in rows:
