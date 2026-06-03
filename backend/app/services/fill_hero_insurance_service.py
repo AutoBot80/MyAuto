@@ -5888,6 +5888,29 @@ def _proposal_read_dob_txt(page) -> str | None:
     return None
 
 
+def _proposal_read_nominee_name_txt(page) -> str | None:
+    """Best-effort current value of ``txtNomineeName`` across proposal roots."""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        try:
+            loc = _proposal_cph1_locator(root, "txtNomineeName")
+            n = loc.count()
+            if n == 0:
+                continue
+            for idx in range(min(n, 12)):
+                el = loc.nth(idx)
+                try:
+                    if not el.is_visible(timeout=400):
+                        continue
+                except Exception:
+                    continue
+                got = _proposal_read_input_value_best_effort(el)
+                if got:
+                    return got
+        except Exception:
+            continue
+    return None
+
+
 def _proposal_step_fill_dob(
     page,
     dob_raw: str,
@@ -9845,6 +9868,39 @@ def _hero_misp_fill_proposal_and_review(
             )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+
+        # Relationship dropdown/postback can clear Nominee Name; re-fill if it did not stick.
+        if nn:
+            try:
+                page.wait_for_timeout(400)
+            except Exception:
+                _t(page, 400)
+            got_nn = _proposal_read_nominee_name_txt(page)
+            still_ok = bool(got_nn) and (
+                got_nn == nn
+                or normalize_for_fuzzy_match(got_nn) == normalize_for_fuzzy_match(nn)
+                or _proposal_expected_matches_readback(nn, got_nn)
+            )
+            if not still_ok:
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    "nominee_name",
+                    f"re-fill after nominee_relationship (readback={got_nn!r}, want={nn!r})",
+                )
+                err = _proposal_step_fill_input(
+                    page,
+                    (r"Nominee\s*Name", r"Name\s*of\s*Nominee"),
+                    nn,
+                    "nominee_name",
+                    ocr_output_dir,
+                    subfolder,
+                    timeout_ms=pt,
+                    cph1_id_suffix="txtNomineeName",
+                )
+                if err:
+                    return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+                _t(page, 350)
 
     fin = (values.get("financer_name") or "").strip()
     if fin:

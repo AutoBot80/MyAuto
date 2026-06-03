@@ -127,6 +127,34 @@ def test_nominee_name_waits_300ms_before_tab_commit(mock_page):
     el.press.assert_called_with("Tab")
 
 
+def test_proposal_read_nominee_name_txt_returns_first_visible_value(mock_page):
+    el = MagicMock()
+    el.is_visible.return_value = True
+    loc = MagicMock()
+    loc.count.return_value = 1
+    loc.nth.return_value = el
+    with patch.object(fhi, "_hero_misp_page_and_frame_roots", return_value=[mock_page]):
+        with patch.object(fhi, "_proposal_cph1_locator", return_value=loc):
+            with patch.object(
+                fhi, "_proposal_read_input_value_best_effort", return_value="Priya Sharma"
+            ):
+                got = fhi._proposal_read_nominee_name_txt(mock_page)
+    assert got == "Priya Sharma"
+
+
+def test_proposal_read_nominee_name_txt_empty_when_no_value(mock_page):
+    el = MagicMock()
+    el.is_visible.return_value = True
+    loc = MagicMock()
+    loc.count.return_value = 1
+    loc.nth.return_value = el
+    with patch.object(fhi, "_hero_misp_page_and_frame_roots", return_value=[mock_page]):
+        with patch.object(fhi, "_proposal_cph1_locator", return_value=loc):
+            with patch.object(fhi, "_proposal_read_input_value_best_effort", return_value=""):
+                got = fhi._proposal_read_nominee_name_txt(mock_page)
+    assert got is None
+
+
 def test_main_process_does_not_call_update_after_issue(mock_page):
     pre = {
         "success": True,

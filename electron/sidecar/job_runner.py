@@ -1996,6 +1996,48 @@ def _dispatch_print_gate_pass_local_impl(params: dict) -> dict:
         return {"success": False, "error": str(exc), "pdfs_saved": []}
 
 
+def _dispatch_print_view_customer_sale_files_local_impl(params: dict) -> dict:
+    """Resolve Form 20 + Form 22 + GST Retail Invoice in local sale folder; return merged print_jobs."""
+    api_url, jwt = _require_api_credentials(params)
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    if not subfolder:
+        return {"success": False, "error": "subfolder is required"}
+    customer = params.get("customer") if isinstance(params.get("customer"), dict) else {}
+    mobile_param = (params.get("mobile") or "").strip()
+
+    from app.config import get_uploads_dir
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.fill_rto_service import build_view_customer_sale_files_print_jobs
+
+    safe = _safe_subfolder_name(subfolder)
+    sale_dir = get_uploads_dir(dealer_id) / safe
+    mob = mobile_param or _mobile_for_print_local(subfolder, customer)
+
+    print_jobs, missing = build_view_customer_sale_files_print_jobs(
+        sale_dir,
+        subfolder=safe,
+        mobile=mob,
+    )
+    if missing:
+        err = "Missing PDFs in sale folder — " + "; ".join(missing)
+        _record_print_queue_rto_failure(
+            api_url,
+            jwt,
+            dealer_id,
+            safe,
+            f"View Customer Print File: {err}",
+            customer=customer,
+        )
+        return {"success": False, "error": err}
+
+    return {
+        "success": True,
+        "print_jobs": print_jobs,
+        "subfolder": safe,
+    }
+
+
 def _dispatch_upload_sale_artifacts_impl(params: dict) -> dict:
     """
     Two-way sale-folder sync for Print / Queue RTO:
@@ -3401,6 +3443,13 @@ def dispatch(payload: dict) -> dict:
         }
     if job_type == "print_gate_pass_local":
         data = _dispatch_print_gate_pass_local_impl(params)
+        return {
+            "success": bool(data.get("success")),
+            "data": data,
+            "error": data.get("error"),
+        }
+    if job_type == "print_view_customer_sale_files_local":
+        data = _dispatch_print_view_customer_sale_files_local_impl(params)
         return {
             "success": bool(data.get("success")),
             "data": data,

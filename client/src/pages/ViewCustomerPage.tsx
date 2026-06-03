@@ -12,6 +12,8 @@ import { apiFetch } from "../api/client";
 import { DEALER_ID } from "../api/dealerId";
 import { formatDdMmmYyyyIst } from "../utils/formatIstDate";
 import { loadViewCustomer, saveViewCustomer } from "../utils/viewCustomerStorage";
+import { runViewCustomerPrintFilesFlow } from "../utils/viewCustomerPrintFilesFlow";
+import type { FillDmsCustomer } from "../api/fillForms";
 
 interface ViewCustomerPageProps {
   /** Optional: pre-fill search from URL or context */
@@ -95,6 +97,8 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
   const [docOpenErr, setDocOpenErr] = useState<string | null>(null);
   const [formVahan, setFormVahan] = useState<FormVahanViewResult | null>(null);
   const [formVahanLoading, setFormVahanLoading] = useState(false);
+  const [printFileBusy, setPrintFileBusy] = useState(false);
+  const [printFileMessage, setPrintFileMessage] = useState<string | null>(null);
 
   useEffect(() => {
     saveViewCustomer({ mobile, plateNum, result, selectedVehicleId });
@@ -160,6 +164,37 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
   const selectedCustomerId = cust?.customer_id ?? null;
   const selectedVehicleKey = selectedVehicle?.vehicle_id ?? null;
 
+  const handlePrintFile = async () => {
+    if (!cust || !selectedFileLocation?.trim()) return;
+    setPrintFileMessage(null);
+    setPrintFileBusy(true);
+    try {
+      const customerForPrint: FillDmsCustomer = {
+        name: cust.name ?? null,
+        mobile: cust.mobile ?? (cust.mobile_number != null ? String(cust.mobile_number) : null),
+        mobile_number:
+          cust.mobile_number != null
+            ? String(cust.mobile_number)
+            : cust.mobile ?? null,
+        address: cust.address ?? null,
+        city: cust.city ?? null,
+        state: cust.state ?? null,
+        pin_code: cust.pin != null ? String(cust.pin) : null,
+        care_of: cust.care_of ?? null,
+      };
+      const res = await runViewCustomerPrintFilesFlow({
+        dealerId,
+        subfolder: selectedFileLocation.trim(),
+        customer: customerForPrint,
+      });
+      setPrintFileMessage(res.message);
+    } catch (err) {
+      setPrintFileMessage(err instanceof Error ? err.message : "Print failed");
+    } finally {
+      setPrintFileBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (!selectedCustomerId || !selectedVehicleKey) {
       setFormVahan(null);
@@ -192,7 +227,7 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
           <input
             id="vc-mobile"
             type="text"
-            placeholder="e.g. 9876543210"
+            placeholder="e.g. 9876543210 or 9*"
             value={mobile}
             onChange={(e) => setMobile(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
@@ -250,16 +285,32 @@ export function ViewCustomerPage({ initialMobile = "", dealerId = DEALER_ID }: V
                 </span>
               </div>
             </div>
-            <button
-              type="button"
-              className="view-customer-folder-btn"
-              onClick={() => selectedFileLocation && openDocuments(selectedFileLocation)}
-              title="View documents for selected vehicle"
-              disabled={!selectedFileLocation}
-              aria-label="Open documents folder"
-            >
-              <FolderIcon />
-            </button>
+            <div className="view-customer-folder-actions">
+              <button
+                type="button"
+                className="view-customer-folder-btn"
+                onClick={() => selectedFileLocation && openDocuments(selectedFileLocation)}
+                title="View documents for selected vehicle"
+                disabled={!selectedFileLocation}
+                aria-label="Open documents folder"
+              >
+                <FolderIcon />
+              </button>
+              <button
+                type="button"
+                className="view-customer-print-file-link"
+                onClick={() => void handlePrintFile()}
+                disabled={!selectedFileLocation || printFileBusy}
+                title="Print Form 20, Form 22, and GST Retail Invoice"
+              >
+                {printFileBusy ? "Printing…" : "Print File"}
+              </button>
+              {printFileMessage && (
+                <p className="view-customer-print-file-status" role="status">
+                  {printFileMessage}
+                </p>
+              )}
+            </div>
           </div>
         </section>
       )}

@@ -16,6 +16,7 @@ import {
   fillDmsLocal,
   fillHeroInsuranceLocal,
 } from "../api/fillForms";
+import { pullAadharScansForInsurance } from "../utils/ensureAadharScansBeforeInsurance";
 import { runPrintQueueRtoFlow } from "../utils/printQueueRtoFlow";
 import { buildDisplayAddress } from "../types";
 import type { ExtractedCustomerDetails, ExtractedInsuranceDetails, ExtractedVehicleDetails } from "../types";
@@ -622,6 +623,11 @@ export function AddSalesInProcessPanel({
                             e.stopPropagation();
                             setSelectedId(r.staging_id);
                             void wrapRowAction(r.staging_id, async () => {
+                              const sf = (r.file_location ?? r.subfolder ?? subfolder).trim();
+                              const pullWarn = await pullAadharScansForInsurance(dealerId, sf);
+                              if (pullWarn) {
+                                setRowMsg({ text: `Warning: ${pullWarn}`, success: true });
+                              }
                               const res = await fillHeroInsuranceLocal({ staging_id: r.staging_id });
                               if (!res.success) throw new Error(res.error ?? "Generate Insurance failed.");
                               dispatchPrintJobsFromApi(res.print_jobs);

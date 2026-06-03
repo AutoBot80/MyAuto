@@ -111,6 +111,49 @@ export async function pushSaleFolderToServer(
   };
 }
 
+export interface PrintViewCustomerSaleFilesRequest {
+  dealer_id: number;
+  subfolder: string;
+  mobile?: string | null;
+  customer?: PrintForm20Request["customer"];
+}
+
+export interface PrintViewCustomerSaleFilesResponse {
+  success: boolean;
+  print_jobs?: PrintForm20Response["print_jobs"];
+  error?: string | null;
+}
+
+export async function printViewCustomerSaleFilesLocal(
+  req: PrintViewCustomerSaleFilesRequest
+): Promise<PrintViewCustomerSaleFilesResponse> {
+  const subfolder = (req.subfolder || "").trim();
+  if (!subfolder) {
+    return { success: false, error: "subfolder is required." };
+  }
+  const r = await runSidecarJob(
+    "print_view_customer_sale_files_local",
+    {
+      dealer_id: req.dealer_id,
+      subfolder,
+      mobile: req.mobile?.trim() || null,
+      customer: req.customer ?? {},
+    },
+    GATE_PASS_LOCAL_TIMEOUT_MS
+  );
+  if (!r.success) {
+    return { success: false, error: r.error ?? "print_view_customer_sale_files_local failed." };
+  }
+  const d = r.data ?? {};
+  return {
+    success: true,
+    print_jobs: Array.isArray(d.print_jobs)
+      ? (d.print_jobs as PrintViewCustomerSaleFilesResponse["print_jobs"])
+      : undefined,
+    error: null,
+  };
+}
+
 export async function printGatePassLocal(req: PrintForm20Request): Promise<PrintForm20Response> {
   const subfolder = (req.subfolder || "").trim();
   if (!subfolder) {

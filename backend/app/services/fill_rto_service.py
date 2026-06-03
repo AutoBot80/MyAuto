@@ -769,6 +769,59 @@ def build_local_rto_print_jobs(
     return jobs, []
 
 
+def build_view_customer_sale_files_print_jobs(
+    sale_dir: Path,
+    *,
+    subfolder: str,
+    mobile: str,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """
+    Merged print job for View Customer **Print File**: Form 20, Form 22, GST Retail Invoice.
+
+    Same merge + ``rto_print_bundle`` kind as Print / Queue RTO (one dialog, temp PDF cleaned up by Electron).
+    """
+    if not sale_dir.is_dir():
+        return [], ["Sale folder not found on this PC — sync documents from the server first."]
+
+    mob_fn = _mobile_fn_from_mobile(mobile)
+    sub = (subfolder or sale_dir.name).strip()
+    doc_map = _resolve_sale_documents(sale_dir, subfolder=sub, mob_fn=mob_fn)
+
+    from app.services.form20_pencil_overlay import find_form20_pdf
+
+    form20 = find_form20_pdf(sale_dir, mob_fn) or doc_map.get("FORM 20")
+    form22 = doc_map.get("FORM 22")
+    gst = doc_map.get("INVOICE ORIGINAL")
+
+    labeled: list[tuple[str, Path | None]] = [
+        ("Form 20 (*Form_20*, *Form 20*, or DMS-generated PDF)", form20),
+        ("Form 22 (*Form_22*, *Form22*, or DMS Run Report)", form22),
+        ("GST Retail Invoice (*GST_Retail_Invoice*, *GST*Invoice*, etc.)", gst),
+    ]
+    missing: list[str] = []
+    ordered_paths: list[Path] = []
+    for label, p in labeled:
+        if p is None or not p.is_file():
+            missing.append(label)
+            continue
+        ordered_paths.append(p.resolve())
+
+    if missing:
+        return [], missing
+    if not ordered_paths:
+        return [], ["No printable PDFs found in the sale folder."]
+
+    merged_path = _merge_pdfs_to_temp(ordered_paths, subfolder=subfolder)
+    jobs = [
+        {
+            "filename": merged_path.name,
+            "presigned_url": str(merged_path),
+            "kind": "rto_print_bundle",
+        }
+    ]
+    return jobs, []
+
+
 # ---------------------------------------------------------------------------
 # Playwright micro-helpers
 # ---------------------------------------------------------------------------

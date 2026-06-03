@@ -1,5 +1,7 @@
 /** Section 2: DOB display as DD/MM/YYYY and C/O split (relation + name) for Add Sales. */
 
+import type { ExtractedCustomerDetails } from "../types";
+
 export const CARE_OF_RELATION_OPTIONS = ["S/o", "D/o", "W/o", "C/o"] as const;
 export type CareOfRelation = (typeof CARE_OF_RELATION_OPTIONS)[number];
 
@@ -66,4 +68,64 @@ export function isValidDdMmYyyy(s: string | undefined | null): boolean {
   if (dd < 1 || dd > 31) return false;
   const dt = new Date(yyyy, mm - 1, dd);
   return dt.getFullYear() === yyyy && dt.getMonth() === mm - 1 && dt.getDate() === dd;
+}
+
+const ADDRESS_LINE1_PARTS = (c: ExtractedCustomerDetails) =>
+  [c.house, c.street, c.location, c.post_office, c.district, c.sub_district].filter(
+    (s) => s != null && String(s).trim() !== ""
+  );
+
+/** Section 2 Address row 1: house / street / locality (not city, state, PIN). */
+export function buildAddressLine1(c: ExtractedCustomerDetails | null | undefined): string {
+  if (!c) return "";
+  const granular = ADDRESS_LINE1_PARTS(c).map((s) => String(s).trim());
+  if (granular.length > 0) return granular.join(", ");
+  return (c.address ?? "").trim();
+}
+
+/** Section 2 Address row 2: city, state, PIN. */
+export function buildAddressLine2(c: ExtractedCustomerDetails | null | undefined): string {
+  if (!c) return "";
+  const parts = [c.city, c.state, c.pin_code].filter((s) => s != null && String(s).trim() !== "");
+  return parts.map((s) => String(s).trim()).join(", ");
+}
+
+/** Full address for Section 2 required-field checks (both rows). */
+export function buildSection2FullAddress(c: ExtractedCustomerDetails | null | undefined): string {
+  const l1 = buildAddressLine1(c);
+  const l2 = buildAddressLine2(c);
+  if (!l1 && !l2) return "";
+  return [l1, l2].filter(Boolean).join(", ");
+}
+
+/** Parse row-2 text into city / state / PIN (comma-separated; last segment may be 6-digit PIN). */
+export function parseAddressLine2(raw: string): Pick<ExtractedCustomerDetails, "city" | "state" | "pin_code"> {
+  const s = (raw ?? "").trim();
+  if (!s) return {};
+  const segments = s.split(",").map((x) => x.trim()).filter(Boolean);
+  if (segments.length === 0) return {};
+
+  let pin_code: string | undefined;
+  let rest = segments;
+  const last = segments[segments.length - 1] ?? "";
+  const pinDigits = last.replace(/\s/g, "");
+  if (/^\d{6}$/.test(pinDigits)) {
+    pin_code = pinDigits;
+    rest = segments.slice(0, -1);
+  }
+
+  let state: string | undefined;
+  let city: string | undefined;
+  if (rest.length >= 2) {
+    state = rest[rest.length - 1];
+    city = rest.slice(0, -1).join(", ");
+  } else if (rest.length === 1) {
+    city = rest[0];
+  }
+
+  return {
+    city: city || undefined,
+    state: state || undefined,
+    pin_code,
+  };
 }

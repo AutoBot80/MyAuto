@@ -1211,6 +1211,18 @@
   padding-left: 6px; /* match .add-sales-v2-dl-row dd — inputs line up with Financier */
 }
 
+.add-sales-v2-dd--address-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 6px;
+}
+
+.add-sales-v2-dl-input--address-line2::placeholder {
+  color: #8a96a3;
+  opacity: 1;
+}
+
 /* Gender column max-content (no fixed 7.25rem gap) pulls “DOB” left; last column min width fits DD/MM/YYYY */
 .add-sales-v2-dl-customer-line--dob-gender {
   grid-template-columns:
@@ -2379,6 +2391,15 @@
   color: #1b2a3a;
 }
 
+.view-customer-folder-actions {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 7rem;
+}
+
 .view-customer-folder-btn {
   flex-shrink: 0;
   padding: 6px;
@@ -2390,6 +2411,36 @@
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.view-customer-print-file-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #1e5a9e;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.view-customer-print-file-link:hover:not(:disabled) {
+  color: #0d4378;
+}
+
+.view-customer-print-file-link:disabled {
+  color: #9ab;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.view-customer-print-file-status {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #5a7a9e;
+  text-align: center;
+  max-width: 11rem;
 }
 
 /* View Vehicles page */

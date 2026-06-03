@@ -17,6 +17,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/customer-search", tags=["customer-search"])
 
 
+def _mobile_ilike_pattern(raw: str) -> str | None:
+    """
+    ILIKE pattern for partial / wildcard mobile search on ``mobile_number::text``.
+    Returns None when the query is a full 10-digit number (exact match preferred).
+    """
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if "*" in s:
+        pat_src = "".join(c for c in s if c.isdigit() or c == "*")
+        digits = "".join(c for c in pat_src if c.isdigit())
+        if not digits:
+            return None
+        p = pat_src.replace("*", "%")
+        return p if "%" in p else None
+    digits = "".join(c for c in s if c.isdigit())
+    if not digits:
+        return None
+    if len(digits) == 10:
+        return None
+    return f"{digits}%"
+
+
+def _mobile_exact_int(raw: str) -> int | None:
+    digits = "".join(c for c in (raw or "") if c.isdigit())
+    if len(digits) == 10:
+        return int(digits[-10:])
+    return None
+
+
 def _format_insurance_policy_dates(row: dict) -> dict:
     r = dict(row)
     if r.get("policy_from"):
@@ -71,25 +101,36 @@ def search_customer(
     finally:
         conn.close()
     if mobile_clean:
-        try:
-            mobile_int = int("".join(c for c in mobile_clean if c.isdigit()))
-        except ValueError:
-            mobile_int = None
-        if mobile_int is not None:
+        mobile_pat = _mobile_ilike_pattern(mobile_clean)
+        mobile_int = _mobile_exact_int(mobile_clean) if mobile_pat is None else None
+        if mobile_pat or mobile_int is not None:
             conn = get_connection()
             try:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT DISTINCT cm.customer_id
-                        FROM customer_master cm
-                        JOIN sales_master sm ON sm.customer_id = cm.customer_id
-                        JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
-                        WHERE cm.mobile_number = %s
-                          AND dr.oem_id = %s
-                        """,
-                        (mobile_int, oem_id),
-                    )
+                    if mobile_pat:
+                        cur.execute(
+                            """
+                            SELECT DISTINCT cm.customer_id
+                            FROM customer_master cm
+                            JOIN sales_master sm ON sm.customer_id = cm.customer_id
+                            JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+                            WHERE cm.mobile_number::text ILIKE %s
+                              AND dr.oem_id = %s
+                            """,
+                            (mobile_pat, oem_id),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT DISTINCT cm.customer_id
+                            FROM customer_master cm
+                            JOIN sales_master sm ON sm.customer_id = cm.customer_id
+                            JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
+                            WHERE cm.mobile_number = %s
+                              AND dr.oem_id = %s
+                            """,
+                            (mobile_int, oem_id),
+                        )
                     by_mobile = {row["customer_id"] for row in cur.fetchall()}
             finally:
                 conn.close()

@@ -34,8 +34,7 @@ import {
   type CreateInvoiceEligibilityResponse,
   type CpaInsurerPortalRow,
 } from "../api/addSales";
-import { pullAadharScanJpegsFromServer } from "../api/printRtoSidecar";
-import { isElectron } from "../electron";
+import { pullAadharScansForInsurance } from "../utils/ensureAadharScansBeforeInsurance";
 import { runPrintQueueRtoFlow } from "../utils/printQueueRtoFlow";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { markBulkLoadSuccess } from "../api/bulkLoads";
@@ -54,10 +53,14 @@ import { StatusMessage } from "../components/StatusMessage";
 import { usePageVisible } from "../hooks/usePageVisible";
 import type { ConsolidatedFsArchiveContext } from "../utils/scannerArchive";
 import {
+  buildAddressLine1,
+  buildAddressLine2,
+  buildSection2FullAddress,
   composeCareOf,
   formatDobDigitsInput,
   isValidDdMmYyyy,
   normalizeDobToDdMmYyyy,
+  parseAddressLine2,
   parseCareOfFromCombined,
 } from "../utils/section2CustomerFormat";
 import { isPlaceholderCustomerMobileDigits } from "../utils/customerMobile";
@@ -950,7 +953,7 @@ export function AddSalesPage({
     const requiredEmpty: { field: string; label: string; value: string | undefined }[] = [
       { field: "name", label: "Name", value: c?.name },
       { field: "gender", label: "Gender", value: c?.gender },
-      { field: "address", label: "Address", value: c ? buildDisplayAddress(c) : undefined },
+      { field: "address", label: "Address", value: c ? buildSection2FullAddress(c) : undefined },
       { field: "key_no", label: "Key no.", value: v?.key_no },
       { field: "chassis_no", label: "Chassis No.", value: v?.frame_no },
       { field: "engine_no", label: "Engine no.", value: v?.engine_no },
@@ -1056,7 +1059,12 @@ export function AddSalesPage({
   );
 
   const hasMeaningfulCustomer = (cust: typeof c) =>
-    cust && (cust.aadhar_id || cust.name || cust.address || buildDisplayAddress(cust) !== "—");
+    cust &&
+    (cust.aadhar_id ||
+      cust.name ||
+      cust.address ||
+      buildSection2FullAddress(cust) !== "" ||
+      buildDisplayAddress(cust) !== "—");
   const hasMeaningfulInsurance = (i: typeof ins) =>
     Boolean(
       i &&
@@ -1222,7 +1230,7 @@ export function AddSalesPage({
               customer: {
                 name: c?.name ?? undefined,
                 care_of: c?.care_of ?? undefined,
-                address: c?.address ?? buildDisplayAddress(c),
+                address: buildAddressLine1(c) || c?.address || undefined,
                 city: c?.city ?? undefined,
                 state: c?.state ?? undefined,
                 pin_code: c?.pin_code ?? undefined,
@@ -1432,6 +1440,10 @@ export function AddSalesPage({
           insurance: { insurer: selectedInsurer },
         });
       }
+      const pullWarn = await pullAadharScansForInsurance(dealerId, savedTo);
+      if (pullWarn) {
+        setFillInsuranceStatus(`Warning: ${pullWarn}`);
+      }
       const insuranceRes = await fillHeroInsuranceLocal(
         lastStagingId
           ? { staging_id: lastStagingId }
@@ -1445,7 +1457,9 @@ export function AddSalesPage({
       if (!insuranceRes.success) {
         setFillInsuranceStatus(insuranceRes.error ?? "Generate Insurance (Hero) failed.");
       } else {
-        setFillInsuranceStatus("Hero Insurance run completed (pre + main + post). Browser may remain open for operator.");
+        const successMsg =
+          "Hero Insurance run completed (pre + main + post). Browser may remain open for operator.";
+        setFillInsuranceStatus(pullWarn ? `Warning: ${pullWarn} ${successMsg}` : successMsg);
         setGenerateInsuranceCompleted(true);
         dispatchPrintJobsFromApi(insuranceRes.print_jobs);
         await reloadInsuranceFromStaging();
@@ -1601,7 +1615,7 @@ export function AddSalesPage({
         customer: {
           name: c?.name ?? undefined,
           care_of: c?.care_of ?? undefined,
-          address: c?.address ?? buildDisplayAddress(c),
+          address: buildAddressLine1(c) || c?.address || undefined,
           city: c?.city ?? undefined,
           state: c?.state ?? undefined,
           pin_code: c?.pin_code ?? undefined,
@@ -1936,20 +1950,10 @@ export function AddSalesPage({
                           stagingId: lastStagingId,
                           preferInsurer,
                         });
-                        let submitStatusMsg = "Saved";
                         setHasSubmittedInfo(true);
                         if (submitRes?.staging_id != null && String(submitRes.staging_id).trim())
                           setLastStagingId(String(submitRes.staging_id).trim());
-                        if (isElectron() && savedTo?.trim()) {
-                          const pull = await pullAadharScanJpegsFromServer({
-                            dealer_id: dealerId,
-                            subfolder: savedTo.trim(),
-                          });
-                          if (!pull.success) {
-                            submitStatusMsg = `Saved. Warning: could not download Aadhaar scans — ${pull.error ?? "unknown"}`;
-                          }
-                        }
-                        setSubmitStatus(submitStatusMsg);
+                        setSubmitStatus("Saved");
                         const stored = loadAddSalesForm();
                         if (stored.reprocessBulkLoadId != null && savedTo) {
                           try {
@@ -2069,19 +2073,43 @@ export function AddSalesPage({
                         <Section2FieldError field="care_of" errors={section2ValidationErrors} />
                       </dd>
                     </div>
-                    <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--full">
+                    <div className="add-sales-v2-dl-customer-line add-sales-v2-dl-customer-line--full add-sales-v2-dl-customer-line--address">
                       <dt>Address</dt>
-                      <dd>
+                      <dd className="add-sales-v2-dd--address-rows">
                         <input
-                          className="add-sales-v2-dl-input"
-                          value={c?.address ?? ""}
-                          onChange={(e) =>
+                          className="add-sales-v2-dl-input add-sales-v2-dl-input--address-line1"
+                          value={buildAddressLine1(c)}
+                          onChange={(e) => {
+                            const line1 = sanitizeFormFieldInputValue(e.target.value);
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
-                              address: sanitizeFormFieldInputValue(e.target.value),
-                            }))
-                          }
-                          placeholder="—"
+                              address: line1 || undefined,
+                              house: undefined,
+                              street: undefined,
+                              location: undefined,
+                              post_office: undefined,
+                              district: undefined,
+                              sub_district: undefined,
+                            }));
+                          }}
+                          placeholder="House, street, locality"
+                          aria-invalid={section2ValidationErrors.some((e) => e.field === "address")}
+                        />
+                        <input
+                          className="add-sales-v2-dl-input add-sales-v2-dl-input--address-line2"
+                          value={buildAddressLine2(c)}
+                          onChange={(e) => {
+                            const parsed = parseAddressLine2(
+                              sanitizeFormFieldInputValue(e.target.value)
+                            );
+                            setExtractedCustomer((prev) => ({
+                              ...(prev ?? {}),
+                              city: parsed.city,
+                              state: parsed.state,
+                              pin_code: parsed.pin_code,
+                            }));
+                          }}
+                          placeholder="City, State, PIN"
                           aria-invalid={section2ValidationErrors.some((e) => e.field === "address")}
                         />
                         <Section2FieldError field="address" errors={section2ValidationErrors} />
