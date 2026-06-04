@@ -10,6 +10,35 @@ from app.db import get_connection
 _NESTED_STAGING_PAYLOAD_KEYS = frozenset({"customer", "vehicle", "insurance"})
 
 
+def non_empty_staging_customer_vehicle_patch(
+    customer: dict[str, Any] | None,
+    vehicle: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build a staging ``payload_json`` patch from optional request customer/vehicle dicts."""
+    patch: dict[str, Any] = {}
+    if customer:
+        c = {
+            k: v
+            for k, v in customer.items()
+            if v is not None and str(v).strip() != ""
+        }
+        if c:
+            if "pin_code" in c and "pin" not in c:
+                c["pin"] = c["pin_code"]
+            elif "pin" in c and "pin_code" not in c:
+                c["pin_code"] = c["pin"]
+            patch["customer"] = c
+    if vehicle:
+        v = {
+            k: v2
+            for k, v2 in vehicle.items()
+            if v2 is not None and str(v2).strip() != ""
+        }
+        if v:
+            patch["vehicle"] = v
+    return patch
+
+
 def deep_merge_staging_payload(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     """
     Merge ``patch`` into ``base`` for staging JSON.

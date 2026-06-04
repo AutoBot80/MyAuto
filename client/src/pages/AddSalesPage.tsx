@@ -59,6 +59,7 @@ import {
   composeCareOf,
   formatDobDigitsInput,
   normalizeDobToDdMmYyyy,
+  normalizeOperatorFreeformAddress,
   parseAddressLine2,
   parseCareOfFromCombined,
 } from "../utils/section2CustomerFormat";
@@ -66,6 +67,10 @@ import {
   getSection2ValidationErrors,
   type Section2FieldError,
 } from "../utils/section2Validation";
+import {
+  isHorizontallyScrollableFocusTarget,
+  syncAddSalesThreeColFocus,
+} from "../utils/scrollFocusedIntoHorizontalParent";
 import { isPlaceholderCustomerMobileDigits } from "../utils/customerMobile";
 import {
   cpaPolicyFromInsuranceRaw,
@@ -429,6 +434,7 @@ export function AddSalesPage({
   const [section2SubmitAttempted, setSection2SubmitAttempted] = useState(false);
   const [addressLine2Input, setAddressLine2Input] = useState("");
   const addressLine2DirtyRef = useRef(false);
+  const threeColRef = useRef<HTMLDivElement>(null);
   const [dealerCpaInsurer, setDealerCpaInsurer] = useState<string | null>(null);
   const [heroCpi, setHeroCpi] = useState<string | null>(null);
   const [isFillCpaInsuranceLoading, setIsFillCpaInsuranceLoading] = useState(false);
@@ -948,6 +954,18 @@ export function AddSalesPage({
     }
   }, [extractedCustomer, formResetKey]);
 
+  useEffect(() => {
+    const root = threeColRef.current;
+    if (!root) return;
+    const onFocusIn = (e: FocusEvent) => {
+      const target = e.target;
+      if (!isHorizontallyScrollableFocusTarget(target) || !root.contains(target)) return;
+      syncAddSalesThreeColFocus(target, root);
+    };
+    root.addEventListener("focusin", onFocusIn, true);
+    return () => root.removeEventListener("focusin", onFocusIn, true);
+  }, []);
+
   const mobileRow = (
     <div className="app-field-row">
       <label className="app-field" htmlFor="add-sales-mobile">
@@ -1159,7 +1177,25 @@ export function AddSalesPage({
     try {
       dmsRes = await fillDmsLocal(
         lastStagingId
-          ? { staging_id: lastStagingId }
+          ? {
+              staging_id: lastStagingId,
+              dealer_id: dealerId,
+              subfolder: savedTo ?? undefined,
+              customer: {
+                name: c?.name ?? undefined,
+                care_of: c?.care_of ?? undefined,
+                address: buildAddressLine1(c) || c?.address || undefined,
+                city: c?.city ?? undefined,
+                state: c?.state ?? undefined,
+                pin_code: c?.pin_code ?? undefined,
+                mobile_number: mobile ?? undefined,
+              },
+              vehicle: {
+                key_no: v?.key_no ?? undefined,
+                frame_no: v?.frame_no ?? undefined,
+                engine_no: v?.engine_no ?? undefined,
+              },
+            }
           : {
               subfolder: savedTo!,
               dms_base_url: dmsUrl,
@@ -1795,7 +1831,7 @@ export function AddSalesPage({
         <AddSalesInvoicesPanel dealerId={dealerId} invoicesTabActive={addSalesPageTab === "invoices"} />
       </div>
       <main className={`add-sales-v2-main ${addSalesPageTab !== "add-sales" ? "add-sales-tab-panel--hidden" : ""}`}>
-        <div className="add-sales-v2-three-col">
+        <div className="add-sales-v2-three-col" ref={threeColRef}>
           <section className="add-sales-v2-box add-sales-v2-box-upload">
               <div className="add-sales-v2-box-title-row">
                 <h2 className="add-sales-v2-box-title">1. Upload Customer Scans</h2>
@@ -1867,12 +1903,11 @@ export function AddSalesPage({
                         return;
                       }
                       const parsedLine2 = parseAddressLine2(addressLine2Input);
-                      const customerForSubmit: ExtractedCustomerDetails = { ...c, ...parsedLine2 };
-                      setExtractedCustomer(customerForSubmit);
+                      const customerForValidate: ExtractedCustomerDetails = { ...c, ...parsedLine2 };
                       const validationErrors = getSection2ValidationErrors({
                         savedTo,
                         mobile,
-                        customer: customerForSubmit,
+                        customer: customerForValidate,
                         vehicle: v ?? null,
                         insurance: ins ?? null,
                         addressLine2Input,
@@ -1889,6 +1924,26 @@ export function AddSalesPage({
                         );
                         return;
                       }
+                      const normedLine2 = normalizeOperatorFreeformAddress(addressLine2Input, {
+                        minCommaSegments: 2,
+                      });
+                      if (!normedLine2) {
+                        setSection2ValidationErrors([
+                          { field: "address_line2", message: "Address could not be normalized." },
+                        ]);
+                        setSection2SubmitAttempted(true);
+                        setSubmitStatus("Address (City, State, PIN): Address could not be normalized.");
+                        return;
+                      }
+                      setAddressLine2Input(normedLine2.address);
+                      addressLine2DirtyRef.current = false;
+                      const customerForSubmit: ExtractedCustomerDetails = {
+                        ...c,
+                        city: normedLine2.city,
+                        state: normedLine2.state,
+                        pin_code: normedLine2.pin_code,
+                      };
+                      setExtractedCustomer(customerForSubmit);
                       setSection2ValidationErrors([]);
                       setSection2SubmitAttempted(false);
                       setIsSubmitting(true);
@@ -2022,7 +2077,7 @@ export function AddSalesPage({
                               care_of_name: has ? parsed.name || undefined : undefined,
                             }));
                           }}
-                          placeholder="C/o Father's Name"
+                          placeholder="S/o Father's Name"
                           autoComplete="off"
                           spellCheck={false}
                           aria-invalid={section2FieldInvalid("care_of")}

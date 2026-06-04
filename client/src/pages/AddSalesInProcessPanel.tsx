@@ -19,7 +19,15 @@ import {
 import { pullAadharScansForInsurance } from "../utils/ensureAadharScansBeforeInsurance";
 import { runPrintQueueRtoFlow } from "../utils/printQueueRtoFlow";
 import { buildDisplayAddress } from "../types";
-import { buildSection2FullAddress } from "../utils/section2CustomerFormat";
+import {
+  buildSection2FullAddress,
+  inProcessAddressFromStaging,
+  normalizeOperatorFreeformAddress,
+} from "../utils/section2CustomerFormat";
+import {
+  getInProcessDetailValidationErrors,
+  type Section2FieldError,
+} from "../utils/section2Validation";
 import type { ExtractedCustomerDetails, ExtractedInsuranceDetails, ExtractedVehicleDetails } from "../types";
 import { cpaPolicyFromInsuranceRaw } from "../utils/insuranceDisplay";
 import { sanitizeFormFieldInputValue, sanitizeFormFieldValue } from "../utils/formFieldSanitize";
@@ -114,14 +122,10 @@ function buildDraftFromPayload(payload: Record<string, unknown> | null): InProce
   const cust = payloadCustomer((payload.customer as Record<string, unknown>) ?? null);
   const veh = payloadVehicle((payload.vehicle as Record<string, unknown>) ?? null);
   const ins = payloadInsurance((payload.insurance as Record<string, unknown>) ?? null);
-  const full = cust ? buildSection2FullAddress(cust) : "";
-  const address = full.trim()
-    ? full.trim()
-    : cust?.address?.trim()
-      ? cust.address
-      : cust
-        ? buildDisplayAddress(cust)
-        : "";
+  const address =
+    inProcessAddressFromStaging(cust) ||
+    (cust ? buildDisplayAddress(cust) : "") ||
+    "";
   return {
     care_of: cust?.care_of?.trim() ?? "",
     address: address.trim(),
@@ -144,6 +148,22 @@ function draftsEqual(a: InProcessDetailDraft, b: InProcessDetailDraft): boolean 
     a.battery_no === b.battery_no &&
     a.nominee_name === b.nominee_name &&
     a.nominee_relationship === b.nominee_relationship
+  );
+}
+
+function InProcessFieldError({
+  field,
+  errors,
+}: {
+  field: string;
+  errors: readonly Section2FieldError[];
+}) {
+  const msg = errors.find((e) => e.field === field)?.message;
+  if (!msg) return null;
+  return (
+    <p className="add-sales-v2-field-error" role="alert">
+      {msg}
+    </p>
   );
 }
 
@@ -222,6 +242,8 @@ export function AddSalesInProcessPanel({
   const [isPanelRefreshing, setIsPanelRefreshing] = useState(false);
   const [detailEditDraft, setDetailEditDraft] = useState<InProcessDetailDraft | null>(null);
   const [detailSaveBusy, setDetailSaveBusy] = useState(false);
+  const [detailValidationErrors, setDetailValidationErrors] = useState<Section2FieldError[]>([]);
+  const [detailSaveAttempted, setDetailSaveAttempted] = useState(false);
 
   const refreshList = useCallback(async () => {
     if (dealerId <= 0) return;
@@ -317,7 +339,21 @@ export function AddSalesInProcessPanel({
 
   useEffect(() => {
     setDetailEditDraft(buildDraftFromPayload(detailPayload));
+    setDetailValidationErrors([]);
+    setDetailSaveAttempted(false);
   }, [detailPayload, selectedId]);
+
+  const clearDetailValidation = useCallback(() => {
+    setDetailValidationErrors([]);
+    setDetailSaveAttempted(false);
+  }, []);
+
+  const detailFieldInvalid = useCallback(
+    (field: string) => detailSaveAttempted && detailValidationErrors.some((e) => e.field === field),
+    [detailSaveAttempted, detailValidationErrors]
+  );
+
+  const detailErrorsToShow = detailSaveAttempted ? detailValidationErrors : [];
 
   const detailDraftBaseline = useMemo(
     () => buildDraftFromPayload(detailPayload),
@@ -330,10 +366,45 @@ export function AddSalesInProcessPanel({
 
   const onSaveDetailChanges = useCallback(async () => {
     if (!selectedId || !detailEditDraft || dealerId <= 0 || !detailDirty) return;
+    const validationErrors = getInProcessDetailValidationErrors(detailEditDraft);
+    if (validationErrors.length > 0) {
+      setDetailValidationErrors(validationErrors);
+      setDetailSaveAttempted(true);
+      const labels: Record<string, string> = {
+        care_of: "Care of",
+        address: "Address",
+        frame_no: "Chassis",
+        engine_no: "Engine",
+        key_no: "Key",
+        battery_no: "Battery",
+        nominee_name: "Nominee Name",
+        nominee_relationship: "Relationship",
+      };
+      setDetailErr(
+        validationErrors
+          .map((e) => `${labels[e.field] ?? e.field}: ${e.message}`)
+          .join(" · ")
+      );
+      return;
+    }
+    const normedAddress = normalizeOperatorFreeformAddress(detailEditDraft.address);
+    if (!normedAddress) {
+      setDetailValidationErrors([{ field: "address", message: "Address could not be normalized." }]);
+      setDetailSaveAttempted(true);
+      setDetailErr("Address: Address could not be normalized.");
+      return;
+    }
+    const draftForSave: InProcessDetailDraft = {
+      ...detailEditDraft,
+      address: normedAddress.address,
+    };
+    setDetailEditDraft(draftForSave);
+    setDetailValidationErrors([]);
+    setDetailSaveAttempted(false);
     setDetailSaveBusy(true);
     setDetailErr(null);
     try {
-      await patchAddSalesStagingPayload(selectedId, dealerId, draftToPatchBody(detailEditDraft));
+      await patchAddSalesStagingPayload(selectedId, dealerId, draftToPatchBody(draftForSave));
       setPanelRefreshToken((t) => t + 1);
       await refreshList();
       setRowMsg({ text: "Changes saved.", success: true });
@@ -762,6 +833,15 @@ export function AddSalesInProcessPanel({
               {detailErr}
             </p>
           )}
+          {detailSaveAttempted && detailValidationErrors.length > 0 && (
+            <ul className="add-sales-v2-validation-list" role="alert">
+              {detailValidationErrors.map((e) => (
+                <li key={e.field}>
+                  <strong>{e.field}</strong>: {e.message}
+                </li>
+              ))}
+            </ul>
+          )}
           {selectedId && detailPayload && detailEditDraft && (
             <div className="add-sales-in-process-sales-details">
               <div className="add-sales-in-process-sales-col add-sales-in-process-sales-col--customer">
@@ -781,16 +861,19 @@ export function AddSalesInProcessPanel({
                         className="add-sales-v2-dl-input add-sales-v2-dl-input--care-of-free"
                         value={detailEditDraft.care_of}
                         onChange={(e) => {
+                          clearDetailValidation();
                           const raw = sanitizeFormFieldInputValue(e.target.value);
                           setDetailEditDraft((prev) =>
                             prev ? { ...prev, care_of: raw } : prev
                           );
                         }}
-                        placeholder="C/o Father's Name"
+                        placeholder="S/o Father's Name"
                         autoComplete="off"
                         spellCheck={false}
                         disabled={detailSaveBusy}
+                        aria-invalid={detailFieldInvalid("care_of")}
                       />
+                      <InProcessFieldError field="care_of" errors={detailErrorsToShow} />
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
@@ -799,16 +882,19 @@ export function AddSalesInProcessPanel({
                       <input
                         className="add-sales-v2-dl-input"
                         value={detailEditDraft.address}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          clearDetailValidation();
                           setDetailEditDraft((prev) =>
                             prev
                               ? { ...prev, address: sanitizeFormFieldInputValue(e.target.value) }
                               : prev
-                          )
-                        }
-                        placeholder="—"
+                          );
+                        }}
+                        placeholder="locality, City, State, 123456 or State - 123456"
                         disabled={detailSaveBusy}
+                        aria-invalid={detailFieldInvalid("address")}
                       />
+                      <InProcessFieldError field="address" errors={detailErrorsToShow} />
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
@@ -825,16 +911,19 @@ export function AddSalesInProcessPanel({
                       <input
                         className="add-sales-v2-dl-input"
                         value={detailEditDraft.frame_no}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          clearDetailValidation();
                           setDetailEditDraft((prev) =>
                             prev
                               ? { ...prev, frame_no: sanitizeFormFieldValue(e.target.value) }
                               : prev
-                          )
-                        }
+                          );
+                        }}
                         placeholder="—"
                         disabled={detailSaveBusy}
+                        aria-invalid={detailFieldInvalid("frame_no")}
                       />
+                      <InProcessFieldError field="frame_no" errors={detailErrorsToShow} />
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
@@ -843,16 +932,19 @@ export function AddSalesInProcessPanel({
                       <input
                         className="add-sales-v2-dl-input"
                         value={detailEditDraft.engine_no}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          clearDetailValidation();
                           setDetailEditDraft((prev) =>
                             prev
                               ? { ...prev, engine_no: sanitizeFormFieldValue(e.target.value) }
                               : prev
-                          )
-                        }
+                          );
+                        }}
                         placeholder="—"
                         disabled={detailSaveBusy}
+                        aria-invalid={detailFieldInvalid("engine_no")}
                       />
+                      <InProcessFieldError field="engine_no" errors={detailErrorsToShow} />
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
@@ -861,14 +953,17 @@ export function AddSalesInProcessPanel({
                       <input
                         className="add-sales-v2-dl-input"
                         value={detailEditDraft.key_no}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          clearDetailValidation();
                           setDetailEditDraft((prev) =>
                             prev ? { ...prev, key_no: sanitizeFormFieldValue(e.target.value) } : prev
-                          )
-                        }
+                          );
+                        }}
                         placeholder="—"
                         disabled={detailSaveBusy}
+                        aria-invalid={detailFieldInvalid("key_no")}
                       />
+                      <InProcessFieldError field="key_no" errors={detailErrorsToShow} />
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
@@ -877,16 +972,19 @@ export function AddSalesInProcessPanel({
                       <input
                         className="add-sales-v2-dl-input"
                         value={detailEditDraft.battery_no}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          clearDetailValidation();
                           setDetailEditDraft((prev) =>
                             prev
                               ? { ...prev, battery_no: sanitizeFormFieldValue(e.target.value) }
                               : prev
-                          )
-                        }
+                          );
+                        }}
                         placeholder="—"
                         disabled={detailSaveBusy}
+                        aria-invalid={detailFieldInvalid("battery_no")}
                       />
+                      <InProcessFieldError field="battery_no" errors={detailErrorsToShow} />
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
@@ -907,16 +1005,19 @@ export function AddSalesInProcessPanel({
                       <input
                         className="add-sales-v2-dl-input"
                         value={detailEditDraft.nominee_name}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          clearDetailValidation();
                           setDetailEditDraft((prev) =>
                             prev
                               ? { ...prev, nominee_name: sanitizeFormFieldInputValue(e.target.value) }
                               : prev
-                          )
-                        }
+                          );
+                        }}
                         placeholder="—"
                         disabled={detailSaveBusy}
+                        aria-invalid={detailFieldInvalid("nominee_name")}
                       />
+                      <InProcessFieldError field="nominee_name" errors={detailErrorsToShow} />
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
@@ -925,7 +1026,8 @@ export function AddSalesInProcessPanel({
                       <input
                         className="add-sales-v2-dl-input"
                         value={detailEditDraft.nominee_relationship}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          clearDetailValidation();
                           setDetailEditDraft((prev) =>
                             prev
                               ? {
@@ -933,11 +1035,13 @@ export function AddSalesInProcessPanel({
                                   nominee_relationship: sanitizeFormFieldValue(e.target.value),
                                 }
                               : prev
-                          )
-                        }
+                          );
+                        }}
                         placeholder="—"
                         disabled={detailSaveBusy}
+                        aria-invalid={detailFieldInvalid("nominee_relationship")}
                       />
+                      <InProcessFieldError field="nominee_relationship" errors={detailErrorsToShow} />
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">

@@ -722,3 +722,115 @@ def enrich_customer_address_from_freeform(customer: dict[str, Any]) -> dict[str,
             out["state"] = fixed
 
     return out
+
+
+def _parse_operator_address_comma_segments(
+    segments: list[str],
+    *,
+    min_segments: int,
+) -> tuple[str, str, str] | None:
+    """
+    PIN as last comma segment, or ``State - 321001`` in the last segment (UIDAI-style dash before PIN).
+    Returns ``(city_raw, state_raw, pin)`` or ``None``.
+    """
+    if len(segments) < min_segments:
+        return None
+    last = segments[-1]
+    last_pin = re.sub(r"\s+", "", last)
+    if re.fullmatch(r"\d{6}", last_pin):
+        if len(segments) < 2:
+            return None
+        state_raw = re.sub(r"(?:\s*[-–—])+\s*$", "", segments[-2]).strip()
+        city_raw = ", ".join(segments[:-2]).strip()
+        return city_raw, state_raw, last_pin
+    m = re.match(r"^(.+?)\s*(?:[-–—]\s*)+(\d{6})\s*$", last.strip())
+    if m:
+        state_raw = m.group(1).strip()
+        pin = m.group(2)
+        city_raw = ", ".join(segments[:-1]).strip()
+        return city_raw, state_raw, pin
+    return None
+
+
+def validate_operator_freeform_address(
+    address: str | None,
+    *,
+    min_comma_segments: int = 3,
+) -> str | None:
+    """
+    Operator-entered address (In-process full line or New tab row 2).
+
+    Comma-separated locality / city / state; PIN after a **comma** or **dash**
+    (e.g. ``…, Rajasthan, 321001`` or ``…, Rajasthan - 321001``).
+    """
+    s = _squish_spaces(address or "")
+    if not s:
+        return "Address is required."
+    if "," not in s:
+        return "Use comma-separated format: locality, City, State, 123456."
+    segments = [p.strip() for p in s.split(",") if p.strip()]
+    parsed = _parse_operator_address_comma_segments(segments, min_segments=min_comma_segments)
+    if not parsed:
+        if len(segments) < min_comma_segments:
+            if min_comma_segments <= 2:
+                return "Enter City, State, and 6-digit PIN on the second address line."
+            return "Enter locality, City, State, and 6-digit PIN."
+        return "City, State, and PIN could not be detected — use: City, State, 123456."
+    city_raw, state_raw, pin = parsed
+    if not re.fullmatch(r"\d{6}", pin):
+        return "Last segment must be a 6-digit PIN."
+    if not state_raw:
+        return "State is required before the PIN."
+    if len(city_raw) < 2:
+        return "City / locality is required before State and PIN."
+    canon = resolve_indian_state_name(state_raw, allow_la_ladakh=True)
+    if not canon:
+        return f"State «{state_raw}» is not a recognized Indian state or union territory."
+    return None
+
+
+def _title_case_address_locality(raw: str) -> str:
+    parts = [p.strip() for p in (raw or "").split(",") if p.strip()]
+    return ", ".join(_squish_spaces(p).title() for p in parts)
+
+
+def _primary_city_from_locality(locality: str) -> str:
+    parts = [p.strip() for p in locality.split(",") if p.strip()]
+    return parts[-1] if parts else (locality or "").strip()
+
+
+def normalize_operator_freeform_address(
+    address: str | None,
+    *,
+    min_comma_segments: int = 3,
+) -> dict[str, str] | None:
+    """
+    Validate, then return address + ``city`` / ``state`` / ``pin`` for staging.
+
+    Locality clauses are title-cased; state is canonical (``RJ`` → ``Rajasthan``).
+    """
+    if validate_operator_freeform_address(address, min_comma_segments=min_comma_segments):
+        return None
+    s = _squish_spaces(address or "")
+    segments = [p.strip() for p in s.split(",") if p.strip()]
+    parsed = _parse_operator_address_comma_segments(segments, min_segments=min_comma_segments)
+    if not parsed:
+        return None
+    city_raw, state_raw, pin = parsed
+    canon = resolve_indian_state_name(state_raw, allow_la_ladakh=True)
+    if not canon:
+        return None
+    city_locality = _title_case_address_locality(city_raw)
+    city = _primary_city_from_locality(city_locality)
+    last = segments[-1]
+    if re.match(r"^(.+?)\s*(?:[-–—]\s*)+(\d{6})\s*$", last.strip()):
+        addr = f"{city_locality}, {canon} - {pin}"
+    else:
+        addr = f"{city_locality}, {canon}, {pin}"
+    return {
+        "address": addr,
+        "city": city,
+        "state": canon,
+        "pin": pin,
+        "pin_code": pin,
+    }

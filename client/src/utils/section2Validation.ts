@@ -10,8 +10,10 @@ import type {
 import {
   buildAddressLine1,
   buildSection2FullAddress,
+  CARE_OF_RELATION_PREFIX_ERROR,
+  careOfHasRecognizedRelationMarker,
   isValidDdMmYyyy,
-  parseAddressLine2,
+  validateFreeformAddressLine,
 } from "./section2CustomerFormat";
 
 export type Section2FieldError = { field: string; message: string };
@@ -63,26 +65,9 @@ export function getAddressLine2ValidationErrors(
   const raw = (rawLine2 ?? "").trim();
   if (!l1 && !raw) return [];
 
-  const parsed = parseAddressLine2(rawLine2);
-  const city = (parsed.city ?? c?.city ?? "").trim();
-  const state = (parsed.state ?? c?.state ?? "").trim();
-  const pin = String(parsed.pin_code ?? c?.pin_code ?? "").replace(/\s/g, "");
-
-  if (raw && (!city || !state || !/^\d{6}$/.test(pin))) {
-    return [
-      {
-        field: "address_line2",
-        message: "City, State, and PIN could not be detected — use: City, State, 123456",
-      },
-    ];
-  }
-  if (!city || !state || !/^\d{6}$/.test(pin)) {
-    return [
-      {
-        field: "address_line2",
-        message: "Enter City, State, and 6-digit PIN on the second address line.",
-      },
-    ];
+  const formatErr = validateFreeformAddressLine(rawLine2, { minCommaSegments: 2 });
+  if (formatErr) {
+    return [{ field: "address_line2", message: formatErr }];
   }
   return [];
 }
@@ -120,8 +105,11 @@ export function getSection2ValidationErrors(opts: GetSection2ValidationErrorsOpt
   if (!isValidDdMmYyyy(c?.date_of_birth)) {
     setErr("dob", "Enter a valid date in DD/MM/YYYY format.");
   }
-  if (!(c?.care_of ?? "").trim()) {
+  const careOfTrimmed = (c?.care_of ?? "").trim();
+  if (!careOfTrimmed) {
     setErr("care_of", "C/O is required.");
+  } else if (!careOfHasRecognizedRelationMarker(careOfTrimmed)) {
+    setErr("care_of", CARE_OF_RELATION_PREFIX_ERROR);
   }
   if (!/^\d{4}$/.test((c?.aadhar_id ?? "").trim())) {
     setErr("aadhar", "Enter the last 4 digits of Aadhaar.");
@@ -228,6 +216,69 @@ export function getSection2ValidationErrors(opts: GetSection2ValidationErrorsOpt
         setErr(field, `${label} must not contain special characters.`);
       }
     }
+  }
+
+  return Array.from(m.entries()).map(([field, message]) => ({ field, message }));
+}
+
+/** Editable In-process Sales Details draft (Save Changes). */
+export type InProcessDetailDraftFields = {
+  care_of: string;
+  address: string;
+  frame_no: string;
+  engine_no: string;
+  key_no: string;
+  battery_no: string;
+  nominee_name: string;
+  nominee_relationship: string;
+};
+
+/** Validation for Add Sales In-process Save Changes (parity with Section 2 editable subset). */
+export function getInProcessDetailValidationErrors(
+  draft: InProcessDetailDraftFields
+): Section2FieldError[] {
+  const m = new Map<string, string>();
+  const setErr = (field: string, message: string) => {
+    if (!m.has(field)) m.set(field, message);
+  };
+
+  const careOfTrimmed = (draft.care_of ?? "").trim();
+  if (!careOfTrimmed) {
+    setErr("care_of", "C/O is required.");
+  } else if (!careOfHasRecognizedRelationMarker(careOfTrimmed)) {
+    setErr("care_of", CARE_OF_RELATION_PREFIX_ERROR);
+  }
+
+  const addressTrimmed = (draft.address ?? "").trim();
+  if (!addressTrimmed) {
+    setErr("address", "Address is required.");
+  } else {
+    if (hasDisallowedSpecialChars(addressTrimmed)) {
+      setErr("address", "Address must not contain special characters.");
+    } else {
+      const addrErr = validateFreeformAddressLine(addressTrimmed);
+      if (addrErr) setErr("address", addrErr);
+    }
+  }
+
+  const required: { field: string; label: string; value: string }[] = [
+    { field: "key_no", label: "Key no.", value: draft.key_no },
+    { field: "frame_no", label: "Chassis No.", value: draft.frame_no },
+    { field: "engine_no", label: "Engine no.", value: draft.engine_no },
+    { field: "battery_no", label: "Battery no.", value: draft.battery_no },
+    { field: "nominee_name", label: "Nominee Name", value: draft.nominee_name },
+    { field: "nominee_relationship", label: "Relationship", value: draft.nominee_relationship },
+  ];
+  for (const { field, label, value } of required) {
+    if (isBlank(value)) {
+      setErr(field, `${label} is required.`);
+    } else if (hasDisallowedSpecialChars(value)) {
+      setErr(field, `${label} must not contain special characters.`);
+    }
+  }
+
+  if (!isBlank(draft.care_of) && hasDisallowedSpecialChars(draft.care_of)) {
+    setErr("care_of", "C/O must not contain special characters.");
   }
 
   return Array.from(m.entries()).map(([field, message]) => ({ field, message }));

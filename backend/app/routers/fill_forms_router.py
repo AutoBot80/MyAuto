@@ -490,21 +490,13 @@ def _fill_dms_staging_or_ids(
                     "Pass customer_id and vehicle_id to continue without staging snapshot."
                 ),
             )
-        payload = deepcopy(raw)
-        if customer_dict:
-            c = {k: v for k, v in customer_dict.items() if v is not None and str(v).strip() != ""}
-            if c:
-                payload.setdefault("customer", {})
-                if not isinstance(payload["customer"], dict):
-                    payload["customer"] = {}
-                payload["customer"].update(c)
-        if vehicle_dict:
-            v = {k: v2 for k, v2 in vehicle_dict.items() if v2 is not None and str(v2).strip() != ""}
-            if v:
-                payload.setdefault("vehicle", {})
-                if not isinstance(payload["vehicle"], dict):
-                    payload["vehicle"] = {}
-                payload["vehicle"].update(v)
+        from app.repositories.add_sales_staging import (
+            deep_merge_staging_payload,
+            non_empty_staging_customer_vehicle_patch,
+        )
+
+        patch = non_empty_staging_customer_vehicle_patch(customer_dict, vehicle_dict)
+        payload = deep_merge_staging_payload(deepcopy(raw), patch) if patch else deepcopy(raw)
         return payload, None, None
     if customer_id is None or vehicle_id is None:
         raise HTTPException(

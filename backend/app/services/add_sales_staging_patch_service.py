@@ -11,7 +11,11 @@ from app.repositories.add_sales_staging import (
     merge_staging_payload_on_cursor,
 )
 from app.schemas.add_sales_staging_patch import PatchAddSalesStagingPayloadRequest
-from app.services.customer_address_infer import enrich_customer_address_from_freeform
+from app.services.customer_address_infer import (
+    enrich_customer_address_from_freeform,
+    normalize_operator_freeform_address,
+    validate_operator_freeform_address,
+)
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
 from app.services.utility_functions import (
     normalize_nominee_relationship_value,
@@ -113,6 +117,21 @@ def patch_add_sales_staging_payload(
     patch = _build_patch_from_request(req)
     if not patch:
         raise ValueError("At least one editable field is required")
+
+    cust_patch = patch.get("customer")
+    if isinstance(cust_patch, dict) and cust_patch.get("address") is not None:
+        raw_addr = str(cust_patch.get("address") or "")
+        addr_err = validate_operator_freeform_address(raw_addr)
+        if addr_err:
+            raise ValueError(addr_err)
+        normed = normalize_operator_freeform_address(raw_addr)
+        if not normed:
+            raise ValueError(addr_err or "Address could not be normalized.")
+        cust_patch["address"] = normed["address"]
+        cust_patch["city"] = normed["city"]
+        cust_patch["state"] = normed["state"]
+        cust_patch["pin"] = normed["pin"]
+        cust_patch["pin_code"] = normed["pin_code"]
 
     with get_connection() as conn:
         with conn.cursor() as cur:

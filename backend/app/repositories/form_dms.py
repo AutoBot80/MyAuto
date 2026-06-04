@@ -6,6 +6,8 @@
 ``add_sales_staging.payload_json`` only; optional ``dealer_ref.dealer_name`` lookup (reference table).
 """
 
+import re
+from pathlib import Path
 from typing import Any
 
 from app.db import get_connection
@@ -52,6 +54,11 @@ def build_dms_fill_row_from_staging_payload(payload: dict[str, Any]) -> dict[str
     except (TypeError, ValueError):
         did = None
     file_loc = _st(payload.get("file_location")) or _st(customer.get("file_location"))
+    subfolder_leaf = file_loc
+    if subfolder_leaf and ("/" in subfolder_leaf or "\\" in subfolder_leaf):
+        subfolder_leaf = Path(subfolder_leaf).name
+    if subfolder_leaf:
+        subfolder_leaf = re.sub(r"[^\w\-]", "_", subfolder_leaf.strip()) or None
     name = _st(customer.get("name"))
     parts = name.split(None, 1)
     first = parts[0] if parts else ""
@@ -91,7 +98,7 @@ def build_dms_fill_row_from_staging_payload(payload: dict[str, Any]) -> dict[str
         "customer_id": None,
         "vehicle_id": None,
         "dealer_id": did,
-        "subfolder": file_loc or None,
+        "subfolder": subfolder_leaf or None,
         "dealer_name": lookup_dealer_name(did) or None,
         "oem_name": _st(vehicle.get("oem_name")) or None,
         "Mr/Ms": mr_ms,

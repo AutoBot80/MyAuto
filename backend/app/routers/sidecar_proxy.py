@@ -58,6 +58,9 @@ router = APIRouter(prefix="/sidecar", tags=["sidecar-proxy"])
 class DmsResolveRequest(BaseModel):
     staging_id: str | None = None
     staging_payload: dict[str, Any] | None = None
+    """Optional Section 2 overlay (merged onto fetched staging when ``staging_id`` is set)."""
+    customer: dict[str, Any] | None = None
+    vehicle: dict[str, Any] | None = None
     customer_id: int | None = None
     vehicle_id: int | None = None
     subfolder: str | None = None
@@ -250,13 +253,27 @@ async def dms_resolve(
 ) -> DmsResolveResponse:
     did = resolve_dealer_id(principal, req.dealer_id)
 
-    staging_payload = req.staging_payload
-    if not staging_payload and req.staging_id:
-        from app.repositories.add_sales_staging import fetch_staging_payload
+    from app.repositories.add_sales_staging import (
+        deep_merge_staging_payload,
+        fetch_staging_payload,
+        non_empty_staging_customer_vehicle_patch,
+    )
 
-        staging_payload = fetch_staging_payload(req.staging_id, did)
-        if not staging_payload:
+    staging_payload = req.staging_payload
+    if req.staging_id:
+        fetched = fetch_staging_payload(req.staging_id, did)
+        if not fetched:
             raise HTTPException(status_code=404, detail="Staging row not found or not accessible")
+        patch = non_empty_staging_customer_vehicle_patch(req.customer, req.vehicle)
+        if req.staging_payload:
+            patch = deep_merge_staging_payload(patch, req.staging_payload)
+        staging_payload = deep_merge_staging_payload(fetched, patch) if patch else fetched
+    elif req.customer or req.vehicle:
+        patch = non_empty_staging_customer_vehicle_patch(req.customer, req.vehicle)
+        if staging_payload and patch:
+            staging_payload = deep_merge_staging_payload(staging_payload, patch)
+        elif patch:
+            staging_payload = patch
 
     from app.services.fill_hero_dms_service import (
         _build_dms_fill_values,

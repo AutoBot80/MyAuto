@@ -370,6 +370,40 @@ def _safe_subfolder_name(subfolder: str) -> str:
     return re.sub(r"[^\w\-]", "_", (subfolder or "").strip()) or "default"
 
 
+def _ocr_sale_folder_leaf(subfolder: str | None) -> str:
+    """Leaf ``{mobile}_{ddmmyy}`` from a bare leaf or a full uploads/OCR path."""
+    raw = (subfolder or "").strip()
+    if not raw:
+        return ""
+    if "/" in raw or "\\" in raw:
+        raw = Path(raw).name
+    return _safe_subfolder_name(raw)
+
+
+def _read_customer_pin_from_ocr_json(dealer_id: int | None, subfolder: str | None) -> str:
+    """Fallback PIN from ``OCR_To_be_Used.json`` when staging ``customer.pin`` / ``pin_code`` are empty."""
+    sub = _ocr_sale_folder_leaf(subfolder)
+    if not sub:
+        return ""
+    try:
+        did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    except (TypeError, ValueError):
+        did = int(DEALER_ID)
+    path = Path(get_ocr_output_dir(did)).resolve() / sub / "OCR_To_be_Used.json"
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        cust = data.get("customer") if isinstance(data.get("customer"), dict) else {}
+        pin_digits = "".join(
+            c for c in (str(cust.get("pin_code") or cust.get("pin") or "")) if c.isdigit()
+        )
+        return pin_digits[:6] if len(pin_digits) >= 6 else ""
+    except Exception as exc:
+        logging.getLogger(__name__).debug("DMS: OCR pin read failed %s: %s", path, exc)
+        return ""
+
+
 def _sales_file_location_varchar128(full_posix: str, dealer_id: int, safe_leaf: str) -> str:
     """``sales_master.file_location`` is varchar(128); shorten with a stable relative form if needed."""
     if len(full_posix) <= 128:
@@ -910,7 +944,23 @@ def _build_dms_fill_values(
             c for c in (str(cust_fb.get("pin") or cust_fb.get("pin_code") or "")) if c.isdigit()
         )
         pin_raw = pin_fb[:6] if len(pin_fb) >= 6 else pin_fb
+    if not pin_raw and staging_payload is not None:
+        try:
+            did_ocr = int(staging_payload.get("dealer_id") or 0) or None
+        except (TypeError, ValueError):
+            did_ocr = None
+        sub_ocr = _clean_text(row.get("subfolder")) or _clean_text(staging_payload.get("file_location"))
+        if not sub_ocr:
+            cust_loc = staging_payload.get("customer")
+            if isinstance(cust_loc, dict):
+                sub_ocr = _clean_text(cust_loc.get("file_location"))
+        pin_raw = _read_customer_pin_from_ocr_json(did_ocr, sub_ocr)
+        if pin_raw:
+            row["Pin Code"] = pin_raw
     state_raw = _clean_text(row.get("State"))
+    if staging_payload is not None and not state_raw:
+        cust_fb = staging_payload.get("customer") if isinstance(staging_payload.get("customer"), dict) else {}
+        state_raw = _clean_text(cust_fb.get("state")) or state_raw
     father_raw = _clean_text(row.get("Father or Husband Name"))
     inferred_addr = enrich_customer_address_from_freeform(
         {

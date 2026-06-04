@@ -5,6 +5,8 @@ from app.services.customer_address_infer import (
     normalize_address_freeform,
     resolve_indian_state_name,
     strip_junk_between_last_indian_state_and_pin,
+    normalize_operator_freeform_address,
+    validate_operator_freeform_address,
     _strip_leading_care_of_duplicate_from_work,
 )
 from app.services.sales_ocr_service import _clean_aadhar_back_cross_column_noise
@@ -106,3 +108,38 @@ def test_normalize_address_no_duplicate_care_of_in_composed_line():
     addr = (got.get("address") or "").lower()
     assert not addr.startswith("s/o ")
     assert "aur singh" not in addr
+
+
+def test_validate_operator_freeform_address_rejects_pin_only_garbage():
+    assert validate_operator_freeform_address("sss 123456") is not None
+    assert validate_operator_freeform_address("sss, 123456") is not None
+
+
+def test_validate_operator_freeform_address_accepts_canonical_tail():
+    assert validate_operator_freeform_address("house, Bharatpur, Rajasthan, 321001") is None
+    assert validate_operator_freeform_address("house, Bharatpur, Rajashan, 321001") is None
+
+
+def test_validate_operator_freeform_address_accepts_dash_before_pin():
+    assert validate_operator_freeform_address("house, Bharatpur, Rajasthan - 321001") is None
+    assert (
+        validate_operator_freeform_address(
+            "Bharatpur, Rajasthan - 321001", min_comma_segments=2
+        )
+        is None
+    )
+
+
+def test_normalize_operator_address_title_case_and_canonical_state():
+    got = normalize_operator_freeform_address("Locality, bharatpur, RJ - 321001")
+    assert got is not None
+    assert got["address"] == "Locality, Bharatpur, Rajasthan - 321001"
+    assert got["city"] == "Bharatpur"
+    assert got["state"] == "Rajasthan"
+    assert got["pin"] == "321001"
+
+
+def test_validate_operator_freeform_address_rejects_unknown_state():
+    err = validate_operator_freeform_address("house, Bharatpur, Foobaristan, 321001")
+    assert err is not None
+    assert "Foobaristan" in err

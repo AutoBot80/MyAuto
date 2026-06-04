@@ -2172,6 +2172,8 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
     resolve_body = {
         "staging_id": params.get("staging_id"),
         "staging_payload": params.get("staging_payload"),
+        "customer": params.get("customer"),
+        "vehicle": params.get("vehicle"),
         "customer_id": params.get("customer_id"),
         "vehicle_id": params.get("vehicle_id"),
         "subfolder": params.get("subfolder"),

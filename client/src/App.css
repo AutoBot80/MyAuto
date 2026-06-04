@@ -1232,6 +1232,20 @@
     minmax(11rem, 1fr);
 }
 
+/* Section 2: keep Gender/DOB row inside the column so focus does not scroll three-col right */
+.add-sales-v2-box-extracted .add-sales-v2-dl-customer-line--dob-gender {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  grid-template-columns:
+    var(--add-sales-customer-label-col)
+    max-content
+    min-content
+    minmax(0, 1fr);
+}
+
 .add-sales-v2-dl--customer .add-sales-v2-dd--gender-narrow {
   display: flex;
   justify-content: flex-start;
