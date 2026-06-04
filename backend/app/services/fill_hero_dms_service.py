@@ -904,6 +904,12 @@ def _build_dms_fill_values(
 
     addr_full = _clean_text(row.get("Address Line 1"))
     pin_raw = _clean_text(row.get("Pin Code"))[:6]
+    if staging_payload is not None and not pin_raw:
+        cust_fb = staging_payload.get("customer") if isinstance(staging_payload.get("customer"), dict) else {}
+        pin_fb = "".join(
+            c for c in (str(cust_fb.get("pin") or cust_fb.get("pin_code") or "")) if c.isdigit()
+        )
+        pin_raw = pin_fb[:6] if len(pin_fb) >= 6 else pin_fb
     state_raw = _clean_text(row.get("State"))
     father_raw = _clean_text(row.get("Father or Husband Name"))
     inferred_addr = enrich_customer_address_from_freeform(

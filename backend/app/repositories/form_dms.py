@@ -84,7 +84,8 @@ def build_dms_fill_row_from_staging_payload(payload: dict[str, Any]) -> dict[str
     frame_left = frame_src[:12] if frame_src else ""
     engine_left = engine_src[:12] if engine_src else ""
     battery = _st(vehicle.get("battery_no"))
-    pin = (_st(customer.get("pin")) or "")[:6]
+    pin_digits = "".join(c for c in (_st(customer.get("pin")) or _st(customer.get("pin_code"))) if c.isdigit())
+    pin = pin_digits[:6] if len(pin_digits) >= 6 else pin_digits
     return {
         "sales_id": None,
         "customer_id": None,

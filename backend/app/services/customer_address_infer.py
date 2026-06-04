@@ -661,6 +661,13 @@ def enrich_customer_address_from_freeform(customer: dict[str, Any]) -> dict[str,
     Sets both ``pin`` and ``pin_code`` when inferring PIN.
     """
     out = dict(customer)
+    pin_digits = "".join(
+        c for c in (str(out.get("pin") or out.get("pin_code") or "")) if c.isdigit()
+    )
+    if len(pin_digits) >= 6:
+        out["pin"] = pin_digits[:6]
+        out["pin_code"] = pin_digits[:6]
+
     addr = (out.get("address") or "").strip()
     if not addr:
         return out

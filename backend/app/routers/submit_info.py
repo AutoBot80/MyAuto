@@ -18,6 +18,7 @@ class CustomerPayload(BaseModel):
     date_of_birth: str | None = None
     address: str | None = None
     pin: str | None = None
+    pin_code: str | None = None
     city: str | None = None
     state: str | None = None
     mobile_number: int | str | None = None

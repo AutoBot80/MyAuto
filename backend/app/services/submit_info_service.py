@@ -65,7 +65,14 @@ def submit_info(
     if not aadhar_last4 or mobile is None:
         raise ValueError("Customer aadhar (last 4) and mobile_number are required")
 
-    customer = enrich_customer_address_from_freeform(dict(customer))
+    cust_in = dict(customer)
+    pin_digits = "".join(
+        c for c in (str(cust_in.get("pin") or cust_in.get("pin_code") or "")) if c.isdigit()
+    )
+    if len(pin_digits) >= 6:
+        cust_in["pin"] = pin_digits[:6]
+        cust_in["pin_code"] = pin_digits[:6]
+    customer = enrich_customer_address_from_freeform(cust_in)
 
     loc = _str_or_none(file_location) or _str_or_none(customer.get("file_location"))
     if loc:
@@ -80,7 +87,7 @@ def submit_info(
     name = _str_or_none(customer.get("name")) or ""
     address = _str_or_none(customer.get("address"))
     alt_phone_num = _str_or_none(customer.get("alt_phone_num"), 16)
-    pin = _str_or_none(customer.get("pin"), 6)
+    pin = _str_or_none(customer.get("pin"), 6) or _str_or_none(customer.get("pin_code"), 6)
     city = _str_or_none(customer.get("city"))
     state = _str_or_none(customer.get("state"))
     gender = _str_or_none(customer.get("gender"), 8)
@@ -137,6 +144,7 @@ def submit_info(
             "date_of_birth": date_of_birth,
             "address": address,
             "pin": pin,
+            "pin_code": pin,
             "city": city,
             "state": state,
             "mobile_number": mobile,
