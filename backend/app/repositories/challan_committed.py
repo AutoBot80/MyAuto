@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.db import get_connection
+from app.repositories.ist_date_ranges import created_at_ist_sql_bounds, validate_date_range
 
 
 def _jsonable(v: Any) -> Any:
@@ -27,17 +28,41 @@ def list_committed_masters_for_dealer(
     dealer_from_id: int,
     *,
     days: int = 365,
+    date_from: str | None = None,
+    date_to: str | None = None,
     limit: int = 500,
 ) -> list[dict[str, Any]]:
     """
     Latest-first committed challans where ``dealer_from`` matches (parent dealer).
-    ``days`` filters on ``challan_master.created_at``; rows with NULL ``created_at`` are included.
+
+    When ``date_from`` and ``date_to`` (dd-mm-yyyy) are valid, filter ``created_at`` by IST
+    calendar day (NULL ``created_at`` excluded). Otherwise ``days`` filters on ``created_at``;
+    rows with NULL ``created_at`` are included in the days window.
     """
+    bounds = validate_date_range(date_from, date_to)
+    if bounds is not None:
+        start, end = bounds
+        lower_sql, upper_sql = created_at_ist_sql_bounds(start, end)
+        date_clause = f"""
+                  AND cm.created_at IS NOT NULL
+                  AND (cm.created_at AT TIME ZONE 'Asia/Kolkata')::date >= {lower_sql}
+                  AND (cm.created_at AT TIME ZONE 'Asia/Kolkata')::date <= {upper_sql}
+        """
+        params: tuple[Any, ...] = (int(dealer_from_id), int(limit))
+    else:
+        date_clause = """
+                  AND (
+                      cm.created_at IS NULL
+                      OR cm.created_at >= NOW() - (%s * INTERVAL '1 day')
+                  )
+        """
+        params = (int(dealer_from_id), int(days), int(limit))
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
                     cm.challan_id,
                     cm.challan_date,
@@ -54,14 +79,11 @@ def list_committed_masters_for_dealer(
                 FROM challan_master cm
                 LEFT JOIN dealer_ref dr ON dr.dealer_id = cm.dealer_to
                 WHERE cm.dealer_from = %s
-                  AND (
-                      cm.created_at IS NULL
-                      OR cm.created_at >= NOW() - (%s * INTERVAL '1 day')
-                  )
+                  {date_clause}
                 ORDER BY cm.created_at DESC NULLS LAST, cm.challan_id DESC
                 LIMIT %s
                 """,
-                (int(dealer_from_id), int(days), int(limit)),
+                params,
             )
             rows = cur.fetchall() or []
             return [_row_jsonable(dict(r)) for r in rows]

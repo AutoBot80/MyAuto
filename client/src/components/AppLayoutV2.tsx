@@ -11,6 +11,7 @@ const PAGE_LABELS: Record<Page, string> = {
   "rto-status": "RTO Queue",
   "service-reminders": "Service Reminders",
   "dealer-dashboard": "Dealer Saathi",
+  "sales-reports": "Sales Reports",
   "admin-tools": "Admin Tools",
   "admin-dealers": "Dealers",
   "admin-usage": "Usage",

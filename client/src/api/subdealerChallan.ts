@@ -700,15 +700,33 @@ export type ChallanInvoiceDetailLine = {
   discount: number | null;
 };
 
+export type ListCommittedChallanInvoicesParams = {
+  days?: number;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  limit?: number;
+};
+
 export async function listRecentCommittedChallanInvoices(
   dealerId?: number,
-  days: number = CHALLAN_INVOICES_RECENT_DAYS,
+  daysOrOpts: number | ListCommittedChallanInvoicesParams = CHALLAN_INVOICES_RECENT_DAYS,
   limit: number = 500
 ): Promise<ChallanInvoiceMasterRow[]> {
   const search = new URLSearchParams();
   search.set("dealer_id", String(dealerId ?? DEALER_ID));
-  search.set("days", String(days));
-  search.set("limit", String(limit));
+
+  const opts: ListCommittedChallanInvoicesParams =
+    typeof daysOrOpts === "number" ? { days: daysOrOpts, limit } : daysOrOpts;
+
+  const from = (opts.dateFrom ?? "").trim();
+  const to = (opts.dateTo ?? "").trim();
+  if (from && to) {
+    search.set("date_from", from);
+    search.set("date_to", to);
+  } else {
+    search.set("days", String(opts.days ?? CHALLAN_INVOICES_RECENT_DAYS));
+  }
+  search.set("limit", String(opts.limit ?? limit));
   return apiFetch<ChallanInvoiceMasterRow[]>(`/subdealer-challan/invoices/recent?${search.toString()}`);
 }
 

@@ -70,6 +70,7 @@ from app.services.dms_relation_prefix import compute_dms_relation_prefix
 from app.services.add_sales_commit_service import finalize_staging_row_with_master_ids
 from app.services.hero_dms_db_service import persist_staging_masters_after_invoice
 from app.services.hero_dms_reports_service import run_hero_dms_reports
+from app.services.dms_fill_timing import fill_dms_phase, fill_dms_phase_reset
 from app.services.handle_browser_opening import (
     get_or_open_site_page,
     launch_site_background_detached,
@@ -2246,8 +2247,19 @@ def run_fill_dms_only(
         "dms_milestones": [],
         "dms_step_messages": [],
     }
+    fill_dms_phase_reset()
+    fill_dms_phase(
+        "run_fill_dms_only_entry",
+        staging_id=staging_id or "",
+        dms=(dms_base_url or "")[:50],
+    )
+    logger.info(
+        "fill_dms_service: run_fill_dms_only starting mode=real dms=%s",
+        (dms_base_url or "")[:50],
+    )
     try:
         _ensure_hero_oem_for_fill_dms(dealer_id)
+        fill_dms_phase("oem_guard_ok")
     except Exception as e:
         result["error"] = str(e)
         return result
@@ -2262,12 +2274,14 @@ def run_fill_dms_only(
             subfolder,
             staging_payload=staging_payload,
         )
+        fill_dms_phase("build_dms_values_done")
     except Exception as e:
         result["error"] = str(e)
         return result
     effective_subfolder = dms_values.get("subfolder") or subfolder
     subfolder_path = uploads_dir / effective_subfolder
     subfolder_path.mkdir(parents=True, exist_ok=True)
+    fill_dms_phase("subfolder_ready", subfolder=effective_subfolder)
 
     if not dms_automation_is_real_siebel():
         result["error"] = (
@@ -2278,7 +2292,6 @@ def run_fill_dms_only(
 
     page = None
     try:
-        logger.info("fill_dms_service: run_fill_dms_only starting mode=real dms=%s", dms_base_url[:50])
         playwright_dms_log = (
             Path(ocr_dir).resolve()
             / _safe_subfolder_name(effective_subfolder)
@@ -2291,6 +2304,8 @@ def run_fill_dms_only(
             execution_log_client_api_base_url=execution_log_client_api_base_url,
             execution_log_http_request_base_url=execution_log_http_request_base_url,
         )
+        fill_dms_phase("playwright_log_written", path=str(playwright_dms_log))
+        fill_dms_phase("get_or_open_begin")
         page, open_error = get_or_open_site_page(
             dms_base_url,
             "DMS",
@@ -2298,6 +2313,11 @@ def run_fill_dms_only(
             login_user=login_user,
             login_password=login_password,
             playwright_dms_execution_log_path=playwright_dms_log,
+        )
+        fill_dms_phase(
+            "get_or_open_return",
+            ok=page is not None,
+            error=(open_error or "")[:120],
         )
         if page is None:
             result["error"] = open_error

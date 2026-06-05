@@ -7,6 +7,7 @@ export type Page =
   | "rto-status"
   | "service-reminders"
   | "dealer-dashboard"
+  | "sales-reports"
   | "admin-tools"
   | "admin-dealers"
   | "admin-usage"

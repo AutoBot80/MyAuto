@@ -80,6 +80,29 @@ def test_list_recent_sales_invoices_chassis_engine_filters() -> None:
     assert "vm.engine" in sql
 
 
+def test_list_recent_sales_invoices_date_range_in_sql() -> None:
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+    mock_cur.__exit__ = MagicMock(return_value=False)
+    mock_conn.cursor.return_value = mock_cur
+    mock_cur.fetchall.return_value = []
+
+    with patch.object(repo, "get_connection", return_value=mock_conn):
+        repo.list_recent_sales_invoices(
+            dealer_id=1,
+            days=7,
+            date_from="01-06-2026",
+            date_to="04-06-2026",
+        )
+
+    sql = mock_cur.execute.call_args[0][0].lower()
+    params = mock_cur.execute.call_args[0][1]
+    assert "at time zone 'asia/kolkata'" in sql
+    assert "2026-06-01" in params
+    assert "2026-06-04" in params
+
+
 def test_serialize_row_formats_dates_and_mobile() -> None:
     from datetime import datetime
 

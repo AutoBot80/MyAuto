@@ -67,10 +67,16 @@ from app.config import (
     PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
     USE_NATIVE_PLAYWRIGHT_CHROMIUM_FOR_DMS,
 )
+from app.services.dms_fill_timing import fill_dms_phase
 from app.services.hero_dms_shared_utilities import _is_browser_disconnected_error, _ts_ist_iso
 from app.services.playwright_executor import get_playwright_executor, run_playwright_callable_sync
 
 logger = logging.getLogger(__name__)
+
+
+def _dms_phase(name: str, site_label: str = "", **fields: object) -> None:
+    if (site_label or "").strip() == "DMS":
+        fill_dms_phase(name, **fields)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -1093,6 +1099,7 @@ def _refresh_native_dms_context_liveness() -> None:
             exc,
         )
         _DMS_NATIVE_PERSISTENT_CONTEXT = None
+        fill_dms_phase("native_context_cleared", reason=str(exc)[:80])
 
 
 def _refresh_native_insurance_context_liveness() -> None:
@@ -1237,6 +1244,7 @@ def _get_playwright():
         _PW = None
         _PW_THREAD_ID = None
     if _PW is None:
+        fill_dms_phase("get_playwright_cold_start", thread_id=current_thread_id)
         _PW = sync_playwright().start()
         _PW_THREAD_ID = current_thread_id
     return _PW
@@ -2702,7 +2710,18 @@ def _launch_native_site_persistent_context(
     global _DMS_NATIVE_PERSISTENT_CONTEXT, _INSURANCE_NATIVE_PERSISTENT_CONTEXT, _CPA_INSURANCE_NATIVE_PERSISTENT_CONTEXT, _VAHAN_NATIVE_PERSISTENT_CONTEXT
     sl = (site_label or "").strip()
     _refresh_native_context_liveness_for_site(sl)
+    if sl == "DMS":
+        ctx_before = "alive" if _DMS_NATIVE_PERSISTENT_CONTEXT is not None else "none"
+        _dms_phase("launch_native_begin", site_label=sl, mode="reuse_context" if ctx_before == "alive" else "cold")
+        _dms_phase("get_playwright_begin", site_label=sl)
+    pw_was_cold = _PW is None
     pw = _get_playwright()
+    if sl == "DMS":
+        _dms_phase(
+            "get_playwright_ready",
+            site_label=sl,
+            cold_start=pw_was_cold,
+        )
     profile_dir.mkdir(parents=True, exist_ok=True)
     ot = (open_target or "").strip()
     if not ot:
@@ -2735,6 +2754,11 @@ def _launch_native_site_persistent_context(
                 ctx_ref = None
 
         if sl == "DMS" and _DMS_NATIVE_PERSISTENT_CONTEXT is None:
+            _dms_phase(
+                "launch_persistent_context_begin",
+                site_label=sl,
+                profile=str(profile_dir),
+            )
             _DMS_NATIVE_PERSISTENT_CONTEXT = pw.chromium.launch_persistent_context(
                 user_data_dir=str(profile_dir),
                 headless=False,
@@ -2745,6 +2769,7 @@ def _launch_native_site_persistent_context(
                 "handle_browser_opening: launched Playwright Chromium (persistent) profile=%s",
                 profile_dir,
             )
+            fill_dms_phase("launch_persistent_context_done", profile=str(profile_dir))
         elif sl == "Insurance" and _INSURANCE_NATIVE_PERSISTENT_CONTEXT is None:
             # Generate Insurance / MISP: installed Microsoft Edge (not bundled Chromium) for vendor
             # bot / API parity with a typical dealer Windows default browser.
@@ -2803,12 +2828,15 @@ def _launch_native_site_persistent_context(
                 matched = p
                 break
         if matched is not None:
+            _dms_phase("launch_native_reuse_tab", site_label=sl, url=(ot or "")[:80])
             _try_cdp_maximize_browser_window(matched)
             return matched, native_launch_tag
         if ctx.pages:
             pg0 = ctx.pages[0]
         else:
             pg0 = ctx.new_page()
+        goto_wait = "commit" if launch_background else "domcontentloaded"
+        _dms_phase("goto_begin", site_label=sl, wait_until=goto_wait, target=(ot or "")[:80])
         if not launch_background:
             try:
                 pg0.goto(ot, wait_until="domcontentloaded", timeout=30_000)
@@ -2826,6 +2854,7 @@ def _launch_native_site_persistent_context(
         # Immediately after goto + maximize, focus the page to move away from omnibox.
         _try_cdp_focus_page(pg0)
         _try_js_click_body_for_focus(pg0)
+        _dms_phase("goto_done", site_label=sl)
         return pg0, native_launch_tag
     except Exception as exc:
         logger.warning(
@@ -2984,8 +3013,10 @@ def _login_gate_after_open(
     playwright_dms_execution_log_path: Path | str | None = None,
 ):
     """Prefilled click, else DMS env/cache fill+submit, else wait for manual login (long for DMS)."""
+    sl = (site_label or "").strip()
     if not require_login_on_open:
         return page, None
+    _dms_phase("login_gate_begin", site_label=sl)
     _logp: Path | None = None
     if playwright_dms_execution_log_path and (site_label or "").strip() == "DMS":
         try:
@@ -3003,12 +3034,13 @@ def _login_gate_after_open(
                 return None, _dms_browser_closed_operator_message(site_label)
         except Exception:
             pass
-        if (site_label or "").strip() == "DMS":
+        if sl == "DMS":
             try:
                 if _is_ready_after_login_page(page):
                     logger.info(
                         "handle_browser_opening: DMS already past login — continuing automation on this tab."
                     )
+                    fill_dms_phase("login_gate_done", already_logged_in=True)
                     return page, None
             except Exception as e:
                 if _is_browser_disconnected_error(e):
@@ -3019,11 +3051,13 @@ def _login_gate_after_open(
                 raise
             _dms_steal_focus_from_omnibox_for_login(page)
         if _try_auto_login_if_prefilled(page, log_path=_logp):
+            _dms_phase("login_gate_done", site_label=sl, prefilled_auto_login=True)
             return page, None
-        if (site_label or "").strip() == "DMS":
+        if sl == "DMS":
             eu, ep = _effective_dms_login_creds(login_user, login_password)
             if eu and ep:
                 if _try_fill_siebel_login_and_submit(page, eu, ep, log_path=_logp):
+                    fill_dms_phase("login_gate_done", auto_submit=True)
                     return page, None
                 logger.warning(
                     "handle_browser_opening: DMS automatic login did not complete (fields not found or "
@@ -3037,7 +3071,15 @@ def _login_gate_after_open(
                     "handle_browser_opening: no DMS_LOGIN_USER/PASSWORD and no operator_dms_login.json — "
                     "waiting for manual Siebel login (up to DMS_LOGIN_MANUAL_WAIT_MS)."
                 )
-        return _wait_login_or_prompt_after_open(page, site_label, log_path=_logp)
+        out = _wait_login_or_prompt_after_open(page, site_label, log_path=_logp)
+        if sl == "DMS":
+            fill_dms_phase(
+                "login_gate_done",
+                manual_wait=True,
+                ok=out[0] is not None,
+                error=(out[1] or "")[:80],
+            )
+        return out
     finally:
         if _logp is not None:
             try:
@@ -3088,10 +3130,15 @@ def get_or_open_site_page(
     ``#statusBar`` text, and PNG screenshots are appended under the same ``ocr_output/.../Playwright_DMS_*.txt``
     tree as the main automation trace.
     """
+    sl = (site_label or "").strip()
     if _use_native_pw_chromium_for_site(site_label):
         _refresh_native_context_liveness_for_site(site_label)
+        if sl == "DMS":
+            ctx_before = "alive" if _DMS_NATIVE_PERSISTENT_CONTEXT is not None else "none"
+            _dms_phase("native_liveness_refresh", site_label=sl, context_before=ctx_before)
     page = find_open_site_page(base_url, site_label=site_label)
     if page is not None:
+        _dms_phase("find_open_tab", site_label=sl, result="hit")
         return _login_gate_after_open(
             page,
             site_label,
@@ -3101,11 +3148,13 @@ def get_or_open_site_page(
             playwright_dms_execution_log_path=playwright_dms_execution_log_path,
         )
 
+    _dms_phase("find_open_tab", site_label=sl, result="miss")
     open_target = (launch_url or base_url or "").strip()
 
     if not launch_background:
         nav_page = _navigate_existing_tab_to_site(open_target, site_label)
         if nav_page is not None:
+            _dms_phase("navigate_existing_tab", site_label=sl, result="hit")
             return _login_gate_after_open(
                 nav_page,
                 site_label,
@@ -3114,6 +3163,7 @@ def get_or_open_site_page(
                 login_password=login_password,
                 playwright_dms_execution_log_path=playwright_dms_execution_log_path,
             )
+        _dms_phase("navigate_existing_tab", site_label=sl, result="miss")
 
     if _use_native_pw_chromium_for_site(site_label):
         sl_open = (site_label or "").strip()

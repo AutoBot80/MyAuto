@@ -102,12 +102,17 @@ export interface AddSalesInvoiceRow {
   invoice_date: string | null;
   invoice_number: string | null;
   insurance_policy_num: string | null;
+  ex_showroom_amount: number | null;
+  insurance_premium: number | null;
   cpa_policy_num: string | null;
+  cpa_premium: number | null;
   file_location: string | null;
 }
 
 export type FetchAddSalesInvoicesParams = {
   days?: number;
+  dateFrom?: string | null;
+  dateTo?: string | null;
   mobile?: string | null;
   chassis?: string | null;
   engine?: string | null;
@@ -117,10 +122,15 @@ export async function fetchAddSalesInvoices(
   dealerId: number,
   opts: FetchAddSalesInvoicesParams = {}
 ): Promise<{ count: number; rows: AddSalesInvoiceRow[] }> {
-  const q = new URLSearchParams({
-    dealer_id: String(dealerId),
-    days: String(opts.days ?? 7),
-  });
+  const q = new URLSearchParams({ dealer_id: String(dealerId) });
+  const from = (opts.dateFrom ?? "").trim();
+  const to = (opts.dateTo ?? "").trim();
+  if (from && to) {
+    q.set("date_from", from);
+    q.set("date_to", to);
+  } else {
+    q.set("days", String(opts.days ?? 7));
+  }
   const m = (opts.mobile ?? "").trim();
   const c = (opts.chassis ?? "").trim();
   const e = (opts.engine ?? "").trim();

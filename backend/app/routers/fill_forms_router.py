@@ -26,6 +26,7 @@ from app.services.add_sales_natural_key_resolve import (
     resolve_customer_vehicle_ids_by_natural_keys,
 )
 from app.services.cpa_form_values import prepare_cpa_alliance_fill
+from app.services.dms_fill_timing import fill_dms_api_phase, fill_dms_api_phase_reset
 from app.services.fill_hero_dms_service import (
     run_fill_dms,
     run_fill_dms_only,
@@ -695,6 +696,8 @@ async def fill_dms_only(
     if req.customer.mobile:
         customer_dict["mobile"] = req.customer.mobile
     vehicle_dict = req.vehicle.model_dump(exclude_none=True)
+    fill_dms_api_phase_reset()
+    fill_dms_api_phase("fill_dms_request_begin", staging_id=req.staging_id or "")
     staging_payload, cid, vid = _fill_dms_staging_or_ids(
         req.staging_id,
         did,
@@ -703,6 +706,7 @@ async def fill_dms_only(
         customer_dict,
         vehicle_dict,
     )
+    fill_dms_api_phase("staging_resolved", customer_id=cid, vehicle_id=vid)
     sid_for_commit = (req.staging_id or "").strip() or None
     if sid_for_commit and staging_payload is None:
         sid_for_commit = None
@@ -714,6 +718,7 @@ async def fill_dms_only(
         )
     _http_base = _fill_forms_http_request_base(request)
     _client_api = (req.client_api_base_url or "").strip() or None
+    fill_dms_api_phase("playwright_executor_enqueue", subfolder=subfolder_resolved)
     result = await _run_playwright_work(
         partial(
             run_fill_dms_only,

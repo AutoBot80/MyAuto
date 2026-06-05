@@ -83,9 +83,9 @@ _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS = 500
 
 # Branch (2) Address / postal: most-specific locators for visibility-first waits (before full scoped sweep).
 _BRANCH2_POSTAL_QUICK_SELECTORS: tuple[str, ...] = (
-    "td#1_s_1_l_Postal_Code",
+    'td[id="1_s_1_l_Postal_Code"]',
     '[id="1_s_1_l_Postal_Code"]',
-    "td#1_s_1_l_Postal_Code input",
+    'td[id="1_s_1_l_Postal_Code"] input',
     'input[name="Postal_Code"]',
     '[id="1_Postal_Code"]',
     'input[id="1_Postal_Code"]',
@@ -96,19 +96,18 @@ _BRANCH2_ADDRESS_CITY_POSTAL_WAIT_MS = 2000
 # scopes×selectors×roots otherwise stack multi‑minute waits.
 _BRANCH2_ADDRESS_SCOPED_FILL_CAP_MS = 300
 # Postal-only: jqGrid cell activation (wait_for + click + dblclick) needs more than generic 300ms cap.
-_BRANCH2_POSTAL_SCOPED_FILL_CAP_MS = 720
+_BRANCH2_POSTAL_SCOPED_FILL_CAP_MS = 1200
 _BRANCH2_ADDRESS_UNION_FILL_BUDGET_MS = 300
 _BRANCH2_POSTAL_DIRECT_SELECTORS: tuple[str, ...] = (
-    "#S_A1 td#1_s_1_l_Postal_Code",
-    "div#S_A1 td#1_s_1_l_Postal_Code",
-    "#gbox_s_1_l td#1_s_1_l_Postal_Code",
-    "td#1_s_1_l_Postal_Code",
-    "td#1_s_1_l_Postal_Code input",
+    '#S_A1 td[id="1_s_1_l_Postal_Code"]',
+    'div#S_A1 td[id="1_s_1_l_Postal_Code"]',
+    "#gbox_s_1_l td[id=\"1_s_1_l_Postal_Code\"]",
+    'td[id="1_s_1_l_Postal_Code"]',
+    'td[id="1_s_1_l_Postal_Code"] input',
     '[id="1_s_1_l_Postal_Code"] input',
     # Scoped last — bare ``name=`` can match another applet's field before the grid td wins in some trees.
     "#gbox_s_1_l input[name=\"Postal_Code\"]",
     'table#s_1_l input[name="Postal_Code"]',
-    "input#1_Postal_Code",
     'input[id="1_Postal_Code"]',
 )
 _BRANCH2_EMAIL_WAIT_SELECTORS: tuple[str, ...] = (
@@ -140,11 +139,10 @@ _BRANCH2_ADDRESS_GRID_SCOPES: tuple[str, ...] = (
 )
 # v0.7.06 Postal selectors + fuzzy Postal name + scoped-friendly td order.
 _BRANCH2_POSTAL_SCOPED_SELECTORS: tuple[str, ...] = (
-    "td#1_s_1_l_Postal_Code",
+    'td[id="1_s_1_l_Postal_Code"]',
     '[id="1_s_1_l_Postal_Code"]',
-    "td#1_s_1_l_Postal_Code input",
+    'td[id="1_s_1_l_Postal_Code"] input',
     '[id="1_s_1_l_Postal_Code"] input',
-    "input#1_Postal_Code",
     'input[id="1_Postal_Code"]',
     'input[name="Postal_Code"]',
     'input[name*="Postal" i]',
@@ -153,14 +151,24 @@ _BRANCH2_POSTAL_SCOPED_SELECTORS: tuple[str, ...] = (
 # Siebel list-ctrl; then **three** ``Tab`` presses move through Address Line 1/2 to Pincode. (Tab without
 # Enter often leaves focus stuck in Tehsil.)
 _BRANCH2_CITY_AS_TEHSIL_COMBO_SELECTORS: tuple[str, ...] = (
-    "input#1_HHML_Tehsil_Taluka",
+    'input[id="1_HHML_Tehsil_Taluka"]',
     'input[name="HHML_Tehsil_Taluka"]',
-    'input#1_HHML_Tehsil_Taluka[role="combobox"]',
+    'input[id="1_HHML_Tehsil_Taluka"][role="combobox"]',
     'input.siebui-input-popup[name="HHML_Tehsil_Taluka"]',
+)
+_BRANCH2_TEHSIL_TD_SELECTORS: tuple[str, ...] = (
+    'td[id="1_s_1_l_HHML_Tehsil_Taluka"]',
+    '[id="1_s_1_l_HHML_Tehsil_Taluka"]',
+)
+_BRANCH2_POSTAL_EDITOR_SELECTORS: tuple[str, ...] = (
+    'input[id="1_Postal_Code"]',
+    'td[id="1_s_1_l_Postal_Code"] input',
+    'td[id="1_s_1_l_Postal_Code"].edit-cell input',
+    '[id="1_s_1_l_Postal_Code"] input',
 )
 _BRANCH2_TABS_AFTER_CITY_COMBO_TO_POSTAL = 3
 _BRANCH2_POSTAL_VALUE_CHECK_SELECTORS: tuple[str, ...] = (
-    "input#1_Postal_Code",
+    'input[id="1_Postal_Code"]',
     'input[name="Postal_Code"]',
 )
 
@@ -3630,6 +3638,7 @@ def _branch2_fill_scoped_in_root(
     log_label: str,
     allow_fill_fallback: bool = False,
     max_round_ms: int = 4500,
+    visible_timeout_ms: int = 200,
 ) -> bool:
     """Fill the first visible control matching *selectors* under *scopes* (empty scope = root).
 
@@ -3649,13 +3658,25 @@ def _branch2_fill_scoped_in_root(
         try:
             if loc.count() == 0:
                 return False
-            if not loc.is_visible(timeout=200):
+            _is_postal_td = "Postal_Code" in css or "Postal" in css
+            if _is_postal_td:
+                try:
+                    loc.evaluate(_BRANCH2_JQGRID_SURFACE_CELL_IN_VIEW_JS)
+                except Exception:
+                    pass
+            if not loc.is_visible(timeout=visible_timeout_ms):
                 return False
             try:
                 loc.scroll_into_view_if_needed(timeout=min(900, max(320, int(min(2000, t) * 2))))
             except Exception:
                 pass
             loc.click(timeout=min(2000, t))
+            if _is_postal_td:
+                try:
+                    loc.press("Control+A", timeout=min(500, t))
+                except Exception:
+                    pass
+                time.sleep(0.05)
             try:
                 loc.fill(v, timeout=t)
             except Exception:
@@ -3664,7 +3685,10 @@ def _branch2_fill_scoped_in_root(
                 try:
                     inner = loc.locator("input, textarea").first
                     if inner.count() > 0 and inner.is_visible(timeout=320):
-                        inner.fill(v, timeout=t)
+                        if _is_postal_td:
+                            _branch2_overwrite_locator_value(inner, v, timeout_ms=t)
+                        else:
+                            inner.fill(v, timeout=t)
                     else:
                         loc.press_sequentially(v, delay=12)
                 except Exception:
@@ -3678,7 +3702,10 @@ def _branch2_fill_scoped_in_root(
                         time.sleep(0.13)
                         inner2 = loc.locator("input, textarea").first
                         if inner2.count() > 0 and inner2.is_visible(timeout=280):
-                            inner2.fill(v, timeout=t)
+                            if _is_postal_td:
+                                _branch2_overwrite_locator_value(inner2, v, timeout_ms=t)
+                            else:
+                                inner2.fill(v, timeout=t)
                         else:
                             loc.press_sequentially(v, delay=12)
                     except Exception:
@@ -3973,6 +4000,136 @@ def _branch2_scroll_outer_window_expose_address_jqgrid(page: Page, *, note: Call
     note("Branch (2): outer window scrolled to bottom so Address jqGrid / Postal are in viewport.")
 
 
+def _branch2_postal_input_has_pin(root, pin: str) -> bool:
+    pin = (pin or "").strip()
+    if not pin:
+        return False
+    try:
+        chk = _branch2_locator_union_first(root, _BRANCH2_POSTAL_VALUE_CHECK_SELECTORS)
+        if chk.count() == 0:
+            return False
+        got = (chk.input_value() or "").strip()
+        if not got:
+            return False
+        if pin in got or got == pin:
+            return True
+        digits_pin = "".join(c for c in pin if c.isdigit())
+        digits_got = "".join(c for c in got if c.isdigit())
+        return bool(digits_pin and digits_pin in digits_got)
+    except Exception:
+        return False
+
+
+def _branch2_overwrite_locator_value(loc, value: str, *, timeout_ms: int) -> bool:
+    """Select-all and replace — overwrites prefilled correct/wrong Pincode values."""
+    v = (value or "").strip()
+    if not v:
+        return False
+    t = max(200, int(timeout_ms))
+    try:
+        loc.click(timeout=t)
+        try:
+            loc.press("Control+A", timeout=t)
+        except Exception:
+            pass
+        time.sleep(0.05)
+        try:
+            loc.fill(v, timeout=t)
+            return True
+        except Exception:
+            try:
+                loc.press_sequentially(v, delay=12)
+                return True
+            except Exception:
+                return False
+    except Exception:
+        return False
+
+
+def _branch2_try_activate_tehsil_grid_cell(root) -> None:
+    """Click Tehsil jqGrid display cell so the list-combo input can appear (Hero display mode)."""
+    for css in _BRANCH2_TEHSIL_TD_SELECTORS:
+        try:
+            td = root.locator(css).first
+            if td.count() == 0:
+                continue
+            try:
+                td.evaluate(_BRANCH2_JQGRID_SURFACE_CELL_IN_VIEW_JS)
+            except Exception:
+                pass
+            td.scroll_into_view_if_needed(timeout=1200)
+            td.click(timeout=500)
+            time.sleep(0.12)
+            return
+        except Exception:
+            continue
+
+
+def _branch2_try_fill_postal_jqgrid_cell(
+    root,
+    *,
+    pin: str,
+    action_timeout_ms: int,
+    note: Callable[..., None] | None = None,
+) -> bool:
+    """
+    Activate Pincode jqGrid cell and overwrite prefilled value (correct or wrong) with *pin*.
+    """
+    pin = (pin or "").strip()
+    if not pin:
+        return False
+    t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
+
+    def _postal_td_locator():
+        try:
+            pcell = _branch2_locator_union_first(
+                root, ('td[id="1_s_1_l_Postal_Code"]', '[id="1_s_1_l_Postal_Code"]')
+            )
+            if pcell.count() == 0:
+                return None
+            return pcell
+        except ValueError:
+            return None
+
+    def _attempt_fill(*, via_label: str) -> bool:
+        pcell = _postal_td_locator()
+        if pcell is None:
+            return False
+        try:
+            try:
+                pcell.evaluate(_BRANCH2_JQGRID_SURFACE_CELL_IN_VIEW_JS)
+            except Exception:
+                pass
+            pcell.scroll_into_view_if_needed(timeout=min(2000, t * 4))
+            pcell.click(timeout=t)
+            time.sleep(0.12)
+            inner = pcell.locator("input").first
+            if inner.count() == 0 or not inner.is_visible(timeout=450):
+                try:
+                    pcell.dblclick(timeout=t)
+                except Exception:
+                    pass
+                time.sleep(0.14)
+                inner = pcell.locator("input").first
+            target = inner if inner.count() > 0 and inner.is_visible(timeout=400) else pcell
+            if not _branch2_overwrite_locator_value(target, pin, timeout_ms=t):
+                return False
+            time.sleep(0.2)
+            if _branch2_postal_input_has_pin(root, pin):
+                if callable(note):
+                    note(f"Branch (2): filled Postal Code ({via_label}) → {pin[:48]!r}.")
+                return True
+        except Exception:
+            return False
+        return False
+
+    if _attempt_fill(via_label="jqGrid Pincode td activate + overwrite"):
+        return True
+    _branch2_try_click_address_grid_first_jqgrow(root, note=note or (lambda *_a, **_k: None))
+    time.sleep(0.15)
+    return _attempt_fill(via_label="jqGrid Pincode td after row re-click + overwrite")
+
+
 def _branch2_try_click_address_grid_first_jqgrow(root, *, note: Callable[..., None]) -> None:
     """
     Best-effort: select the first Personal Addresses jqGrid data row so Postal Code ``td`` can enter
@@ -4015,26 +4172,12 @@ def _branch2_try_fill_tehsil_combo_tabs_then_postal(
     if not city or not pin:
         return False
     t = min(int(action_timeout_ms), _BRANCH2_PLAYWRIGHT_ACTION_CAP_MS)
+
+    _branch2_try_activate_tehsil_grid_cell(root)
     try:
         loc = _branch2_locator_union_first(root, _BRANCH2_CITY_AS_TEHSIL_COMBO_SELECTORS)
     except ValueError:
         return False
-
-    def _postal_input_has_pin() -> bool:
-        try:
-            chk = _branch2_locator_union_first(root, _BRANCH2_POSTAL_VALUE_CHECK_SELECTORS)
-            if chk.count() == 0:
-                return False
-            got = (chk.input_value() or "").strip()
-            if not got:
-                return False
-            if pin in got or got == pin:
-                return True
-            digits_pin = "".join(c for c in pin if c.isdigit())
-            digits_got = "".join(c for c in got if c.isdigit())
-            return bool(digits_pin and digits_pin in digits_got)
-        except Exception:
-            return False
 
     def _tabs_then_type_pin() -> None:
         for _ in range(_BRANCH2_TABS_AFTER_CITY_COMBO_TO_POSTAL):
@@ -4044,48 +4187,10 @@ def _branch2_try_fill_tehsil_combo_tabs_then_postal(
         time.sleep(0.05)
         page.keyboard.type(pin, delay=15)
 
-    def _try_postal_td_click_fill() -> bool:
-        try:
-            pcell = _branch2_locator_union_first(
-                root, ("td#1_s_1_l_Postal_Code", '[id="1_s_1_l_Postal_Code"]')
-            )
-            if pcell.count() == 0:
-                return False
-            pcell.scroll_into_view_if_needed(timeout=min(2000, t * 4))
-            pcell.click(timeout=t)
-            time.sleep(0.1)
-            try:
-                pcell.dblclick(timeout=t)
-            except Exception:
-                pass
-            time.sleep(0.14)
-            inner = pcell.locator("input").first
-            if inner.count() > 0:
-                try:
-                    if inner.is_visible(timeout=400):
-                        inner.fill(pin, timeout=t)
-                    else:
-                        inner.click(timeout=t)
-                        inner.fill(pin, timeout=t)
-                except Exception:
-                    try:
-                        pcell.press_sequentially(pin, delay=12)
-                    except Exception:
-                        return False
-            else:
-                try:
-                    pcell.press_sequentially(pin, delay=12)
-                except Exception:
-                    return False
-            time.sleep(0.2)
-            return _postal_input_has_pin()
-        except Exception:
-            return False
-
     try:
         if loc.count() == 0:
             return False
-        loc.wait_for(state="visible", timeout=min(2500, max(t, 800)))
+        loc.wait_for(state="visible", timeout=min(1200, max(t, 800)))
         loc.scroll_into_view_if_needed(timeout=min(2000, max(t * 4, 800)))
         loc.click(timeout=t)
         loc.fill(city, timeout=t)
@@ -4105,7 +4210,7 @@ def _branch2_try_fill_tehsil_combo_tabs_then_postal(
         time.sleep(0.2)
         _tabs_then_type_pin()
         time.sleep(0.22)
-        if _postal_input_has_pin():
+        if _branch2_postal_input_has_pin(root, pin):
             note(
                 "Branch (2): Tehsil combo + Enter + "
                 f"{_BRANCH2_TABS_AFTER_CITY_COMBO_TO_POSTAL}×Tab + pin "
@@ -4119,14 +4224,16 @@ def _branch2_try_fill_tehsil_combo_tabs_then_postal(
         time.sleep(0.12)
         _tabs_then_type_pin()
         time.sleep(0.22)
-        if _postal_input_has_pin():
+        if _branch2_postal_input_has_pin(root, pin):
             note(
                 "Branch (2): Tehsil + Enter + Esc + "
                 f"{_BRANCH2_TABS_AFTER_CITY_COMBO_TO_POSTAL}×Tab + pin "
                 f"(city={city[:40]!r})."
             )
             return True
-        if _try_postal_td_click_fill():
+        if _branch2_try_fill_postal_jqgrid_cell(
+            root, pin=pin, action_timeout_ms=action_timeout_ms, note=note
+        ):
             note(
                 f"Branch (2): Tehsil filled ({city[:40]!r}); Postal via jqGrid td click after tab path stalled."
             )
@@ -4210,6 +4317,8 @@ def _siebel_video_branch2_address_postal_and_save(
 
     _branch2_scroll_outer_window_expose_address_jqgrid(page, note=note)
 
+    _branch2_try_click_address_grid_first_jqgrow(page, note=note)
+
     city_val = (city or "").strip()
     _postal_scoped_round_ms = min(
         _BRANCH2_POSTAL_SCOPED_FILL_CAP_MS,
@@ -4217,11 +4326,18 @@ def _siebel_video_branch2_address_postal_and_save(
     )
 
     def _fill_postal_in_root(root) -> bool:
-        _branch2_try_click_address_grid_first_jqgrow(root, note=note)
-        if city_val and _branch2_try_fill_tehsil_combo_tabs_then_postal(
-            page,
+        # TEMP: Tehsil combo path disabled — focus on Pincode fill only (re-enable after PIN works).
+        # if city_val and _branch2_try_fill_tehsil_combo_tabs_then_postal(
+        #     page,
+        #     root,
+        #     city=city_val,
+        #     pin=pin,
+        #     action_timeout_ms=action_timeout_ms,
+        #     note=note,
+        # ):
+        #     return True
+        if _branch2_try_fill_postal_jqgrid_cell(
             root,
-            city=city_val,
             pin=pin,
             action_timeout_ms=action_timeout_ms,
             note=note,
@@ -4237,6 +4353,7 @@ def _siebel_video_branch2_address_postal_and_save(
             log_label="Postal Code (scoped, v0.7.06)",
             allow_fill_fallback=True,
             max_round_ms=_postal_scoped_round_ms,
+            visible_timeout_ms=500,
         ) or _branch2_try_fill_union_direct_scroll(
             root,
             _BRANCH2_POSTAL_DIRECT_SELECTORS,
@@ -4246,7 +4363,7 @@ def _siebel_video_branch2_address_postal_and_save(
             allow_fill_fallback=True,
             budget_ms=_BRANCH2_ADDRESS_UNION_FILL_BUDGET_MS,
             root_inner_fallback=(
-                "input#1_Postal_Code",
+                'input[id="1_Postal_Code"]',
                 'input[id="1_Postal_Code"]',
                 'input[name="Postal_Code"]',
             ),

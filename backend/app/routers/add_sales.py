@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
 from app.repositories.add_sales_invoices import list_recent_sales_invoices
+from app.repositories.ist_date_ranges import validate_date_range
 from app.repositories.add_sales_staging import fetch_staging_payload, list_in_process_staging_rows
 from app.repositories.master_ref import (
     REF_TYPE_FINANCER,
@@ -155,6 +156,8 @@ def list_add_sales_in_process(
 def list_add_sales_invoices(
     dealer_id: int | None = Query(None, ge=1),
     days: int = Query(7, ge=1, le=365),
+    date_from: str | None = Query(None, max_length=16, description="IST start date dd-mm-yyyy (with date_to)"),
+    date_to: str | None = Query(None, max_length=16, description="IST end date dd-mm-yyyy (with date_from)"),
     mobile: str | None = Query(None, max_length=MAX_TEXT_CHARS, description="Customer mobile"),
     chassis: str | None = Query(None, max_length=MAX_TEXT_CHARS, description="Chassis / VIN partial or wildcard"),
     engine: str | None = Query(None, max_length=MAX_TEXT_CHARS, description="Engine partial or wildcard"),
@@ -162,9 +165,17 @@ def list_add_sales_invoices(
 ) -> dict[str, Any]:
     """Committed ``sales_master`` rows for Add Sales Invoices tab (last ``days`` IST days on billing_date)."""
     did = resolve_dealer_id(principal, dealer_id)
+    df = (date_from or "").strip() or None
+    dt = (date_to or "").strip() or None
+    if (df and not dt) or (dt and not df):
+        raise HTTPException(status_code=400, detail="Both date_from and date_to are required for a date range.")
+    if df and dt and validate_date_range(df, dt) is None:
+        raise HTTPException(status_code=400, detail="Invalid date range: use dd-mm-yyyy with from <= to.")
     rows = list_recent_sales_invoices(
         dealer_id=did,
         days=days,
+        date_from=df,
+        date_to=dt,
         mobile=mobile,
         chassis=chassis,
         engine=engine,

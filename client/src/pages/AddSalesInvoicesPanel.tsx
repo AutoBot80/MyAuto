@@ -3,7 +3,7 @@ import { apiFetch } from "../api/client";
 import { fetchAddSalesInvoices, type AddSalesInvoiceRow } from "../api/addSales";
 import { openDocumentFileInNewTab } from "../api/customerSearch";
 
-const INVOICES_RECENT_DAYS = 7;
+const INVOICES_RECENT_DAYS = 15;
 
 export interface AddSalesInvoicesPanelProps {
   dealerId: number;
@@ -13,6 +13,11 @@ export interface AddSalesInvoicesPanelProps {
 function cell(value: string | null | undefined): string {
   const s = (value ?? "").trim();
   return s || "—";
+}
+
+function formatCost(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return Math.round(value).toLocaleString("en-IN");
 }
 
 function FolderIcon() {
@@ -201,6 +206,9 @@ export function AddSalesInvoicesPanel({ dealerId, invoicesTabActive }: AddSalesI
                 <th scope="col">Invoice Number</th>
                 <th scope="col">Insurance Policy No.</th>
                 <th scope="col">CPA Policy No.</th>
+                <th scope="col">Ex-Showroom</th>
+                <th scope="col">Insurance Premium</th>
+                <th scope="col">CPA Premium</th>
                 <th scope="col">Scans</th>
               </tr>
             </thead>
@@ -217,6 +225,9 @@ export function AddSalesInvoicesPanel({ dealerId, invoicesTabActive }: AddSalesI
                     <td className="view-vehicles-mono">{cell(r.invoice_number)}</td>
                     <td className="view-vehicles-mono">{cell(r.insurance_policy_num)}</td>
                     <td className="view-vehicles-mono">{cell(r.cpa_policy_num)}</td>
+                    <td className="view-vehicles-mono">{formatCost(r.ex_showroom_amount)}</td>
+                    <td className="view-vehicles-mono">{formatCost(r.insurance_premium)}</td>
+                    <td className="view-vehicles-mono">{formatCost(r.cpa_premium)}</td>
                     <td className="add-sales-invoices-scans-cell">
                       <button
                         type="button"

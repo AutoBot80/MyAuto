@@ -10,6 +10,7 @@ import { AdminPage } from "./pages/AdminPage";
 import { AdminDealersPage } from "./pages/AdminDealersPage";
 import { AdminUsagePage } from "./pages/AdminUsagePage";
 import { DealerDashboardPage } from "./pages/DealerDashboardPage";
+import { SalesReportsPage } from "./pages/SalesReportsPage";
 import { HomePage } from "./pages/HomePage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { ViewCustomerPage } from "./pages/ViewCustomerPage";
@@ -73,7 +74,7 @@ const SERVICE_PAGES: Page[] = ["service-reminders", "contact-us"];
 
 const RTO_PAGES: Page[] = ["rto-status", "contact-us"];
 
-const DEALER_PAGES: Page[] = ["dealer-dashboard", "customer-details", "view-vehicles", "contact-us"];
+const DEALER_PAGES: Page[] = ["dealer-dashboard", "sales-reports", "customer-details", "view-vehicles", "contact-us"];
 
 const ADMIN_PAGES: Page[] = ["admin-dealers", "admin-usage", "admin-tools"];
 
@@ -324,6 +325,10 @@ function App() {
         return <PlaceholderPage title="Service Reminders" />;
       case "dealer-dashboard":
         return <DealerDashboardPage dealerId={dealerId} />;
+      case "sales-reports":
+        return (
+          <SalesReportsPage dealerId={dealerId} isPrincipalDealer={isPrincipalDealer === true} />
+        );
       case "admin-tools":
         return <AdminPage />;
       case "admin-dealers":

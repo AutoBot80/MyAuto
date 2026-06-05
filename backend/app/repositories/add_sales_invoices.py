@@ -7,6 +7,7 @@ from typing import Any
 
 from app.db import get_connection
 from app.repositories.add_sales_staging import ist_window_start_timestamptz
+from app.repositories.ist_date_ranges import validate_date_range
 
 
 def _search_pattern(raw: str) -> str:
@@ -39,6 +40,15 @@ def _format_invoice_date(val: Any) -> str | None:
     return str(val)
 
 
+def _to_float_or_none(val: Any) -> float | None:
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except Exception:
+        return None
+
+
 def _serialize_row(r: dict[str, Any]) -> dict[str, Any]:
     out = dict(r)
     mob = out.get("mobile_number")
@@ -48,6 +58,9 @@ def _serialize_row(r: dict[str, Any]) -> dict[str, Any]:
         out["mobile"] = None
     out.pop("mobile_number", None)
     out["invoice_date"] = _format_invoice_date(out.pop("billing_date", None))
+    out["ex_showroom_amount"] = _to_float_or_none(out.get("ex_showroom_amount"))
+    out["insurance_premium"] = _to_float_or_none(out.get("insurance_premium"))
+    out["cpa_premium"] = _to_float_or_none(out.get("cpa_premium"))
     for k in ("customer_name", "model", "invoice_number", "insurance_policy_num", "cpa_policy_num", "file_location"):
         v = out.get(k)
         if isinstance(v, str):
@@ -59,23 +72,32 @@ def list_recent_sales_invoices(
     *,
     dealer_id: int,
     days: int = 7,
+    date_from: str | None = None,
+    date_to: str | None = None,
     mobile: str | None = None,
     chassis: str | None = None,
     engine: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     ``sales_master`` rows for dealer in last ``days`` IST calendar days on ``billing_date``,
-    newest first. Optional filters AND together.
+    or inclusive ``date_from``/``date_to`` (dd-mm-yyyy IST) when both are valid.
+    Newest first. Optional filters AND together.
     """
     did = int(dealer_id)
-    d = max(1, min(int(days), 365))
-    ist_start = ist_window_start_timestamptz(d)
 
-    where: list[str] = [
-        "sm.dealer_id = %s",
-        f"sm.billing_date >= {ist_start}",
-    ]
+    where: list[str] = ["sm.dealer_id = %s"]
     params: list[Any] = [did]
+
+    bounds = validate_date_range(date_from, date_to)
+    if bounds is not None:
+        start, end = bounds
+        where.append("(sm.billing_date AT TIME ZONE 'Asia/Kolkata')::date >= %s::date")
+        where.append("(sm.billing_date AT TIME ZONE 'Asia/Kolkata')::date <= %s::date")
+        params.extend([start.isoformat(), end.isoformat()])
+    else:
+        d = max(1, min(int(days), 365))
+        ist_start = ist_window_start_timestamptz(d)
+        where.append(f"sm.billing_date >= {ist_start}")
 
     mobile_clean = (mobile or "").strip()
     if mobile_clean:
@@ -118,13 +140,16 @@ def list_recent_sales_invoices(
                     sm.billing_date,
                     sm.invoice_number,
                     sm.file_location,
+                    vm.vehicle_ex_showroom_price AS ex_showroom_amount,
                     main_ins.policy_num AS insurance_policy_num,
-                    cpa_ins.policy_num AS cpa_policy_num
+                    main_ins.premium AS insurance_premium,
+                    cpa_ins.policy_num AS cpa_policy_num,
+                    cpa_ins.premium AS cpa_premium
                 FROM sales_master sm
                 JOIN customer_master cm ON cm.customer_id = sm.customer_id
                 JOIN vehicle_master vm ON vm.vehicle_id = sm.vehicle_id
                 LEFT JOIN LATERAL (
-                    SELECT im.policy_num
+                    SELECT im.policy_num, im.premium
                     FROM insurance_master im
                     WHERE im.customer_id = sm.customer_id
                       AND im.vehicle_id = sm.vehicle_id
@@ -133,7 +158,7 @@ def list_recent_sales_invoices(
                     LIMIT 1
                 ) main_ins ON true
                 LEFT JOIN LATERAL (
-                    SELECT im.policy_num
+                    SELECT im.policy_num, im.premium
                     FROM insurance_master im
                     WHERE im.customer_id = sm.customer_id
                       AND im.vehicle_id = sm.vehicle_id

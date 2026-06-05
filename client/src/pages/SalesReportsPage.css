@@ -1,0 +1,65 @@
+.sales-reports-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.sales-reports-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1.25rem;
+}
+
+.sales-reports-date-field label {
+  display: block;
+  font-size: 0.85rem;
+  margin-bottom: 0.2rem;
+}
+
+.sales-reports-date-field input {
+  min-width: 8.5rem;
+}
+
+.sales-reports-period {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.sales-reports-period-legend {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-right: 0.25rem;
+}
+
+.sales-reports-radio-label {
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.sales-reports-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sales-reports-hint {
+  font-size: 0.85rem;
+  color: var(--muted-fg, #666);
+  margin: 0;
+}
+
+.sales-reports-panel {
+  margin-top: 0.25rem;
+}
+
+.sales-reports-table-wrap {
+  overflow-x: auto;
+}

@@ -12,6 +12,7 @@ from app.config import CHALLANS_DIR, DMS_BASE_URL, MAX_TEXT_CHARS, UPLOAD_MAX_FI
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
 from app.repositories import challan_committed as committed_repo
+from app.repositories.ist_date_ranges import validate_date_range
 from app.repositories import challan_details_staging as detail_repo
 from app.repositories import challan_master_staging as master_repo
 from app.services.add_subdealer_challan_service import (
@@ -435,12 +436,26 @@ def list_committed_invoices_recent(
     principal: Principal = Depends(get_principal),
     dealer_id: int | None = Query(None, description="dealer_from; uses token dealer if omitted"),
     days: int = Query(365, ge=1, le=3650, description="Include masters with created_at in the last N days (NULL created_at always included)"),
+    date_from: str | None = Query(None, max_length=16, description="IST start date dd-mm-yyyy (with date_to)"),
+    date_to: str | None = Query(None, max_length=16, description="IST end date dd-mm-yyyy (with date_from)"),
     limit: int = Query(500, ge=1, le=2000),
 ) -> list[dict]:
     """Committed ``challan_master`` rows (subdealer invoices) for the Invoices tab, newest first."""
     did = resolve_dealer_id(principal, dealer_id)
+    df = (date_from or "").strip() or None
+    dt = (date_to or "").strip() or None
+    if (df and not dt) or (dt and not df):
+        raise HTTPException(status_code=400, detail="Both date_from and date_to are required for a date range.")
+    if df and dt and validate_date_range(df, dt) is None:
+        raise HTTPException(status_code=400, detail="Invalid date range: use dd-mm-yyyy with from <= to.")
     try:
-        return committed_repo.list_committed_masters_for_dealer(did, days=days, limit=limit)
+        return committed_repo.list_committed_masters_for_dealer(
+            did,
+            days=days,
+            date_from=df,
+            date_to=dt,
+            limit=limit,
+        )
     except pg_errors.UndefinedTable as e:
         logger.warning("subdealer_challan invoices: missing schema: %s", e)
         raise HTTPException(status_code=503, detail=CHALLAN_COMMITTED_SCHEMA_HINT) from e
