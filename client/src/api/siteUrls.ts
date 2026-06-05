@@ -10,6 +10,8 @@ export interface SiteUrls {
   /** Informational only; Vahan automation not yet wired. */
   vahan_base_url?: string;
   insurance_base_url: string;
+  /** True when backend ``ENVIRONMENT`` is prod/production (case-insensitive). */
+  environment_is_production?: boolean;
 }
 
 /**

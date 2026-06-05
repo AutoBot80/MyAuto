@@ -4086,6 +4086,14 @@
   min-width: 88px;
 }
 
+.subdealer-challan-discount-example {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.35;
+}
+
 /* Scroll region so bottom table rows stay reachable (explicit user request) */
 .subdealer-challan-tables-scroll {
   flex: 1;

@@ -74,6 +74,9 @@ def list_committed_masters_for_dealer(
                     cm.invoice_number,
                     cm.total_ex_showroom_price,
                     cm.total_discount,
+                    cm.add_transport_cost,
+                    cm.reduce_discount_by_percent,
+                    cm.transport_cost_per_vehicle,
                     cm.created_at,
                     COALESCE(TRIM(dr.dealer_name), '') AS to_dealer_name
                 FROM challan_master cm

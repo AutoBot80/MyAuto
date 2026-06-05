@@ -474,7 +474,7 @@ This document lists the current database tables and their columns. **Executable 
 
 ## 13) `challan_master_staging` and `challan_details_staging`
 
-**Purpose:** Subdealer challan **before** commit to `challan_master` / `challan_details`: one **header** row per batch (`challan_master_staging`) and **per-vehicle** lines (`challan_details_staging`), joined by `challan_batch_id` (UUID). Replaces the older single-table `challan_staging` model for new installs (**`DDL/23_challan_master_staging.sql`**, **`DDL/24_challan_details_staging.sql`**). When **`add_transport_cost`** is true, **`transport_cost_per_vehicle`** is stored on the header; the order phase subtracts that amount from each vehicle’s resolved subdealer discount (minimum zero), updates **`vehicle_inventory_master.discount`**, and passes the net values in **`order_line_vehicles`** to Siebel (**`add_subdealer_challan_service.line_discount_after_transport`** — **LLD** **§2.4e**, **6.301**).
+**Purpose:** Subdealer challan **before** commit to `challan_master` / `challan_details`: one **header** row per batch (`challan_master_staging`) and **per-vehicle** lines (`challan_details_staging`), joined by `challan_batch_id` (UUID). Replaces the older single-table `challan_staging` model for new installs (**`DDL/23_challan_master_staging.sql`**, **`DDL/24_challan_details_staging.sql`**). When **`add_transport_cost`** is true (UI **Reduce Discount**), **`reduce_discount_by_percent`** and **`transport_cost_per_vehicle`** are stored on the header; the order phase computes `base − (base × percent / 100) − cost` per line (negative results allowed), updates **`vehicle_inventory_master.discount`**, and passes net values in **`order_line_vehicles`** to Siebel (**`add_subdealer_challan_service.line_discount_after_transport`**).
 
 ### `challan_master_staging`
 
@@ -489,14 +489,15 @@ This document lists the current database tables and their columns. **Executable 
 | `num_vehicles_prepared` | `integer` | NO | `0` | Lines in Ready or Committed (derived) |
 | `invoice_complete` | `boolean` | NO | `FALSE` | Set when invoice number is captured |
 | `invoice_status` | `varchar(32)` | NO | `'Pending'` | **Pending** \| **Failed** \| **Completed** |
-| `add_transport_cost` | `boolean` | NO | `FALSE` | When true, subtract `transport_cost_per_vehicle` from each line discount before Siebel order attach |
-| `transport_cost_per_vehicle` | `numeric(12,2)` | YES |  | Per-vehicle transport amount (same currency as discount); meaningful when `add_transport_cost` is true |
+| `add_transport_cost` | `boolean` | NO | `FALSE` | When true (**Reduce Discount** in UI), apply percent + per-vehicle reduction before Siebel order attach |
+| `transport_cost_per_vehicle` | `numeric(12,2)` | YES |  | Per-vehicle amount (same currency as discount) deducted after percent reduction |
+| `reduce_discount_by_percent` | `numeric(5,2)` | YES |  | Percent of base discount subtracted per line (e.g. `10` = 10%); meaningful when `add_transport_cost` is true |
 | `created_at` | `timestamptz` | NO | `CURRENT_TIMESTAMP` | Processed tab / window filters |
 | `last_run_at` | `timestamptz` | YES |  | Set when a process/retry DMS run completes (**Latest run** in UI); nullable until first run |
 
 **Primary key:** `challan_batch_id`
 
-**Scripts:** `DDL/23_challan_master_staging.sql`; existing DBs: `DDL/alter/23a_challan_master_staging_last_run_at.sql`, `DDL/alter/20c_challan_master_transport_cost.sql`
+**Scripts:** `DDL/23_challan_master_staging.sql`; existing DBs: `DDL/alter/23a_challan_master_staging_last_run_at.sql`, `DDL/alter/20c_challan_master_transport_cost.sql`, `DDL/alter/20e_challan_reduce_discount_percent.sql`
 
 ### `challan_details_staging`
 
@@ -523,7 +524,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 ## 14) `challan_master`
 
-**Purpose:** Challan header after validation (book number, dealers, vehicle count). **`total_ex_showroom_price`** and **`total_discount`** are summed from linked **`vehicle_inventory_master`** rows at commit; **`add_transport_cost`** / **`transport_cost_per_vehicle`** copy the staging header snapshot for audit (same semantics as staging: when the flag was true, per-line discounts in inventory were already net of transport before **`order_line_vehicles`**).
+**Purpose:** Challan header after validation (book number, dealers, vehicle count). **`total_ex_showroom_price`** and **`total_discount`** are summed from linked **`vehicle_inventory_master`** rows at commit; **`add_transport_cost`** / **`reduce_discount_by_percent`** / **`transport_cost_per_vehicle`** copy the staging header snapshot for audit.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
@@ -537,8 +538,9 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `invoice_number` | `varchar(128)` | YES |  | Invoice reference when applicable |
 | `total_ex_showroom_price` | `numeric(12,2)` | YES |  | Sum of ex-showroom across lines |
 | `total_discount` | `numeric(12,2)` | YES |  | Total discount for the challan |
-| `add_transport_cost` | `boolean` | NO | `FALSE` | Snapshot from staging: transport deducted from per-line discount when true |
+| `add_transport_cost` | `boolean` | NO | `FALSE` | Snapshot from staging: discount reduction applied when true |
 | `transport_cost_per_vehicle` | `numeric(12,2)` | YES |  | Snapshot from staging; per-vehicle amount when flag was true |
+| `reduce_discount_by_percent` | `numeric(5,2)` | YES |  | Snapshot from staging; percent of base discount deducted when flag was true |
 | `created_at` | `timestamptz` | YES |  | UTC insert time when the row is committed; NULL on legacy rows before this column |
 
 **Primary key:** `challan_master_pkey` on (`challan_id`)
@@ -547,7 +549,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 - `fk_challan_master_dealer_from`: (`dealer_from`) → `dealer_ref(dealer_id)`
 - `fk_challan_master_dealer_to`: (`dealer_to`) → `dealer_ref(dealer_id)`
 
-**Scripts:** `DDL/20_challan_master.sql`; existing DBs: `DDL/alter/18a_challan_master_add_order_invoice_totals.sql`, `DDL/alter/20b_challan_master_created_at.sql`, `DDL/alter/20c_challan_master_transport_cost.sql`
+**Scripts:** `DDL/20_challan_master.sql`; existing DBs: `DDL/alter/18a_challan_master_add_order_invoice_totals.sql`, `DDL/alter/20b_challan_master_created_at.sql`, `DDL/alter/20c_challan_master_transport_cost.sql`, `DDL/alter/20e_challan_reduce_discount_percent.sql`
 
 ---
 
@@ -842,6 +844,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.93 | May 2026 | **`master_ref.comments`** (CPA portal **https** URL); **`dealer_ref.cpa_insurer`** + **`cpa_insurer_ref_type`** (generated) + **`fk_dealer_ref_cpa_insurer`**; seed **Alliance Assure** — **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**, greenfield **`DDL/28_master_ref.sql`** / **`DDL/04b_dealer_ref.sql`** — **BRD** **3.170**; **LLD** **6.302**; **HLD** **1.173** |
 | 2.94 | May 2026 | **`process_failure_log`** — terminal client-visible automation failures (upsert by dealer + process + entity key); **`DDL/30_process_failure_log.sql`** — Admin Usage **Failure Logs**; **`GET /admin/failure-logs`**, **`POST /sidecar/failure-log`** |
 | 2.95 | May 2026 | **No schema change.** For **`master_ref`** with **`ref_type = INSURER`**, **`comments = 'Y'`** marks rows included in the Add Sales Section 3 insurer dropdown; **`portal_insurers`** on **`GET /add-sales/dealer-cpa-context`** / create-invoice-eligibility (with **`dealer_id`**) — **`backend/app/repositories/master_ref.py`**, **`backend/app/routers/add_sales.py`**, **`client`** |
+| 2.96 | Jun 2026 | **`challan_master_staging`**, **`challan_master`**: **`reduce_discount_by_percent`** (`numeric(5,2)`); order phase formula `base − (base × percent / 100) − cost` (negative net allowed); **`DDL/alter/20e_challan_reduce_discount_percent.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`**, **`DDL/20_challan_master.sql`** |
 
 
 ## `process_failure_log`

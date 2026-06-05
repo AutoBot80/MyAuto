@@ -32,6 +32,7 @@ def commit_challan_masters(
     invoice_number: str | None,
     add_transport_cost: bool = False,
     transport_cost_per_vehicle: float | None = None,
+    reduce_discount_by_percent: float | None = None,
     total_ex_showroom_price: float | None = None,
 ) -> int:
     """
@@ -137,7 +138,8 @@ def commit_challan_masters(
                             total_ex_showroom_price = %s,
                             total_discount = %s,
                             add_transport_cost = %s,
-                            transport_cost_per_vehicle = %s
+                            transport_cost_per_vehicle = %s,
+                            reduce_discount_by_percent = %s
                         WHERE challan_id = %s
                         """,
                         (
@@ -151,6 +153,7 @@ def commit_challan_masters(
                             total_disc_f,
                             bool(add_transport_cost),
                             None if not add_transport_cost else transport_cost_per_vehicle,
+                            None if not add_transport_cost else reduce_discount_by_percent,
                             challan_id,
                         ),
                     )
@@ -162,9 +165,10 @@ def commit_challan_masters(
                             num_vehicles, order_number, invoice_number,
                             total_ex_showroom_price, total_discount,
                             add_transport_cost, transport_cost_per_vehicle,
+                            reduce_discount_by_percent,
                             created_at
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING challan_id
                         """,
                         (
@@ -179,6 +183,7 @@ def commit_challan_masters(
                             total_disc_f,
                             bool(add_transport_cost),
                             None if not add_transport_cost else transport_cost_per_vehicle,
+                            None if not add_transport_cost else reduce_discount_by_percent,
                             created,
                         ),
                     )
@@ -194,9 +199,10 @@ def commit_challan_masters(
                         num_vehicles, order_number, invoice_number,
                         total_ex_showroom_price, total_discount,
                         add_transport_cost, transport_cost_per_vehicle,
+                        reduce_discount_by_percent,
                         created_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING challan_id
                     """,
                     (
@@ -211,6 +217,7 @@ def commit_challan_masters(
                         total_disc_f,
                         bool(add_transport_cost),
                         None if not add_transport_cost else transport_cost_per_vehicle,
+                        None if not add_transport_cost else reduce_discount_by_percent,
                         created,
                     ),
                 )

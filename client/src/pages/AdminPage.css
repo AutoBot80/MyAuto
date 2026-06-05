@@ -20,3 +20,14 @@
   right: 0;
 }
 
+.admin-page-prod-hint {
+  position: absolute;
+  top: 2.75rem;
+  right: 0;
+  margin: 0;
+  max-width: 18rem;
+  font-size: 0.8125rem;
+  color: #667085;
+  text-align: right;
+}
+

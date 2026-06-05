@@ -7,6 +7,8 @@ import {
 import {
   cell,
   formatChallanDateDisplay,
+  formatCostPerVehicleDisplay,
+  formatDiscountReductionDisplay,
   formatInrAmount,
   formatLatestRunDisplay,
 } from "../utils/formatDisplay";
@@ -92,6 +94,8 @@ export function SalesReportsSubdealersTable({
                 <th scope="col">Vehicles</th>
                 <th scope="col">Challan date</th>
                 <th scope="col">Challan no.</th>
+                <th scope="col">Discount Reduction</th>
+                <th scope="col">Cost per vehicle</th>
                 <th scope="col">Order no.</th>
                 <th scope="col">Invoice no.</th>
                 <th scope="col">Created</th>
@@ -121,6 +125,8 @@ export function SalesReportsSubdealersTable({
                     <td>{r.num_vehicles ?? "—"}</td>
                     <td>{formatChallanDateDisplay(r.challan_date)}</td>
                     <td>{cell(r.challan_book_num)}</td>
+                    <td>{formatDiscountReductionDisplay(r)}</td>
+                    <td>{formatCostPerVehicleDisplay(r)}</td>
                     <td>{cell(r.order_number)}</td>
                     <td>{cell(r.invoice_number)}</td>
                     <td>{formatLatestRunDisplay(r.created_at)}</td>

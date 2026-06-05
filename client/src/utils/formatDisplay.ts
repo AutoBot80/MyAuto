@@ -84,3 +84,44 @@ export function formatInrAmount(n: number | null | undefined): string {
     return String(n);
   }
 }
+
+export type ChallanDiscountReductionRow = {
+  add_transport_cost?: boolean;
+  reduce_discount_by_percent?: number | null;
+  transport_cost_per_vehicle?: number | null;
+};
+
+export function formatDiscountReductionDisplay(r: ChallanDiscountReductionRow): string {
+  if (!r.add_transport_cost) return "—";
+  const n = Number(r.reduce_discount_by_percent);
+  if (!Number.isFinite(n)) return "—";
+  const rounded = Math.round(n * 100) / 100;
+  const text = Number.isInteger(rounded) ? String(rounded) : String(rounded);
+  return `${text}%`;
+}
+
+export function formatCostPerVehicleDisplay(r: ChallanDiscountReductionRow): string {
+  if (!r.add_transport_cost) return "—";
+  const n = Number(r.transport_cost_per_vehicle);
+  if (!Number.isFinite(n)) return "—";
+  return formatInrAmount(n);
+}
+
+const REDUCE_DISCOUNT_EXAMPLE_BASE = 1000;
+
+export function formatReduceDiscountExample(
+  percentRaw: string,
+  costRaw: string
+): string | null {
+  const pct = Number(percentRaw.trim());
+  const cost = Number(costRaw.trim());
+  if (!Number.isFinite(pct) || !Number.isFinite(cost)) return null;
+  const base = REDUCE_DISCOUNT_EXAMPLE_BASE;
+  const pctPart = (base * pct) / 100;
+  const result = base - pctPart - cost;
+  const baseFmt = formatCost(base);
+  const costFmt = formatCost(Math.round(cost));
+  const resultFmt = formatCost(Math.round(result * 100) / 100);
+  const pctText = Number.isInteger(pct) ? String(pct) : String(pct);
+  return `Discount ${baseFmt} - (${baseFmt} × ${pctText}%) - ${costFmt} = Discount of ${resultFmt}`;
+}

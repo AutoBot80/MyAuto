@@ -70,6 +70,7 @@ export interface ElectronAPI {
       dms_real_contact_url_configured: boolean;
       vahan_base_url: string;
       insurance_base_url: string;
+      environment_is_production: boolean;
     }>;
   };
   updater: {

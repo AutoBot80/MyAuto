@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS challan_master_staging (
     invoice_status VARCHAR(32) NOT NULL DEFAULT 'Pending',
     add_transport_cost BOOLEAN NOT NULL DEFAULT FALSE,
     transport_cost_per_vehicle NUMERIC(12, 2),
+    reduce_discount_by_percent NUMERIC(5, 2),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_run_at TIMESTAMPTZ,
     CONSTRAINT fk_challan_master_staging_from FOREIGN KEY (from_dealer_id) REFERENCES dealer_ref(dealer_id),
@@ -31,4 +32,5 @@ COMMENT ON COLUMN challan_master_staging.num_vehicles IS 'Line count when Create
 COMMENT ON COLUMN challan_master_staging.num_vehicles_prepared IS 'Lines that passed prepare_vehicle + inventory (Ready or Committed)';
 COMMENT ON COLUMN challan_master_staging.last_run_at IS 'Set when process/retry DMS batch finishes';
 COMMENT ON COLUMN challan_master_staging.add_transport_cost IS 'When true, transport_cost_per_vehicle is subtracted from each line discount before Siebel attach';
-COMMENT ON COLUMN challan_master_staging.transport_cost_per_vehicle IS 'Per-vehicle transport amount (same currency as discount)';
+COMMENT ON COLUMN challan_master_staging.transport_cost_per_vehicle IS 'Per-vehicle amount (same currency as discount) deducted after percent reduction';
+COMMENT ON COLUMN challan_master_staging.reduce_discount_by_percent IS 'When add_transport_cost is true, percent of base discount subtracted per line (e.g. 10 = 10%)';

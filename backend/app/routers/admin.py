@@ -9,7 +9,13 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.config import CHALLANS_DIR, STORAGE_USE_S3, get_ocr_output_dir, get_uploads_dir
+from app.config import (
+    CHALLANS_DIR,
+    ENVIRONMENT_IS_PRODUCTION,
+    STORAGE_USE_S3,
+    get_ocr_output_dir,
+    get_uploads_dir,
+)
 from app.services.dealer_storage import (
     list_admin_folder_s3,
     presigned_challans_get_by_rel_path,
@@ -472,6 +478,11 @@ def get_admin_folder_file(
 @router.post("/reset-all-data")
 def reset_all_data(payload: ResetAllDataRequest) -> dict:
     """Delete all public base-table rows except *ref tables (LIKE '%ref') and PRESERVED_EXTRA_TABLES."""
+    if ENVIRONMENT_IS_PRODUCTION:
+        raise HTTPException(
+            status_code=403,
+            detail="Delete All Data is disabled in production (ENVIRONMENT=prod/production).",
+        )
     if payload.confirmation != CONFIRMATION_TEXT:
         raise HTTPException(status_code=400, detail="Invalid confirmation text")
 

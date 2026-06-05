@@ -17,6 +17,11 @@ import {
   type ChallanMasterProcessedRow,
   type SubdealerChallanLine,
 } from "../api/subdealerChallan";
+import {
+  formatCostPerVehicleDisplay,
+  formatDiscountReductionDisplay,
+  formatReduceDiscountExample,
+} from "../utils/formatDisplay";
 const ROWS_PER_TABLE = 13;
 const TABLE_COUNT = 2;
 const PAGE_SIZE = ROWS_PER_TABLE * TABLE_COUNT;
@@ -96,13 +101,6 @@ function formatPreparedOverTotal(r: ChallanMasterProcessedRow): string {
   const t = r.num_vehicles ?? 0;
   if (t <= 0) return "—";
   return `${p}/${t}`;
-}
-
-function formatTransportCostDisplay(r: ChallanMasterProcessedRow): string {
-  if (!r.add_transport_cost) return "—";
-  const n = Number(r.transport_cost_per_vehicle);
-  if (!Number.isFinite(n)) return "—";
-  return Number.isInteger(n) ? String(n) : String(n);
 }
 
 /**
@@ -318,9 +316,14 @@ export function SubdealerChallanPage({
   const [invoiceDetailsLoading, setInvoiceDetailsLoading] = useState(false);
   const [invoiceDetailsError, setInvoiceDetailsError] = useState<string | null>(null);
   const [addTransportCost, setAddTransportCost] = useState(false);
+  const [reduceDiscountByPercent, setReduceDiscountByPercent] = useState("");
   const [transportCostPerVehicle, setTransportCostPerVehicle] = useState("");
 
   const vehicleCount = useMemo(() => uniqueVehicleCount(rows), [rows]);
+  const reduceDiscountExample = useMemo(() => {
+    if (!addTransportCost) return null;
+    return formatReduceDiscountExample(reduceDiscountByPercent, transportCostPerVehicle);
+  }, [addTransportCost, reduceDiscountByPercent, transportCostPerVehicle]);
 
 
   const selectedProcessedRow = useMemo(
@@ -720,14 +723,20 @@ export function SubdealerChallanPage({
     }
     setError(null);
     if (addTransportCost) {
-      const raw = transportCostPerVehicle.trim();
-      if (raw === "") {
-        setError("Enter cost per vehicle when Add transport cost is checked.");
+      const pctRaw = reduceDiscountByPercent.trim();
+      const costRaw = transportCostPerVehicle.trim();
+      if (pctRaw === "") {
+        setError("Enter Reduce Discount by % when Reduce Discount is checked.");
         return;
       }
-      const n = Number(raw);
-      if (!Number.isFinite(n) || n < 0) {
-        setError("Cost per vehicle must be a valid number that is zero or positive.");
+      if (costRaw === "") {
+        setError("Enter cost per vehicle when Reduce Discount is checked.");
+        return;
+      }
+      const pct = Number(pctRaw);
+      const cost = Number(costRaw);
+      if (!Number.isFinite(pct) || !Number.isFinite(cost)) {
+        setError("Reduce Discount by % and Cost per vehicle must be valid numbers.");
         return;
       }
     }
@@ -738,8 +747,10 @@ export function SubdealerChallanPage({
         raw_chassis: r.chassisNo.trim(),
       }));
       let transportNum: number | undefined;
+      let reducePct: number | undefined;
       if (addTransportCost) {
         transportNum = Number(transportCostPerVehicle.trim());
+        reducePct = Number(reduceDiscountByPercent.trim());
       }
       const st = await createChallanStaging({
         from_dealer_id: dealerId,
@@ -749,6 +760,7 @@ export function SubdealerChallanPage({
         lines,
         add_transport_cost: addTransportCost,
         transport_cost_per_vehicle: addTransportCost ? transportNum : undefined,
+        reduce_discount_by_percent: addTransportCost ? reducePct : undefined,
       });
       const stagingNotes: string[] = [];
       const ex = st.dropped_existing_same_book_date ?? 0;
@@ -929,7 +941,7 @@ export function SubdealerChallanPage({
         </button>
       </div>
 
-        <div className="subdealer-challan-transport-row" role="group" aria-label="Transport cost">
+        <div className="subdealer-challan-transport-row" role="group" aria-label="Reduce discount">
           <label className="subdealer-challan-transport-check">
             <input
               type="checkbox"
@@ -937,11 +949,27 @@ export function SubdealerChallanPage({
               onChange={(e) => {
                 const on = e.target.checked;
                 setAddTransportCost(on);
-                if (!on) setTransportCostPerVehicle("");
+                if (!on) {
+                  setReduceDiscountByPercent("");
+                  setTransportCostPerVehicle("");
+                }
               }}
               disabled={loading || processingChallan}
             />
-            <span>Add transport cost</span>
+            <span>Reduce Discount</span>
+          </label>
+          <label className="subdealer-challan-transport-cost-label" htmlFor="sdc-reduce-discount-pct">
+            Reduce Discount by %
+            <input
+              id="sdc-reduce-discount-pct"
+              type="number"
+              className="subdealer-challan-input subdealer-challan-transport-cost-input"
+              step="0.01"
+              value={reduceDiscountByPercent}
+              onChange={(e) => setReduceDiscountByPercent(e.target.value)}
+              disabled={!addTransportCost || loading || processingChallan}
+              aria-disabled={!addTransportCost}
+            />
           </label>
           <label className="subdealer-challan-transport-cost-label" htmlFor="sdc-transport-cost">
             Cost per vehicle
@@ -949,7 +977,6 @@ export function SubdealerChallanPage({
               id="sdc-transport-cost"
               type="number"
               className="subdealer-challan-input subdealer-challan-transport-cost-input"
-              min={0}
               step="0.01"
               value={transportCostPerVehicle}
               onChange={(e) => setTransportCostPerVehicle(e.target.value)}
@@ -957,6 +984,11 @@ export function SubdealerChallanPage({
               aria-disabled={!addTransportCost}
             />
           </label>
+          {reduceDiscountExample ? (
+            <p className="subdealer-challan-discount-example" aria-live="polite">
+              {reduceDiscountExample}
+            </p>
+          ) : null}
         </div>
 
       {showSummaryBar && (
@@ -1164,6 +1196,8 @@ export function SubdealerChallanPage({
                         <th scope="col">Vehicles</th>
                         <th scope="col">Challan date</th>
                         <th scope="col">Challan no.</th>
+                        <th scope="col">Discount Reduction</th>
+                        <th scope="col">Cost per vehicle</th>
                         <th scope="col">Order no.</th>
                         <th scope="col">Invoice no.</th>
                         <th scope="col">Created</th>
@@ -1195,6 +1229,8 @@ export function SubdealerChallanPage({
                             <td>{r.num_vehicles ?? "—"}</td>
                             <td>{formatChallanDateDisplay(r.challan_date)}</td>
                             <td>{(r.challan_book_num || "").trim() || "—"}</td>
+                            <td>{formatDiscountReductionDisplay(r)}</td>
+                            <td>{formatCostPerVehicleDisplay(r)}</td>
                             <td>{(r.order_number || "").trim() || "—"}</td>
                             <td>{(r.invoice_number || "").trim() || "—"}</td>
                             <td>{formatLatestRunDisplay(r.created_at)}</td>
@@ -1341,8 +1377,11 @@ export function SubdealerChallanPage({
                       <th scope="col">To dealer</th>
                       <th scope="col">Challan date</th>
                       <th scope="col">Challan number</th>
-                      <th scope="col" className="challans-proc-col--transport" title="Transport cost per vehicle">
-                        Transport
+                      <th scope="col" className="challans-proc-col--transport" title="Reduce Discount by %">
+                        Discount Reduction
+                      </th>
+                      <th scope="col" className="challans-proc-col--transport" title="Cost per vehicle">
+                        Cost per vehicle
                       </th>
                       <th scope="col" title="Vehicles prepared vs total in this batch">
                         Vehicles Prepared
@@ -1384,7 +1423,8 @@ export function SubdealerChallanPage({
                           <td>{formatDealerDisplay(r.to_dealer_name, r.to_dealer_id)}</td>
                           <td>{formatChallanDateDisplay(r.challan_date)}</td>
                           <td>{(r.challan_book_num || "").trim() || "—"}</td>
-                          <td className="challans-proc-col--transport">{formatTransportCostDisplay(r)}</td>
+                          <td className="challans-proc-col--transport">{formatDiscountReductionDisplay(r)}</td>
+                          <td className="challans-proc-col--transport">{formatCostPerVehicleDisplay(r)}</td>
                           <td>{formatPreparedOverTotal(r)}</td>
                           <td>{(r.dms_order_number || "").trim() || "—"}</td>
                           <td>

@@ -1,6 +1,7 @@
 """Subdealer challan: OCR parse Daily Delivery Report uploads + staging / DMS batch."""
 
 import logging
+import math
 import uuid
 from pathlib import Path
 
@@ -71,7 +72,11 @@ class CreateChallanStagingRequest(BaseModel):
     add_transport_cost: bool = False
     transport_cost_per_vehicle: float | None = Field(
         None,
-        description="Required when add_transport_cost is true; subtracted from each line discount in order phase.",
+        description="Required when add_transport_cost is true; per-vehicle amount subtracted after percent reduction.",
+    )
+    reduce_discount_by_percent: float | None = Field(
+        None,
+        description="Required when add_transport_cost is true; percent of base discount subtracted per line.",
     )
 
 
@@ -171,18 +176,31 @@ def create_staging(
 
     add_tc = bool(req.add_transport_cost)
     tcp: float | None = None
+    rdp: float | None = None
     if add_tc:
         if req.transport_cost_per_vehicle is None:
             raise HTTPException(
                 status_code=400,
                 detail="transport_cost_per_vehicle is required when add_transport_cost is true.",
             )
-        if float(req.transport_cost_per_vehicle) < 0:
+        if req.reduce_discount_by_percent is None:
             raise HTTPException(
                 status_code=400,
-                detail="transport_cost_per_vehicle must be zero or positive.",
+                detail="reduce_discount_by_percent is required when add_transport_cost is true.",
             )
-        tcp = float(req.transport_cost_per_vehicle)
+        try:
+            tcp = float(req.transport_cost_per_vehicle)
+            rdp = float(req.reduce_discount_by_percent)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="transport_cost_per_vehicle and reduce_discount_by_percent must be valid numbers.",
+            ) from exc
+        if not math.isfinite(tcp) or not math.isfinite(rdp):
+            raise HTTPException(
+                status_code=400,
+                detail="transport_cost_per_vehicle and reduce_discount_by_percent must be finite numbers.",
+            )
 
     try:
         bid = create_challan_staging_batch(
@@ -193,6 +211,7 @@ def create_staging(
             lines=lines,
             add_transport_cost=add_tc,
             transport_cost_per_vehicle=tcp,
+            reduce_discount_by_percent=rdp,
         )
     except pg_errors.UndefinedTable as e:
         logger.warning("subdealer_challan: missing schema: %s", e)

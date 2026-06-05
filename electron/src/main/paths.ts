@@ -94,6 +94,12 @@ export interface SiteUrlsResult {
   dms_real_contact_url_configured: boolean;
   vahan_base_url: string;
   insurance_base_url: string;
+  environment_is_production: boolean;
+}
+
+function environmentIsProduction(env: Record<string, string>): boolean {
+  const raw = (env["ENVIRONMENT"] || "").trim().toLowerCase();
+  return raw === "prod" || raw === "production";
 }
 
 export function getSiteUrlsFromEnv(): SiteUrlsResult {
@@ -108,6 +114,7 @@ export function getSiteUrlsFromEnv(): SiteUrlsResult {
     dms_real_contact_url_configured: !!(env["DMS_REAL_URL_CONTACT"] || "").trim(),
     vahan_base_url: (env["VAHAN_BASE_URL"] || VAHAN_BASE_URL_DEFAULT).replace(/\/+$/, ""),
     insurance_base_url: (env["INSURANCE_BASE_URL"] || "").replace(/\/+$/, ""),
+    environment_is_production: environmentIsProduction(env),
   };
 }
 

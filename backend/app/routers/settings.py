@@ -6,6 +6,7 @@ from app.config import (
     DMS_BASE_URL,
     DMS_MODE,
     DMS_REAL_URL_CONTACT,
+    ENVIRONMENT_IS_PRODUCTION,
     INSURANCE_BASE_URL,
     VAHAN_BASE_URL,
     dms_automation_is_real_siebel,
@@ -24,4 +25,5 @@ def get_site_urls() -> dict:
         "dms_real_contact_url_configured": bool((DMS_REAL_URL_CONTACT or "").strip()),
         "vahan_base_url": VAHAN_BASE_URL,
         "insurance_base_url": INSURANCE_BASE_URL,
+        "environment_is_production": ENVIRONMENT_IS_PRODUCTION,
     }

@@ -61,15 +61,15 @@ def line_discount_after_transport(
     *,
     add_transport: bool,
     per_vehicle: float | None,
+    reduce_percent: float | None = None,
 ) -> float:
-    """Net line discount for DMS when transport is enabled: base minus per-vehicle amount, floored at zero."""
-    if not add_transport or per_vehicle is None:
+    """Net line discount when Reduce Discount is enabled: base - (base × percent/100) - per_vehicle."""
+    if not add_transport:
         return float(base)
     b = Decimal(str(base))
-    t = Decimal(str(per_vehicle))
-    net = b - t
-    if net < 0:
-        net = Decimal("0")
+    p = Decimal(str(reduce_percent or 0))
+    t = Decimal(str(per_vehicle or 0))
+    net = b - (b * p / Decimal("100")) - t
     return float(net.quantize(Decimal("0.01")))
 # Pass 1: Queued (and Failed when batch-wide retry). Pass 2: retry Failed only when requeue_all_failed.
 MAX_PREP_ROUNDS = 2
@@ -263,9 +263,14 @@ def _run_order_phase(
     master_row = master_repo.fetch_master(challan_batch_id) or {}
     add_tc = bool(master_row.get("add_transport_cost"))
     raw_tcp = master_row.get("transport_cost_per_vehicle")
+    raw_pct = master_row.get("reduce_discount_by_percent")
     tcp = float(raw_tcp) if raw_tcp is not None else None
-    if add_tc and tcp is not None:
-        logln(f"Transport cost enabled: {tcp:.2f} per vehicle (deducted from each line discount).")
+    rdp = float(raw_pct) if raw_pct is not None else None
+    if add_tc:
+        logln(
+            f"Reduce discount enabled: {rdp or 0:.2f}% and {tcp or 0:.2f} per vehicle "
+            f"(deducted from each line discount)."
+        )
     inv_ids = [int(r["inventory_line_id"]) for r in final_rows if r.get("inventory_line_id")]
     for r in final_rows:
         iid = r.get("inventory_line_id")
@@ -276,7 +281,9 @@ def _run_order_phase(
             continue
         model = (inv.get("model") or "").strip()
         disc = get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)
-        eff = line_discount_after_transport(float(disc), add_transport=add_tc, per_vehicle=tcp)
+        eff = line_discount_after_transport(
+            float(disc), add_transport=add_tc, per_vehicle=tcp, reduce_percent=rdp
+        )
         update_discount_and_ex_showroom(int(iid), discount=float(eff))
 
     inv_rows = fetch_lines_for_batch_inventory(inv_ids)
@@ -347,6 +354,7 @@ def _run_order_phase(
         invoice_number=iid_inv,
         add_transport_cost=add_tc,
         transport_cost_per_vehicle=None if not add_tc else tcp,
+        reduce_discount_by_percent=None if not add_tc else rdp,
         total_ex_showroom_price=_scraped_ex,
     )
     out_partial["challan_id"] = cid
@@ -474,7 +482,9 @@ def sidecar_build_order_playwright_package(
     master_row = master_repo.fetch_master(challan_batch_id) or {}
     add_tc = bool(master_row.get("add_transport_cost"))
     raw_tcp = master_row.get("transport_cost_per_vehicle")
+    raw_pct = master_row.get("reduce_discount_by_percent")
     tcp = float(raw_tcp) if raw_tcp is not None else None
+    rdp = float(raw_pct) if raw_pct is not None else None
     for r in final_rows:
         iid = r.get("inventory_line_id")
         if not iid:
@@ -484,7 +494,9 @@ def sidecar_build_order_playwright_package(
             continue
         model = (inv.get("model") or "").strip()
         disc = get_subdealer_challan_discount(from_dealer_id, to_dealer_id, model)
-        eff = line_discount_after_transport(float(disc), add_transport=add_tc, per_vehicle=tcp)
+        eff = line_discount_after_transport(
+            float(disc), add_transport=add_tc, per_vehicle=tcp, reduce_percent=rdp
+        )
         update_discount_and_ex_showroom(int(iid), discount=float(eff))
 
     inv_rows = fetch_lines_for_batch_inventory(inv_ids)
@@ -659,7 +671,9 @@ def sidecar_finalize_order_playwright_result(
     mhead = master_repo.fetch_master(challan_batch_id) or {}
     add_tc = bool(mhead.get("add_transport_cost"))
     raw_tcp = mhead.get("transport_cost_per_vehicle")
+    raw_pct = mhead.get("reduce_discount_by_percent")
     tcp_fin: float | None = None
+    rdp_fin: float | None = None
     if add_tc and raw_tcp is not None:
         try:
             if isinstance(raw_tcp, Decimal):
@@ -673,6 +687,19 @@ def sidecar_finalize_order_playwright_result(
                 _tcp_exc,
             )
             tcp_fin = None
+    if add_tc and raw_pct is not None:
+        try:
+            if isinstance(raw_pct, Decimal):
+                rdp_fin = float(raw_pct)
+            else:
+                rdp_fin = float(str(raw_pct).replace(",", "").strip())
+        except (TypeError, ValueError) as _pct_exc:
+            logger.warning(
+                "finalize_order: invalid reduce_discount_by_percent %r (%s); treating as None",
+                raw_pct,
+                _pct_exc,
+            )
+            rdp_fin = None
 
     logger.info(
         "finalize_order: committing challan_master batch=%s lines=%s order=%r invoice=%r",
@@ -693,6 +720,7 @@ def sidecar_finalize_order_playwright_result(
             invoice_number=iid_inv,
             add_transport_cost=add_tc,
             transport_cost_per_vehicle=None if not add_tc else tcp_fin,
+            reduce_discount_by_percent=None if not add_tc else rdp_fin,
             total_ex_showroom_price=scraped_total_ex_showroom_from_vehicle_out(veh_partial),
         )
         out["challan_id"] = int(cid)
@@ -1125,6 +1153,7 @@ def create_challan_staging_batch(
     lines: list[dict],
     add_transport_cost: bool = False,
     transport_cost_per_vehicle: float | None = None,
+    reduce_discount_by_percent: float | None = None,
 ) -> uuid.UUID:
     """Insert master + Queued detail rows; return batch id."""
     batch_id = uuid.uuid4()
@@ -1138,6 +1167,7 @@ def create_challan_staging_batch(
         num_vehicles=n,
         add_transport_cost=add_transport_cost,
         transport_cost_per_vehicle=transport_cost_per_vehicle,
+        reduce_discount_by_percent=reduce_discount_by_percent,
     )
     detail_repo.insert_detail_rows(challan_batch_id=batch_id, lines=lines)
     master_repo.refresh_prepared_count(batch_id)

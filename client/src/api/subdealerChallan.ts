@@ -439,9 +439,10 @@ export type CreateChallanStagingBody = {
   challan_date?: string | null;
   challan_book_num?: string | null;
   lines: { raw_engine?: string; raw_chassis?: string }[];
-  /** When true, ``transport_cost_per_vehicle`` is required and subtracted from each line discount in the order phase. */
+  /** When true (Reduce Discount), percent and cost per vehicle are required for order-phase discount netting. */
   add_transport_cost?: boolean;
   transport_cost_per_vehicle?: number | null;
+  reduce_discount_by_percent?: number | null;
 };
 
 export type CreateChallanStagingResponse = {
@@ -567,6 +568,7 @@ export type ChallanMasterProcessedRow = {
   dms_attached_vin_count?: number | null;
   add_transport_cost?: boolean;
   transport_cost_per_vehicle?: number | null;
+  reduce_discount_by_percent?: number | null;
   /** Failed-only subset (legacy). Prefer ``detail_lines`` when present. */
   failed_lines: ChallanFailedDetailLine[];
   /** All vehicle lines: Queued / Failed / Ready / Committed. */
@@ -684,6 +686,9 @@ export type ChallanInvoiceMasterRow = {
   invoice_number: string | null;
   total_ex_showroom_price: number | null;
   total_discount: number | null;
+  add_transport_cost?: boolean;
+  reduce_discount_by_percent?: number | null;
+  transport_cost_per_vehicle?: number | null;
   created_at: string | null;
   to_dealer_name: string;
 };

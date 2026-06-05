@@ -70,6 +70,7 @@ def insert_master(
     num_vehicles: int,
     add_transport_cost: bool = False,
     transport_cost_per_vehicle: float | None = None,
+    reduce_discount_by_percent: float | None = None,
 ) -> None:
     conn = get_connection()
     try:
@@ -80,9 +81,9 @@ def insert_master(
                     challan_batch_id, from_dealer_id, to_dealer_id,
                     challan_date, challan_book_num, num_vehicles,
                     num_vehicles_prepared, invoice_complete, invoice_status,
-                    add_transport_cost, transport_cost_per_vehicle
+                    add_transport_cost, transport_cost_per_vehicle, reduce_discount_by_percent
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, 0, FALSE, 'Pending', %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, 0, FALSE, 'Pending', %s, %s, %s)
                 """,
                 (
                     str(challan_batch_id),
@@ -93,6 +94,7 @@ def insert_master(
                     int(num_vehicles),
                     bool(add_transport_cost),
                     None if not add_transport_cost else transport_cost_per_vehicle,
+                    None if not add_transport_cost else reduce_discount_by_percent,
                 ),
             )
         conn.commit()
@@ -109,6 +111,7 @@ def fetch_master(challan_batch_id: uuid.UUID) -> dict[str, Any] | None:
                 SELECT challan_batch_id, from_dealer_id, to_dealer_id, challan_date, challan_book_num,
                        num_vehicles, num_vehicles_prepared, invoice_complete, invoice_status, created_at,
                        last_run_at, add_transport_cost, transport_cost_per_vehicle,
+                       reduce_discount_by_percent,
                        dms_order_number, dms_attached_vin_count
                 FROM challan_master_staging
                 WHERE challan_batch_id = %s::uuid
@@ -239,6 +242,7 @@ _MASTER_LIST_SELECT = """
                 SELECT m.challan_batch_id, m.from_dealer_id, m.to_dealer_id, m.challan_date, m.challan_book_num,
                        m.num_vehicles, m.num_vehicles_prepared, m.invoice_complete, m.invoice_status, m.created_at,
                        m.last_run_at, m.add_transport_cost, m.transport_cost_per_vehicle,
+                       m.reduce_discount_by_percent,
                        m.dms_order_number, m.dms_attached_vin_count,
                        df.dealer_name AS from_dealer_name,
                        dt.dealer_name AS to_dealer_name,

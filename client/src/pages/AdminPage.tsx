@@ -2,7 +2,12 @@ import { useState } from "react";
 import { resetAllData } from "../api/admin";
 import "./AdminPage.css";
 
-export function AdminPage() {
+interface AdminPageProps {
+  /** Disabled when backend ``ENVIRONMENT`` is prod/production, or while settings are loading. */
+  deleteAllDataDisabled: boolean;
+}
+
+export function AdminPage({ deleteAllDataDisabled }: AdminPageProps) {
   const [isDeleting, setIsDeleting] = useState(false);
 
   async function handleDeleteAllData() {
@@ -23,16 +28,28 @@ export function AdminPage() {
     }
   }
 
+  const buttonDisabled = isDeleting || deleteAllDataDisabled;
+
   return (
     <div className="admin-page">
       <button
         type="button"
         className="app-button admin-danger-button admin-danger-button--top-right"
         onClick={handleDeleteAllData}
-        disabled={isDeleting}
+        disabled={buttonDisabled}
+        title={
+          deleteAllDataDisabled
+            ? "Disabled in production (ENVIRONMENT=prod or production in backend/.env)."
+            : undefined
+        }
       >
         {isDeleting ? "Deleting..." : "Delete All Data"}
       </button>
+      {deleteAllDataDisabled ? (
+        <p className="admin-page-prod-hint" role="status">
+          Delete All Data is disabled when ENVIRONMENT is prod or production.
+        </p>
+      ) : null}
     </div>
   );
 }

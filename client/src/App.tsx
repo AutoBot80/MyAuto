@@ -330,7 +330,9 @@ function App() {
           <SalesReportsPage dealerId={dealerId} isPrincipalDealer={isPrincipalDealer === true} />
         );
       case "admin-tools":
-        return <AdminPage />;
+        return (
+          <AdminPage deleteAllDataDisabled={siteUrls?.environment_is_production === true} />
+        );
       case "admin-dealers":
         return <AdminDealersPage />;
       case "admin-usage":
