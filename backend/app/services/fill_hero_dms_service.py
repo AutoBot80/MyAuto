@@ -68,6 +68,7 @@ from app.db import get_connection
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
 from app.services.add_sales_commit_service import finalize_staging_row_with_master_ids
+from app.services.add_subdealer_challan_commit_service import _coerce_ex_showroom_scalar
 from app.services.hero_dms_db_service import persist_staging_masters_after_invoice
 from app.services.hero_dms_reports_service import run_hero_dms_reports
 from app.services.dms_fill_timing import fill_dms_phase, fill_dms_phase_reset
@@ -1260,11 +1261,7 @@ def _vehicle_master_update_from_scrape_on_cursor(cur, vehicle_id: int, scraped: 
             num_cylinders = int(str(num_cylinders).strip())
         except (ValueError, TypeError):
             num_cylinders = None
-    if ex_showroom:
-        try:
-            ex_showroom = float(str(ex_showroom).replace(",", ""))
-        except (ValueError, TypeError):
-            ex_showroom = None
+    ex_showroom = _coerce_ex_showroom_scalar(ex_showroom)
 
     if _is_two_wheeler_vehicle_type(vehicle_type):
         seating_capacity = 2
@@ -1603,11 +1600,7 @@ def insert_dms_masters_from_siebel_scrape(
             num_cylinders = int(str(num_cylinders).strip())
         except (ValueError, TypeError):
             num_cylinders = None
-    if ex_showroom:
-        try:
-            ex_showroom = float(str(ex_showroom).replace(",", ""))
-        except (ValueError, TypeError):
-            ex_showroom = None
+    ex_showroom = _coerce_ex_showroom_scalar(ex_showroom)
 
     if _is_two_wheeler_vehicle_type(vehicle_type):
         seating_capacity = 2
