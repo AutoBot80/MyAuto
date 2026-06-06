@@ -55,6 +55,7 @@ from app.config import (
 from app.services.hero_insure_reports_service import run_hero_insure_reports
 from app.services.handle_browser_opening import (
     _playwright_page_url_matches_site_base,
+    find_open_site_page,
     get_or_open_site_page,
     launch_site_background_detached,
 )
@@ -2147,6 +2148,74 @@ def _still_on_heroinsurance_misp_partner_login(page) -> bool:
         return False
 
 
+def _misp_close_stale_partner_login_tabs(active_page) -> None:
+    """Close leftover ``misp-partner-login`` tabs after Sign In opened the app in a new tab."""
+    try:
+        ctx = active_page.context
+    except Exception:
+        return
+    for p in list(ctx.pages):
+        if p is active_page:
+            continue
+        try:
+            if p.is_closed():
+                continue
+            u = (p.url or "").lower()
+        except Exception:
+            continue
+        if "misp-partner-login" not in u:
+            continue
+        try:
+            p.close()
+            logger.info("Hero Insurance: closed stale partner-login tab (%s).", u[:120])
+        except Exception as exc:
+            logger.debug("Hero Insurance: could not close stale partner-login tab: %s", exc)
+
+
+def _misp_post_sign_in_page(
+    page,
+    *,
+    portal_base_url: str = "",
+    pages_before: list | None = None,
+    timeout_ms: int = 8_000,
+):
+    """
+    After Sign In: prefer the logged-in MISP tab (often a **new** tab) and close stale partner-login tabs.
+    """
+    base = (portal_base_url or INSURANCE_BASE_URL or "").strip()
+    before = list(pages_before) if pages_before is not None else _misp_snapshot_context_pages(page)
+    active, branch = _misp_resolve_page_after_possible_new_tab(
+        before,
+        page,
+        portal_base_url=base,
+        timeout_ms=timeout_ms,
+        step_label="sign_in",
+    )
+    if _still_on_heroinsurance_misp_partner_login(active):
+        try:
+            for p in list(active.context.pages):
+                if p is active:
+                    continue
+                try:
+                    u = (p.url or "").lower()
+                except Exception:
+                    continue
+                if "misp-partner-login" in u:
+                    continue
+                if "heroinsurance.com" in u and not _tab_url_is_dms_siebel_not_insurance(u):
+                    active = p
+                    logger.info(
+                        "Hero Insurance: switched to post-sign-in tab (%s) — url=%s",
+                        branch,
+                        u[:160],
+                    )
+                    break
+        except Exception:
+            pass
+    _misp_close_stale_partner_login_tabs(active)
+    return active
+
+
 def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     """
     Click landing-page login CTA (``Sign In``, ``Login``, ``Log in``).
@@ -2168,6 +2237,7 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
             return False
     except Exception:
         pass
+    pages_before = _misp_snapshot_context_pages(page)
     wait_ms = max(int(INSURANCE_LOGIN_WAIT_MS), int(timeout_ms))
     pwd_ready = _wait_for_partner_login_password_filled(page, timeout_ms=wait_ms)
     if not pwd_ready:
@@ -2191,6 +2261,21 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
             if not on_misp:
                 logger.info(
                     "Hero Insurance: Sign In succeeded (left misp-partner-login) on attempt %s/%s.",
+                    attempt,
+                    max_attempts,
+                )
+                return True
+            resolved, branch = _misp_resolve_page_after_possible_new_tab(
+                pages_before,
+                page,
+                portal_base_url=(INSURANCE_BASE_URL or "").strip(),
+                timeout_ms=min(int(timeout_ms), 8_000),
+                step_label="sign_in_click",
+            )
+            if not _still_on_heroinsurance_misp_partner_login(resolved):
+                logger.info(
+                    "Hero Insurance: Sign In succeeded on new tab (%s) attempt %s/%s.",
+                    branch,
                     attempt,
                     max_attempts,
                 )
@@ -5614,7 +5699,14 @@ def _run_hero_misp_portal_after_open(
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
     )
+    pages_before = _misp_snapshot_context_pages(page)
     clicked = _click_sign_in_if_visible(page, timeout_ms=timeout_ms)
+    page = _misp_post_sign_in_page(
+        page,
+        portal_base_url=portal_base_url,
+        pages_before=pages_before,
+        timeout_ms=timeout_ms,
+    )
     if not clicked:
         _hero_insurance_log_page_diagnostics(
             page,
@@ -10857,6 +10949,14 @@ def warm_insurance_browser_session(insurance_base_url: str) -> dict:
             launch_background=True,
         )
         if page is None:
+            # CDP attach can lag the OS spawn — poll before a non-CDP detached window (duplicate tab).
+            poll_deadline = time.monotonic() + 5.0
+            while time.monotonic() < poll_deadline:
+                page = find_open_site_page(u, "Insurance")
+                if page is not None:
+                    out["success"] = True
+                    return out
+                time.sleep(0.5)
             launched = launch_site_background_detached(u)
             if launched:
                 out["success"] = True
@@ -10914,7 +11014,14 @@ def open_misp_page_sign_in_and_2w_only(
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
     )
+    pages_before = _misp_snapshot_context_pages(page)
     _ins_clicked = _click_sign_in_if_visible(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
+    page = _misp_post_sign_in_page(
+        page,
+        portal_base_url=insurance_base_url.strip(),
+        pages_before=pages_before,
+        timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
+    )
     if not _ins_clicked:
         _hero_insurance_log_page_diagnostics(
             page,
@@ -11018,7 +11125,14 @@ def run_fill_insurance_only(
             ocr_output_dir=ocr_output_dir,
             subfolder=subfolder,
         )
+        pages_before = _misp_snapshot_context_pages(page)
         _ins_clicked = _click_sign_in_if_visible(page, timeout_ms=INSURANCE_ACTION_TIMEOUT_MS)
+        page = _misp_post_sign_in_page(
+            page,
+            portal_base_url=insurance_base_url.strip(),
+            pages_before=pages_before,
+            timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,
+        )
         if not _ins_clicked:
             _hero_insurance_log_page_diagnostics(
                 page,

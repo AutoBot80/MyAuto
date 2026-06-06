@@ -2145,6 +2145,13 @@ def _dispatch_warm_insurance(params: dict) -> dict:
     return warm_insurance_browser_session(insurance_base)
 
 
+def _dispatch_warm_cpa(params: dict) -> dict:
+    from app.services.add_alliance_cpa_insurance import warm_cpa_browser_session
+
+    portal_url = (params.get("cpa_portal_url") or params.get("portal_url") or "").strip() or None
+    return warm_cpa_browser_session(portal_url)
+
+
 def _dispatch_warm_vahan(params: dict) -> dict:
     from app.services.fill_rto_service import warm_vahan_browser_session
 
@@ -3388,6 +3395,9 @@ def dispatch(payload: dict) -> dict:
         return {"success": True, "data": data}
     if job_type == "warm_insurance":
         data = _run_sidecar_playwright_job(lambda: _dispatch_warm_insurance(params))
+        return {"success": True, "data": data}
+    if job_type == "warm_cpa":
+        data = _run_sidecar_playwright_job(lambda: _dispatch_warm_cpa(params))
         return {"success": True, "data": data}
     if job_type == "warm_vahan":
         data = _run_sidecar_playwright_job(lambda: _dispatch_warm_vahan(params))

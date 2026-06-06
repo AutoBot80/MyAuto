@@ -24,10 +24,13 @@ from app.services.dealer_storage import (
     sync_uploads_subfolder_to_s3,
 )
 from app.services.fill_hero_dms_service import _safe_subfolder_name
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
 from app.services.handle_browser_opening import (
     _is_ready_after_login_page,
     _login_form_visible_any_frame,
     get_or_open_site_page,
+    launch_site_background_detached,
 )
 from app.services.utility_functions import (
     alliance_model_match_score,
@@ -38,8 +41,11 @@ from app.services.utility_functions import (
 )
 
 # After open: poll for manual login / SPA shell before clicking Issue New Certificate (not Hero insurance wait).
-CPA_PORTAL_READY_MAX_POLLS = 10
+CPA_PORTAL_READY_MAX_POLLS = 14
 CPA_PORTAL_READY_POLL_MS = 1_000
+_ALLIANCE_LOGIN_AUTOFILL_MAX_MS = 14_000
+_ALLIANCE_CONTINUE_PAUSE_MS = 500
+_ALLIANCE_CONTINUE_MAX_ATTEMPTS = 4
 # Alliance ``Plan`` dropdown preset (``master_ref`` / dealer SOP). When selected, plan amounts auto-fill.
 ALLIANCE_CPA_PLAN_DEFAULT = "PLAN348 RGI"
 
@@ -154,6 +160,129 @@ def _alliance_certificate_form_visible(page) -> bool:
     return False
 
 
+_ALLIANCE_LOGIN_PASSWORD_READY_JS = """() => {
+  const vis = (el) => {
+    if (!el) return false;
+    const st = window.getComputedStyle(el);
+    if (st.display === 'none' || st.visibility === 'hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 2 && r.height > 2;
+  };
+  const inputs = document.querySelectorAll('input[type="password"]');
+  for (const el of inputs) {
+    if (!vis(el)) continue;
+    if ((el.value || '').trim().length > 0) return true;
+    try {
+      if (el.matches && el.matches(':-webkit-autofill')) return true;
+    } catch (e) {}
+  }
+  return false;
+}"""
+
+
+def _still_on_alliance_login(page) -> bool:
+    try:
+        u = (page.url or "").lower()
+    except Exception:
+        return False
+    return "allianceassure.in" in u and ("/login" in u or u.rstrip("/").endswith("/login"))
+
+
+def _alliance_login_password_ready(page, *, timeout_ms: int) -> bool:
+    """Wait until Alliance login password field has autofill or operator value."""
+    try:
+        page.wait_for_function(
+            _ALLIANCE_LOGIN_PASSWORD_READY_JS,
+            timeout=max(1, int(timeout_ms)),
+        )
+        logger.info("Alliance CPA: password field ready — proceeding to Continue.")
+        return True
+    except PlaywrightTimeout:
+        pass
+    except Exception:
+        pass
+    logger.debug(
+        "Alliance CPA: no non-empty password field within %s ms — not clicking Continue.",
+        timeout_ms,
+    )
+    return False
+
+
+def _attempt_alliance_continue_click_once(page, *, timeout_ms: int) -> bool:
+    patterns = (
+        re.compile(r"^\s*Continue\s*$", re.I),
+        re.compile(r"^\s*Sign\s+in\s*$", re.I),
+        re.compile(r"^\s*Login\s*$", re.I),
+    )
+    for pat in patterns:
+        try:
+            btn = page.get_by_role("button", name=pat)
+            if btn.count() > 0 and btn.first.is_visible(timeout=min(1200, timeout_ms)):
+                btn.first.click(timeout=timeout_ms)
+                return True
+        except Exception:
+            continue
+    try:
+        submit = page.locator('button[type="submit"].btn-primary').filter(
+            has_text=re.compile(r"Continue", re.I)
+        )
+        if submit.count() > 0 and submit.first.is_visible(timeout=min(1200, timeout_ms)):
+            submit.first.click(timeout=timeout_ms)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _try_click_alliance_continue(page, log_path: Path, *, timeout_ms: int = 8_000) -> bool:
+    """
+    Click Alliance Assure **Continue** after autofill (mirrors MISP Sign In retries).
+    Returns True only when navigation leaves ``/account/login``.
+    """
+    if not _still_on_alliance_login(page):
+        return True
+    pwd_ready = _alliance_login_password_ready(page, timeout_ms=_ALLIANCE_LOGIN_AUTOFILL_MAX_MS)
+    if not pwd_ready:
+        return False
+    for attempt in range(1, _ALLIANCE_CONTINUE_MAX_ATTEMPTS + 1):
+        clicked = _attempt_alliance_continue_click_once(page, timeout_ms=timeout_ms)
+        if clicked:
+            _append_cpa_log(
+                log_path,
+                f"NOTE Alliance Continue clicked (attempt {attempt}/{_ALLIANCE_CONTINUE_MAX_ATTEMPTS}).",
+            )
+            try:
+                page.wait_for_timeout(_ALLIANCE_CONTINUE_PAUSE_MS)
+            except Exception:
+                time.sleep(_ALLIANCE_CONTINUE_PAUSE_MS / 1000.0)
+            if not _still_on_alliance_login(page):
+                logger.info(
+                    "Alliance CPA: Continue succeeded (left login) on attempt %s/%s.",
+                    attempt,
+                    _ALLIANCE_CONTINUE_MAX_ATTEMPTS,
+                )
+                return True
+            logger.warning(
+                "Alliance CPA: Continue click did not leave login (attempt %s/%s) — retrying.",
+                attempt,
+                _ALLIANCE_CONTINUE_MAX_ATTEMPTS,
+            )
+        if attempt < _ALLIANCE_CONTINUE_MAX_ATTEMPTS:
+            try:
+                page.wait_for_timeout(_ALLIANCE_CONTINUE_PAUSE_MS)
+            except Exception:
+                time.sleep(_ALLIANCE_CONTINUE_PAUSE_MS / 1000.0)
+    _append_cpa_log(log_path, "NOTE Alliance Continue did not leave login after retries.")
+    return not _still_on_alliance_login(page)
+
+
+def _try_alliance_login_autofill_and_continue(page, log_path: Path) -> bool:
+    """When on Alliance login with autofill, click Continue; no-op when already past login."""
+    if not _still_on_alliance_login(page):
+        return True
+    return _try_click_alliance_continue(page, log_path)
+
+
 def _is_cpa_portal_ready(page) -> bool:
     """Past login for CPA: generic probe plus Alliance Assure SPA (``app.allianceassure.in``)."""
     if _alliance_certificate_form_visible(page):
@@ -186,6 +315,8 @@ def _wait_cpa_portal_ready(page, log_path: Path) -> str | None:
         except Exception:
             return "CPA browser tab closed while waiting for login."
         try:
+            if _still_on_alliance_login(page):
+                _try_alliance_login_autofill_and_continue(page, log_path)
             if _is_cpa_portal_ready(page):
                 _append_cpa_log(
                     log_path,
@@ -1806,6 +1937,43 @@ def _build_cpa_alliance_payload(
         nominee_gender=_s(nominee_gender),
         nominee_age=_s(nominee_age),
     )
+
+
+def warm_cpa_browser_session(portal_url: str | None = None) -> dict:
+    """
+    Pre-open or attach to the CPA Alliance portal without running fill automation.
+    On Windows, a new managed browser starts minimized via ``launch_background=True``.
+    """
+    out: dict = {"success": False, "error": None}
+    resolved = _resolve_cpa_portal_url(portal_url)
+    if not resolved:
+        out["error"] = (
+            "CPA portal URL missing. Set ALLIANCE_CPA_PORTAL_URL in backend/.env "
+            "or pass portal_url."
+        )
+        return out
+    try:
+        page, open_error = get_or_open_site_page(
+            resolved,
+            "CPAInsurance",
+            require_login_on_open=False,
+            launch_background=True,
+        )
+        if page is None:
+            launched = launch_site_background_detached(resolved)
+            if launched:
+                out["success"] = True
+                return out
+            out["error"] = open_error or "Could not open CPA portal browser"
+            return out
+        out["success"] = True
+    except PlaywrightTimeout as e:
+        out["error"] = f"Timeout: {e!s}"
+        logger.warning("add_alliance_cpa_insurance: warm_cpa_browser_session PlaywrightTimeout %s", e)
+    except Exception as e:
+        out["error"] = str(e)
+        logger.warning("add_alliance_cpa_insurance: warm_cpa_browser_session %s", e)
+    return out
 
 
 def add_alliance_cpa_insurance(

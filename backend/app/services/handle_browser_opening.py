@@ -1677,6 +1677,94 @@ def _try_js_click_body_for_focus(page) -> bool:
         return False
 
 
+def _find_portal_page_in_cdp_pages(
+    pages: list,
+    base_url: str,
+    site_label: str,
+    *,
+    include_loading_blank: bool = True,
+):
+    """Pick an existing CDP tab for ``site_label`` before opening a duplicate tab/window."""
+    want_host = _hostname_for_site_match(base_url)
+    skip_siebel = _host_matched_portal_skips_dms_siebel(site_label)
+
+    for page in pages:
+        try:
+            u = (page.url or "").strip()
+        except Exception:
+            u = ""
+        if skip_siebel and _url_looks_like_dms_siebel_tab(u):
+            continue
+        if u and _page_matches_site_for_reuse(u, base_url, site_label):
+            return page
+
+    if want_host:
+        for page in pages:
+            try:
+                u = (page.url or "").strip()
+            except Exception:
+                u = ""
+            if skip_siebel and _url_looks_like_dms_siebel_tab(u):
+                continue
+            if u and _hostname_for_site_match(u) == want_host:
+                return page
+
+    if include_loading_blank:
+        loading_candidates: list = []
+        for page in pages:
+            try:
+                u = (page.url or "").strip()
+            except Exception:
+                u = ""
+            if skip_siebel and _url_looks_like_dms_siebel_tab(u):
+                continue
+            low = u.lower()
+            if not u or "blank" in low or low.startswith("about:"):
+                loading_candidates.append(page)
+        if len(loading_candidates) == 1:
+            return loading_candidates[0]
+        if loading_candidates and want_host:
+            return loading_candidates[0]
+
+    return None
+
+
+def _try_attach_existing_managed_cdp_page(
+    pw,
+    cdp_url: str,
+    base_url: str,
+    site_label: str,
+    *,
+    headless: bool,
+    channel: str,
+):
+    """Reuse a tab from an already-running managed CDP browser — avoid ``Popen --new-window`` duplicate."""
+    _refresh_cdp_browsers()
+    if not _cdp_url_http_reachable(cdp_url):
+        return None, None
+    try:
+        browser = _CDP_BROWSERS_BY_URL.get(cdp_url)
+        if browser is None:
+            browser = pw.chromium.connect_over_cdp(cdp_url)
+            _CDP_BROWSERS_BY_URL[cdp_url] = browser
+        existing: list = []
+        for ctx in browser.contexts:
+            for page in ctx.pages:
+                existing.append(page)
+        matched = _find_portal_page_in_cdp_pages(existing, base_url, site_label)
+        if matched is not None:
+            logger.info(
+                "handle_browser_opening: reused existing CDP tab for %s (skipped independent Popen).",
+                (site_label or "").strip() or "portal",
+            )
+            if not headless:
+                _try_cdp_maximize_browser_window(matched)
+            return matched, channel
+    except Exception as exc:
+        logger.debug("handle_browser_opening: CDP-first attach for %s failed: %s", site_label, exc)
+    return None, None
+
+
 def _launch_managed_browser_for_site(
     base_url: str, *, launch_background: bool = False, site_label: str = ""
 ):
@@ -1686,6 +1774,18 @@ def _launch_managed_browser_for_site(
     cdp_url = f"http://127.0.0.1:{port}"
 
     exe, channel = _find_browser_exe()
+    channel = channel or "msedge"
+    attached, ch = _try_attach_existing_managed_cdp_page(
+        pw,
+        cdp_url,
+        base_url,
+        site_label,
+        headless=headless,
+        channel=channel,
+    )
+    if attached is not None:
+        return attached, ch
+
     attempted_independent_launch = False
     if exe:
         attempted_independent_launch = True
@@ -1831,27 +1931,48 @@ def _launch_managed_browser_for_site(
                                         return page, channel
                                 except Exception:
                                     continue
+                    # Independent Popen passed ``base_url`` on the CLI — never ``ctx.new_page()`` here
+                    # (that created a second MISP/Insurance tab while the CLI tab was still loading).
                     if launch_background:
-                        # In silent warm mode, avoid creating/navigating tabs via CDP here because
-                        # those operations can foreground an existing browser window on Windows.
                         continue
-                    try:
-                        if browser.contexts:
-                            ctx0 = browser.contexts[0]
-                        else:
-                            ctx0 = browser.new_context()
-                        page = ctx0.new_page()
-                        page.goto(base_url, wait_until="domcontentloaded", timeout=5000)
-                        logger.info(
-                            "handle_browser_opening: opened target URL in independent %s window via CDP at %s",
-                            channel,
-                            cdp_url,
-                        )
-                        if not headless:
-                            _try_cdp_maximize_browser_window(page)
-                        return page, channel
-                    except Exception:
-                        continue
+                    want_host = _hostname_for_site_match(base_url)
+                    for page in existing:
+                        try:
+                            u = (page.url or "").strip()
+                        except Exception:
+                            u = ""
+                        if _host_matched_portal_skips_dms_siebel(site_label) and _url_looks_like_dms_siebel_tab(
+                            u
+                        ):
+                            continue
+                        try:
+                            page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        except Exception:
+                            pass
+                        try:
+                            u = (page.url or "").strip()
+                        except Exception:
+                            u = ""
+                        low = u.lower()
+                        if not u or "blank" in low or low.startswith("about:"):
+                            logger.info(
+                                "handle_browser_opening: reusing loading tab from independent %s launch "
+                                "(avoid duplicate %s tab).",
+                                channel,
+                                (site_label or "").strip() or "portal",
+                            )
+                            if not headless:
+                                _try_cdp_maximize_browser_window(page)
+                            return page, channel
+                        if want_host and u and _hostname_for_site_match(u) == want_host:
+                            if not headless:
+                                _try_cdp_maximize_browser_window(page)
+                            return page, channel
+                        if u and _page_matches_site_for_reuse(u, base_url, site_label):
+                            if not headless:
+                                _try_cdp_maximize_browser_window(page)
+                            return page, channel
+                    continue
                 except Exception:
                     pass
                 time.sleep(0.05)
@@ -2969,6 +3090,21 @@ def _navigate_existing_tab_to_site(target_url: str, site_label: str = ""):
                                 exc,
                             )
                             continue
+                    reuse = _find_portal_page_in_cdp_pages(pages, target_url, site_label)
+                    if reuse is not None:
+                        try:
+                            reuse.goto(target_url, wait_until="domcontentloaded", timeout=20_000)
+                            logger.info(
+                                "handle_browser_opening: reused existing %s hostname tab for navigate (no new_page).",
+                                (site_label or "").strip() or "portal",
+                            )
+                            return reuse
+                        except Exception as exc:
+                            logger.debug(
+                                "handle_browser_opening: reuse goto %s failed: %s",
+                                (site_label or "").strip() or "portal",
+                                exc,
+                            )
                     try:
                         pg_new = ctx.new_page()
                         pg_new.goto(target_url, wait_until="domcontentloaded", timeout=20_000)
