@@ -71,11 +71,37 @@ class DmsResolveRequest(BaseModel):
 class DmsResolveResponse(BaseModel):
     dms_values: dict[str, Any]
     staging_payload: dict[str, Any] | None = None
+    staging_id: str | None = None
+    dms_state: int = 0
     dms_base_url: str
     headed: bool
     remote_debug_port: int
     uploads_dir: str
     ocr_output_dir: str
+
+
+class DmsVehicleAfterPrepareRequest(BaseModel):
+    staging_id: str
+    dealer_id: int | None = None
+    dms_values: dict[str, Any] = {}
+    scraped_vehicle: dict[str, Any] = {}
+
+
+class DmsVehicleAfterPrepareResponse(BaseModel):
+    vehicle_id: int | None = None
+    error: str | None = None
+
+
+class DmsCustomerAfterPrepareRequest(BaseModel):
+    staging_id: str
+    dealer_id: int | None = None
+    dms_values: dict[str, Any] = {}
+    collated_customer: dict[str, Any] | None = None
+
+
+class DmsCustomerAfterPrepareResponse(BaseModel):
+    customer_id: int | None = None
+    error: str | None = None
 
 
 class DmsCommitRequest(BaseModel):
@@ -269,11 +295,14 @@ async def dms_resolve(
 
     from app.repositories.add_sales_staging import (
         deep_merge_staging_payload,
+        fetch_staging_dms_state,
         fetch_staging_payload,
         non_empty_staging_customer_vehicle_patch,
     )
 
     staging_payload = req.staging_payload
+    dms_state = 0
+    sid_resolved = (req.staging_id or "").strip() or None
     if req.staging_id:
         fetched = fetch_staging_payload(req.staging_id, did)
         if not fetched:
@@ -282,6 +311,9 @@ async def dms_resolve(
         if req.staging_payload:
             patch = deep_merge_staging_payload(patch, req.staging_payload)
         staging_payload = deep_merge_staging_payload(fetched, patch) if patch else fetched
+        ds_raw = fetch_staging_dms_state(req.staging_id, did)
+        if ds_raw is not None:
+            dms_state = int(ds_raw)
     elif req.customer or req.vehicle:
         patch = non_empty_staging_customer_vehicle_patch(req.customer, req.vehicle)
         if staging_payload and patch:
@@ -317,12 +349,66 @@ async def dms_resolve(
     return DmsResolveResponse(
         dms_values=dms_values,
         staging_payload=staging_payload,
+        staging_id=sid_resolved,
+        dms_state=dms_state,
         dms_base_url=(DMS_BASE_URL or "").strip(),
         headed=bool(DMS_PLAYWRIGHT_HEADED),
         remote_debug_port=int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333),
         uploads_dir=str(get_uploads_dir(did)),
         ocr_output_dir=str(get_ocr_output_dir(did)),
     )
+
+
+@router.post("/dms/vehicle-after-prepare", response_model=DmsVehicleAfterPrepareResponse)
+async def dms_vehicle_after_prepare(
+    req: DmsVehicleAfterPrepareRequest,
+    principal: Principal = Depends(get_principal),
+) -> DmsVehicleAfterPrepareResponse:
+    did = resolve_dealer_id(principal, req.dealer_id)
+    sid = (req.staging_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="staging_id is required")
+    from app.services.hero_dms_db_service import persist_vehicle_master_after_prepare_vehicle
+
+    try:
+        vid = persist_vehicle_master_after_prepare_vehicle(
+            dms_values=req.dms_values,
+            scraped_vehicle=req.scraped_vehicle,
+            staging_id=sid,
+            dealer_id=did,
+        )
+        if vid is None:
+            return DmsVehicleAfterPrepareResponse(error="vehicle checkpoint persist returned no vehicle_id")
+        return DmsVehicleAfterPrepareResponse(vehicle_id=int(vid))
+    except Exception as exc:
+        logger.warning("sidecar_proxy dms/vehicle-after-prepare: %s", exc)
+        return DmsVehicleAfterPrepareResponse(error=str(exc))
+
+
+@router.post("/dms/customer-after-prepare", response_model=DmsCustomerAfterPrepareResponse)
+async def dms_customer_after_prepare(
+    req: DmsCustomerAfterPrepareRequest,
+    principal: Principal = Depends(get_principal),
+) -> DmsCustomerAfterPrepareResponse:
+    did = resolve_dealer_id(principal, req.dealer_id)
+    sid = (req.staging_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="staging_id is required")
+    from app.services.hero_dms_db_service import persist_customer_master_after_prepare_customer
+
+    try:
+        cid = persist_customer_master_after_prepare_customer(
+            dms_values=req.dms_values,
+            collated_customer=req.collated_customer,
+            staging_id=sid,
+            dealer_id=did,
+        )
+        if cid is None:
+            return DmsCustomerAfterPrepareResponse(error="customer checkpoint persist returned no customer_id")
+        return DmsCustomerAfterPrepareResponse(customer_id=int(cid))
+    except Exception as exc:
+        logger.warning("sidecar_proxy dms/customer-after-prepare: %s", exc)
+        return DmsCustomerAfterPrepareResponse(error=str(exc))
 
 
 @router.post("/dms/commit", response_model=DmsCommitResponse)

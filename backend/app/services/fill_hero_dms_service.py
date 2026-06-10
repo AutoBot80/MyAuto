@@ -1482,47 +1482,60 @@ def update_sales_master_from_dms_scrape(customer_id: int, vehicle_id: int, vehic
         conn.close()
 
 
-def insert_dms_masters_from_siebel_scrape(
-    dms_values: dict,
-    vehicle_dict: dict,
-    *,
-    collated_customer_fields: dict | None = None,
-    file_location: str | None = None,
-    dealer_id: int | None = None,
-) -> tuple[int, int, int]:
-    """
-    Single transaction: **INSERT** ``customer_master``, ``vehicle_master``, and ``sales_master`` when
-    no prior rows exist (Siebel-only / staging-less Fill DMS). Before commit, **UPDATE**
-    ``vehicle_inventory_master.sold_date`` to today (dd/mm/yyyy) when trimmed chassis/engine match
-    full scraped frame/engine (not ``raw_*``).     Call after Create Invoice in DMS when **Invoice#** is scraped; in non-production, **Invoice#**
-    may be ``HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER`` when the UI never issued an invoice
-    (see ``invoice_number_ready_for_master_commit``).
+_VEHICLE_MASTER_COALESCE_SET = """
+                    chassis = COALESCE(EXCLUDED.chassis, vehicle_master.chassis),
+                    engine = COALESCE(EXCLUDED.engine, vehicle_master.engine),
+                    key_num = COALESCE(EXCLUDED.key_num, vehicle_master.key_num),
+                    battery = COALESCE(EXCLUDED.battery, vehicle_master.battery),
+                    model = COALESCE(EXCLUDED.model, vehicle_master.model),
+                    colour = COALESCE(EXCLUDED.colour, vehicle_master.colour),
+                    cubic_capacity = COALESCE(EXCLUDED.cubic_capacity, vehicle_master.cubic_capacity),
+                    seating_capacity = COALESCE(EXCLUDED.seating_capacity, vehicle_master.seating_capacity),
+                    body_type = COALESCE(EXCLUDED.body_type, vehicle_master.body_type),
+                    vehicle_type = COALESCE(EXCLUDED.vehicle_type, vehicle_master.vehicle_type),
+                    num_cylinders = COALESCE(EXCLUDED.num_cylinders, vehicle_master.num_cylinders),
+                    year_of_mfg = COALESCE(EXCLUDED.year_of_mfg, vehicle_master.year_of_mfg),
+                    vehicle_ex_showroom_price = COALESCE(EXCLUDED.vehicle_ex_showroom_price, vehicle_master.vehicle_ex_showroom_price),
+                    place_of_registeration = COALESCE(EXCLUDED.place_of_registeration, vehicle_master.place_of_registeration),
+                    oem_name = COALESCE(EXCLUDED.oem_name, vehicle_master.oem_name)
+"""
 
-    Requires name, mobile, and Aadhar last-4 derivable from ``dms_values`` and/or ``collated_customer_fields``.
 
-    ``customer_master.file_location`` / ``sales_master.file_location`` are set to the per-sale OCR folder
-    ``ocr_output/{dealer_id}/{mobile}_{ddmmyy}`` (see ``resolve_ocr_sale_folder_paths``), unless
-    ``file_location`` overrides (full path or leaf segment).
-
-    Returns ``(customer_id, vehicle_id, sales_id)``.
-    """
-    from psycopg2 import IntegrityError
-
-    from app.repositories.vehicle_inventory import (
-        today_dd_mm_yyyy,
-        update_sold_date_by_chassis_engine_on_cursor,
+def _dealer_oem_place_on_cursor(cur, dealer_id: int) -> tuple[str | None, str | None]:
+    cur.execute(
+        """
+        SELECT dr.rto_name, o.oem_name
+        FROM dealer_ref dr
+        LEFT JOIN oem_ref o ON o.oem_id = dr.oem_id
+        WHERE dr.dealer_id = %s
+        LIMIT 1
+        """,
+        (int(dealer_id),),
     )
+    drow = cur.fetchone()
+    place_reg: str | None = None
+    oem_n: str | None = None
+    if drow:
+        if isinstance(drow, dict):
+            r = str(drow.get("rto_name") or "").strip()
+            o = str(drow.get("oem_name") or "").strip()
+        else:
+            r = str(drow[0] or "").strip()
+            o = str(drow[1] or "").strip()
+        if r:
+            place_reg = r[:128]
+        if o:
+            oem_n = o[:64]
+    return place_reg, oem_n
 
+
+def _customer_identity_from_dms(
+    dms_values: dict,
+    collated_customer_fields: dict | None,
+) -> tuple[str, int, str]:
+    """Return (name, mobile_int, aadhar_last4) or raise ValueError."""
     dv = dict(dms_values or {})
     cf = dict(collated_customer_fields or {})
-    vd = dict(vehicle_dict or {})
-    sale_dealer_id = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
-    loc_full, loc_sales = resolve_ocr_sale_folder_paths(
-        sale_dealer_id,
-        dv,
-        file_location_override=(file_location or "").strip() or None,
-    )
-
     name = (cf.get("name") or dv.get("customer_name") or "").strip()
     mob_raw = cf.get("mobile_number")
     if mob_raw is None:
@@ -1533,17 +1546,39 @@ def insert_dms_masters_from_siebel_scrape(
             mob_raw = int(str(mob_raw).strip().replace(" ", ""))
         except (ValueError, TypeError):
             mob_raw = None
-
     dig_cf = "".join(c for c in str(cf.get("aadhar") or "") if c.isdigit())
     dig_dv = "".join(c for c in str(dv.get("aadhar_id") or "") if c.isdigit())
     _dig = dig_cf if len(dig_cf) >= 4 else dig_dv
     aad = _dig[-4:] if len(_dig) >= 4 else None
-
     if not name or mob_raw is None or not aad or len(aad) < 4:
         raise ValueError(
             "Cannot INSERT customer_master: need customer name, 10-digit mobile, and Aadhar last 4 "
             "(from DMS fill values and/or Siebel collate fields)."
         )
+    return name, int(mob_raw), aad
+
+
+def _upsert_customer_master_from_dms_on_cursor(
+    cur,
+    dms_values: dict,
+    collated_customer_fields: dict | None,
+    *,
+    file_location: str | None = None,
+    dealer_id: int | None = None,
+    preexisting_customer_id: int | None = None,
+) -> int:
+    if preexisting_customer_id is not None and int(preexisting_customer_id) > 0:
+        return int(preexisting_customer_id)
+
+    dv = dict(dms_values or {})
+    cf = dict(collated_customer_fields or {})
+    sale_dealer_id = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    loc_full, _loc_sales = resolve_ocr_sale_folder_paths(
+        sale_dealer_id,
+        dv,
+        file_location_override=(file_location or "").strip() or None,
+    )
+    _name, mob_raw, aad = _customer_identity_from_dms(dv, cf)
 
     address = (cf.get("address") or dv.get("address_line_1") or "").strip() or None
     pin = (cf.get("pin") or dv.get("pin_code") or "").strip()[:6] or None
@@ -1560,10 +1595,80 @@ def insert_dms_masters_from_siebel_scrape(
     if dcp not in ("found", "new_enquiry", "skip_find"):
         dcp = "found"
     dms_cid = (cf.get("dms_contact_id") or "").strip()[:128] or None
-
     drp = (cf.get("dms_relation_prefix") or "").strip()[:8] or None
     if not drp:
         drp = compute_dms_relation_prefix(care_of=care_of, address=address or "", gender=gender)[:8]
+
+    cur.execute(
+        """
+        INSERT INTO customer_master (
+            aadhar, name, address, pin, city, state, mobile_number,
+            alt_phone_num,
+            profession, financier, marital_status,
+            dms_relation_prefix, dms_contact_path, care_of,
+            file_location, gender, date_of_birth, dms_contact_id
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (aadhar, mobile_number) DO UPDATE SET
+            name = COALESCE(EXCLUDED.name, customer_master.name),
+            address = COALESCE(EXCLUDED.address, customer_master.address),
+            pin = COALESCE(EXCLUDED.pin, customer_master.pin),
+            city = COALESCE(EXCLUDED.city, customer_master.city),
+            state = COALESCE(EXCLUDED.state, customer_master.state),
+            alt_phone_num = COALESCE(EXCLUDED.alt_phone_num, customer_master.alt_phone_num),
+            profession = COALESCE(EXCLUDED.profession, customer_master.profession),
+            financier = COALESCE(EXCLUDED.financier, customer_master.financier),
+            marital_status = COALESCE(EXCLUDED.marital_status, customer_master.marital_status),
+            dms_relation_prefix = COALESCE(EXCLUDED.dms_relation_prefix, customer_master.dms_relation_prefix),
+            dms_contact_path = COALESCE(EXCLUDED.dms_contact_path, customer_master.dms_contact_path),
+            care_of = COALESCE(EXCLUDED.care_of, customer_master.care_of),
+            file_location = COALESCE(EXCLUDED.file_location, customer_master.file_location),
+            gender = COALESCE(EXCLUDED.gender, customer_master.gender),
+            date_of_birth = COALESCE(EXCLUDED.date_of_birth, customer_master.date_of_birth),
+            dms_contact_id = COALESCE(EXCLUDED.dms_contact_id, customer_master.dms_contact_id)
+        RETURNING customer_id
+        """,
+        (
+            aad,
+            _name,
+            address,
+            pin,
+            city,
+            state,
+            mob_raw,
+            alt_phone,
+            profession,
+            financier,
+            marital_status,
+            drp,
+            dcp,
+            care_of,
+            loc_full,
+            gender,
+            dob,
+            dms_cid,
+        ),
+    )
+    cid_row = cur.fetchone()
+    return int(cid_row["customer_id"] if isinstance(cid_row, dict) else cid_row[0])
+
+
+def _upsert_vehicle_master_from_scrape_on_cursor(
+    cur,
+    dms_values: dict,
+    vehicle_dict: dict,
+    *,
+    dealer_id: int | None = None,
+    preexisting_vehicle_id: int | None = None,
+) -> int:
+    if preexisting_vehicle_id is not None and int(preexisting_vehicle_id) > 0:
+        _vehicle_master_update_from_scrape_on_cursor(cur, int(preexisting_vehicle_id), dict(vehicle_dict or {}))
+        return int(preexisting_vehicle_id)
+
+    dv = dict(dms_values or {})
+    vd = dict(vehicle_dict or {})
+    sale_dealer_id = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    place_reg, oem_n = _dealer_oem_place_on_cursor(cur, sale_dealer_id)
 
     def _strip_or_none(k: str) -> str | None:
         v = (vd.get(k) or "").strip()
@@ -1601,7 +1706,6 @@ def insert_dms_masters_from_siebel_scrape(
         except (ValueError, TypeError):
             num_cylinders = None
     ex_showroom = _coerce_ex_showroom_scalar(ex_showroom)
-
     if _is_two_wheeler_vehicle_type(vehicle_type):
         seating_capacity = 2
         body_type = "Open"
@@ -1612,237 +1716,301 @@ def insert_dms_masters_from_siebel_scrape(
     raw_k = (str(dv.get("key_partial") or "").strip() or key_num or None)
     battery = _strip_or_none("battery") or (str(dv.get("battery_partial") or "").strip() or None)
 
+    sql_v = f"""
+        INSERT INTO vehicle_master (
+            chassis, engine, key_num, battery,
+            raw_frame_num, raw_engine_num, raw_key_num,
+            model, colour, variant,
+            cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, year_of_mfg,
+            vehicle_ex_showroom_price, place_of_registeration, oem_name
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (raw_frame_num, raw_engine_num, raw_key_num) DO UPDATE SET
+            {_VEHICLE_MASTER_COALESCE_SET},
+            variant = COALESCE(EXCLUDED.variant, vehicle_master.variant)
+        RETURNING vehicle_id
+        """
+    params_v = (
+        chassis,
+        engine,
+        key_num,
+        battery,
+        raw_f,
+        raw_e,
+        raw_k,
+        model,
+        colour,
+        variant,
+        cubic_capacity,
+        seating_capacity,
+        body_type,
+        vehicle_type,
+        num_cylinders,
+        year_of_mfg,
+        ex_showroom,
+        place_reg,
+        oem_n,
+    )
+    try:
+        cur.execute(sql_v, params_v)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "variant" in msg and ("column" in msg or "undefined" in msg):
+            sql_v_nv = f"""
+        INSERT INTO vehicle_master (
+            chassis, engine, key_num, battery,
+            raw_frame_num, raw_engine_num, raw_key_num,
+            model, colour,
+            cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, year_of_mfg,
+            vehicle_ex_showroom_price, place_of_registeration, oem_name
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (raw_frame_num, raw_engine_num, raw_key_num) DO UPDATE SET
+            {_VEHICLE_MASTER_COALESCE_SET}
+        RETURNING vehicle_id
+        """
+            cur.execute(
+                sql_v_nv,
+                (
+                    chassis,
+                    engine,
+                    key_num,
+                    battery,
+                    raw_f,
+                    raw_e,
+                    raw_k,
+                    model,
+                    colour,
+                    cubic_capacity,
+                    seating_capacity,
+                    body_type,
+                    vehicle_type,
+                    num_cylinders,
+                    year_of_mfg,
+                    ex_showroom,
+                    place_reg,
+                    oem_n,
+                ),
+            )
+        else:
+            raise
+    vid_row = cur.fetchone()
+    return int(vid_row["vehicle_id"] if isinstance(vid_row, dict) else vid_row[0])
+
+
+def _upsert_sales_master_on_cursor(
+    cur,
+    *,
+    customer_id: int,
+    vehicle_id: int,
+    dealer_id: int,
+    file_location: str,
+    order_n: str | None,
+    inv_n: str | None,
+    enq_n: str | None,
+) -> int:
+    sql_s = """
+        INSERT INTO sales_master (
+            customer_id, vehicle_id, dealer_id, file_location,
+            order_number, invoice_number, enquiry_number
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (customer_id, vehicle_id) DO UPDATE SET
+            dealer_id = COALESCE(EXCLUDED.dealer_id, sales_master.dealer_id),
+            file_location = COALESCE(EXCLUDED.file_location, sales_master.file_location),
+            order_number = COALESCE(EXCLUDED.order_number, sales_master.order_number),
+            invoice_number = COALESCE(EXCLUDED.invoice_number, sales_master.invoice_number),
+            enquiry_number = COALESCE(EXCLUDED.enquiry_number, sales_master.enquiry_number)
+        RETURNING sales_id
+        """
+    try:
+        cur.execute(
+            sql_s,
+            (customer_id, vehicle_id, dealer_id, file_location, order_n, inv_n, enq_n),
+        )
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "enquiry_number" in msg and ("column" in msg or "undefined" in msg):
+            cur.execute(
+                """
+                INSERT INTO sales_master (
+                    customer_id, vehicle_id, dealer_id, file_location,
+                    order_number, invoice_number
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (customer_id, vehicle_id) DO UPDATE SET
+                    dealer_id = COALESCE(EXCLUDED.dealer_id, sales_master.dealer_id),
+                    file_location = COALESCE(EXCLUDED.file_location, sales_master.file_location),
+                    order_number = COALESCE(EXCLUDED.order_number, sales_master.order_number),
+                    invoice_number = COALESCE(EXCLUDED.invoice_number, sales_master.invoice_number)
+                RETURNING sales_id
+                """,
+                (customer_id, vehicle_id, dealer_id, file_location, order_n, inv_n),
+            )
+        else:
+            raise
+    sid_row = cur.fetchone()
+    return int(sid_row["sales_id"] if isinstance(sid_row, dict) else sid_row[0])
+
+
+def vehicle_scrape_from_staging_or_db(
+    staging_id: str,
+    dealer_id: int,
+    vehicle_id: int | None = None,
+) -> dict[str, Any]:
+    """Restore vehicle scrape dict for DMS resume when ``dms_state >= 1``."""
+    from app.repositories.add_sales_staging import fetch_staging_payload
+    from app.services.form20_service import _get_vehicle_from_db
+
+    payload = fetch_staging_payload(staging_id, int(dealer_id)) or {}
+    saved = payload.get("dms_vehicle_scrape")
+    if isinstance(saved, dict) and saved:
+        return dict(saved)
+    vid = vehicle_id
+    if vid is None:
+        raw_v = payload.get("vehicle_id")
+        try:
+            vid = int(raw_v) if raw_v is not None else None
+        except (TypeError, ValueError):
+            vid = None
+    if vid is not None and int(vid) > 0:
+        db_v = _get_vehicle_from_db(int(vid))
+        if db_v:
+            out: dict[str, Any] = {}
+            if db_v.get("chassis"):
+                out["full_chassis"] = str(db_v["chassis"])
+                out["chassis"] = str(db_v["chassis"])
+            if db_v.get("engine"):
+                out["full_engine"] = str(db_v["engine"])
+                out["engine"] = str(db_v["engine"])
+            if db_v.get("key_num"):
+                out["key_num"] = str(db_v["key_num"])
+            for k in (
+                "model",
+                "colour",
+                "year_of_mfg",
+                "cubic_capacity",
+                "body_type",
+                "seating_capacity",
+                "oem_name",
+                "vehicle_type",
+                "num_cylinders",
+            ):
+                if db_v.get(k) is not None:
+                    out[k] = db_v[k]
+            veh_m = payload.get("vehicle") if isinstance(payload.get("vehicle"), dict) else {}
+            for k in ("order_number", "invoice_number", "enquiry_number"):
+                v = str(veh_m.get(k) or "").strip()
+                if v:
+                    out[k] = v
+            return out
+    return {}
+
+
+def restore_customer_context_from_staging(
+    out: dict[str, Any],
+    staging_id: str,
+    dealer_id: int,
+) -> None:
+    """Rebuild ``dms_customer_master_collated`` when ``dms_state >= 2`` skips prepare_customer."""
+    from app.repositories.add_sales_staging import fetch_staging_payload
+
+    payload = fetch_staging_payload(staging_id, int(dealer_id)) or {}
+    saved = payload.get("dms_customer_collated")
+    if isinstance(saved, dict) and saved:
+        out["dms_customer_master_collated"] = {
+            "fields": dict(saved.get("fields") or saved),
+            "notes": list(saved.get("notes") or []),
+            "mapping_unclear": list(saved.get("mapping_unclear") or []),
+        }
+    elif isinstance(saved, dict):
+        out["dms_customer_master_collated"] = {"fields": dict(saved), "notes": [], "mapping_unclear": []}
+
+
+def insert_dms_masters_from_siebel_scrape(
+    dms_values: dict,
+    vehicle_dict: dict,
+    *,
+    collated_customer_fields: dict | None = None,
+    file_location: str | None = None,
+    dealer_id: int | None = None,
+    preexisting_customer_id: int | None = None,
+    preexisting_vehicle_id: int | None = None,
+) -> tuple[int, int, int]:
+    """
+    Single transaction: **INSERT** ``customer_master``, ``vehicle_master``, and ``sales_master`` when
+    no prior rows exist (Siebel-only / staging-less Fill DMS). Before commit, **UPDATE**
+    ``vehicle_inventory_master.sold_date`` to today (dd/mm/yyyy) when trimmed chassis/engine match
+    full scraped frame/engine (not ``raw_*``).     Call after Create Invoice in DMS when **Invoice#** is scraped; in non-production, **Invoice#**
+    may be ``HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER`` when the UI never issued an invoice
+    (see ``invoice_number_ready_for_master_commit``).
+
+    Requires name, mobile, and Aadhar last-4 derivable from ``dms_values`` and/or ``collated_customer_fields``.
+
+    ``customer_master.file_location`` / ``sales_master.file_location`` are set to the per-sale OCR folder
+    ``ocr_output/{dealer_id}/{mobile}_{ddmmyy}`` (see ``resolve_ocr_sale_folder_paths``), unless
+    ``file_location`` overrides (full path or leaf segment).
+
+    Returns ``(customer_id, vehicle_id, sales_id)``.
+    """
+    from psycopg2 import IntegrityError
+
+    from app.repositories.vehicle_inventory import (
+        today_dd_mm_yyyy,
+        update_sold_date_by_chassis_engine_on_cursor,
+    )
+
+    dv = dict(dms_values or {})
+    cf = dict(collated_customer_fields or {})
+    vd = dict(vehicle_dict or {})
+    sale_dealer_id = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    loc_full, loc_sales = resolve_ocr_sale_folder_paths(
+        sale_dealer_id,
+        dv,
+        file_location_override=(file_location or "").strip() or None,
+    )
+
     order_n = (vd.get("order_number") or "").strip() or None
     inv_n = (vd.get("invoice_number") or "").strip() or None
     enq_n = (vd.get("enquiry_number") or "").strip() or None
     if not inv_n and not HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE:
         inv_n = HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER
 
+    def _strip_or_none(k: str) -> str | None:
+        v = (vd.get(k) or "").strip()
+        return v or None
+
+    chassis = _strip_or_none("full_chassis") or _strip_or_none("frame_num") or _strip_or_none("chassis")
+    engine = _strip_or_none("full_engine") or _strip_or_none("engine_num") or _strip_or_none("engine")
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT dr.rto_name, o.oem_name
-                FROM dealer_ref dr
-                LEFT JOIN oem_ref o ON o.oem_id = dr.oem_id
-                WHERE dr.dealer_id = %s
-                LIMIT 1
-                """,
-                (sale_dealer_id,),
+            customer_id = _upsert_customer_master_from_dms_on_cursor(
+                cur,
+                dv,
+                cf,
+                file_location=loc_full,
+                dealer_id=sale_dealer_id,
+                preexisting_customer_id=preexisting_customer_id,
             )
-            drow = cur.fetchone()
-            place_reg: str | None = None
-            oem_n: str | None = None
-            if drow:
-                if isinstance(drow, dict):
-                    r = str(drow.get("rto_name") or "").strip()
-                    o = str(drow.get("oem_name") or "").strip()
-                else:
-                    r = str(drow[0] or "").strip()
-                    o = str(drow[1] or "").strip()
-                if r:
-                    place_reg = r[:128]
-                if o:
-                    oem_n = o[:64]
-
-            cur.execute(
-                """
-                INSERT INTO customer_master (
-                    aadhar, name, address, pin, city, state, mobile_number,
-                    alt_phone_num,
-                    profession, financier, marital_status,
-                    dms_relation_prefix, dms_contact_path, care_of,
-                    file_location, gender, date_of_birth, dms_contact_id
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (aadhar, mobile_number) DO UPDATE SET
-                    name = COALESCE(EXCLUDED.name, customer_master.name),
-                    address = COALESCE(EXCLUDED.address, customer_master.address),
-                    pin = COALESCE(EXCLUDED.pin, customer_master.pin),
-                    city = COALESCE(EXCLUDED.city, customer_master.city),
-                    state = COALESCE(EXCLUDED.state, customer_master.state),
-                    alt_phone_num = COALESCE(EXCLUDED.alt_phone_num, customer_master.alt_phone_num),
-                    profession = COALESCE(EXCLUDED.profession, customer_master.profession),
-                    financier = COALESCE(EXCLUDED.financier, customer_master.financier),
-                    marital_status = COALESCE(EXCLUDED.marital_status, customer_master.marital_status),
-                    dms_relation_prefix = COALESCE(EXCLUDED.dms_relation_prefix, customer_master.dms_relation_prefix),
-                    dms_contact_path = COALESCE(EXCLUDED.dms_contact_path, customer_master.dms_contact_path),
-                    care_of = COALESCE(EXCLUDED.care_of, customer_master.care_of),
-                    file_location = COALESCE(EXCLUDED.file_location, customer_master.file_location),
-                    gender = COALESCE(EXCLUDED.gender, customer_master.gender),
-                    date_of_birth = COALESCE(EXCLUDED.date_of_birth, customer_master.date_of_birth),
-                    dms_contact_id = COALESCE(EXCLUDED.dms_contact_id, customer_master.dms_contact_id)
-                RETURNING customer_id
-                """,
-                (
-                    aad,
-                    name,
-                    address,
-                    pin,
-                    city,
-                    state,
-                    mob_raw,
-                    alt_phone,
-                    profession,
-                    financier,
-                    marital_status,
-                    drp,
-                    dcp,
-                    care_of,
-                    loc_full,
-                    gender,
-                    dob,
-                    dms_cid,
-                ),
+            vehicle_id = _upsert_vehicle_master_from_scrape_on_cursor(
+                cur,
+                dv,
+                vd,
+                dealer_id=sale_dealer_id,
+                preexisting_vehicle_id=preexisting_vehicle_id,
             )
-            cid_row = cur.fetchone()
-            customer_id = int(cid_row["customer_id"] if isinstance(cid_row, dict) else cid_row[0])
-
-            _vehicle_coalesce_set = """
-                    chassis = COALESCE(EXCLUDED.chassis, vehicle_master.chassis),
-                    engine = COALESCE(EXCLUDED.engine, vehicle_master.engine),
-                    key_num = COALESCE(EXCLUDED.key_num, vehicle_master.key_num),
-                    battery = COALESCE(EXCLUDED.battery, vehicle_master.battery),
-                    model = COALESCE(EXCLUDED.model, vehicle_master.model),
-                    colour = COALESCE(EXCLUDED.colour, vehicle_master.colour),
-                    cubic_capacity = COALESCE(EXCLUDED.cubic_capacity, vehicle_master.cubic_capacity),
-                    seating_capacity = COALESCE(EXCLUDED.seating_capacity, vehicle_master.seating_capacity),
-                    body_type = COALESCE(EXCLUDED.body_type, vehicle_master.body_type),
-                    vehicle_type = COALESCE(EXCLUDED.vehicle_type, vehicle_master.vehicle_type),
-                    num_cylinders = COALESCE(EXCLUDED.num_cylinders, vehicle_master.num_cylinders),
-                    year_of_mfg = COALESCE(EXCLUDED.year_of_mfg, vehicle_master.year_of_mfg),
-                    vehicle_ex_showroom_price = COALESCE(EXCLUDED.vehicle_ex_showroom_price, vehicle_master.vehicle_ex_showroom_price),
-                    place_of_registeration = COALESCE(EXCLUDED.place_of_registeration, vehicle_master.place_of_registeration),
-                    oem_name = COALESCE(EXCLUDED.oem_name, vehicle_master.oem_name)
-            """
-            sql_v = f"""
-                INSERT INTO vehicle_master (
-                    chassis, engine, key_num, battery,
-                    raw_frame_num, raw_engine_num, raw_key_num,
-                    model, colour, variant,
-                    cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, year_of_mfg,
-                    vehicle_ex_showroom_price, place_of_registeration, oem_name
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (raw_frame_num, raw_engine_num, raw_key_num) DO UPDATE SET
-                    {_vehicle_coalesce_set},
-                    variant = COALESCE(EXCLUDED.variant, vehicle_master.variant)
-                RETURNING vehicle_id
-                """
-            params_v = (
-                chassis,
-                engine,
-                key_num,
-                battery,
-                raw_f,
-                raw_e,
-                raw_k,
-                model,
-                colour,
-                variant,
-                cubic_capacity,
-                seating_capacity,
-                body_type,
-                vehicle_type,
-                num_cylinders,
-                year_of_mfg,
-                ex_showroom,
-                place_reg,
-                oem_n,
+            sales_id = _upsert_sales_master_on_cursor(
+                cur,
+                customer_id=customer_id,
+                vehicle_id=vehicle_id,
+                dealer_id=sale_dealer_id,
+                file_location=loc_sales,
+                order_n=order_n,
+                inv_n=inv_n,
+                enq_n=enq_n,
             )
-            try:
-                cur.execute(sql_v, params_v)
-            except Exception as exc:
-                msg = str(exc).lower()
-                if "variant" in msg and ("column" in msg or "undefined" in msg):
-                    sql_v_nv = f"""
-                INSERT INTO vehicle_master (
-                    chassis, engine, key_num, battery,
-                    raw_frame_num, raw_engine_num, raw_key_num,
-                    model, colour,
-                    cubic_capacity, seating_capacity, body_type, vehicle_type, num_cylinders, year_of_mfg,
-                    vehicle_ex_showroom_price, place_of_registeration, oem_name
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (raw_frame_num, raw_engine_num, raw_key_num) DO UPDATE SET
-                    {_vehicle_coalesce_set}
-                RETURNING vehicle_id
-                """
-                    cur.execute(
-                        sql_v_nv,
-                        (
-                            chassis,
-                            engine,
-                            key_num,
-                            battery,
-                            raw_f,
-                            raw_e,
-                            raw_k,
-                            model,
-                            colour,
-                            cubic_capacity,
-                            seating_capacity,
-                            body_type,
-                            vehicle_type,
-                            num_cylinders,
-                            year_of_mfg,
-                            ex_showroom,
-                            place_reg,
-                            oem_n,
-                        ),
-                    )
-                    logger.info(
-                        "fill_dms: vehicle_master upsert without variant column (DDL/alter/15a_vehicle_master_variant_vin_unique_drop_dms_sku.sql)"
-                    )
-                else:
-                    raise
-            vid_row = cur.fetchone()
-            vehicle_id = int(vid_row["vehicle_id"] if isinstance(vid_row, dict) else vid_row[0])
-
-            sql_s = """
-                INSERT INTO sales_master (
-                    customer_id, vehicle_id, dealer_id, file_location,
-                    order_number, invoice_number, enquiry_number
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (customer_id, vehicle_id) DO UPDATE SET
-                    dealer_id = COALESCE(EXCLUDED.dealer_id, sales_master.dealer_id),
-                    file_location = COALESCE(EXCLUDED.file_location, sales_master.file_location),
-                    order_number = COALESCE(EXCLUDED.order_number, sales_master.order_number),
-                    invoice_number = COALESCE(EXCLUDED.invoice_number, sales_master.invoice_number),
-                    enquiry_number = COALESCE(EXCLUDED.enquiry_number, sales_master.enquiry_number)
-                RETURNING sales_id
-                """
-            try:
-                cur.execute(
-                    sql_s,
-                    (customer_id, vehicle_id, sale_dealer_id, loc_sales, order_n, inv_n, enq_n),
-                )
-            except Exception as exc:
-                msg = str(exc).lower()
-                if "enquiry_number" in msg and ("column" in msg or "undefined" in msg):
-                    cur.execute(
-                        """
-                        INSERT INTO sales_master (
-                            customer_id, vehicle_id, dealer_id, file_location,
-                            order_number, invoice_number
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (customer_id, vehicle_id) DO UPDATE SET
-                            dealer_id = COALESCE(EXCLUDED.dealer_id, sales_master.dealer_id),
-                            file_location = COALESCE(EXCLUDED.file_location, sales_master.file_location),
-                            order_number = COALESCE(EXCLUDED.order_number, sales_master.order_number),
-                            invoice_number = COALESCE(EXCLUDED.invoice_number, sales_master.invoice_number)
-                        RETURNING sales_id
-                        """,
-                        (customer_id, vehicle_id, sale_dealer_id, loc_sales, order_n, inv_n),
-                    )
-                    logger.info("fill_dms: sales_master upsert without enquiry_number column")
-                else:
-                    raise
-            sid_row = cur.fetchone()
-            sales_id = int(sid_row["sales_id"] if isinstance(sid_row, dict) else sid_row[0])
 
             _sold_today = today_dd_mm_yyyy()
             _inv_rc = update_sold_date_by_chassis_engine_on_cursor(
@@ -2025,6 +2193,9 @@ def _run_fill_dms_real_siebel_playwright(
     *,
     execution_log_client_api_base_url: str | None = None,
     execution_log_http_request_base_url: str | None = None,
+    staging_id: str | None = None,
+    dealer_id: int | None = None,
+    dms_state_hint: int | None = None,
 ) -> None:
     """
     Hero Connect / Siebel Open UI: ``Playwright_Hero_DMS_fill`` — **Find Contact Enquiry** path
@@ -2109,6 +2280,9 @@ def _run_fill_dms_real_siebel_playwright(
         vehicle_id=vehicle_id,
         execution_log_client_api_base_url=execution_log_client_api_base_url,
         execution_log_http_request_base_url=execution_log_http_request_base_url,
+        staging_id=staging_id,
+        dealer_id=dealer_id,
+        dms_state_hint=dms_state_hint,
     )
 
     result["vehicle"] = frag.get("vehicle") or {}
@@ -2276,6 +2450,33 @@ def run_fill_dms_only(
     subfolder_path.mkdir(parents=True, exist_ok=True)
     fill_dms_phase("subfolder_ready", subfolder=effective_subfolder)
 
+    did_eff = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    sid_clean = (staging_id or "").strip()
+    cid_eff = customer_id
+    vid_eff = vehicle_id
+    if staging_payload:
+        if cid_eff is None:
+            raw_c = staging_payload.get("customer_id")
+            try:
+                cid_eff = int(raw_c) if raw_c is not None else None
+            except (TypeError, ValueError):
+                cid_eff = None
+        if vid_eff is None:
+            raw_v = staging_payload.get("vehicle_id")
+            try:
+                vid_eff = int(raw_v) if raw_v is not None else None
+            except (TypeError, ValueError):
+                vid_eff = None
+    dms_state_hint: int | None = None
+    if sid_clean:
+        from app.services.add_sales_staging_state_service import resolved_staging_dms_state
+
+        dms_state_hint = resolved_staging_dms_state(
+            staging_id=sid_clean,
+            dealer_id=did_eff,
+            dms_state_hint=None,
+        )
+
     if not dms_automation_is_real_siebel():
         result["error"] = (
             "DMS_MODE must be real, siebel, live, production, or hero (static training DMS was removed). "
@@ -2335,12 +2536,15 @@ def run_fill_dms_only(
             dms_values,
             effective_subfolder,
             ocr_dir,
-            customer_id,
-            vehicle_id,
+            cid_eff,
+            vid_eff,
             result,
             playwright_dms_log,
             execution_log_client_api_base_url=execution_log_client_api_base_url,
             execution_log_http_request_base_url=execution_log_http_request_base_url,
+            staging_id=sid_clean or None,
+            dealer_id=did_eff,
+            dms_state_hint=dms_state_hint,
         )
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
@@ -2563,6 +2767,9 @@ def Playwright_Hero_DMS_fill(
     vehicle_id: int | None = None,
     execution_log_client_api_base_url: str | None = None,
     execution_log_http_request_base_url: str | None = None,
+    staging_id: str | None = None,
+    dealer_id: int | None = None,
+    dms_state_hint: int | None = None,
 ) -> dict:
     """
     Hero Connect / Siebel automation — **Find Contact Enquiry** path. Pipeline:
@@ -2771,50 +2978,94 @@ def Playwright_Hero_DMS_fill(
         contact_url = (urls.contact or "").strip()
         in_transit_state = False
 
+        from app.services.add_sales_staging_state_service import resolved_staging_dms_state
+        from app.services.hero_dms_db_service import (
+            persist_customer_master_after_prepare_customer,
+            persist_vehicle_master_after_prepare_vehicle,
+        )
+
+        sid_clean = (staging_id or "").strip()
+        did_eff = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+        dms_state = resolved_staging_dms_state(
+            staging_id=sid_clean or None,
+            dealer_id=did_eff,
+            dms_state_hint=dms_state_hint,
+        )
+        dms_state_int = int(dms_state or 0)
+
         step("Pre-step: preparing vehicle before contact find (video path).")
         _pv_ok = False
         _pv_err: str | None = None
         _pv_scraped: dict[str, Any] = {}
         _pv_crit: list[str] = []
         _pv_info: list[str] = []
-        for _pv_attempt in range(1, _PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS + 1):
-            _pv_ok, _pv_err, _pv_scraped, in_transit_state, _pv_crit, _pv_info = prepare_vehicle(
-                page,
-                dms_values,
-                urls,
-                nav_timeout_ms=nav_timeout_ms,
-                action_timeout_ms=action_timeout_ms,
-                content_frame_selector=content_frame_selector,
-                note=note,
-                form_trace=form_trace,
-                ms_done=ms_done,
-                step=step,
-                debug_dump_dir=_exec_log_path.parent if _exec_log_path else None,
+        if sid_clean and dms_state_int >= 1:
+            _pv_scraped = vehicle_scrape_from_staging_or_db(
+                sid_clean,
+                did_eff,
+                vehicle_id=vehicle_id,
             )
-            if _pv_ok:
-                break
-            if (
-                _pv_attempt < _PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS
-                and _is_prepare_vehicle_precheck_pdi_transient(_pv_err)
-            ):
+            if _pv_scraped:
+                _pv_ok = True
+                out["vehicle"] = _pv_scraped
                 note(
-                    "prepare_vehicle "
-                    f"attempt {_pv_attempt}/{_PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS} failed "
-                    f"(transient Pre-check/PDI): {_pv_err!r} — "
-                    f"retrying after {_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS}ms settle."
+                    "resume: dms_state>=1 — skip prepare_vehicle; continuing at prepare_customer"
                 )
-                try:
-                    page.wait_for_timeout(_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS)
-                except Exception:
-                    time.sleep(_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS / 1000.0)
-                continue
-            break
-
+                ms_done("Vehicle prep skipped (already completed)")
+            else:
+                note(
+                    "resume: dms_state>=1 but no saved vehicle scrape — running prepare_vehicle"
+                )
         if not _pv_ok:
-            out["error"] = _pv_err or "prepare_vehicle failed before contact find."
-            return out
-        out["vehicle"] = _pv_scraped
-        _write_playwright_vehicle_master_section(log_fp, _pv_scraped, _pv_crit, _pv_info)
+            for _pv_attempt in range(1, _PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS + 1):
+                _pv_ok, _pv_err, _pv_scraped, in_transit_state, _pv_crit, _pv_info = prepare_vehicle(
+                    page,
+                    dms_values,
+                    urls,
+                    nav_timeout_ms=nav_timeout_ms,
+                    action_timeout_ms=action_timeout_ms,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    form_trace=form_trace,
+                    ms_done=ms_done,
+                    step=step,
+                    debug_dump_dir=_exec_log_path.parent if _exec_log_path else None,
+                )
+                if _pv_ok:
+                    break
+                if (
+                    _pv_attempt < _PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS
+                    and _is_prepare_vehicle_precheck_pdi_transient(_pv_err)
+                ):
+                    note(
+                        "prepare_vehicle "
+                        f"attempt {_pv_attempt}/{_PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS} failed "
+                        f"(transient Pre-check/PDI): {_pv_err!r} — "
+                        f"retrying after {_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS}ms settle."
+                    )
+                    try:
+                        page.wait_for_timeout(_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS)
+                    except Exception:
+                        time.sleep(_PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS / 1000.0)
+                    continue
+                break
+
+            if not _pv_ok:
+                out["error"] = _pv_err or "prepare_vehicle failed before contact find."
+                return out
+            out["vehicle"] = _pv_scraped
+            _write_playwright_vehicle_master_section(log_fp, _pv_scraped, _pv_crit, _pv_info)
+            if sid_clean:
+                _vid_ckpt = persist_vehicle_master_after_prepare_vehicle(
+                    dms_values=dms_values,
+                    scraped_vehicle=_pv_scraped,
+                    staging_id=sid_clean,
+                    dealer_id=did_eff,
+                )
+                if _vid_ckpt is not None:
+                    vehicle_id = int(_vid_ckpt)
+                    out["vehicle_id"] = vehicle_id
+                    dms_state_int = max(dms_state_int, 1)
 
         if skip_contact_find:
             note(
@@ -2832,30 +3083,47 @@ def Playwright_Hero_DMS_fill(
             )
             return out
         video_first_name = first.strip()
-        if not prepare_customer(
-            page,
-            dms_values,
-            urls,
-            out,
-            contact_url=contact_url,
-            mobile=mobile,
-            video_first_name=video_first_name,
-            care_of=care_of,
-            addr=addr,
-            pin=pin,
-            action_timeout_ms=action_timeout_ms,
-            nav_timeout_ms=nav_timeout_ms,
-            content_frame_selector=content_frame_selector,
-            mobile_aria_hints=mobile_aria_hints,
-            note=note,
-            step=step,
-            form_trace=form_trace,
-            ms_done=ms_done,
-            log_fp=log_fp,
-            log_vehicle_snapshot=log_vehicle_snapshot,
-            playwright_dms_log_path=_exec_log_path,
-        ):
-            return out
+        if sid_clean and dms_state_int >= 2:
+            restore_customer_context_from_staging(out, sid_clean, did_eff)
+            note(
+                "resume: dms_state>=2 — skip prepare_customer; continuing at prepare_order"
+            )
+            ms_done("Customer prep skipped (already completed)")
+        else:
+            if not prepare_customer(
+                page,
+                dms_values,
+                urls,
+                out,
+                contact_url=contact_url,
+                mobile=mobile,
+                video_first_name=video_first_name,
+                care_of=care_of,
+                addr=addr,
+                pin=pin,
+                action_timeout_ms=action_timeout_ms,
+                nav_timeout_ms=nav_timeout_ms,
+                content_frame_selector=content_frame_selector,
+                mobile_aria_hints=mobile_aria_hints,
+                note=note,
+                step=step,
+                form_trace=form_trace,
+                ms_done=ms_done,
+                log_fp=log_fp,
+                log_vehicle_snapshot=log_vehicle_snapshot,
+                playwright_dms_log_path=_exec_log_path,
+            ):
+                return out
+            if sid_clean:
+                _cid_ckpt = persist_customer_master_after_prepare_customer(
+                    dms_values=dms_values,
+                    collated_customer=out.get("dms_customer_master_collated"),
+                    staging_id=sid_clean,
+                    dealer_id=did_eff,
+                )
+                if _cid_ckpt is not None:
+                    customer_id = int(_cid_ckpt)
+                    out["customer_id"] = customer_id
         order_scraped = prepare_order(
             page,
             dms_values,

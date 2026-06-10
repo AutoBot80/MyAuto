@@ -203,16 +203,11 @@ def upsert_customer_vehicle_sales(
     if sale_dealer_id is None:
         sale_dealer_id = int(DEALER_ID)
 
-    cur.execute(
-        """
-        SELECT customer_id FROM customer_master
-        WHERE aadhar = %s AND mobile_number = %s
-        """,
-        (aadhar_last4, mobile),
-    )
-    row = cur.fetchone()
-    if row:
-        customer_id = row["customer_id"]
+    pre_cid = _int_or_none(payload.get("customer_id"))
+    pre_vid = _int_or_none(payload.get("vehicle_id"))
+
+    if pre_cid is not None and int(pre_cid) > 0:
+        customer_id = int(pre_cid)
         cur.execute(
             """
             UPDATE customer_master SET
@@ -246,69 +241,117 @@ def upsert_customer_vehicle_sales(
     else:
         cur.execute(
             """
-            INSERT INTO customer_master (
-                aadhar, name, address, pin, city, state, mobile_number,
-                alt_phone_num,
-                profession, financier, marital_status,
-                dms_relation_prefix, dms_contact_path, care_of,
-                file_location, gender, date_of_birth
+            SELECT customer_id FROM customer_master
+            WHERE aadhar = %s AND mobile_number = %s
+            """,
+            (aadhar_last4, mobile),
+        )
+        row = cur.fetchone()
+        if row:
+            customer_id = row["customer_id"]
+            cur.execute(
+                """
+                UPDATE customer_master SET
+                    name = %s, address = %s, pin = %s, city = %s, state = %s,
+                    alt_phone_num = %s,
+                    gender = %s, date_of_birth = %s, profession = %s,
+                    financier = %s, marital_status = %s,
+                    dms_relation_prefix = %s, dms_contact_path = %s, care_of = %s,
+                    file_location = %s
+                WHERE customer_id = %s
+                """,
+                (
+                    name,
+                    address,
+                    pin,
+                    city,
+                    state,
+                    alt_phone_num,
+                    gender,
+                    date_of_birth,
+                    profession,
+                    financier,
+                    marital_status,
+                    dms_relation_prefix,
+                    dms_contact_path,
+                    care_of,
+                    loc,
+                    customer_id,
+                ),
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING customer_id
-            """,
-            (
-                aadhar_last4,
-                name,
-                address,
-                pin,
-                city,
-                state,
-                mobile,
-                alt_phone_num,
-                profession,
-                financier,
-                marital_status,
-                dms_relation_prefix,
-                dms_contact_path,
-                care_of,
-                loc,
-                gender,
-                date_of_birth,
-            ),
-        )
-        customer_id = cur.fetchone()["customer_id"]
+        else:
+            cur.execute(
+                """
+                INSERT INTO customer_master (
+                    aadhar, name, address, pin, city, state, mobile_number,
+                    alt_phone_num,
+                    profession, financier, marital_status,
+                    dms_relation_prefix, dms_contact_path, care_of,
+                    file_location, gender, date_of_birth
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING customer_id
+                """,
+                (
+                    aadhar_last4,
+                    name,
+                    address,
+                    pin,
+                    city,
+                    state,
+                    mobile,
+                    alt_phone_num,
+                    profession,
+                    financier,
+                    marital_status,
+                    dms_relation_prefix,
+                    dms_contact_path,
+                    care_of,
+                    loc,
+                    gender,
+                    date_of_birth,
+                ),
+            )
+            customer_id = cur.fetchone()["customer_id"]
 
-    cur.execute(
-        """
-        SELECT vehicle_id FROM vehicle_master
-        WHERE (raw_frame_num IS NOT DISTINCT FROM %s)
-          AND (raw_engine_num IS NOT DISTINCT FROM %s)
-          AND (raw_key_num IS NOT DISTINCT FROM %s)
-        """,
-        (raw_f, raw_e, raw_k),
-    )
-    vrow = cur.fetchone()
-    if vrow:
-        vehicle_id = vrow["vehicle_id"]
-        cur.execute(
-            """
-            UPDATE vehicle_master SET
-                chassis = %s, engine = %s, key_num = %s, battery = %s,
-                raw_frame_num = %s, raw_engine_num = %s, raw_key_num = %s
-            WHERE vehicle_id = %s
-            """,
-            (frame_no, engine_no, raw_k, battery_no, raw_f, raw_e, raw_k, vehicle_id),
-        )
+    if pre_vid is not None and int(pre_vid) > 0:
+        vehicle_id = int(pre_vid)
+        if scraped_vehicle:
+            from app.services.fill_hero_dms_service import _vehicle_master_update_from_scrape_on_cursor
+
+            _vehicle_master_update_from_scrape_on_cursor(cur, vehicle_id, dict(scraped_vehicle))
     else:
         cur.execute(
             """
-            INSERT INTO vehicle_master (chassis, engine, key_num, battery, raw_frame_num, raw_engine_num, raw_key_num)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING vehicle_id
+            SELECT vehicle_id FROM vehicle_master
+            WHERE (raw_frame_num IS NOT DISTINCT FROM %s)
+              AND (raw_engine_num IS NOT DISTINCT FROM %s)
+              AND (raw_key_num IS NOT DISTINCT FROM %s)
             """,
-            (frame_no, engine_no, raw_k, battery_no, raw_f, raw_e, raw_k),
+            (raw_f, raw_e, raw_k),
         )
-        vehicle_id = cur.fetchone()["vehicle_id"]
+        vrow = cur.fetchone()
+        if vrow:
+            vehicle_id = vrow["vehicle_id"]
+            cur.execute(
+                """
+                UPDATE vehicle_master SET
+                    chassis = %s, engine = %s, key_num = %s, battery = %s,
+                    raw_frame_num = %s, raw_engine_num = %s, raw_key_num = %s
+                WHERE vehicle_id = %s
+                """,
+                (frame_no, engine_no, raw_k, battery_no, raw_f, raw_e, raw_k, vehicle_id),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO vehicle_master (chassis, engine, key_num, battery, raw_frame_num, raw_engine_num, raw_key_num)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING vehicle_id
+                """,
+                (frame_no, engine_no, raw_k, battery_no, raw_f, raw_e, raw_k),
+            )
+            vehicle_id = cur.fetchone()["vehicle_id"]
 
     try:
         cur.execute(
@@ -318,6 +361,12 @@ def upsert_customer_vehicle_sales(
                 order_number, invoice_number, enquiry_number
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (customer_id, vehicle_id) DO UPDATE SET
+                dealer_id = COALESCE(EXCLUDED.dealer_id, sales_master.dealer_id),
+                file_location = COALESCE(EXCLUDED.file_location, sales_master.file_location),
+                order_number = COALESCE(EXCLUDED.order_number, sales_master.order_number),
+                invoice_number = COALESCE(EXCLUDED.invoice_number, sales_master.invoice_number),
+                enquiry_number = COALESCE(EXCLUDED.enquiry_number, sales_master.enquiry_number)
             RETURNING sales_id
             """,
             (customer_id, vehicle_id, sale_dealer_id, loc, order_n, inv_n, enq_n),
@@ -327,15 +376,39 @@ def upsert_customer_vehicle_sales(
     except IntegrityError as exc:
         cname = getattr(getattr(exc, "diag", None), "constraint_name", None) or ""
         if cname == "uq_sales_customer_vehicle" or "uq_sales_customer_vehicle" in str(exc):
-            raise ValueError(
-                "A sale already exists for this customer and vehicle; duplicate sales_master row is not allowed."
-            ) from exc
-        raise
+            cur.execute(
+                """
+                SELECT sales_id FROM sales_master
+                WHERE customer_id = %s AND vehicle_id = %s
+                LIMIT 1
+                """,
+                (customer_id, vehicle_id),
+            )
+            srow = cur.fetchone()
+            if not srow:
+                raise ValueError(
+                    "A sale already exists for this customer and vehicle; duplicate sales_master row is not allowed."
+                ) from exc
+            sales_id = int(srow["sales_id"] if isinstance(srow, dict) else srow[0])
+            cur.execute(
+                """
+                UPDATE sales_master SET
+                    dealer_id = COALESCE(%s, dealer_id),
+                    file_location = COALESCE(%s, file_location),
+                    order_number = COALESCE(%s, order_number),
+                    invoice_number = COALESCE(%s, invoice_number),
+                    enquiry_number = COALESCE(%s, enquiry_number)
+                WHERE sales_id = %s
+                """,
+                (sale_dealer_id, loc, order_n, inv_n, enq_n, sales_id),
+            )
+        else:
+            raise
 
     if sales_id is None:
         raise RuntimeError("sales_master INSERT did not return sales_id")
 
-    if scraped_vehicle:
+    if scraped_vehicle and not (pre_vid is not None and int(pre_vid) > 0):
         scrape = dict(scraped_vehicle)
         if scrape:
             from app.services.fill_hero_dms_service import _vehicle_master_update_from_scrape_on_cursor

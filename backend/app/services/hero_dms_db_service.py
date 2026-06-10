@@ -26,6 +26,135 @@ from app.config import (
 logger = logging.getLogger(__name__)
 
 
+def persist_vehicle_master_after_prepare_vehicle(
+    *,
+    dms_values: dict[str, Any],
+    scraped_vehicle: dict[str, Any],
+    staging_id: str,
+    dealer_id: int | None = None,
+) -> int | None:
+    """
+    After successful ``prepare_vehicle``: upsert ``vehicle_master``, patch staging, set ``dms_state=1``.
+    Returns ``vehicle_id`` or None when skipped/failed (does not raise).
+    """
+    from app.config import DATABASE_URL
+    from app.db import get_connection
+    from app.repositories.add_sales_staging import merge_staging_payload_on_cursor
+    from app.services.add_sales_staging_state_service import mark_staging_dms_state
+    from app.services.fill_hero_dms_service import _upsert_vehicle_master_from_scrape_on_cursor
+
+    sid = (staging_id or "").strip()
+    if not sid or not DATABASE_URL:
+        return None
+    did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    scrape = dict(scraped_vehicle or {})
+    if not scrape:
+        return None
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                vehicle_id = _upsert_vehicle_master_from_scrape_on_cursor(
+                    cur,
+                    dict(dms_values or {}),
+                    scrape,
+                    dealer_id=did,
+                )
+                merge_staging_payload_on_cursor(
+                    cur,
+                    sid,
+                    did,
+                    {
+                        "vehicle_id": int(vehicle_id),
+                        "dms_vehicle_scrape": scrape,
+                    },
+                )
+            conn.commit()
+        mark_staging_dms_state(sid, did, 1)
+        logger.info(
+            "persist_vehicle_master_after_prepare_vehicle ok staging_id=%s vehicle_id=%s",
+            sid,
+            vehicle_id,
+        )
+        return int(vehicle_id)
+    except Exception as exc:
+        logger.warning(
+            "persist_vehicle_master_after_prepare_vehicle failed staging_id=%s: %s",
+            sid,
+            exc,
+        )
+        return None
+
+
+def persist_customer_master_after_prepare_customer(
+    *,
+    dms_values: dict[str, Any],
+    collated_customer: dict[str, Any] | None,
+    staging_id: str,
+    dealer_id: int | None = None,
+) -> int | None:
+    """
+    After successful ``prepare_customer``: upsert ``customer_master``, patch staging, set ``dms_state=2``.
+    Returns ``customer_id`` or None when skipped/failed (does not raise).
+    """
+    from app.config import DATABASE_URL
+    from app.db import get_connection
+    from app.repositories.add_sales_staging import merge_staging_payload_on_cursor
+    from app.services.add_sales_staging_state_service import mark_staging_dms_state
+    from app.services.fill_hero_dms_service import (
+        _upsert_customer_master_from_dms_on_cursor,
+        resolve_ocr_sale_folder_paths,
+    )
+
+    sid = (staging_id or "").strip()
+    if not sid or not DATABASE_URL:
+        return None
+    did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    cm = dict(collated_customer or {})
+    fields = cm.get("fields") if isinstance(cm.get("fields"), dict) else cm
+    if not isinstance(fields, dict) or not fields:
+        return None
+    try:
+        dv = dict(dms_values or {})
+        loc_full, _loc_sales = resolve_ocr_sale_folder_paths(did, dv)
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                customer_id = _upsert_customer_master_from_dms_on_cursor(
+                    cur,
+                    dv,
+                    fields,
+                    file_location=loc_full,
+                    dealer_id=did,
+                )
+                merge_staging_payload_on_cursor(
+                    cur,
+                    sid,
+                    did,
+                    {
+                        "customer_id": int(customer_id),
+                        "dms_customer_collated": {
+                            "fields": dict(fields),
+                            "notes": list(cm.get("notes") or []),
+                            "mapping_unclear": list(cm.get("mapping_unclear") or []),
+                        },
+                    },
+                )
+            conn.commit()
+        mark_staging_dms_state(sid, did, 2)
+        logger.info(
+            "persist_customer_master_after_prepare_customer ok staging_id=%s customer_id=%s",
+            sid,
+            customer_id,
+        )
+        return int(customer_id)
+    except Exception as exc:
+        logger.warning(
+            "persist_customer_master_after_prepare_customer failed staging_id=%s: %s",
+            sid,
+            exc,
+        )
+        return None
+
+
 def persist_masters_after_create_order(
     out: dict[str, Any],
     dms_values: dict[str, Any],
@@ -83,13 +212,8 @@ def persist_masters_after_create_order(
     _sid_out: int | None = None
 
     _inv_ready = invoice_number_ready_for_master_commit(out.get("vehicle"))
-    if (
-        _inv_ready
-        and preexisting_customer_id is None
-        and preexisting_vehicle_id is None
-    ):
+    if _inv_ready:
         if not DATABASE_URL:
-            # Electron sidecar has no DB; cloud /sidecar/dms/commit persists masters.
             note(
                 "Master INSERT skipped locally (no DATABASE_URL); "
                 "cloud /sidecar/dms/commit will persist after this run."
@@ -102,6 +226,8 @@ def persist_masters_after_create_order(
                     out.get("vehicle") or {},
                     collated_customer_fields=_collate_fields,
                     dealer_id=did,
+                    preexisting_customer_id=preexisting_customer_id,
+                    preexisting_vehicle_id=preexisting_vehicle_id,
                 )
                 _atomic_ok = True
                 if _cid_out is not None:
@@ -113,11 +239,6 @@ def persist_masters_after_create_order(
             except Exception as _p_exc:
                 _atomic_err = str(_p_exc)
                 logger.warning("siebel_dms: master INSERT after Create Invoice failed: %s", _p_exc)
-    elif _inv_ready and (preexisting_customer_id is not None or preexisting_vehicle_id is not None):
-        note(
-            "Invoice# present but customer_id/vehicle_id already set — skipping DB "
-            "(policy: no UPDATE during Siebel; refresh ids from DB separately if needed)."
-        )
     else:
         note(
             "Invoice# not in scrape yet (Create Invoice not completed or not scraped) — "

@@ -2191,6 +2191,8 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
     dms_values = ctx["dms_values"]
     staging_payload = ctx.get("staging_payload")
     dms_base_url = ctx["dms_base_url"]
+    sid_ctx = (ctx.get("staging_id") or params.get("staging_id") or "").strip() or None
+    dms_state_hint = ctx.get("dms_state")
 
     # Use LOCAL paths (SAATHI_BASE_DIR on dealer PC), not server-returned Linux paths.
     from app.config import get_uploads_dir, get_ocr_output_dir
@@ -2263,6 +2265,108 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
     )
     result["playwright_dms_execution_log_path"] = str(playwright_dms_log)
 
+    cid_eff = params.get("customer_id")
+    vid_eff = params.get("vehicle_id")
+    if staging_payload:
+        if cid_eff is None:
+            raw_c = staging_payload.get("customer_id")
+            try:
+                cid_eff = int(raw_c) if raw_c is not None else None
+            except (TypeError, ValueError):
+                cid_eff = None
+        if vid_eff is None:
+            raw_v = staging_payload.get("vehicle_id")
+            try:
+                vid_eff = int(raw_v) if raw_v is not None else None
+            except (TypeError, ValueError):
+                vid_eff = None
+
+    import app.services.hero_dms_db_service as _hdb
+    import app.services.add_sales_staging_state_service as _stg
+
+    _orig_mark_dms = _stg.mark_staging_dms_state
+    _orig_persist_vehicle = _hdb.persist_vehicle_master_after_prepare_vehicle
+    _orig_persist_customer = _hdb.persist_customer_master_after_prepare_customer
+
+    def _mark_dms_state_via_api(staging_id: str, dealer_id: int, state: int) -> None:
+        sid = (staging_id or "").strip()
+        if not sid:
+            return
+        try:
+            _api_post(
+                api_url,
+                jwt,
+                "/sidecar/staging/processing-state",
+                {
+                    "staging_id": sid,
+                    "dealer_id": dealer_id,
+                    "dms_state": int(state),
+                },
+            )
+        except Exception as exc:
+            logging.warning(
+                "fill_dms sidecar dms_state=%s staging_id=%s: %s",
+                state,
+                sid,
+                exc,
+            )
+
+    def _persist_vehicle_via_api(**kw) -> int | None:
+        sid = (kw.get("staging_id") or "").strip()
+        if not sid:
+            return None
+        try:
+            resp = _api_post(
+                api_url,
+                jwt,
+                "/sidecar/dms/vehicle-after-prepare",
+                {
+                    "staging_id": sid,
+                    "dealer_id": kw.get("dealer_id") or dealer_id,
+                    "dms_values": kw.get("dms_values") or {},
+                    "scraped_vehicle": kw.get("scraped_vehicle") or {},
+                },
+            )
+            err = (resp.get("error") or "").strip()
+            if err:
+                logging.warning("fill_dms sidecar vehicle-after-prepare: %s", err)
+                return None
+            vid = resp.get("vehicle_id")
+            return int(vid) if vid is not None else None
+        except Exception as exc:
+            logging.warning("fill_dms sidecar vehicle-after-prepare failed: %s", exc)
+            return None
+
+    def _persist_customer_via_api(**kw) -> int | None:
+        sid = (kw.get("staging_id") or "").strip()
+        if not sid:
+            return None
+        try:
+            resp = _api_post(
+                api_url,
+                jwt,
+                "/sidecar/dms/customer-after-prepare",
+                {
+                    "staging_id": sid,
+                    "dealer_id": kw.get("dealer_id") or dealer_id,
+                    "dms_values": kw.get("dms_values") or {},
+                    "collated_customer": kw.get("collated_customer"),
+                },
+            )
+            err = (resp.get("error") or "").strip()
+            if err:
+                logging.warning("fill_dms sidecar customer-after-prepare: %s", err)
+                return None
+            cid = resp.get("customer_id")
+            return int(cid) if cid is not None else None
+        except Exception as exc:
+            logging.warning("fill_dms sidecar customer-after-prepare failed: %s", exc)
+            return None
+
+    _stg.mark_staging_dms_state = _mark_dms_state_via_api
+    _hdb.persist_vehicle_master_after_prepare_vehicle = _persist_vehicle_via_api
+    _hdb.persist_customer_master_after_prepare_customer = _persist_customer_via_api
+
     page = None
     try:
         page, open_error = get_or_open_site_page(
@@ -2281,16 +2385,23 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
                 dms_values,
                 subfolder,
                 ocr_output_dir,
-                params.get("customer_id"),
-                params.get("vehicle_id"),
+                cid_eff,
+                vid_eff,
                 result,
                 playwright_dms_log,
                 execution_log_client_api_base_url=_client_api_log,
                 execution_log_http_request_base_url=_http_api_log,
+                staging_id=sid_ctx,
+                dealer_id=dealer_id,
+                dms_state_hint=int(dms_state_hint) if dms_state_hint is not None else None,
             )
     except Exception as e:
         result["error"] = str(e)
         logging.warning("fill_dms sidecar: %s", e)
+    finally:
+        _stg.mark_staging_dms_state = _orig_mark_dms
+        _hdb.persist_vehicle_master_after_prepare_vehicle = _orig_persist_vehicle
+        _hdb.persist_customer_master_after_prepare_customer = _orig_persist_customer
 
     try:
         _write_data_from_dms(

@@ -6,10 +6,15 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from app.repositories.add_sales_staging import (
+    fetch_staging_dms_state,
     fetch_staging_insurance_state,
     update_staging_processing_state,
 )
-from app.services.add_sales_staging_state_service import mark_staging_insurance_state
+from app.services.add_sales_staging_state_service import (
+    mark_staging_dms_state,
+    mark_staging_insurance_state,
+    resolved_staging_dms_state,
+)
 
 
 def test_update_staging_processing_state_insurance_only() -> None:
@@ -87,3 +92,38 @@ def test_fetch_staging_insurance_state() -> None:
 
     with patch("app.repositories.add_sales_staging.get_connection", return_value=conn):
         assert fetch_staging_insurance_state(sid, 100001) == 2
+
+
+def test_fetch_staging_dms_state() -> None:
+    sid = str(uuid4())
+    cur = MagicMock()
+    cur.fetchone.return_value = {"dms_state": 2}
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__ = MagicMock(return_value=cur)
+    conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+    with patch("app.repositories.add_sales_staging.get_connection", return_value=conn):
+        assert fetch_staging_dms_state(sid, 100001) == 2
+
+
+def test_mark_staging_dms_state_delegates() -> None:
+    sid = str(uuid4())
+    with patch(
+        "app.services.add_sales_staging_state_service.update_staging_processing_state",
+        return_value=True,
+    ) as upd:
+        mark_staging_dms_state(sid, 100001, 1)
+    upd.assert_called_once_with(sid, 100001, dms_state=1)
+
+
+def test_resolved_staging_dms_state_hint() -> None:
+    assert resolved_staging_dms_state(staging_id=None, dealer_id=100001, dms_state_hint=2) == 2
+
+
+def test_resolved_staging_dms_state_fetch() -> None:
+    sid = str(uuid4())
+    with patch(
+        "app.repositories.add_sales_staging.fetch_staging_dms_state",
+        return_value=1,
+    ):
+        assert resolved_staging_dms_state(staging_id=sid, dealer_id=100001, dms_state_hint=None) == 1

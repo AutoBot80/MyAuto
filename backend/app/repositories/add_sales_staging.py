@@ -592,6 +592,41 @@ def update_staging_processing_state(
         conn.close()
 
 
+def fetch_staging_dms_state(staging_id: str, dealer_id: int) -> int | None:
+    """
+    Return ``dms_state`` for a draft/committed staging row, or None if missing.
+    """
+    sid = (staging_id or "").strip()
+    if not sid:
+        return None
+    try:
+        uuid.UUID(sid)
+    except ValueError:
+        return None
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT dms_state
+                FROM add_sales_staging
+                WHERE staging_id::text = %s
+                  AND dealer_id = %s
+                  AND status IN ('draft', 'committed')
+                """,
+                (sid, int(dealer_id)),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            raw = row["dms_state"] if isinstance(row, dict) else row[0]
+            if raw is None:
+                return 0
+            return int(raw)
+    finally:
+        conn.close()
+
+
 def fetch_staging_insurance_state(staging_id: str, dealer_id: int) -> int | None:
     """
     Return ``insurance_state`` for a draft/committed staging row, or None if missing.

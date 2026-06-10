@@ -41,6 +41,22 @@ def mark_staging_insurance_state(staging_id: str, dealer_id: int, state: int) ->
         )
 
 
+def resolved_staging_dms_state(
+    *,
+    staging_id: str | None,
+    dealer_id: int | None,
+    dms_state_hint: int | None,
+) -> int | None:
+    if dms_state_hint is not None:
+        return int(dms_state_hint)
+    sid = (staging_id or "").strip()
+    if sid and dealer_id is not None:
+        from app.repositories.add_sales_staging import fetch_staging_dms_state
+
+        return fetch_staging_dms_state(sid, int(dealer_id))
+    return None
+
+
 def mark_staging_dms_state(staging_id: str, dealer_id: int, state: int) -> None:
     """Set ``dms_state`` on the staging row (reserved for future DMS milestones)."""
     sid = (staging_id or "").strip()

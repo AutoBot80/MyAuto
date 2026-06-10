@@ -711,7 +711,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `subfolder` | `varchar(256)` | YES |  | Upload scans / OCR folder (mirrors **`payload_json.file_location`**); **`DDL/alter/13d_add_sales_staging_subfolder.sql`** |
 | `payload_json` | `jsonb` | NO |  | Merged payload (same logical shape as **`POST /submit-info`**); after **Create Invoice** commit merged with **`customer_id`**, **`vehicle_id`**, **`sales_id`**; after **Generate Insurance** merged with **`insurance_id`** when **`staging_id`** was passed to Hero insurance |
 | `status` | `varchar(32)` | NO | `'draft'` | `draft` / `committed` / `abandoned` |
-| `dms_state` | `integer` | NO | `0` | DMS processing state (**`0`** = not started; reserved for future steps) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`** |
+| `dms_state` | `integer` | NO | `0` | DMS processing state (**`0`** = not started; **`1`** = vehicle prep complete + **`vehicle_master`** upserted; **`2`** = customer prep complete + **`customer_master`** upserted) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`**, **`fill_hero_dms_service`**, **`hero_dms_db_service`** |
 | `insurance_state` | `integer` | NO | `0` | Insurance processing state (**`0`** = not started; **`2`** = policy preview Submit clicked on MISP) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`** |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
@@ -848,6 +848,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.95 | May 2026 | **No schema change.** For **`master_ref`** with **`ref_type = INSURER`**, **`comments = 'Y'`** marks rows included in the Add Sales Section 3 insurer dropdown; **`portal_insurers`** on **`GET /add-sales/dealer-cpa-context`** / create-invoice-eligibility (with **`dealer_id`**) — **`backend/app/repositories/master_ref.py`**, **`backend/app/routers/add_sales.py`**, **`client`** |
 | 2.96 | Jun 2026 | **`challan_master_staging`**, **`challan_master`**: **`reduce_discount_by_percent`** (`numeric(5,2)`); order phase formula `base − (base × percent / 100) − cost` (negative net allowed); **`DDL/alter/20e_challan_reduce_discount_percent.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`**, **`DDL/20_challan_master.sql`** |
 | 2.97 | Jun 2026 | **`add_sales_staging`**: **`dms_state`**, **`insurance_state`** (integer, default **`0`**; **`insurance_state`** **`2`** after MISP policy-preview Submit) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`**, **`add_sales_staging_state_service`**, **`fill_hero_insurance_service`** |
+| 2.99 | Jun 2026 | **`add_sales_staging.dms_state`**: documented **`1`** (vehicle prep + **`vehicle_master`** upsert) and **`2`** (customer prep + **`customer_master`** upsert); DMS rerun resume in **`fill_hero_dms_service`** / sidecar — no DDL change |
 | 2.98 | Jun 2026 | **`ocr_run_log`** — append-only Add Sales OCR runs with missing derived fields; Admin Usage **OCR Logs** tab; **`GET /admin/ocr-logs`** (15-day window); **`DDL/31_ocr_run_log.sql`** |
 
 
