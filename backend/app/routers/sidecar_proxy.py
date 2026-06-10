@@ -7,6 +7,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/dms/commit``    → persist masters + finalize staging after Playwright
   - ``/sidecar/insurance/resolve`` → load insurance fill values
   - ``/sidecar/insurance/commit``  → insert/update insurance_master
+  - ``/sidecar/staging/processing-state`` → set ``dms_state`` / ``insurance_state`` on ``add_sales_staging``
   - ``/sidecar/cpa/resolve`` → load CPA Alliance fill values (``form_cpa_insurance_view`` + staging)
   - ``/sidecar/cpa/commit``  → persist CPA certificate # (staging ``cpa_policy_num`` + ``insurance_master``)
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
@@ -111,6 +112,7 @@ class InsuranceResolveResponse(BaseModel):
     insurance_base_url: str
     staging_payload: dict[str, Any] | None = None
     staging_id: str | None = None
+    insurance_state: int = 0
     ocr_output_dir: str
     headed: bool
     remote_debug_port: int
@@ -160,6 +162,18 @@ class InsuranceCommitRequest(BaseModel):
 
 class InsuranceCommitResponse(BaseModel):
     insurance_id: int | None = None
+    error: str | None = None
+
+
+class StagingProcessingStateRequest(BaseModel):
+    staging_id: str
+    dealer_id: int | None = None
+    dms_state: int | None = None
+    insurance_state: int | None = None
+
+
+class StagingProcessingStateResponse(BaseModel):
+    ok: bool = False
     error: str | None = None
 
 
@@ -403,15 +417,22 @@ async def insurance_resolve(
     did = resolve_dealer_id(principal, req.dealer_id)
 
     staging_payload = None
+    insurance_state = 0
     sid = (req.staging_id or "").strip()
     if sid:
         try:
             UUID(sid)
         except ValueError:
             raise HTTPException(status_code=400, detail="staging_id must be a valid UUID") from None
-        from app.repositories.add_sales_staging import fetch_staging_payload
+        from app.repositories.add_sales_staging import (
+            fetch_staging_insurance_state,
+            fetch_staging_payload,
+        )
 
         staging_payload = fetch_staging_payload(sid, did)
+        ins_raw = fetch_staging_insurance_state(sid, did)
+        if ins_raw is not None:
+            insurance_state = int(ins_raw)
 
     cid = req.customer_id
     vid = req.vehicle_id
@@ -486,6 +507,7 @@ async def insurance_resolve(
         insurance_base_url=(INSURANCE_BASE_URL or "").strip(),
         staging_payload=staging_payload,
         staging_id=sid or None,
+        insurance_state=insurance_state,
         ocr_output_dir=ocr_dir,
         headed=bool(DMS_PLAYWRIGHT_HEADED),
         remote_debug_port=int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333),
@@ -609,6 +631,46 @@ async def insurance_commit(
             logger.warning("sidecar_proxy insurance/commit update: %s", exc)
 
     return InsuranceCommitResponse(error=error)
+
+
+@router.post("/staging/processing-state", response_model=StagingProcessingStateResponse)
+async def staging_processing_state(
+    req: StagingProcessingStateRequest,
+    principal: Principal = Depends(get_principal),
+) -> StagingProcessingStateResponse:
+    """Set ``dms_state`` and/or ``insurance_state`` on ``add_sales_staging`` (sidecar has no local DB)."""
+    did = resolve_dealer_id(principal, req.dealer_id)
+    sid = (req.staging_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="staging_id is required.")
+    try:
+        UUID(sid)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="staging_id must be a valid UUID") from exc
+    if req.dms_state is None and req.insurance_state is None:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of dms_state or insurance_state is required.",
+        )
+
+    from app.repositories.add_sales_staging import update_staging_processing_state
+
+    try:
+        ok = update_staging_processing_state(
+            sid,
+            did,
+            dms_state=req.dms_state,
+            insurance_state=req.insurance_state,
+        )
+    except Exception as exc:
+        logger.warning("sidecar_proxy staging/processing-state: %s", exc)
+        return StagingProcessingStateResponse(ok=False, error=str(exc))
+    if not ok:
+        return StagingProcessingStateResponse(
+            ok=False,
+            error="Staging row not found or not in draft/committed status.",
+        )
+    return StagingProcessingStateResponse(ok=True)
 
 
 # ---------------------------------------------------------------------------

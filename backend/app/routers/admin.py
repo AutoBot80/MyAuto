@@ -150,8 +150,26 @@ class ProcessFailureLogRow(BaseModel):
 
 class ProcessFailureLogListResponse(BaseModel):
     timezone_label: str = Field(default="Asia/Kolkata (IST)")
+    window_days: int = Field(default=15, description="Only rows within this many days are returned")
     rows: list[ProcessFailureLogRow]
 
+
+class OcrRunLogRow(BaseModel):
+    id: int
+    dealer_id: int
+    dealer_name: str
+    occurred_at_ist: str = Field(..., description="DD-MM-YYYY HH:MM IST")
+    customer_mobile: str | None = None
+    ocr_failures: str
+
+
+class OcrRunLogListResponse(BaseModel):
+    timezone_label: str = Field(default="Asia/Kolkata (IST)")
+    window_days: int = Field(default=15, description="Only rows within this many days are returned")
+    rows: list[OcrRunLogRow]
+
+
+_ADMIN_LOG_WINDOW_DAYS = 15
 
 _IST = ZoneInfo("Asia/Kolkata")
 
@@ -305,6 +323,17 @@ def _occurred_at_to_ist_display(val) -> str:
     return str(val)
 
 
+def _occurred_at_to_ist_display_ddmm_hhmm(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, datetime):
+        dt = val
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_IST).strftime("%d-%m-%Y %H:%M")
+    return str(val)
+
+
 @router.get("/failure-logs", response_model=ProcessFailureLogListResponse)
 def get_process_failure_logs(
     _principal: Principal = Depends(get_principal),
@@ -313,7 +342,7 @@ def get_process_failure_logs(
     """Recent terminal automation failures (all dealers), newest first."""
     from app.repositories.process_failure_log import list_recent_for_admin
 
-    raw = list_recent_for_admin(limit=limit)
+    raw = list_recent_for_admin(limit=limit, days=_ADMIN_LOG_WINDOW_DAYS)
     rows: list[ProcessFailureLogRow] = []
     for r in raw:
         rows.append(
@@ -332,7 +361,31 @@ def get_process_failure_logs(
                 entity_dedupe_key=str(r.get("entity_dedupe_key") or ""),
             )
         )
-    return ProcessFailureLogListResponse(rows=rows)
+    return ProcessFailureLogListResponse(rows=rows, window_days=_ADMIN_LOG_WINDOW_DAYS)
+
+
+@router.get("/ocr-logs", response_model=OcrRunLogListResponse)
+def get_ocr_run_logs(
+    _principal: Principal = Depends(get_principal),
+    limit: int = Query(200, ge=1, le=1000),
+) -> OcrRunLogListResponse:
+    """Add Sales OCR runs with missing fields (all dealers), newest first."""
+    from app.repositories.ocr_run_log import list_recent_for_admin
+
+    raw = list_recent_for_admin(limit=limit, days=_ADMIN_LOG_WINDOW_DAYS)
+    rows: list[OcrRunLogRow] = []
+    for r in raw:
+        rows.append(
+            OcrRunLogRow(
+                id=int(r["id"]),
+                dealer_id=int(r["dealer_id"]),
+                dealer_name=str(r.get("dealer_name") or ""),
+                occurred_at_ist=_occurred_at_to_ist_display_ddmm_hhmm(r.get("occurred_at")),
+                customer_mobile=r.get("customer_mobile"),
+                ocr_failures=str(r.get("ocr_failures") or ""),
+            )
+        )
+    return OcrRunLogListResponse(rows=rows, window_days=_ADMIN_LOG_WINDOW_DAYS)
 
 
 AdminFolderRoot = Literal["upload_scans", "ocr_output", "challans"]

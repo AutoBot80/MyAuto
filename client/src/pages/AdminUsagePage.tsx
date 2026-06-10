@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   getAdminFailureLogs,
+  getAdminOcrLogs,
   getAdminUsageDealerMatrix,
+  type AdminOcrRunLogListResponse,
+  type AdminOcrRunLogRow,
   type AdminProcessFailureLogListResponse,
   type AdminProcessFailureLogRow,
   type AdminUsageDealerMatrixResponse,
@@ -119,16 +122,58 @@ function FailureLogsTable({ rows, ariaLabel }: { rows: AdminProcessFailureLogRow
   );
 }
 
+function OcrLogsTable({ rows, ariaLabel }: { rows: AdminOcrRunLogRow[]; ariaLabel: string }) {
+  return (
+    <div className="app-table-wrap admin-failure-logs-wrap">
+      <table className="app-table admin-failure-logs-table admin-ocr-logs-table" aria-label={ariaLabel}>
+        <thead>
+          <tr>
+            <th scope="col">Date (IST)</th>
+            <th scope="col">Dealer</th>
+            <th scope="col">Mobile</th>
+            <th scope="col">OCR Failures</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr>
+              <td colSpan={4} className="app-table-empty">
+                No OCR log rows in this period.
+              </td>
+            </tr>
+          ) : (
+            rows.map((r) => (
+              <tr key={r.id}>
+                <td className="admin-failure-logs-nowrap">{r.occurred_at_ist}</td>
+                <td>
+                  <span className="admin-failure-logs-dealer">{r.dealer_name}</span>
+                  <span className="admin-failure-logs-dealer-id"> ({r.dealer_id})</span>
+                </td>
+                <td className="admin-failure-logs-nowrap">{r.customer_mobile ?? "—"}</td>
+                <td className="admin-ocr-logs-failures">{r.ocr_failures}</td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+type UsageSubTab = "sales" | "challans" | "failures" | "ocr_logs";
+
 export interface AdminUsagePageProps {
   dealerId: number;
 }
 
 export function AdminUsagePage({ dealerId }: AdminUsagePageProps) {
-  const [sub, setSub] = useState<"sales" | "challans" | "failures">("sales");
+  const [sub, setSub] = useState<UsageSubTab>("sales");
   const [matrix, setMatrix] = useState<AdminUsageDealerMatrixResponse | null>(null);
   const [matrixErr, setMatrixErr] = useState<string | null>(null);
   const [failures, setFailures] = useState<AdminProcessFailureLogListResponse | null>(null);
   const [failuresErr, setFailuresErr] = useState<string | null>(null);
+  const [ocrLogs, setOcrLogs] = useState<AdminOcrRunLogListResponse | null>(null);
+  const [ocrLogsErr, setOcrLogsErr] = useState<string | null>(null);
 
   const loadMatrix = useCallback(() => {
     setMatrixErr(null);
@@ -154,13 +199,29 @@ export function AdminUsagePage({ dealerId }: AdminUsagePageProps) {
       });
   }, []);
 
+  const loadOcrLogs = useCallback(() => {
+    setOcrLogsErr(null);
+    getAdminOcrLogs(200)
+      .then(setOcrLogs)
+      .catch((e) => {
+        setOcrLogs(null);
+        setOcrLogsErr(e instanceof Error ? e.message : "Could not load OCR logs.");
+      });
+  }, []);
+
   useEffect(() => {
     if (sub === "failures") loadFailures();
   }, [sub, loadFailures]);
 
+  useEffect(() => {
+    if (sub === "ocr_logs") loadOcrLogs();
+  }, [sub, loadOcrLogs]);
+
+  const isLogPanel = sub === "failures" || sub === "ocr_logs";
+
   return (
     <div
-      className={`admin-usage-page${sub === "failures" ? " admin-usage-page--failures" : ""}`}
+      className={`admin-usage-page${isLogPanel ? " admin-usage-page--failures" : ""}`}
     >
       <div className="admin-usage-subtabs" role="tablist" aria-label="Usage sections">
         <button type="button" role="tab" className={sub === "sales" ? "active" : ""} onClick={() => setSub("sales")}>
@@ -182,18 +243,39 @@ export function AdminUsagePage({ dealerId }: AdminUsagePageProps) {
         >
           Failure Logs
         </button>
+        <button
+          type="button"
+          role="tab"
+          className={sub === "ocr_logs" ? "active" : ""}
+          onClick={() => setSub("ocr_logs")}
+        >
+          OCR Logs
+        </button>
       </div>
 
       {sub === "failures" ? (
         <section className="admin-usage-failures-panel" aria-label="Failure logs">
           <p className="admin-failure-logs-hint">
-            Newest first ({failures?.timezone_label ?? "Asia/Kolkata (IST)"}). Includes Print / Queue RTO,
-            Create Invoice, Insurance, challan, and related automation failures.
+            Last {failures?.window_days ?? 15} days, newest first ({failures?.timezone_label ?? "Asia/Kolkata (IST)"}
+            ). Includes Print / Queue RTO, Create Invoice, Insurance, challan, and related automation failures.
           </p>
           {failuresErr ? <p className="view-vehicles-error">{failuresErr}</p> : null}
           {failures ? (
             <FailureLogsTable rows={failures.rows} ariaLabel="Process failure log, newest first" />
           ) : !failuresErr ? (
+            <p>Loading…</p>
+          ) : null}
+        </section>
+      ) : sub === "ocr_logs" ? (
+        <section className="admin-usage-failures-panel" aria-label="OCR logs">
+          <p className="admin-failure-logs-hint">
+            Last {ocrLogs?.window_days ?? 15} days — Add Sales OCR runs with missing fields, newest first (
+            {ocrLogs?.timezone_label ?? "Asia/Kolkata (IST)"}).
+          </p>
+          {ocrLogsErr ? <p className="view-vehicles-error">{ocrLogsErr}</p> : null}
+          {ocrLogs ? (
+            <OcrLogsTable rows={ocrLogs.rows} ariaLabel="OCR run log, newest first" />
+          ) : !ocrLogsErr ? (
             <p>Loading…</p>
           ) : null}
         </section>

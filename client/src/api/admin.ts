@@ -151,10 +151,31 @@ export interface AdminProcessFailureLogRow {
 
 export interface AdminProcessFailureLogListResponse {
   timezone_label: string;
+  window_days: number;
   rows: AdminProcessFailureLogRow[];
 }
 
 export function getAdminFailureLogs(limit = 200) {
   const q = new URLSearchParams({ limit: String(limit) });
   return apiFetch<AdminProcessFailureLogListResponse>(`/admin/failure-logs?${q.toString()}`);
+}
+
+export interface AdminOcrRunLogRow {
+  id: number;
+  dealer_id: number;
+  dealer_name: string;
+  occurred_at_ist: string;
+  customer_mobile: string | null;
+  ocr_failures: string;
+}
+
+export interface AdminOcrRunLogListResponse {
+  timezone_label: string;
+  window_days: number;
+  rows: AdminOcrRunLogRow[];
+}
+
+export function getAdminOcrLogs(limit = 200) {
+  const q = new URLSearchParams({ limit: String(limit) });
+  return apiFetch<AdminOcrRunLogListResponse>(`/admin/ocr-logs?${q.toString()}`);
 }

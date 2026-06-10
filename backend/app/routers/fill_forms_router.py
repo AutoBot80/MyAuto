@@ -1210,6 +1210,7 @@ async def fill_hero_insurance(
             subfolder=subfolder_resolved,
             ocr_output_dir=ocr_dir,
             staging_payload=staging_payload,
+            staging_id=sid_for_process,
             dealer_id=did,
         )
         main = main_process(

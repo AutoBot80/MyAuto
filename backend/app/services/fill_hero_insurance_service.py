@@ -52,6 +52,7 @@ from app.config import (
     MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS,
     get_uploads_dir,
 )
+from app.services.add_sales_staging_state_service import mark_staging_insurance_state
 from app.services.hero_insure_reports_service import run_hero_insure_reports
 from app.services.handle_browser_opening import (
     _playwright_page_url_matches_site_base,
@@ -9597,7 +9598,7 @@ def _hero_misp_final_policy_details_commit(
     :func:`hero_insure_reports_service.run_hero_insure_reports`.
     Non-production: log skip; returns empty scrape.
     """
-    _ = customer_id, vehicle_id, staging_payload, staging_id, dealer_id
+    _ = customer_id, vehicle_id, staging_payload
     pt = max(int(timeout_ms), int(INSURANCE_POLICY_FILL_TIMEOUT_MS))
     if not ENVIRONMENT_IS_PRODUCTION:
         append_playwright_insurance_line(
@@ -9621,6 +9622,7 @@ def _hero_misp_final_policy_details_commit(
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
     )
+    submit_ok = not click_err
     if click_err:
         if _hero_misp_on_final_policy_cert_page(page):
             append_playwright_insurance_line(
@@ -9630,8 +9632,20 @@ def _hero_misp_final_policy_details_commit(
                 "final_policy: Submit not confirmed but PrintPolicy cert page present — "
                 "issue succeeded, continuing",
             )
+            submit_ok = True
         else:
             return click_err, {}
+
+    if submit_ok:
+        sid_clean = (staging_id or "").strip()
+        if sid_clean and dealer_id is not None:
+            mark_staging_insurance_state(sid_clean, int(dealer_id), 2)
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "insurance_state=2 (policy preview Submit)",
+            )
 
     _hero_misp_wait_post_submit_print_policy_page(page, timeout_ms=pt)
     try:
@@ -10518,6 +10532,129 @@ def _insurance_match_base_from_config(insurance_base_url: str) -> tuple[str, str
     return origin, login_full
 
 
+def _resolved_staging_insurance_state(
+    *,
+    staging_id: str | None,
+    dealer_id: int | None,
+    insurance_state_hint: int | None,
+) -> int | None:
+    if insurance_state_hint is not None:
+        return int(insurance_state_hint)
+    sid = (staging_id or "").strip()
+    if sid and dealer_id is not None:
+        from app.repositories.add_sales_staging import fetch_staging_insurance_state
+
+        return fetch_staging_insurance_state(sid, int(dealer_id))
+    return None
+
+
+def _pre_result_hero_resume_at_print_policy(
+    page,
+    *,
+    insurance_base_url: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> dict:
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "resume: insurance_state=2 — skip New Policy/KYC/VIN; main_process will run Print Policy only",
+    )
+    try:
+        mb, lu = _insurance_match_base_from_config(insurance_base_url)
+    except ValueError as exc:
+        return {
+            "success": False,
+            "error": str(exc),
+            "page_url": None,
+            "match_base": None,
+            "login_url": None,
+        }
+    result: dict = {
+        "success": True,
+        "hero_resume_at_print_policy": True,
+        "match_base": mb,
+        "login_url": lu,
+        "_insurance_playwright_page": page,
+        "error": None,
+    }
+    try:
+        result["page_url"] = (page.url or "").strip() or None
+    except Exception:
+        result["page_url"] = None
+    return result
+
+
+def _main_process_run_print_policy_reports(
+    page,
+    values: dict,
+    *,
+    policy_num_hint: str,
+    subfolder: str | None,
+    ocr_output_dir: Path | None,
+    customer_id: int,
+    vehicle_id: int,
+    staging_payload: dict | None,
+    staging_id: str | None,
+    dealer_id: int | None,
+) -> dict:
+    hrep: dict = {}
+    if not (
+        ENVIRONMENT_IS_PRODUCTION
+        and subfolder
+        and page
+        and not page.is_closed()
+    ):
+        if not ENVIRONMENT_IS_PRODUCTION:
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "main_process: MISP Print Policy skipped (non-production ENVIRONMENT).",
+            )
+        return hrep
+    _ins = (values or {}).get("insurer")
+    if not (_ins and str(_ins).strip()):
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "main_process: MISP Print Policy skipped (insurer empty)",
+        )
+        return hrep
+    _did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "main_process: run_hero_insure_reports (PrintPolicyDetails → scrape/INSERT → PDF)",
+    )
+    try:
+        hrep = run_hero_insure_reports(
+            page,
+            insurer=str(_ins).strip(),
+            vin=(values.get("full_chassis") or values.get("frame_no") or "").strip(),
+            policy_num_hint=(policy_num_hint or "").strip(),
+            uploads_dir=get_uploads_dir(_did) / subfolder,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            customer_id=int(customer_id),
+            vehicle_id=int(vehicle_id),
+            fill_values=values,
+            staging_payload=staging_payload,
+            staging_id=staging_id,
+            dealer_id=dealer_id,
+            commit_insurance_master=True,
+        )
+    except Exception as hre:
+        logger.warning("main_process: run_hero_insure_reports: %s", hre)
+        append_playwright_insurance_line(
+            ocr_output_dir, subfolder, "ERROR", f"main_process: run_hero_insure_reports: {hre!s}"
+        )
+    return hrep
+
+
 def pre_process(
     *,
     insurance_base_url: str | None = None,
@@ -10526,7 +10663,9 @@ def pre_process(
     subfolder: str | None = None,
     ocr_output_dir: Path | None = None,
     staging_payload: dict | None = None,
+    staging_id: str | None = None,
     dealer_id: int | None = None,
+    insurance_state_hint: int | None = None,
 ) -> dict:
     """
     Hero insurance **pre** stage: same behavior as ``run_fill_insurance_only`` (former standalone
@@ -10550,7 +10689,9 @@ def pre_process(
         vehicle_id=vehicle_id,
         ocr_output_dir=ocr_output_dir,
         staging_payload=staging_payload,
+        staging_id=staging_id,
         dealer_id=dealer_id,
+        insurance_state_hint=insurance_state_hint,
     )
 
 
@@ -10657,6 +10798,40 @@ def main_process(
 
     try:
         page.set_default_timeout(to)
+        if pre_result.get("hero_resume_at_print_policy"):
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "main_process: resume insurance_state=2 → run_hero_insure_reports only",
+            )
+            hrep = _main_process_run_print_policy_reports(
+                page,
+                values,
+                policy_num_hint="",
+                subfolder=subfolder,
+                ocr_output_dir=ocr_output_dir,
+                customer_id=int(customer_id),
+                vehicle_id=int(vehicle_id),
+                staging_payload=staging_payload,
+                staging_id=staging_id,
+                dealer_id=dealer_id,
+            )
+            out["hero_insure_reports"] = hrep
+            out["success"] = True
+            out["error"] = None
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "main_process: completed — resume Print Policy/scrape/INSERT="
+                f"{'yes' if ENVIRONMENT_IS_PRODUCTION and hrep.get('ok') else 'skipped or n/a'}",
+            )
+            try:
+                out["page_url"] = (page.url or "").strip() or None
+            except Exception:
+                out["page_url"] = None
+            return out
         err = _hero_misp_i_agree_after_vin_submit(
             page,
             timeout_ms=to,
@@ -10708,60 +10883,18 @@ def main_process(
                 f"main_process: final policy / insurance_master failed: {final_err}",
             )
             return out
-        hrep: dict = {}
-        try:
-            if (
-                ENVIRONMENT_IS_PRODUCTION
-                and subfolder
-                and page
-                and not page.is_closed()
-            ):
-                _pn = (final_scrape or {}).get("policy_num")
-                _ins = (values or {}).get("insurer")
-                if _ins and str(_ins).strip():
-                    _did = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
-                    append_playwright_insurance_line(
-                        ocr_output_dir,
-                        subfolder,
-                        "NOTE",
-                        "main_process: run_hero_insure_reports "
-                        "(PrintPolicyDetails → scrape/INSERT → PDF)",
-                    )
-                    hrep = run_hero_insure_reports(
-                        page,
-                        insurer=str(_ins).strip(),
-                        vin=(values.get("full_chassis") or values.get("frame_no") or "").strip(),
-                        policy_num_hint=str(_pn).strip() if _pn else "",
-                        uploads_dir=get_uploads_dir(_did) / subfolder,
-                        ocr_output_dir=ocr_output_dir,
-                        subfolder=subfolder,
-                        customer_id=int(customer_id),
-                        vehicle_id=int(vehicle_id),
-                        fill_values=values,
-                        staging_payload=staging_payload,
-                        staging_id=staging_id,
-                        dealer_id=dealer_id,
-                        commit_insurance_master=True,
-                    )
-                else:
-                    append_playwright_insurance_line(
-                        ocr_output_dir,
-                        subfolder,
-                        "NOTE",
-                        "main_process: MISP Print Policy skipped (insurer empty)",
-                    )
-            elif not ENVIRONMENT_IS_PRODUCTION:
-                append_playwright_insurance_line(
-                    ocr_output_dir,
-                    subfolder,
-                    "NOTE",
-                    "main_process: MISP Print Policy skipped (non-production ENVIRONMENT).",
-                )
-        except Exception as hre:
-            logger.warning("main_process: run_hero_insure_reports: %s", hre)
-            append_playwright_insurance_line(
-                ocr_output_dir, subfolder, "ERROR", f"main_process: run_hero_insure_reports: {hre!s}"
-            )
+        hrep = _main_process_run_print_policy_reports(
+            page,
+            values,
+            policy_num_hint=str((final_scrape or {}).get("policy_num") or "").strip(),
+            subfolder=subfolder,
+            ocr_output_dir=ocr_output_dir,
+            customer_id=int(customer_id),
+            vehicle_id=int(vehicle_id),
+            staging_payload=staging_payload,
+            staging_id=staging_id,
+            dealer_id=dealer_id,
+        )
         out["hero_insure_reports"] = hrep
         out["success"] = True
         out["error"] = None
@@ -11066,7 +11199,9 @@ def run_fill_insurance_only(
     vehicle_id: int | None = None,
     ocr_output_dir: Path | None = None,
     staging_payload: dict | None = None,
+    staging_id: str | None = None,
     dealer_id: int | None = None,
+    insurance_state_hint: int | None = None,
 ) -> dict:
     """
     Fill Insurance portal from DB-backed values (``INSURANCE_BASE_URL`` = production MISP or partner login).
@@ -11173,6 +11308,18 @@ def run_fill_insurance_only(
         )
         _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_2w")
         _insurance_click_settle(page)
+        ins_state = _resolved_staging_insurance_state(
+            staging_id=staging_id,
+            dealer_id=dealer_id,
+            insurance_state_hint=insurance_state_hint,
+        )
+        if ins_state == 2:
+            return _pre_result_hero_resume_at_print_policy(
+                page,
+                insurance_base_url=insurance_base_url.strip(),
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+            )
         page, err_np = _misp_click_nav_step(
             page, _click_new_policy, "New Policy",
             portal_base_url=insurance_base_url.strip(), timeout_ms=INSURANCE_ACTION_TIMEOUT_MS,

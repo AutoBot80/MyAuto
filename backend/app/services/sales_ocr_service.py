@@ -4092,11 +4092,27 @@ class OcrService:
                 f"parallel_compile_ms={section_timings_ms.get('parallel_aadhar_details_compile_ms')} "
                 f"merge_write_ms={section_timings_ms.get('merge_write_json_ms')} "
                 f"insurance_ms={section_timings_ms.get('insurance_ms')} "
-                f"raw_finalize_ms={section_timings_ms.get('raw_ocr_finalize_ms')} "
+                f"raw_finalize_ms={section_timings_ms.get('raw_finalize_ms')} "
                 f"post_ocr_ms={section_timings_ms.get('post_ocr_ms')} "
                 f"processed={len(processed)} errors={len(errors)}"
             ),
         )
+
+        try:
+            dealer_leaf = self.ocr_output_dir.name
+            if dealer_leaf.isdigit():
+                from app.services.ocr_run_log_service import record_safe as record_ocr_run_safe
+
+                details_for_log = self.get_extracted_details(subfolder)
+                if details_for_log:
+                    record_ocr_run_safe(
+                        dealer_id=int(dealer_leaf),
+                        subfolder=subfolder,
+                        details=details_for_log,
+                    )
+        except Exception:
+            logger.exception("ocr_run_log record failed subfolder=%s", subfolder)
+
         return result
 
     def _process_details_sheet(

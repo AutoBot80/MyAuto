@@ -402,6 +402,8 @@ def _merge_ex_showroom_extra_from_invoice_list(
     content_frame_selector: str | None,
     extra: dict,
     note,
+    log_prefix: str = "attach_vehicle_to_bkg",
+    log_when: str = "after Create Invoice",
 ) -> None:
     """Non-blocking: set ``vehicle_ex_showroom_cost`` from invoice list ``s_2_l`` after Create Invoice."""
     from app.services.add_subdealer_challan_commit_service import _coerce_ex_showroom_scalar
@@ -415,19 +417,43 @@ def _merge_ex_showroom_extra_from_invoice_list(
             extra["vehicle_ex_showroom_cost"] = _raw
             extra["vehicle_price"] = _raw
             note(
-                f"attach_vehicle_to_bkg: scraped invoice list amount (ex-showroom)={_raw!r} "
-                "after Create Invoice."
+                f"{log_prefix}: scraped invoice list amount (ex-showroom)={_raw!r} {log_when}."
             )
         else:
             note(
-                "attach_vehicle_to_bkg: invoice list amount not scraped or not numeric after "
-                f"Create Invoice (best-effort, raw={_raw!r})."
+                f"{log_prefix}: invoice list amount not scraped or not numeric {log_when} "
+                f"(best-effort, raw={_raw!r})."
             )
     except Exception as _ex_scrape_exc:
         note(
-            "attach_vehicle_to_bkg: invoice list amount scrape skipped after exception "
-            f"(best-effort): {_ex_scrape_exc!r}"
+            f"{log_prefix}: invoice list amount scrape skipped after exception "
+            f"{log_when} (best-effort): {_ex_scrape_exc!r}"
         )
+
+
+def _scrape_ex_showroom_into_scraped_after_invoice_number(
+    page: Page,
+    *,
+    content_frame_selector: str | None,
+    scraped: dict,
+    invoice_number: str,
+    note,
+) -> None:
+    """After Invoice# poll succeeds, read ``s_2_l`` Round Off / Amount into ``scraped``."""
+    if not _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE:
+        return
+    inv = (invoice_number or "").strip()
+    if not inv:
+        return
+    _safe_page_wait(page, 300, log_label="after_invoice_number_before_ex_showroom_scrape")
+    _merge_ex_showroom_extra_from_invoice_list(
+        page,
+        content_frame_selector=content_frame_selector,
+        extra=scraped,
+        note=note,
+        log_prefix="Create Order",
+        log_when=f"after Invoice#={inv!r}",
+    )
 
 
 # Legacy alias (order-line Total_Cost path retired from attach).
@@ -2605,9 +2631,9 @@ def _attach_vehicle_to_bkg(
     4. Click ``Order:<order#>`` link → **Apply Campaign** → **Create Invoice** when
        ``_ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE`` is True (``ENVIRONMENT=prod`` in ``.env``).
 
-    After **Create Invoice** (prod only), best-effort scrape of **Round Off Amount** / **Amount** from
-    the invoice list grid ``s_2_l`` into ``vehicle_price`` / ``vehicle_ex_showroom_cost`` (challan
-    ``challan_master.total_ex_showroom_price``). Dev/test skip Create Invoice and this scrape.
+    Ex-showroom (**Round Off Amount** / **Amount** from invoice list ``s_2_l``) is scraped in
+    ``_create_order`` after **Invoice#** poll (``_scrape_ex_showroom_into_scraped_after_invoice_number``),
+    not inside this function. Dev/test skip Create Invoice and that scrape.
 
     ``attach_line_items`` (optional): list of dicts with ``full_chassis`` / ``vin`` / ``frame_num`` and optional
     ``line_item_discount`` / ``discount``. If omitted, a single line is built from ``full_chassis`` +
@@ -4496,13 +4522,6 @@ def _attach_vehicle_to_bkg(
         if _ci_err:
             note(f"attach_vehicle_to_bkg: Siebel error after Create Invoice → {_ci_err!r:.300}")
             return False, f"Siebel error after Create Invoice: {_ci_err[:200]}", {}
-        _safe_page_wait(page, 300, log_label="after_create_invoice_before_invoice_amount_scrape")
-        _merge_ex_showroom_extra_from_invoice_list(
-            page,
-            content_frame_selector=content_frame_selector,
-            extra=_extra,
-            note=note,
-        )
     else:
         note(
             "attach_vehicle_to_bkg: Create Invoice not auto-clicked "
@@ -4515,7 +4534,6 @@ def _attach_vehicle_to_bkg(
         + (" → Create Invoice" if _ATTACH_VEHICLE_AUTO_CLICK_CREATE_INVOICE else "")
         + ")."
     )
-    # When Create Invoice is auto-clicked, a follow-up scrape of refreshed Order#/Invoice# can be added here.
     return True, None, _extra
 
 
@@ -5305,6 +5323,13 @@ def _create_order(
                 note(f"Create Order: challan resume — refreshed Order#={order_ref!r} after attach.")
         inv_no = _poll_invoice_number_loops_only()
         scraped["invoice_number"] = inv_no or ""
+        _scrape_ex_showroom_into_scraped_after_invoice_number(
+            page,
+            content_frame_selector=content_frame_selector,
+            scraped=scraped,
+            invoice_number=inv_no or "",
+            note=note,
+        )
         if callable(form_trace):
             form_trace(
                 "v4_create_order",
@@ -5397,6 +5422,13 @@ def _create_order(
                 scraped["order_number"] = order_ref
             inv_no = _poll_invoice_number_loops_only()
             scraped["invoice_number"] = (inv_no or scraped.get("invoice_number") or "")
+            _scrape_ex_showroom_into_scraped_after_invoice_number(
+                page,
+                content_frame_selector=content_frame_selector,
+                scraped=scraped,
+                invoice_number=scraped.get("invoice_number") or "",
+                note=note,
+            )
             if callable(form_trace):
                 form_trace(
                     "v4_create_order",
@@ -6558,6 +6590,13 @@ def _create_order(
                 note(f"Create Order: refreshed Order#={order_ref!r} after header drill-down.")
         inv_no = _poll_invoice_number_loops_only()
         scraped["invoice_number"] = inv_no or ""
+        _scrape_ex_showroom_into_scraped_after_invoice_number(
+            page,
+            content_frame_selector=content_frame_selector,
+            scraped=scraped,
+            invoice_number=inv_no or "",
+            note=note,
+        )
         if callable(form_trace):
             form_trace(
                 "v4_create_order",

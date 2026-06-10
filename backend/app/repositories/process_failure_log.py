@@ -103,8 +103,12 @@ def upsert_process_failure(
         conn.close()
 
 
-def list_recent_for_admin(*, limit: int = 200) -> list[dict[str, Any]]:
+_DEFAULT_LIST_DAYS = 15
+
+
+def list_recent_for_admin(*, limit: int = 200, days: int = _DEFAULT_LIST_DAYS) -> list[dict[str, Any]]:
     lim = max(1, min(int(limit), 1000))
+    window_days = max(1, min(int(days), 365))
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -125,10 +129,11 @@ def list_recent_for_admin(*, limit: int = 200) -> list[dict[str, Any]]:
                     f.entity_dedupe_key
                 FROM process_failure_log f
                 LEFT JOIN dealer_ref d ON d.dealer_id = f.dealer_id
+                WHERE f.occurred_at >= NOW() - (%s * INTERVAL '1 day')
                 ORDER BY f.occurred_at DESC
                 LIMIT %s
                 """,
-                (lim,),
+                (window_days, lim),
             )
             rows = cur.fetchall() or []
             return [dict(r) for r in rows]

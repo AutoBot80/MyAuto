@@ -711,6 +711,8 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `subfolder` | `varchar(256)` | YES |  | Upload scans / OCR folder (mirrors **`payload_json.file_location`**); **`DDL/alter/13d_add_sales_staging_subfolder.sql`** |
 | `payload_json` | `jsonb` | NO |  | Merged payload (same logical shape as **`POST /submit-info`**); after **Create Invoice** commit merged with **`customer_id`**, **`vehicle_id`**, **`sales_id`**; after **Generate Insurance** merged with **`insurance_id`** when **`staging_id`** was passed to Hero insurance |
 | `status` | `varchar(32)` | NO | `'draft'` | `draft` / `committed` / `abandoned` |
+| `dms_state` | `integer` | NO | `0` | DMS processing state (**`0`** = not started; reserved for future steps) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`** |
+| `insurance_state` | `integer` | NO | `0` | Insurance processing state (**`0`** = not started; **`2`** = policy preview Submit clicked on MISP) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`** |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
 | `expires_at` | `timestamptz` | YES |  | Optional TTL for cleanup |
@@ -719,7 +721,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 **Foreign keys:** `dealer_id` → `dealer_ref(dealer_id)`; `login_id` → `login_ref(login_id)` (nullable)
 
-**Scripts:** `DDL/alter/13a_add_sales_staging.sql`; **`DDL/alter/13c_add_sales_staging_login_id.sql`**; **`DDL/alter/13d_add_sales_staging_subfolder.sql`**
+**Scripts:** `DDL/alter/13a_add_sales_staging.sql`; **`DDL/alter/13c_add_sales_staging_login_id.sql`**; **`DDL/alter/13d_add_sales_staging_subfolder.sql`**; **`DDL/alter/31b_add_sales_staging_processing_state.sql`**
 
 ---
 
@@ -845,6 +847,8 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.94 | May 2026 | **`process_failure_log`** — terminal client-visible automation failures (upsert by dealer + process + entity key); **`DDL/30_process_failure_log.sql`** — Admin Usage **Failure Logs**; **`GET /admin/failure-logs`**, **`POST /sidecar/failure-log`** |
 | 2.95 | May 2026 | **No schema change.** For **`master_ref`** with **`ref_type = INSURER`**, **`comments = 'Y'`** marks rows included in the Add Sales Section 3 insurer dropdown; **`portal_insurers`** on **`GET /add-sales/dealer-cpa-context`** / create-invoice-eligibility (with **`dealer_id`**) — **`backend/app/repositories/master_ref.py`**, **`backend/app/routers/add_sales.py`**, **`client`** |
 | 2.96 | Jun 2026 | **`challan_master_staging`**, **`challan_master`**: **`reduce_discount_by_percent`** (`numeric(5,2)`); order phase formula `base − (base × percent / 100) − cost` (negative net allowed); **`DDL/alter/20e_challan_reduce_discount_percent.sql`**; greenfield: **`DDL/23_challan_master_staging.sql`**, **`DDL/20_challan_master.sql`** |
+| 2.97 | Jun 2026 | **`add_sales_staging`**: **`dms_state`**, **`insurance_state`** (integer, default **`0`**; **`insurance_state`** **`2`** after MISP policy-preview Submit) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`**, **`add_sales_staging_state_service`**, **`fill_hero_insurance_service`** |
+| 2.98 | Jun 2026 | **`ocr_run_log`** — append-only Add Sales OCR runs with missing derived fields; Admin Usage **OCR Logs** tab; **`GET /admin/ocr-logs`** (15-day window); **`DDL/31_ocr_run_log.sql`** |
 
 
 ## `process_failure_log`
@@ -868,4 +872,21 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 **Unique:** `uq_process_failure_log_dedupe` on (`dealer_id`, `process_label`, `entity_dedupe_key`)
 
 **Indexes:** `occurred_at DESC`; partial btree on `customer_mobile`, `challan_book_num`, `rto_queue_id` (where not null)
+
+---
+
+## `ocr_run_log`
+
+**Purpose:** Append-only log of Add Sales OCR runs where at least one expected field could not be derived after OCR. Admin Usage **OCR Logs** tab lists rows from the last **15 days** (`GET /admin/ocr-logs`).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `id` | `bigserial` | NO | nextval | Primary key |
+| `dealer_id` | `integer` | NO | | FK to **`dealer_ref.dealer_id`** |
+| `occurred_at` | `timestamptz` | NO | `now()` | Stored in UTC; Admin API formats IST as DD-MM-YYYY HH:MM |
+| `customer_mobile` | `text` | YES | | 10-digit display |
+| `sale_subfolder` | `text` | NO | | e.g. `9876543210_100625` |
+| `ocr_failures` | `text` | NO | | Comma-separated missing field labels (A→Z) |
+
+**Indexes:** `occurred_at DESC`; partial btree on `customer_mobile` (where not null)
 

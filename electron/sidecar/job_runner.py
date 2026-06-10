@@ -2430,6 +2430,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     insurance_base_url = ctx["insurance_base_url"]
     staging_payload = ctx.get("staging_payload")
     staging_id = ctx.get("staging_id")
+    insurance_state_hint = ctx.get("insurance_state")
 
     # Use LOCAL paths, not server-returned Linux paths.
     from app.config import get_ocr_output_dir, get_uploads_dir
@@ -2438,18 +2439,45 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     uploads_dir = get_uploads_dir(dealer_id)
 
     # Monkey-patch DB-dependent functions so pre_process / main_process can run
-    # without DATABASE_URL. The sidecar delegates all DB writes to /sidecar/insurance/commit.
+    # without DATABASE_URL. The sidecar delegates DB writes to /sidecar/insurance/commit
+    # and /sidecar/staging/processing-state.
     import app.services.insurance_form_values as _ifv
     import app.services.fill_hero_insurance_service as _fhi
     import app.services.add_sales_commit_service as _cs
 
     _original_build_ifv = _ifv.build_insurance_fill_values
     _original_build_fhi = _fhi.build_insurance_fill_values
+    _original_mark_ins_state = _fhi.mark_staging_insurance_state
 
     def _build_cached(*_a, **_kw):
         return dict(cached_values)
     _ifv.build_insurance_fill_values = _build_cached
     _fhi.build_insurance_fill_values = _build_cached
+
+    def _mark_insurance_state_via_api(staging_id: str, dealer_id: int, state: int) -> None:
+        sid = (staging_id or "").strip()
+        if not sid:
+            return
+        try:
+            _api_post(
+                api_url,
+                jwt,
+                "/sidecar/staging/processing-state",
+                {
+                    "staging_id": sid,
+                    "dealer_id": dealer_id,
+                    "insurance_state": int(state),
+                },
+            )
+        except Exception as exc:
+            logging.warning(
+                "fill_insurance sidecar insurance_state=%s staging_id=%s: %s",
+                state,
+                sid,
+                exc,
+            )
+
+    _fhi.mark_staging_insurance_state = _mark_insurance_state_via_api
 
     _original_insert_cs = _cs.insert_insurance_master_after_gi
     _captured_insert_args: dict = {}
@@ -2475,7 +2503,9 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
                 subfolder=subfolder,
                 ocr_output_dir=ocr_dir,
                 staging_payload=staging_payload,
+                staging_id=staging_id,
                 dealer_id=params.get("dealer_id"),
+                insurance_state_hint=insurance_state_hint,
             )
             main = main_process(
                 pre_result=pre,
@@ -2494,6 +2524,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     finally:
         _ifv.build_insurance_fill_values = _original_build_ifv
         _fhi.build_insurance_fill_values = _original_build_fhi
+        _fhi.mark_staging_insurance_state = _original_mark_ins_state
         _cs.insert_insurance_master_after_gi = _original_insert_cs
 
     if result.get("success"):

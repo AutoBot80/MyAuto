@@ -539,3 +539,89 @@ def mark_staging_committed_on_cursor(
     )
     if cur.rowcount != 1:
         raise ValueError(f"add_sales_staging commit updated {cur.rowcount} rows (expected 1)")
+
+
+def update_staging_processing_state(
+    staging_id: str,
+    dealer_id: int,
+    *,
+    dms_state: int | None = None,
+    insurance_state: int | None = None,
+) -> bool:
+    """
+    Set ``dms_state`` and/or ``insurance_state`` on a draft/committed staging row.
+    Returns True when exactly one row was updated.
+    """
+    sid = (staging_id or "").strip()
+    if not sid:
+        return False
+    if dms_state is None and insurance_state is None:
+        return False
+    try:
+        uuid.UUID(sid)
+    except ValueError:
+        return False
+
+    sets: list[str] = ["updated_at = now()"]
+    params: list[Any] = []
+    if dms_state is not None:
+        sets.append("dms_state = %s")
+        params.append(int(dms_state))
+    if insurance_state is not None:
+        sets.append("insurance_state = %s")
+        params.append(int(insurance_state))
+
+    did = int(dealer_id)
+    params.extend([sid, did])
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE add_sales_staging
+                SET {", ".join(sets)}
+                WHERE staging_id = %s::uuid AND dealer_id = %s
+                  AND status IN ('draft', 'committed')
+                """,
+                tuple(params),
+            )
+            updated = int(cur.rowcount or 0) == 1
+        conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
+def fetch_staging_insurance_state(staging_id: str, dealer_id: int) -> int | None:
+    """
+    Return ``insurance_state`` for a draft/committed staging row, or None if missing.
+    """
+    sid = (staging_id or "").strip()
+    if not sid:
+        return None
+    try:
+        uuid.UUID(sid)
+    except ValueError:
+        return None
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT insurance_state
+                FROM add_sales_staging
+                WHERE staging_id::text = %s
+                  AND dealer_id = %s
+                  AND status IN ('draft', 'committed')
+                """,
+                (sid, int(dealer_id)),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            raw = row["insurance_state"] if isinstance(row, dict) else row[0]
+            if raw is None:
+                return 0
+            return int(raw)
+    finally:
+        conn.close()
