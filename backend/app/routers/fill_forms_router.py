@@ -430,6 +430,7 @@ class WarmVahanBrowserResponse(BaseModel):
     success: bool
     error: str | None = None
     message: str | None = None
+    ready_for_batch: bool = False
 
 
 class WarmInsuranceBrowserRequest(BaseModel):
@@ -637,12 +638,13 @@ async def warm_dms_browser(req: WarmDmsBrowserRequest) -> WarmDmsBrowserResponse
 
 @router.post("/vahan/warm-browser", response_model=WarmVahanBrowserResponse)
 async def warm_vahan_browser() -> WarmVahanBrowserResponse:
-    """Open or attach to Vahan (no fill). RTO Queue: first click runs this; operator logs in; second click starts batch."""
+    """Open or attach to Vahan (no fill). When ``ready_for_batch``, client may start the RTO batch immediately."""
     result = await _run_playwright_work(warm_vahan_browser_session)
     return WarmVahanBrowserResponse(
         success=bool(result.get("success")),
         error=result.get("error"),
         message=result.get("message"),
+        ready_for_batch=bool(result.get("ready_for_batch")),
     )
 
 

@@ -288,9 +288,11 @@ export interface WarmVahanBrowserResponse {
   success: boolean;
   error?: string | null;
   message?: string | null;
+  /** When true, Vahan is logged in (Screen 1 visible) — batch can start on the same click. */
+  ready_for_batch?: boolean;
 }
 
-/** Open/attach Vahan login (no fill). RTO Queue: first click warms browser; operator logs in; second click runs batch. */
+/** Open/attach Vahan login (no fill). When already logged in, ``ready_for_batch`` allows one-click batch start. */
 export async function warmVahanBrowser(): Promise<WarmVahanBrowserResponse> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), DMS_WARM_BROWSER_TIMEOUT_MS);

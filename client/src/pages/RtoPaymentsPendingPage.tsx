@@ -113,35 +113,28 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
 
   const handleStartBatch = async () => {
     setBatchError(null);
-    triggerVahanWarm();
+    setStartingBatch(true);
+    setVahanWarmMessage(null);
+    const prevWarmMsg = vahanWarmMessage;
+    try {
+      const warm = await warmVahanBrowserLocal();
+      if (!warm.success) {
+        setStartingBatch(false);
+        setBatchError(warm.error ?? "Could not open Vahan site");
+        return;
+      }
 
-    if (!vahanReadyForBatch) {
-      setStartingBatch(true);
-      setVahanWarmMessage(null);
-      try {
-        const warm = await warmVahanBrowserLocal();
-        if (!warm.success) {
-          setBatchError(warm.error ?? "Could not open Vahan site");
-          return;
-        }
+      const canStartBatch = Boolean(warm.ready_for_batch) || vahanReadyForBatch;
+      if (!canStartBatch) {
+        setStartingBatch(false);
         setVahanReadyForBatch(true);
         setVahanWarmMessage(
-          warm.message ??
-            "Vahan Opened. Please login. And then press button again"
+          warm.message ?? "Vahan Opened. Please login. And then press button again"
         );
-      } catch (err) {
-        setBatchError(err instanceof Error ? err.message : "Failed to open Vahan site");
-      } finally {
-        setStartingBatch(false);
+        return;
       }
-      return;
-    }
 
-    setStartingBatch(true);
-    const prevWarmMsg = vahanWarmMessage;
-    setVahanWarmMessage(null);
-    setVahanReadyForBatch(false);
-    try {
+      setVahanReadyForBatch(false);
       const res = await startRtoBatchLocal({ dealer_id: dealerId });
       if (!res.started) {
         setStartingBatch(false);
@@ -264,8 +257,8 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
           disabled={startingBatch || batchStatus?.state === "running" || batchStatus?.state === "starting"}
           title={
             vahanReadyForBatch
-              ? "Start processing queued RTO rows on the logged-in Vahan tab"
-              : "Open Vahan in the browser; log in; then press again to run the batch"
+              ? "Log in on Vahan, then press again to run the batch"
+              : "Open or attach Vahan; starts batch immediately when already logged in"
           }
         >
           {startingBatch || batchStatus?.state === "running" || batchStatus?.state === "starting"
@@ -280,7 +273,10 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
               {vahanWarmMessage}
             </span>
           ) : (
-            <>Batch processes up to 7 queued rows. First click opens Vahan—log in, then press again to run.</>
+            <>
+              Batch processes up to 7 queued rows. When Vahan is already open and logged in, one click
+              runs the batch; otherwise log in on Vahan and press again.
+            </>
           )}
         </span>
         </div>

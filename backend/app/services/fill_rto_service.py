@@ -356,6 +356,22 @@ def _assert_vahan_session_alive(page: Page) -> None:
             raise VahanSessionExpired(msg)
 
 
+def _vahan_dealer_home_ready(page: Page) -> bool:
+    """True when the attached Vahan tab is past login and Screen 1 (``officeList``) is present."""
+    try:
+        url = (page.url or "").lower()
+    except Exception:
+        return False
+    for pat in _VAHAN_SESSION_DEAD_PATTERNS:
+        if pat in url:
+            return False
+    try:
+        page.locator("div#officeList").first.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Data helpers
 # ---------------------------------------------------------------------------
@@ -2153,6 +2169,11 @@ def _screen_1(page: Page, office: str) -> None:
         option_label_regex=_ENTRY_NEW_REG_LABEL_RE,
     )
     _pause()
+
+    # PF action menu can leave focus in the open overlay; Tab reaches Show Form (operator repro).
+    page.keyboard.press("Tab")
+    _pause()
+    _rto_log("Tab → Show Form")
 
     _click(page, "button#pending_action", label="Show Form")
     _pause()
@@ -4435,16 +4456,19 @@ def _screen_6(page: Page) -> float | None:
     return None
 
 
-# Message aligned with ``handle_browser_opening._wait_login_or_prompt_after_open`` (DMS / Create Invoice UX).
-VAHAN_WARM_THEN_CONTINUE_MESSAGE = "Vahan Opened. Please login. And then press button again"
+# Message when warm-browser opens Vahan but the operator still needs to log in manually.
+VAHAN_WARM_LOGIN_MESSAGE = "Vahan Opened. Please login. And then press button again"
+# Back-compat alias (older logs / docs).
+VAHAN_WARM_THEN_CONTINUE_MESSAGE = VAHAN_WARM_LOGIN_MESSAGE
 
 
 def warm_vahan_browser_session() -> dict:
     """Open or attach to the Vahan browser without running fill automation (no login gate).
 
-    Operator should log in, then start the RTO batch from the client so ``fill_rto_row`` can proceed.
+    Returns ``ready_for_batch`` when Screen 1 is already visible so the client can start the
+    RTO batch on the same button click (no extra Continue step).
     """
-    out: dict = {"success": False, "error": None, "message": None}
+    out: dict = {"success": False, "error": None, "message": None, "ready_for_batch": False}
     u = (VAHAN_BASE_URL or "").strip()
     if not u:
         out["error"] = "VAHAN_BASE_URL not set"
@@ -4462,7 +4486,11 @@ def warm_vahan_browser_session() -> dict:
             return out
         _install_playwright_js_dialog_handler(page)
         out["success"] = True
-        out["message"] = VAHAN_WARM_THEN_CONTINUE_MESSAGE
+        if _vahan_dealer_home_ready(page):
+            out["ready_for_batch"] = True
+            out["message"] = "Vahan session ready — batch can start."
+        else:
+            out["message"] = VAHAN_WARM_LOGIN_MESSAGE
     except Exception as e:
         out["error"] = str(e)
         logger.warning("fill_rto_service: warm_vahan_browser_session %s", e)
