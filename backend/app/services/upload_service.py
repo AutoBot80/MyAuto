@@ -46,6 +46,29 @@ from app.services.post_ocr_service import run_deferred_post_ocr_for_sale
 
 logger = logging.getLogger(__name__)
 
+FOR_OCR_SUBDIR = "for_OCR"
+
+
+def list_sale_saved_filenames(sale_dir: Path) -> list[str]:
+    """
+    Filenames to return in upload ``saved_files``: sale-root files plus ``for_OCR/`` basenames
+    not yet at root (deferred post-OCR moves them after the HTTP response).
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    if sale_dir.is_dir():
+        for p in sorted(sale_dir.iterdir()):
+            if p.is_file():
+                names.append(p.name)
+                seen.add(p.name.lower())
+    for_ocr = sale_dir / FOR_OCR_SUBDIR
+    if for_ocr.is_dir():
+        for p in sorted(for_ocr.iterdir()):
+            if p.is_file() and p.name.lower() not in seen:
+                names.append(p.name)
+                seen.add(p.name.lower())
+    return names
+
 
 class UploadService:
     """Business logic for scan uploads and queueing. Stateless, testable."""
@@ -436,12 +459,8 @@ class UploadService:
             sync_uploads_subfolder_to_s3(dealer_id, subdir_name)
             sync_ocr_subfolder_to_s3(dealer_id, subdir_name)
 
-        saved: list[str] = []
         final_sale = uploads_dir / subdir_name
-        if final_sale.is_dir():
-            for p in sorted(final_sale.iterdir()):
-                if p.is_file():
-                    saved.append(p.name)
+        saved = list_sale_saved_filenames(final_sale) if final_sale.is_dir() else []
 
         return {
             "saved_count": len(saved),
@@ -534,16 +553,7 @@ class UploadService:
                     logger.exception("remove_if_empty_initial_artifact_dir failed subfolder=%s", subfolder)
 
         final_sale = uploads_dir / subfolder
-        saved_names: list[str] = []
-        if final_sale.is_dir():
-            for p in sorted(final_sale.iterdir()):
-                if p.is_file():
-                    saved_names.append(p.name)
-            fo = final_sale / "for_OCR"
-            if fo.is_dir():
-                for p in sorted(fo.iterdir()):
-                    if p.is_file():
-                        saved_names.append(f"for_OCR/{p.name}")
+        saved_names = list_sale_saved_filenames(final_sale) if final_sale.is_dir() else []
         return {
             "saved_count": len(saved_names),
             "saved_files": saved_names,

@@ -94,14 +94,7 @@ def dispatch_pdfs_after_create_invoice(
             continue
         dispatch_local_pdf(chosen)
 
-    if mob:
-        try:
-            from app.services.form20_pencil_overlay import form20_pencil_overlay_and_dispatch
-
-            form20_pencil_overlay_and_dispatch(base, mob)
-        except Exception as exc:
-            # Missing optional pencil-mark file does not raise — only unexpected failures (e.g. corrupt PDF).
-            logger.warning("upload_scans_invoice_print: Form 20 pencil overlay failed unexpectedly: %s", exc)
+    # Pencil mark is no longer composited onto DMS Form 20.
 
 
 def _try_dispatch_insurance_pdf_from_dir(base: Path) -> bool:
@@ -210,18 +203,7 @@ def collect_invoice_print_jobs_s3(
             jobs.append(_print_job(chosen.name, url, kind))
 
     if mob:
-        try:
-            from app.services.form20_pencil_overlay import form20_pencil_overlay_write_only
-
-            stamped, _ = form20_pencil_overlay_write_only(base, mob, inplace=False)
-            if stamped is not None and stamped.is_file():
-                sync_uploads_subfolder_to_s3(dealer_id, subfolder)
-                rel = f"{subfolder}/{stamped.name}"
-                url = presigned_uploads_get_by_rel_path(dealer_id, rel)
-                if url:
-                    jobs.append(_print_job(stamped.name, url, "form20_pencil"))
-        except Exception as exc:
-            logger.warning("collect_invoice_print_jobs_s3: pencil overlay: %s", exc)
+        pass  # Pencil mark no longer composited onto Form 20 for print jobs.
 
     return jobs
 
@@ -265,14 +247,7 @@ def collect_invoice_print_jobs_electron_local(
         jobs.append(_print_job(chosen.name, str(chosen.resolve()), kind))
 
     if mob:
-        try:
-            from app.services.form20_pencil_overlay import form20_pencil_overlay_write_only
-
-            stamped, _ = form20_pencil_overlay_write_only(base, mob, inplace=False)
-            if stamped is not None and stamped.is_file():
-                jobs.append(_print_job(stamped.name, str(stamped.resolve()), "form20_pencil"))
-        except Exception as exc:
-            logger.warning("collect_invoice_print_jobs_electron_local: pencil overlay: %s", exc)
+        pass  # Pencil mark no longer composited onto Form 20 for print jobs.
 
     return jobs
 

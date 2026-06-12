@@ -1,5 +1,6 @@
 import { apiFetch } from "./client";
 import type { ExtractedCustomerDetails, ExtractedVehicleDetails, ExtractedInsuranceDetails } from "../types";
+import { resolvePortalInsurer } from "../utils/addSalesInsurerResolve";
 import { financierForStagingPayload } from "../utils/financierStagingRules";
 import {
   sanitizeNomineeAgeInput,
@@ -92,12 +93,16 @@ function mapVehicle(v: ExtractedVehicleDetails | null): SubmitInfoPayload["vehic
   };
 }
 
-function mapInsurance(
+export function mapInsurance(
   ins: ExtractedInsuranceDetails | null,
-  preferInsurer?: string | null
+  preferInsurer?: string | null,
+  portalInsurers?: readonly string[] | null
 ): SubmitInfoPayload["insurance"] {
-  const insurerFromDetails = sanitizeOptionalFormField(ins?.insurer);
-  const insurerFromDealer = sanitizeOptionalFormField(preferInsurer ?? undefined);
+  const resolved = resolvePortalInsurer(
+    sanitizeOptionalFormField(ins?.insurer),
+    preferInsurer,
+    portalInsurers ?? []
+  );
   return {
     nominee_name: sanitizeOptionalFormField(ins?.nominee_name),
     nominee_age:
@@ -106,7 +111,7 @@ function mapInsurance(
         : undefined,
     nominee_relationship: sanitizeOptionalFormField(ins?.nominee_relationship),
     nominee_gender: sanitizeOptionalFormField(ins?.nominee_gender),
-    insurer: insurerFromDetails ?? insurerFromDealer,
+    insurer: sanitizeOptionalFormField(resolved),
     policy_num: sanitizeOptionalFormField(ins?.policy_num),
     policy_from: sanitizeOptionalFormField(ins?.policy_from),
     policy_to: sanitizeOptionalFormField(ins?.policy_to),
@@ -127,12 +132,14 @@ export async function submitInfo(
     stagingId?: string | null;
     /** ``dealer_ref.prefer_insurer`` when details ``insurer`` is empty. */
     preferInsurer?: string | null;
+    /** ``master_ref`` portal insurers (``comments = 'Y'``) for canonical insurer selection. */
+    portalInsurers?: readonly string[] | null;
   }
 ): Promise<SubmitInfoResponse> {
   const payload: SubmitInfoPayload = {
     customer: mapCustomer(opts.customer, opts.mobile, opts.insurance, opts.fileLocation, opts.oemId),
     vehicle: mapVehicle(opts.vehicle),
-    insurance: mapInsurance(opts.insurance, opts.preferInsurer),
+    insurance: mapInsurance(opts.insurance, opts.preferInsurer, opts.portalInsurers),
     dealer_id: opts.dealerId,
     file_location: opts.fileLocation ?? undefined,
     staging_id: opts.stagingId ?? undefined,

@@ -48,7 +48,9 @@ def find_form20_pdf(sale_dir: Path, mobile_10: str) -> Path | None:
         return exp
     for p in sorted(sale_dir.glob("*.pdf"), key=lambda x: x.name.lower()):
         low = p.name.lower()
-        if "with_pencil_mark" in low:
+        if "with_pencil_mark" in low or "with_cover" in low:
+            continue
+        if "cover_page" in low.replace(" ", "_"):
             continue
         if any(x in low for x in ("gst", "invoice_details", "booking_receipt", "retail_invoice")):
             continue
@@ -57,6 +59,85 @@ def find_form20_pdf(sale_dir: Path, mobile_10: str) -> Path | None:
         if "form" in low and "20" in low:
             return p
     return None
+
+
+def find_form20_cover_page(sale_dir: Path) -> Path | None:
+    """Scanned Form 20 cover page promoted to sale root after pre-OCR."""
+    from app.services.page_classifier import FILENAME_FORM_20_COVER
+
+    if not sale_dir.is_dir():
+        return None
+    for name in (FILENAME_FORM_20_COVER, "Form_20_Cover_Page.jpeg"):
+        p = sale_dir / name
+        if p.is_file():
+            return p
+    return None
+
+
+def build_form20_with_cover_pdf(sale_dir: Path, mobile_10: str) -> Path | None:
+    """
+    Merge optional scanned cover (page 1) with DMS Form 20 pages for RTO upload.
+
+    Returns ``{mobile}_Form_20_with_cover.pdf`` when cover exists; else signed DMS Form 20 only.
+    """
+    import fitz
+
+    dms = find_form20_pdf(sale_dir, mobile_10)
+    cover = find_form20_cover_page(sale_dir)
+    if dms is None:
+        return None
+    if cover is None:
+        return dms
+
+    merged_name = f"{mobile_10}_Form_20_with_cover.pdf"
+    out = sale_dir / merged_name
+    try:
+        cover_mtime = cover.stat().st_mtime
+        dms_mtime = dms.stat().st_mtime
+        if out.is_file() and out.stat().st_mtime >= max(cover_mtime, dms_mtime):
+            return out
+    except OSError:
+        pass
+
+    merged = fitz.open()
+    try:
+        cover_suffix = cover.suffix.lower()
+        if cover_suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"):
+            cover_pix = fitz.Pixmap(str(cover))
+            try:
+                w, h = cover_pix.width, cover_pix.height
+                page = merged.new_page(width=float(w), height=float(h))
+                page.insert_image(page.rect, filename=str(cover))
+            finally:
+                cover_pix = None
+        else:
+            cover_doc = fitz.open(str(cover))
+            try:
+                merged.insert_pdf(cover_doc, from_page=0, to_page=-1)
+            finally:
+                cover_doc.close()
+
+        dms_doc = fitz.open(str(dms))
+        try:
+            merged.insert_pdf(dms_doc, from_page=0, to_page=-1)
+        finally:
+            dms_doc.close()
+
+        out.parent.mkdir(parents=True, exist_ok=True)
+        merged.save(str(out), garbage=4, deflate=True)
+    finally:
+        merged.close()
+
+    return out if out.is_file() else dms
+
+
+def form20_with_cover_pdf_path(sale_dir: Path, mobile_10: str) -> Path:
+    """Path to merged Form 20 + scanned cover PDF required before Vahan upload."""
+    return sale_dir / f"{mobile_10}_Form_20_with_cover.pdf"
+
+
+def is_form20_with_cover_ready(sale_dir: Path, mobile_10: str) -> bool:
+    return form20_with_cover_pdf_path(sale_dir, mobile_10).is_file()
 
 
 def _place_stamp_top_right(page, pr, stamp_path: Path, max_w: float, max_h: float) -> None:
@@ -171,13 +252,8 @@ def _existing_pencil_mark_ready(sale_dir: Path, *, min_bytes: int = 80) -> bool:
 
 def prepare_details_pencil_and_form20_overlay(sale_dir: Path) -> dict[str, object]:
     """
-    **Electron / dealer PC (local sale folder):** crop the chassis pencil mark from the Details sheet
-    (same logic as upload-time :func:`app.services.pre_ocr_service.try_write_pencil_mark_for_sale_folder`)
-    into ``pencil_mark.jpeg``, then composite it onto **page 1 top-right** of the Form 20 PDF
-    (writes ``{{Form20 stem}}_with_pencil_mark.pdf``). Run **after** dealer signature overlay so the
-    stamped Form 20 on disk is the input to the composite.
-
-    Non-fatal: missing Details/Form 20 yields empty ``form20_stamped_path`` without raising.
+    Legacy hook after dealer signature overlay. Pencil mark is **no longer** stamped onto DMS Form 20;
+    returns crop status only when ``pencil_mark.jpeg`` already exists or can be written from Details.
     """
     import re
 
@@ -185,7 +261,7 @@ def prepare_details_pencil_and_form20_overlay(sale_dir: Path) -> dict[str, objec
         "ok": True,
         "pencil_crop_written": False,
         "form20_stamped_path": None,
-        "note": None,
+        "note": "pencil_on_form20_disabled",
     }
     if not sale_dir.is_dir():
         out["ok"] = False
@@ -204,17 +280,11 @@ def prepare_details_pencil_and_form20_overlay(sale_dir: Path) -> dict[str, objec
         out["note"] = "used_existing_pencil_mark"
     elif try_write_pencil_mark_for_sale_folder(sale_dir):
         out["pencil_crop_written"] = True
+        out["note"] = "pencil_crop_only_no_form20_stamp"
 
     m = re.match(r"^(\d{10})", sale_dir.name.strip())
-    mob10 = m.group(1) if m else ""
-    if len(mob10) != 10:
+    if not m:
         out["note"] = "no_mobile_in_folder_name"
-        return out
-
-    stamped, fail_note = form20_pencil_overlay_write_only(sale_dir, mob10, inplace=True)
-    out["form20_stamped_path"] = str(stamped) if stamped else None
-    if fail_note and not stamped:
-        out["note"] = fail_note
     return out
 
 
@@ -225,57 +295,8 @@ def form20_pencil_overlay_write_only(
     inplace: bool = False,
 ) -> tuple[Path | None, str | None]:
     """
-    Composite pencil mark onto Form 20 page 1 top-right.
-
-    When ``inplace`` is True (Electron overlay path), updates the same Form 20 PDF that received
-  dealer signatures. Otherwise writes ``{{stem}}_with_pencil_mark.pdf`` beside the original.
-
-    Returns ``(stamped_path_or_none, failure_note_or_none)``.
+    Disabled: pencil mark is no longer composited onto DMS Form 20 (cover page + RTO merge replace this flow).
     """
-    import os
-
-    try:
-        import fitz  # noqa: F401
-    except ImportError:
-        logger.warning("form20_pencil_overlay: PyMuPDF (fitz) not installed; skipping overlay")
-        return None, "no_fitz"
-
-    form20 = find_form20_pdf(sale_dir, mobile_10)
-    if form20 is None:
-        logger.info(
-            "form20_pencil_overlay: Form 20 PDF not found under %s; skipping overlay",
-            sale_dir,
-        )
-        return None, "form20_missing"
-
-    pencil = find_pencil_mark_file(sale_dir)
-    if pencil is None:
-        logger.info(
-            "form20_pencil_overlay: optional pencil-mark file not present; skipping stamp"
-        )
-        return None, "pencil_mark_missing"
-
-    if inplace:
-        out = form20.with_name(form20.name + ".pencil_tmp.pdf")
-    else:
-        out = sale_dir / f"{form20.stem}_with_pencil_mark.pdf"
-    try:
-        composite_form20_first_page_with_stamp(form20, pencil, out)
-    except Exception as exc:
-        logger.warning("form20_pencil_overlay: composite failed: %s", exc)
-        out.unlink(missing_ok=True)
-        return None, f"composite_failed: {exc}"
-
-    if not out.is_file():
-        return None, "output_missing"
-
-    if inplace:
-        try:
-            os.replace(str(out), str(form20))
-            return form20, None
-        except OSError as exc:
-            logger.warning("form20_pencil_overlay: replace in place failed: %s", exc)
-            out.unlink(missing_ok=True)
-            return None, f"replace_failed: {exc}"
-
-    return out, None
+    _ = sale_dir, mobile_10, inplace
+    logger.info("form20_pencil_overlay: pencil-on-Form-20 disabled; skipping")
+    return None, "pencil_on_form20_disabled"

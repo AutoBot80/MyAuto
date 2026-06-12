@@ -73,8 +73,7 @@ export function runDealerSignOverlayHeadless(dealerId: number, subfolder: string
   const sig = resolveDealerSignatureImagePath(dealerId);
   if (!sig) {
     logInfo(
-      `dealer_sign_overlay: no signature file for dealer ${dealerId} (signature overlay skipped; ` +
-        `Details pencil → Form 20 step still runs if Details/Form 20 exist).`
+      `dealer_sign_overlay: no signature file for dealer ${dealerId} (signature overlay skipped).`
     );
   }
 
@@ -94,7 +93,6 @@ export function runDealerSignOverlayHeadless(dealerId: number, subfolder: string
     String(dealerId),
     "--signature",
     sig ?? "",
-    "--after-sign-pencil-form20",
     "--json",
   ];
 

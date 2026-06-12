@@ -49,6 +49,8 @@ export interface RtoPaymentRow {
   locked_by_login_id?: string | null;
   /** Display name of the user who locked this row. */
   locked_by_name?: string | null;
+  /** When true, row is eligible for Fill Vahan Site batch (default true). */
+  in_queue?: boolean;
 }
 
 export interface RtoBatchRowResult {
@@ -155,6 +157,98 @@ export async function retryRtoQueueRow(rtoQueueId: number): Promise<{ ok: boolea
   );
 }
 
+export interface RtoFormsMissingItem {
+  key: string;
+  label: string;
+}
+
+export interface RtoFormsStatusResponse {
+  ready: boolean;
+  missing: RtoFormsMissingItem[];
+  last_error?: string | null;
+}
+
+export async function getRtoFormsStatus(rtoQueueId: number): Promise<RtoFormsStatusResponse> {
+  return apiFetch<RtoFormsStatusResponse>(`/rto-queue/${encodeURIComponent(rtoQueueId)}/forms-status`);
+}
+
+export async function setRtoInQueue(
+  rtoQueueId: number,
+  inQueue: boolean
+): Promise<{ ok: boolean; rto_queue_id: number; in_queue: boolean }> {
+  return apiFetch<{ ok: boolean; rto_queue_id: number; in_queue: boolean }>(
+    `/rto-queue/${encodeURIComponent(rtoQueueId)}/in-queue`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ in_queue: inQueue }),
+    }
+  );
+}
+
+export async function markRtoDone(
+  rtoQueueId: number
+): Promise<{ ok: boolean; rto_queue_id: number; status: string }> {
+  return apiFetch<{ ok: boolean; rto_queue_id: number; status: string }>(
+    `/rto-queue/${encodeURIComponent(rtoQueueId)}/mark-done`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+}
+
+export async function requeueRtoQueueRow(
+  rtoQueueId: number
+): Promise<{ ok: boolean; rto_queue_id: number; status: string; in_queue: boolean }> {
+  return apiFetch<{ ok: boolean; rto_queue_id: number; status: string; in_queue: boolean }>(
+    `/rto-queue/${encodeURIComponent(rtoQueueId)}/requeue`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+}
+
+export async function releaseRtoQueueRow(
+  rtoQueueId: number
+): Promise<{ ok: boolean; rto_queue_id: number; status: string }> {
+  return apiFetch<{ ok: boolean; rto_queue_id: number; status: string }>(
+    `/rto-queue/${encodeURIComponent(rtoQueueId)}/release`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+}
+
+export interface UploadRtoQueueFormsApiResponse {
+  ok: boolean;
+  ready?: boolean;
+  missing?: string[];
+  error?: string | null;
+  status?: string;
+  rto_queue_id?: number;
+}
+
+export async function uploadRtoQueueFormsApi(
+  rtoQueueId: number,
+  uploads: { category_key: string; file: File }[]
+): Promise<UploadRtoQueueFormsApiResponse> {
+  const form = new FormData();
+  for (const u of uploads) {
+    form.append("category_keys", u.category_key);
+    form.append("files", u.file, u.file.name);
+  }
+  return apiFetch<UploadRtoQueueFormsApiResponse>(
+    `/rto-queue/${encodeURIComponent(rtoQueueId)}/upload-forms`,
+    {
+      method: "POST",
+      body: form,
+    }
+  );
+}
+
 const RTO_BATCH_TIMEOUT_MS = 900_000; // 15 min
 
 /**
@@ -178,10 +272,22 @@ export async function startRtoBatchLocal(payload?: {
     const data = result.parsed as { data?: { success: boolean; total: number; completed: number; failed: number } } | null;
     const d = data?.data;
     if (d) {
+      const formsMissing = Number((d as { forms_missing?: number }).forms_missing ?? 0);
+      const pending = Number((d as { pending?: number }).pending ?? 0);
+      let msg = `Batch done: ${d.completed} completed, ${d.failed} failed of ${d.total}`;
+      if (formsMissing > 0) {
+        msg += `; ${formsMissing} moved to Forms Missing`;
+      }
+      if (pending > 0) {
+        msg += `; ${pending} returned to Pending`;
+      }
+      if (d.total === 0) {
+        msg = "No rows to process. Check In Queue boxes or release stuck rows.";
+      }
       return {
         started: true,
         session_id: "",
-        message: `Batch done: ${d.completed} completed, ${d.failed} failed of ${d.total}`,
+        message: msg,
       };
     }
     return { started: result.success, session_id: "", message: result.error ?? "Sidecar returned no data." };

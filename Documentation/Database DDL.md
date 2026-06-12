@@ -274,12 +274,13 @@ This document lists the current database tables and their columns. **Executable 
 | `rto_queue_id` | `serial` | NO | auto | Primary key (system-generated) |
 | `sales_id` | `integer` | NO |  | FK → `sales_master(sales_id)`; UNIQUE |
 | `insurance_id` | `integer` | YES |  | FK → `insurance_master(insurance_id)` |
-| `customer_mobile` | `varchar(16)` | YES |  | Customer mobile at queue time |
+| `customer_mobile` | `varchar(16)` | YES |  | Primary mobile at queue time; updated when operator chooses alternate Vahan OTP mobile |
 | `rto_application_id` | `varchar(128)` | YES |  | Vahan application number (filled by automation) |
 | `rto_application_date` | `date` | YES |  | Date row added / application filed |
 | `rto_payment_id` | `varchar(64)` | YES |  | Transaction ID when paid |
 | `rto_payment_amount` | `numeric(12,2)` | YES |  | RTO fees / payment amount |
-| `status` | `varchar(32)` | NO | `'Queued'` | e.g. Queued, Pending, In Progress, Completed, Failed |
+| `status` | `varchar(32)` | NO | `'Queued'` | e.g. Queued, Pending, In Progress, Completed, Failed, Forms Missing, Manually Completed |
+| `in_queue` | `boolean` | NO | `true` | When true, row is eligible for Fill Vahan Site batch claim |
 | `processing_session_id` | `varchar(128)` | YES |  | Dealer batch/session id that claimed the row |
 | `worker_id` | `varchar(128)` | YES |  | Worker identifier for the active batch |
 | `leased_until` | `timestamptz` | YES |  | Lease timeout for claimed queue rows |
@@ -850,6 +851,8 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.97 | Jun 2026 | **`add_sales_staging`**: **`dms_state`**, **`insurance_state`** (integer, default **`0`**; **`insurance_state`** **`2`** after MISP policy-preview Submit) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`**, **`add_sales_staging_state_service`**, **`fill_hero_insurance_service`** |
 | 2.99 | Jun 2026 | **`add_sales_staging.dms_state`**: documented **`1`** (vehicle prep + **`vehicle_master`** upsert) and **`2`** (customer prep + **`customer_master`** upsert); DMS rerun resume in **`fill_hero_dms_service`** / sidecar — no DDL change |
 | 2.98 | Jun 2026 | **`ocr_run_log`** — append-only Add Sales OCR runs with missing derived fields; Admin Usage **OCR Logs** tab; **`GET /admin/ocr-logs`** (15-day window); **`DDL/31_ocr_run_log.sql`** |
+| 3.00 | Jun 2026 | **`form_vahan_view.mobile`**: **`COALESCE(rto_queue.customer_mobile, customer_master.mobile_number)`** for operator alternate Vahan OTP mobile; **`rto_queue.customer_mobile`** note updated — **`DDL/alter/33a_form_vahan_view_queue_mobile.sql`**, **`DDL/alter/10e_form_vahan_view.sql`**; **`rto_payment_details.update_customer_mobile`**, **`fill_rto_service`** |
+| 3.01 | Jun 2026 | **`rto_queue.in_queue`** (default true) for per-row Vahan batch opt-in; statuses **Forms Missing**, **Manually Completed** — **`DDL/alter/33b_rto_queue_in_queue.sql`**, RTO Queue subtabs UI |
 
 
 ## `process_failure_log`

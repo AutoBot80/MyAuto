@@ -1,8 +1,10 @@
 import { app } from "electron";
+import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { autoUpdater } from "electron-updater";
 import { logError, logInfo, logWarn } from "./logger";
+import { getSaathiBaseDir, getSidecarExePath } from "./paths";
 
 /** Written when an update finishes downloading; consumed on the next process start to run the installer. */
 const PENDING_UPDATE_ON_LAUNCH = "pending-update-on-next-launch.json";
@@ -60,6 +62,40 @@ function clearPendingUpdateMarker(): void {
   } catch {
     // ignore
   }
+}
+
+/**
+ * After an auto-update the bundled Playwright driver may require a new ``chromium-*`` revision.
+ * NSIS ``customInstall`` can skip download when an older revision exists; run the sidecar CLI
+ * on every packaged start (background) so ``D:\Saathi\playwright-browsers`` stays in sync.
+ */
+export function ensurePlaywrightBrowsersInstalled(): void {
+  if (!app.isPackaged) return;
+  let exe: string;
+  try {
+    exe = getSidecarExePath();
+  } catch (e) {
+    logWarn(`updater: playwright browsers skipped — ${e}`);
+    return;
+  }
+  const saathi = getSaathiBaseDir();
+  logInfo(`updater: ensuring Playwright Chromium under ${saathi}`);
+  const proc = spawn(exe, ["--install-playwright-browsers", saathi], {
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  proc.stdout?.on("data", (chunk: Buffer) => {
+    const line = chunk.toString("utf8").trim();
+    if (line) logInfo(`playwright-browsers: ${line}`);
+  });
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    const line = chunk.toString("utf8").trim();
+    if (line) logWarn(`playwright-browsers: ${line}`);
+  });
+  proc.on("error", (err) => logError("playwright-browsers spawn", err));
+  proc.on("close", (code) => {
+    logInfo(`updater: playwright browsers install finished (exit ${code ?? "?"})`);
+  });
 }
 
 /**
@@ -168,6 +204,7 @@ export function setupAutoUpdater(send: UpdateSender): void {
   void (async () => {
     const didInstall = await tryInstallPendingUpdateOnNextLaunch();
     if (didInstall) return;
+    ensurePlaywrightBrowsersInstalled();
     await autoUpdater.checkForUpdates().catch((e: unknown) => logError("updater checkForUpdates", e));
   })();
 }

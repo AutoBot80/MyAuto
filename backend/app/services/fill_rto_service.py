@@ -635,7 +635,132 @@ def _resolve_sale_documents(
     result["INSURANCE CERTIFICATE"] = _resolve_insurance_certificate(
         sale_dir, all_files, subfolder, mob_fn
     )
+    from app.services.form20_pencil_overlay import build_form20_with_cover_pdf
+
+    form20_merged = build_form20_with_cover_pdf(sale_dir, mob_fn)
+    if form20_merged is not None:
+        result["FORM 20"] = form20_merged
     return result
+
+
+VAHAN_DOC_CATEGORY_LABELS: dict[str, str] = {
+    "FORM 20": "Form 20 with cover (merged PDF)",
+    "FORM 21": "Sale Certificate / Form 21",
+    "FORM 22": "Form 22",
+    "INSURANCE CERTIFICATE": "Insurance certificate",
+    "INVOICE ORIGINAL": "GST / retail invoice",
+    "AADHAAR_FRONT": "Aadhaar front",
+    "AADHAAR_BACK": "Aadhaar back",
+    "OWNER UNDERTAKING FORM": "Owner undertaking (Sales Detail Sheet)",
+}
+
+VAHAN_UPLOAD_READINESS_KEYS: tuple[str, ...] = (
+    "FORM 21",
+    "FORM 22",
+    "INSURANCE CERTIFICATE",
+    "INVOICE ORIGINAL",
+    "AADHAAR_FRONT",
+    "AADHAAR_BACK",
+    "OWNER UNDERTAKING FORM",
+)
+
+RTO_QUEUE_UPLOAD_FILENAMES: dict[str, str] = {
+    "FORM 20": "Form_20_Cover_Page.jpg",
+    "AADHAAR_FRONT": "Aadhar_front.jpg",
+    "AADHAAR_BACK": "Aadhar_back.jpg",
+    "OWNER UNDERTAKING FORM": "Sales_Detail_Sheet.pdf",
+}
+
+
+def resolve_mob_fn_for_row(*, mobile: str, subfolder: str) -> str:
+    mob_fn = _mobile_fn_from_mobile(mobile)
+    if mob_fn and mob_fn != "0000000000":
+        return mob_fn
+    leaf = Path(str(subfolder or "").strip().replace("\\", "/")).name
+    m = re.match(r"^(\d{10})", leaf)
+    return m.group(1) if m else mob_fn
+
+
+def resolve_vahan_upload_readiness(
+    sale_dir: Path,
+    *,
+    subfolder: str,
+    mobile: str,
+) -> tuple[bool, list[str]]:
+    """Return (ready, missing_labels) for Screen 5 Vahan document uploads."""
+    if not sale_dir.is_dir():
+        return False, ["Sale folder not found on disk"]
+
+    mob_fn = resolve_mob_fn_for_row(mobile=mobile, subfolder=subfolder)
+    missing: list[str] = []
+
+    from app.services.form20_pencil_overlay import is_form20_with_cover_ready
+
+    if not is_form20_with_cover_ready(sale_dir, mob_fn):
+        missing.append(VAHAN_DOC_CATEGORY_LABELS["FORM 20"])
+
+    doc_map = _resolve_sale_documents(sale_dir, subfolder=subfolder, mob_fn=mob_fn)
+    for key in VAHAN_UPLOAD_READINESS_KEYS:
+        if doc_map.get(key) is None:
+            missing.append(VAHAN_DOC_CATEGORY_LABELS[key])
+
+    return len(missing) == 0, missing
+
+
+def place_rto_queue_category_upload(
+    sale_dir: Path,
+    category_key: str,
+    source_path: Path,
+    *,
+    subfolder: str,
+    mobile: str,
+) -> Path:
+    """Copy one operator upload into the sale folder with a canonical name when known."""
+    import shutil
+
+    from app.services.hero_dms_playwright_invoice import _mobile_report_pdf_filename
+
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Upload source not found: {source_path}")
+
+    sale_dir.mkdir(parents=True, exist_ok=True)
+    key = (category_key or "").strip().upper()
+    mob_fn = resolve_mob_fn_for_row(mobile=mobile, subfolder=subfolder)
+
+    fixed = RTO_QUEUE_UPLOAD_FILENAMES.get(key)
+    if fixed:
+        dest = sale_dir / fixed
+        if dest.suffix.lower() != source_path.suffix.lower() and key == "OWNER UNDERTAKING FORM":
+            if source_path.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                dest = sale_dir / "Sales_Detail_Sheet.jpg"
+        shutil.copy2(source_path, dest)
+        return dest
+
+    pdf_names = {
+        "FORM 21": _mobile_report_pdf_filename(mob_fn, "Sale Certificate"),
+        "FORM 22": _mobile_report_pdf_filename(mob_fn, "Form 22"),
+    }
+    if key in pdf_names:
+        dest = sale_dir / pdf_names[key]
+        shutil.copy2(source_path, dest)
+        return dest
+
+    if key == "INSURANCE CERTIFICATE":
+        canon = _canonical_insurance_certificate_pdf(sale_dir, subfolder, mob_fn)
+        dest = canon if canon is not None else sale_dir / source_path.name
+        shutil.copy2(source_path, dest)
+        return dest
+
+    if key == "INVOICE ORIGINAL":
+        dest = sale_dir / source_path.name
+        if "gst" not in source_path.name.lower() and "invoice" not in source_path.name.lower():
+            dest = sale_dir / f"{mob_fn}_GST_Retail_Invoice.pdf"
+        shutil.copy2(source_path, dest)
+        return dest
+
+    dest = sale_dir / source_path.name
+    shutil.copy2(source_path, dest)
+    return dest
 
 
 def resolve_rto_print_bundle_pdfs(
@@ -691,9 +816,9 @@ def resolve_print_rto_push_upload_paths(
     sub = (subfolder or sale_dir.name).strip()
     doc_map = _resolve_sale_documents(sale_dir, subfolder=sub, mob_fn=mob_fn)
 
-    from app.services.form20_pencil_overlay import find_form20_pdf
+    from app.services.form20_pencil_overlay import build_form20_with_cover_pdf, find_form20_pdf
 
-    form20 = find_form20_pdf(sale_dir, mob_fn) or doc_map.get("FORM 20")
+    form20 = build_form20_with_cover_pdf(sale_dir, mob_fn) or find_form20_pdf(sale_dir, mob_fn) or doc_map.get("FORM 20")
 
     ordered: list[Path | None] = [
         form20,
@@ -803,9 +928,9 @@ def build_view_customer_sale_files_print_jobs(
     sub = (subfolder or sale_dir.name).strip()
     doc_map = _resolve_sale_documents(sale_dir, subfolder=sub, mob_fn=mob_fn)
 
-    from app.services.form20_pencil_overlay import find_form20_pdf
+    from app.services.form20_pencil_overlay import build_form20_with_cover_pdf, find_form20_pdf
 
-    form20 = find_form20_pdf(sale_dir, mob_fn) or doc_map.get("FORM 20")
+    form20 = build_form20_with_cover_pdf(sale_dir, mob_fn) or find_form20_pdf(sale_dir, mob_fn) or doc_map.get("FORM 20")
     form22 = doc_map.get("FORM 22")
     gst = doc_map.get("INVOICE ORIGINAL")
 
@@ -4527,7 +4652,7 @@ def fill_rto_row(row: dict) -> dict:
         "engine_short": row.get("engine_short") or "",
         "customer_name": row.get("customer_name") or "",
         "care_of": row.get("care_of") or "",
-        "mobile": row.get("mobile") or row.get("customer_mobile") or "",
+        "mobile": (row.get("customer_mobile") or row.get("mobile") or "").strip(),
         "address": row.get("address") or "",
         "city": row.get("city") or "",
         "district": (row.get("district") or "").strip(),
@@ -4544,7 +4669,7 @@ def fill_rto_row(row: dict) -> dict:
         "nominee_relationship": (row.get("nominee_relationship") or "").strip(),
     }
 
-    mob_fn = _mobile_digits_for_filename(data.get("mobile") or row.get("customer_mobile"))
+    mob_fn = _mobile_digits_for_filename(data.get("mobile"))
     log_path = _rto_action_log_path(dealer_id, row, mob_fn)
     rlog = RtoActionLog(log_path)
     token = _rto_action_log.set(rlog)

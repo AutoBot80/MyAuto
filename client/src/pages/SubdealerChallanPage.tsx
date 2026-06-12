@@ -403,21 +403,35 @@ export function SubdealerChallanPage({
     });
   }, []);
 
-  const loadProcessed = useCallback(async () => {
-    setProcessedLoading(true);
-    setProcessedError(null);
-    try {
-      const rows = await listRecentChallanStaging(dealerId, CHALLAN_STAGING_RECENT_DAYS, {
-        challanBookNum: processedChallanSearchApplied.trim() || null,
+  const loadProcessed = useCallback(
+    async (opts?: { preserveError?: boolean }) => {
+      setProcessedLoading(true);
+      if (!opts?.preserveError) {
+        setProcessedError(null);
+      }
+      try {
+        const rows = await listRecentChallanStaging(dealerId, CHALLAN_STAGING_RECENT_DAYS, {
+          challanBookNum: processedChallanSearchApplied.trim() || null,
+        });
+        setProcessedRows(rows);
+      } catch (err) {
+        setProcessedError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setProcessedLoading(false);
+        onChallanCountsRefresh();
+      }
+    },
+    [dealerId, processedChallanSearchApplied, onChallanCountsRefresh],
+  );
+
+  const scrollProcessedErrorIntoView = useCallback(() => {
+    window.setTimeout(() => {
+      document.getElementById("challans-processed-error")?.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
       });
-      setProcessedRows(rows);
-    } catch (err) {
-      setProcessedError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setProcessedLoading(false);
-      onChallanCountsRefresh();
-    }
-  }, [dealerId, processedChallanSearchApplied, onChallanCountsRefresh]);
+    }, 0);
+  }, []);
 
   const loadInvoices = useCallback(async () => {
     setInvoiceLoading(true);
@@ -608,22 +622,24 @@ export function SubdealerChallanPage({
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
       });
-      if (pr.error || !pr.ok) {
-        setProcessedError(pr.error || "Batch retry failed.");
+      const batchErr =
+        pr.error || (!pr.ok ? "Batch retry failed." : null);
+      await loadProcessed({ preserveError: Boolean(batchErr) });
+      if (batchErr) {
+        setProcessedError(batchErr);
+        scrollProcessedErrorIntoView();
       }
-      await loadProcessed();
-      onChallanCountsRefresh();
     } catch (err) {
       const aborted =
         (err instanceof Error && err.name === "AbortError") ||
         (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError");
-      setProcessedError(
-        aborted
-          ? "Request timed out or was cancelled. In browser-only dev, if you closed the DMS window mid-run, stop and restart uvicorn (Ctrl+C in the API terminal, then start again), refresh the app, then Retry — Release Browsers alone cannot always free a stuck Playwright worker thread."
-          : err instanceof Error
-            ? err.message
-            : String(err),
-      );
+      const msg = aborted
+        ? "Request timed out or was cancelled. In browser-only dev, if you closed the DMS window mid-run, stop and restart uvicorn (Ctrl+C in the API terminal, then start again), refresh the app, then Retry — Release Browsers alone cannot always free a stuck Playwright worker thread."
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      setProcessedError(msg);
+      scrollProcessedErrorIntoView();
     } finally {
       setRetryingProcessBatchId(null);
     }
@@ -638,30 +654,24 @@ export function SubdealerChallanPage({
         dms_base_url: dmsUrl || null,
         dealer_id: dealerId,
       });
-      if (pr.error || !pr.ok) {
-        setProcessedError(pr.error || "Retry order failed.");
-      }
-      await loadProcessed();
-      onChallanCountsRefresh();
-      if (pr.error || !pr.ok) {
-        window.setTimeout(() => {
-          document.getElementById("challans-processed-error")?.scrollIntoView({
-            behavior: "smooth",
-            block: "nearest",
-          });
-        }, 0);
+      const orderErr =
+        pr.error || (!pr.ok ? "Retry order failed." : null);
+      await loadProcessed({ preserveError: Boolean(orderErr) });
+      if (orderErr) {
+        setProcessedError(orderErr);
+        scrollProcessedErrorIntoView();
       }
     } catch (err) {
       const aborted =
         (err instanceof Error && err.name === "AbortError") ||
         (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError");
-      setProcessedError(
-        aborted
-          ? "Request timed out or was cancelled. In browser-only dev, if you closed the DMS window mid-run, stop and restart uvicorn (Ctrl+C in the API terminal, then start again), refresh the app, then Retry — Release Browsers alone cannot always free a stuck Playwright worker thread."
-          : err instanceof Error
-            ? err.message
-            : String(err),
-      );
+      const msg = aborted
+        ? "Request timed out or was cancelled. In browser-only dev, if you closed the DMS window mid-run, stop and restart uvicorn (Ctrl+C in the API terminal, then start again), refresh the app, then Retry — Release Browsers alone cannot always free a stuck Playwright worker thread."
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      setProcessedError(msg);
+      scrollProcessedErrorIntoView();
     } finally {
       setRetryingOrderBatchId(null);
     }

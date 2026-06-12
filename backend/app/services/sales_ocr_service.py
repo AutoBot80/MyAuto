@@ -13,7 +13,12 @@ from typing import Any, Callable
 
 from app.db import get_connection
 from app.repositories.ai_reader_queue import AiReaderQueueRepository
-from app.repositories.master_ref import REF_TYPE_FINANCER, REF_TYPE_INSURER, list_ref_values
+from app.repositories.master_ref import (
+    REF_TYPE_FINANCER,
+    REF_TYPE_INSURER,
+    list_portal_insurers,
+    list_ref_values,
+)
 from app.services.utility_functions import (
     default_profession_if_empty,
     fuzzy_best_master_ref_value,
@@ -468,7 +473,21 @@ def _parse_aadhar_back_address_from_ocr(ocr_text: str, name_hint: str | None = N
     if m:
         raw = m.group(1).strip()
     if not raw or len(raw) < 12:
-        so_iter = re.finditer(r"(?is)\b(?:C/O|S/O|W/O|D/O)\s*:", text)
+        # OCR merges label + relation: "Address S/O. Mormukat Singh, ..."
+        addr_so = re.search(
+            r"(?is)\bAddress\s+"
+            r"((?:C/O|S/O|W/O|D/O|C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\.?\s*"
+            r"[\s\S]+?)"
+            r"(?=\n\s*(?:\d{4}\s+\d{4}\s+\d{4}|www\.|help@|\Z))",
+            text,
+        )
+        if addr_so:
+            raw = addr_so.group(1).strip()
+    if not raw or len(raw) < 12:
+        so_iter = re.finditer(
+            r"(?is)\b(?:C/O|S/O|W/O|D/O|C\.?\s*/?\s*O\.?|S\.?\s*/?\s*O\.?|W\.?\s*/?\s*O\.?|D\.?\s*/?\s*O\.?)\s*[:.]?\s*",
+            text,
+        )
         best_chunk = ""
         for co in so_iter:
             tail = text[co.start() :]
@@ -585,6 +604,26 @@ def _aadhar_dob_window_not_issue_date(text: str, date_start_idx: int) -> bool:
     """True if the date at ``date_start_idx`` is unlikely to be ``Aadhaar … issued:``."""
     window = text[max(0, date_start_idx - 35) : date_start_idx]
     return not re.search(r"(?i)issued|issue\s*date|date\s+of\s+issue", window)
+
+
+def _extract_dob_within_lines_after_gender(text: str, *, max_lines: int = 2) -> str | None:
+    """UIDAI card front: DOB often sits on the line(s) immediately below Male/Female."""
+    t = text.replace("\r\n", "\n")
+    m = re.search(r"(?i)\b(MALE|FEMALE|Transgender)\b", t)
+    if not m:
+        return None
+    rest = t[m.end() :].lstrip("\n")
+    window = "\n".join(rest.split("\n")[:max_lines])
+    triplet = re.compile(r"(?<!\d)(\d{1,2})[/.\-](\d{1,2})[/.\-]((?:19|20)\d{2})(?!\d)")
+    for dm in triplet.finditer(window):
+        abs_start = m.end() + window.find(dm.group(0))
+        if not _aadhar_dob_window_not_issue_date(t, abs_start):
+            continue
+        d, mo, y = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
+        norm = _aadhar_normalize_dob_triplet(d, mo, y)
+        if norm:
+            return norm
+    return None
 
 
 def _gender_skip_word_then_slash_token(suffix: str) -> str | None:
@@ -740,6 +779,12 @@ def _parse_aadhar_front_textract_fallback(text: str) -> dict[str, str]:
                     out["date_of_birth"] = norm
                     out["year_of_birth"] = str(y)
                     break
+
+    if "date_of_birth" not in out:
+        dob_after = _extract_dob_within_lines_after_gender(t)
+        if dob_after:
+            out["date_of_birth"] = dob_after
+            out["year_of_birth"] = dob_after.split("/")[2]
 
     # Primary gender from layout: anchor on DOB, skip next token, next "/" then gender token.
     g_dob = _extract_gender_using_dob_slash_rule(t, out.get("date_of_birth"))
@@ -2314,6 +2359,7 @@ def _apply_initcap_on_read(
     *,
     master_insurers: list[str] | None = None,
     master_financers: list[str] | None = None,
+    portal_insurers: list[str] | None = None,
 ) -> None:
     """
     Presentation normalization for API reads:
@@ -2321,6 +2367,9 @@ def _apply_initcap_on_read(
 
     When ``master_insurers`` / ``master_financers`` are non-empty, ``fuzzy_best_master_ref_value`` maps
     OCR text to canonical ``master_ref.ref_value`` (head-weighted; optional *The* ignored) with 50%+ score.
+
+    Insurer is kept only when canonical match is in ``portal_insurers`` (``comments = 'Y'``); otherwise
+    dropped so ``dealer_ref.prefer_insurer`` can apply on the client.
     """
     customer = data.get("customer") or {}
     if isinstance(customer, dict):
@@ -2350,13 +2399,23 @@ def _apply_initcap_on_read(
             else:
                 insurance.pop("marital_status", None)
         if "insurer" in insurance:
-            ins = sanitize_details_sheet_insurer_value(insurance.get("insurer"))
-            if ins:
-                if master_insurers:
-                    canon = fuzzy_best_master_ref_value(ins, master_insurers, min_score=0.5)
-                    insurance["insurer"] = canon if canon else _initcap_words(ins)
+            ins = sanitize_details_sheet_insurer_value(
+                insurance.get("insurer"),
+                financier_candidates=master_financers,
+            )
+            if ins and master_insurers:
+                canon = fuzzy_best_master_ref_value(ins, master_insurers, min_score=0.5)
+                if canon and portal_insurers is not None:
+                    if canon in portal_insurers:
+                        insurance["insurer"] = canon
+                    else:
+                        insurance.pop("insurer", None)
+                elif canon:
+                    insurance["insurer"] = canon
                 else:
-                    insurance["insurer"] = _initcap_words(ins)
+                    insurance.pop("insurer", None)
+            elif ins:
+                insurance.pop("insurer", None)
             else:
                 insurance.pop("insurer", None)
         if insurance.get("nominee_relationship"):
@@ -4548,18 +4607,22 @@ class OcrService:
             data["name_mismatch_error"] = name_err
         master_insurers: list[str] | None = None
         master_financers: list[str] | None = None
+        portal_insurers: list[str] | None = None
         try:
             with get_connection() as conn:
                 mi = list_ref_values(conn, REF_TYPE_INSURER)
                 mf = list_ref_values(conn, REF_TYPE_FINANCER)
+                pi = list_portal_insurers(conn)
                 master_insurers = mi if mi else None
                 master_financers = mf if mf else None
+                portal_insurers = pi if pi else []
         except Exception as exc:
             logger.debug("master_ref: could not load INSURER/FINANCER lists: %s", exc)
         _apply_initcap_on_read(
             data,
             master_insurers=master_insurers,
             master_financers=master_financers,
+            portal_insurers=portal_insurers,
         )
         try:
             json_path.parent.mkdir(parents=True, exist_ok=True)

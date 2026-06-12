@@ -129,12 +129,32 @@ def insurer_prefer_matches(
     return difflib.SequenceMatcher(None, a, b).ratio() >= min_ratio
 
 
-def sanitize_details_sheet_insurer_value(val: str | None) -> str | None:
+def insurer_looks_like_financier(
+    val: str | None,
+    financier_candidates: list[str] | None,
+    *,
+    min_score: float = 0.5,
+) -> bool:
+    """True when OCR insurer text fuzzy-matches a ``master_ref`` FINANCER row (field bleed)."""
+    s = (val or "").strip()
+    if not s or not financier_candidates:
+        return False
+    return fuzzy_best_master_ref_value(s, financier_candidates, min_score=min_score) is not None
+
+
+def sanitize_details_sheet_insurer_value(
+    val: str | None,
+    *,
+    financier_candidates: list[str] | None = None,
+) -> str | None:
     """
     Reject OCR bleed when **Insurer Name (if needed)** is blank but the next line is printed
     consent/SMS boilerplate (e.g. "I agree to receiving periodic SMS updates about registration
     and service status"). Returns ``None`` so the field is treated as blank and
     ``dealer_ref.prefer_insurer`` can apply in ``build_insurance_fill_values``.
+
+    When ``financier_candidates`` is provided, also reject values that fuzzy-match a FINANCER row
+    (e.g. misread **Bajaj Finance** landing under insurer).
     """
     if not val or not str(val).strip():
         return None
@@ -158,6 +178,8 @@ def sanitize_details_sheet_insurer_value(val: str | None) -> str | None:
     if len(s.split()) > 14:
         return None
     if len(s) > 120:
+        return None
+    if insurer_looks_like_financier(s, financier_candidates):
         return None
     return s
 

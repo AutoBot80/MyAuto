@@ -221,15 +221,53 @@ def _sync_scripts(api_url: str, jwt: str, saathi_base: str) -> None:
         logging.warning("script-sync: extract/swap failed (%s); using stale cache", exc)
 
 
-def _sidecar_playwright_chromium_ready(browsers_root: Path) -> bool:
-    """True if a Playwright-managed Chromium build exists under ``PLAYWRIGHT_BROWSERS_PATH``."""
+_CACHED_EXPECTED_CHROMIUM_EXE: Path | None = None
+_CACHED_EXPECTED_CHROMIUM_EXE_DONE = False
+
+
+def _sidecar_playwright_expected_chromium_exe(browsers_root: Path) -> Path | None:
+    """
+    ``chrome.exe`` path for the Chromium **revision bundled with this Playwright driver**
+    (e.g. ``…/chromium-1223/chrome-win64/chrome.exe``). Stale ``chromium-*`` folders from an
+    older app version must not satisfy readiness.
+    """
+    global _CACHED_EXPECTED_CHROMIUM_EXE, _CACHED_EXPECTED_CHROMIUM_EXE_DONE
+    if _CACHED_EXPECTED_CHROMIUM_EXE_DONE:
+        return _CACHED_EXPECTED_CHROMIUM_EXE
     if not browsers_root.is_dir():
-        return False
-    for leaf in ("chrome-win64", "chrome-win"):
-        for exe in browsers_root.glob(f"chromium-*/{leaf}/chrome.exe"):
-            if exe.is_file():
-                return True
-    return False
+        return None
+    prev_pw_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers_root.resolve())
+    pw = None
+    try:
+        from playwright.sync_api import sync_playwright
+
+        pw = sync_playwright().start()
+        raw = (pw.chromium.executable_path or "").strip()
+        if not raw:
+            return None
+        _CACHED_EXPECTED_CHROMIUM_EXE = Path(raw)
+        _CACHED_EXPECTED_CHROMIUM_EXE_DONE = True
+        return _CACHED_EXPECTED_CHROMIUM_EXE
+    except Exception as exc:
+        logging.debug("playwright expected chromium executable path: %s", exc)
+        return None
+    finally:
+        if pw is not None:
+            try:
+                pw.stop()
+            except Exception:
+                pass
+        if prev_pw_path is None:
+            os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+        else:
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = prev_pw_path
+
+
+def _sidecar_playwright_chromium_ready(browsers_root: Path) -> bool:
+    """True when the bundled Playwright revision's ``chrome.exe`` exists under ``browsers_root``."""
+    exe = _sidecar_playwright_expected_chromium_exe(browsers_root)
+    return exe is not None and exe.is_file()
 
 
 def _frozen_playwright_browsers_dir(saathi_path: Path) -> Path | None:
@@ -237,8 +275,8 @@ def _frozen_playwright_browsers_dir(saathi_path: Path) -> Path | None:
     Frozen sidecar: Playwright must not use the PyInstaller ``_MEI*`` temp tree.
 
     Set ``PLAYWRIGHT_BROWSERS_PATH`` to ``{SAATHI}/playwright-browsers`` unless the env
-    already specifies a directory. Chromium itself is installed by the NSIS installer
-    (``--install-playwright-browsers``), not on first app run.
+    already specifies a directory. Chromium is installed by the NSIS installer
+    (``--install-playwright-browsers``) and re-checked on sidecar bootstrap after app updates.
     """
     if not _is_frozen:
         return None
@@ -257,8 +295,26 @@ def _frozen_playwright_browsers_dir(saathi_path: Path) -> Path | None:
 
 
 def _configure_frozen_playwright_browsers(saathi_path: Path) -> None:
-    """Ensure persistent browser cache path only (install is installer-time)."""
-    _frozen_playwright_browsers_dir(saathi_path)
+    """Set ``PLAYWRIGHT_BROWSERS_PATH`` and install Chromium when revision is missing (e.g. after auto-update)."""
+    browsers_dir = _frozen_playwright_browsers_dir(saathi_path)
+    if browsers_dir is None:
+        return
+    if _sidecar_playwright_chromium_ready(browsers_dir):
+        exe = _sidecar_playwright_expected_chromium_exe(browsers_dir)
+        logging.info(
+            "playwright Chromium ready revision=%s",
+            exe.parent.parent.name if exe else "?",
+        )
+        return
+    logging.info(
+        "playwright Chromium missing or wrong revision under %s — installing (~300MB)",
+        browsers_dir,
+    )
+    if not _install_playwright_chromium_if_missing(browsers_dir):
+        logging.error(
+            "playwright Chromium install failed; DMS/CPA/Vahan automation may not work "
+            "(run job_runner.exe --install-playwright-browsers)"
+        )
 
 
 def _install_playwright_chromium_if_missing(browsers_dir: Path) -> bool:
@@ -299,6 +355,10 @@ def _install_playwright_chromium_if_missing(browsers_dir: Path) -> bool:
     except Exception as exc:
         logging.error("playwright install chromium raised: %s", exc)
         return False
+    finally:
+        global _CACHED_EXPECTED_CHROMIUM_EXE, _CACHED_EXPECTED_CHROMIUM_EXE_DONE
+        _CACHED_EXPECTED_CHROMIUM_EXE = None
+        _CACHED_EXPECTED_CHROMIUM_EXE_DONE = False
 
 
 def _cli_install_playwright_browsers_main() -> int:
@@ -332,7 +392,12 @@ def _cli_install_playwright_browsers_main() -> int:
         logging.error("playwright browsers dir not usable (%s): %s", browsers_dir, exc)
         return 1
     if _sidecar_playwright_chromium_ready(browsers_dir):
-        logging.info("playwright Chromium already present under %s", browsers_dir)
+        exe = _sidecar_playwright_expected_chromium_exe(browsers_dir)
+        logging.info(
+            "playwright Chromium already present under %s (revision=%s)",
+            browsers_dir,
+            exe.parent.parent.name if exe else "?",
+        )
         return 0
     return 0 if _install_playwright_chromium_if_missing(browsers_dir) else 1
 
@@ -2555,10 +2620,11 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     import app.services.insurance_form_values as _ifv
     import app.services.fill_hero_insurance_service as _fhi
     import app.services.add_sales_commit_service as _cs
+    import app.services.add_sales_staging_state_service as _stg
 
     _original_build_ifv = _ifv.build_insurance_fill_values
     _original_build_fhi = _fhi.build_insurance_fill_values
-    _original_mark_ins_state = _fhi.mark_staging_insurance_state
+    _original_mark_ins_state = _stg.mark_staging_insurance_state
 
     def _build_cached(*_a, **_kw):
         return dict(cached_values)
@@ -2588,7 +2654,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
                 exc,
             )
 
-    _fhi.mark_staging_insurance_state = _mark_insurance_state_via_api
+    _stg.mark_staging_insurance_state = _mark_insurance_state_via_api
 
     _original_insert_cs = _cs.insert_insurance_master_after_gi
     _captured_insert_args: dict = {}
@@ -2635,7 +2701,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     finally:
         _ifv.build_insurance_fill_values = _original_build_ifv
         _fhi.build_insurance_fill_values = _original_build_fhi
-        _fhi.mark_staging_insurance_state = _original_mark_ins_state
+        _stg.mark_staging_insurance_state = _original_mark_ins_state
         _cs.insert_insurance_master_after_gi = _original_insert_cs
 
     if result.get("success"):
@@ -2887,6 +2953,7 @@ def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
     completed_count = 0
     failed_count = 0
     pending_count = 0
+    forms_missing_count = 0
 
     for row in rows:
         rto_queue_id = int(row["rto_queue_id"])
@@ -2918,6 +2985,29 @@ def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
                     "error": f"File download failed: {pull_exc}"[:2000],
                 })
                 pending_count += 1
+                continue
+
+        from app.services.fill_hero_dms_service import _safe_subfolder_name
+        from app.services.fill_rto_service import resolve_vahan_upload_readiness
+
+        safe_sub = _safe_subfolder_name(subfolder) if subfolder else ""
+        sale_dir = uploads_dir / safe_sub if safe_sub else uploads_dir
+        mobile = (row.get("customer_mobile") or row.get("mobile") or "").strip()
+        if subfolder:
+            ready, missing_labels = resolve_vahan_upload_readiness(
+                sale_dir, subfolder=safe_sub or subfolder, mobile=mobile
+            )
+            if not ready:
+                reason = "Missing: " + ", ".join(missing_labels)
+                _api_post(api_url, jwt, "/sidecar/vahan/row-result", {
+                    "rto_queue_id": rto_queue_id,
+                    "sales_id": sales_id,
+                    "session_id": session_id,
+                    "worker_id": worker_id,
+                    "status": "Forms Missing",
+                    "error": reason[:2000],
+                })
+                forms_missing_count += 1
                 continue
 
         try:
@@ -2952,11 +3042,133 @@ def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
             _upload_rto_row_log_if_present(api_url, jwt, dealer_id, row)
 
     return {
-        "success": failed_count == 0 and pending_count == 0,
+        "success": failed_count == 0 and pending_count == 0 and forms_missing_count == 0,
         "total": len(rows),
         "completed": completed_count,
         "failed": failed_count,
         "pending": pending_count,
+        "forms_missing": forms_missing_count,
+    }
+
+
+def _dispatch_upload_rto_queue_forms_impl(params: dict) -> dict:
+    """Save operator uploads locally, merge Form 20 cover, push to EC2/S3, mark row Queued when ready."""
+    api_url, jwt = _require_api_credentials(params)
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    rto_queue_id = int(params.get("rto_queue_id") or 0)
+    raw_uploads = params.get("uploads") or []
+    if not subfolder or rto_queue_id <= 0:
+        return {"success": False, "error": "subfolder and rto_queue_id are required"}
+    if not isinstance(raw_uploads, list) or not raw_uploads:
+        return {"success": False, "error": "uploads list is required"}
+
+    from app.config import get_ocr_output_dir, get_uploads_dir
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.fill_rto_service import (
+        place_rto_queue_category_upload,
+        resolve_mob_fn_for_row,
+        resolve_vahan_upload_readiness,
+    )
+    from app.services.form20_pencil_overlay import build_form20_with_cover_pdf
+    from app.services.print_rto_queue_log import append_print_rto_queue_line
+
+    uploads_dir = get_uploads_dir(dealer_id)
+    ocr_dir = get_ocr_output_dir(dealer_id)
+    safe = _safe_subfolder_name(subfolder)
+    local_uploads = uploads_dir / safe
+    mobile = (params.get("mobile") or "").strip()
+
+    if not local_uploads.is_dir():
+        try:
+            _pull_sale_subfolder_from_server(
+                api_url, jwt, dealer_id, safe, uploads_dir, ocr_dir=ocr_dir
+            )
+        except Exception as exc:
+            return {"success": False, "error": f"Could not pull sale folder: {exc}"}
+
+    changed: list[Path] = []
+    for item in raw_uploads:
+        if not isinstance(item, dict):
+            continue
+        cat = str(item.get("category_key") or item.get("category") or "").strip()
+        src = str(item.get("source_path") or "").strip()
+        if not cat or not src:
+            continue
+        src_path = Path(src)
+        try:
+            dest = place_rto_queue_category_upload(
+                local_uploads,
+                cat,
+                src_path,
+                subfolder=safe,
+                mobile=mobile,
+            )
+            changed.append(dest)
+            append_print_rto_queue_line(
+                ocr_dir,
+                safe,
+                "FORMS_UPLOAD",
+                f"placed {cat} -> {dest.name}",
+            )
+        except Exception as exc:
+            return {"success": False, "error": f"Could not place {cat}: {exc}"}
+
+    mob_fn = resolve_mob_fn_for_row(mobile=mobile, subfolder=safe)
+    merged = build_form20_with_cover_pdf(local_uploads, mob_fn)
+    if merged is not None and merged.is_file():
+        changed.append(merged)
+
+    u_root = uploads_dir.resolve()
+    up_ok, up_http_fail, up_s3_fail = _upload_tree_under(
+        api_url,
+        jwt,
+        dealer_id,
+        "uploads",
+        local_uploads,
+        u_root,
+        ocr_dir=ocr_dir,
+        log_subfolder=safe,
+    )
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "FORMS_UPLOAD",
+        f"push uploads ec2_ok={up_ok} http_fail={up_http_fail} s3_fail={up_s3_fail}",
+    )
+    if up_http_fail > 0 and up_ok < 1:
+        return {
+            "success": False,
+            "ready": False,
+            "error": "Push to server failed — files saved locally only.",
+        }
+
+    ready, missing_labels = resolve_vahan_upload_readiness(
+        local_uploads, subfolder=safe, mobile=mobile
+    )
+    if not ready:
+        return {
+            "success": True,
+            "ready": False,
+            "missing": missing_labels,
+            "error": "Some documents are still missing after upload.",
+        }
+
+    try:
+        _api_post(api_url, jwt, f"/rto-queue/{rto_queue_id}/forms-ready", {})
+    except Exception as exc:
+        return {
+            "success": False,
+            "ready": True,
+            "error": f"Documents ready locally but server confirmation failed: {exc}",
+        }
+
+    return {
+        "success": True,
+        "ready": True,
+        "rto_queue_id": rto_queue_id,
+        "status": "Queued",
+        "files_pushed": up_ok,
     }
 
 
@@ -3561,9 +3773,17 @@ def dispatch(payload: dict) -> dict:
     if job_type == "fill_vahan_batch":
         data = _run_sidecar_playwright_job(lambda: _dispatch_fill_vahan_batch_impl(params))
         return {"success": True, "data": data}
+    if job_type == "upload_rto_queue_forms":
+        data = _dispatch_upload_rto_queue_forms_impl(params)
+        return {"success": bool(data.get("success")), "data": data}
     if job_type == "fill_subdealer_challan":
         data = _run_sidecar_playwright_job(lambda: _fill_subdealer_challan_impl(params))
-        return {"success": True, "data": data}
+        ok = isinstance(data, dict) and bool(data.get("ok"))
+        return {
+            "success": ok,
+            "data": data,
+            "error": data.get("error") if isinstance(data, dict) else None,
+        }
     if job_type == "mirror_challan_parse_artifacts":
         data = _mirror_challan_parse_artifacts_impl(params)
         return {"success": bool(data.get("ok")), "data": data, "error": data.get("error")}

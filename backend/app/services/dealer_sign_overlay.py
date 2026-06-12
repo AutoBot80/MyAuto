@@ -1,12 +1,8 @@
 """
-Headless overlay: stamp dealer signature on Form 20 (page 1 only), GST Retail Invoice, and
-Sale Certificate PDFs in a sale folder (GST / Sale: all pages).
+Headless overlay: stamp dealer signature on Form 20 (page 3, right mid-height), GST Retail Invoice,
+and Sale Certificate PDFs in a sale folder (GST / Sale: all pages, bottom-right).
 
 Used from Electron before ``print-gate-pass``; failures are non-fatal for printing.
-
-With ``--after-sign-pencil-form20`` (Electron): after signature stamps, crop the chassis pencil mark
-from the Details sheet (see :func:`app.services.pre_ocr_service.try_write_pencil_mark_for_sale_folder`)
-and composite it onto **Form 20 page 1 top-right** via :func:`app.services.form20_pencil_overlay.form20_pencil_overlay_write_only`.
 """
 
 from __future__ import annotations
@@ -130,10 +126,13 @@ def overlay_signature_bottom_right_all_pages(
     dst_pdf: Path,
     *,
     first_page_only: bool = False,
+    page_indices: list[int] | None = None,
+    vertical_anchor: str = "bottom",
 ) -> None:
-    """Draw ``signature_image`` on the bottom-right of ``src_pdf``; write ``dst_pdf``.
+    """Draw ``signature_image`` on ``src_pdf``; write ``dst_pdf``.
 
-    When ``first_page_only`` is True (Form 20), only page 1 is stamped; otherwise every page.
+    ``page_indices``: 0-based pages to stamp (default all, or page 0 only when ``first_page_only``).
+    ``vertical_anchor``: ``bottom`` (GST/Sale) or ``mid`` (Form 20 page 3).
     """
     import fitz  # PyMuPDF
 
@@ -158,8 +157,16 @@ def overlay_signature_bottom_right_all_pages(
             if len(doc) < 1:
                 raise ValueError("PDF has no pages")
 
-            page_indices = [0] if first_page_only else range(len(doc))
-            for i in page_indices:
+            if page_indices is not None:
+                indices = page_indices
+            elif first_page_only:
+                indices = [0]
+            else:
+                indices = list(range(len(doc)))
+
+            for i in indices:
+                if i < 0 or i >= len(doc):
+                    continue
                 page = doc[i]
                 pr = page.rect
                 max_w = min(140.0, pr.width * _STAMP_MAX_W_FRAC)
@@ -167,7 +174,10 @@ def overlay_signature_bottom_right_all_pages(
                 scale = min(max_w / iw, max_h / ih)
                 dw, dh = iw * scale, ih * scale
                 x0 = pr.width - m_side - dw
-                y0 = pr.height - m_bottom - dh
+                if vertical_anchor == "mid":
+                    y0 = (pr.height - dh) / 2.0
+                else:
+                    y0 = pr.height - m_bottom - dh
                 tr = fitz.Rect(x0, y0, x0 + dw, y0 + dh)
                 page.insert_image(tr, filename=str(use_image))
 
@@ -273,24 +283,24 @@ def _resolve_gst_and_sale_pdfs(sale_dir: Path, mobile_10: str | None) -> tuple[P
     return gst, sale
 
 
-def collect_pdfs_to_stamp(sale_dir: Path, subfolder: str, mobile_hint: str | None = None) -> list[tuple[Path, bool]]:
+def collect_pdfs_to_stamp(sale_dir: Path, subfolder: str, mobile_hint: str | None = None) -> list[tuple[Path, list[int] | None, str]]:
     """
     Ordered list: Form 20 (if any), GST (if any), Sale Certificate (if any).
 
-    Each item is ``(path, first_page_only)``. Form 20 is stamped on **page 1 only**; GST and Sale
-    Certificate use all pages.
+    Each item is ``(path, page_indices, vertical_anchor)``. Form 20 uses page index 2 (page 3),
+    right mid-height; GST and Sale use all pages, bottom-right.
     """
     mob = _digits_10(mobile_hint or "") or _mobile_from_subfolder(subfolder)
     mob_for_form20 = mob or "0000000000"
 
     seen: set[Path] = set()
-    out: list[tuple[Path, bool]] = []
+    out: list[tuple[Path, list[int] | None, str]] = []
 
     f20 = _find_form20_pdf(sale_dir, mob_for_form20)
     if f20 and f20.is_file():
         r = f20.resolve()
         seen.add(r)
-        out.append((r, True))
+        out.append((r, [2], "mid"))
 
     gst, sale = _resolve_gst_and_sale_pdfs(sale_dir, mob)
 
@@ -298,11 +308,11 @@ def collect_pdfs_to_stamp(sale_dir: Path, subfolder: str, mobile_hint: str | Non
         r = gst.resolve()
         if r not in seen:
             seen.add(r)
-            out.append((r, False))
+            out.append((r, None, "bottom"))
     if sale and sale.is_file():
         r = sale.resolve()
         if r not in seen:
-            out.append((r, False))
+            out.append((r, None, "bottom"))
 
     return out
 
@@ -368,12 +378,31 @@ def apply_dealer_signatures_to_sale_folder(
         result["skipped"] = "no_fitz"
         return result
 
-    for pdf_path, first_page_only in pdfs:
+    for pdf_path, page_indices, vertical_anchor in pdfs:
+        if page_indices == [2]:
+            try:
+                import fitz
+
+                with fitz.open(str(pdf_path)) as doc:
+                    if len(doc) < 3:
+                        logger.warning(
+                            "dealer_sign_overlay: Form 20 %s has %d page(s); need 3 for signature — skipped",
+                            pdf_path.name,
+                            len(doc),
+                        )
+                        continue
+            except Exception as exc:
+                logger.warning("dealer_sign_overlay: could not read Form 20 page count: %s", exc)
+                continue
         tmp = pdf_path.with_name(pdf_path.name + ".dealer_sign_tmp.pdf")
         try:
             try:
                 overlay_signature_bottom_right_all_pages(
-                    pdf_path, sig, tmp, first_page_only=first_page_only
+                    pdf_path,
+                    sig,
+                    tmp,
+                    page_indices=page_indices,
+                    vertical_anchor=vertical_anchor,
                 )
             except Exception as exc:
                 logger.warning("dealer_sign_overlay: failed %s: %s", pdf_path.name, exc)
@@ -400,7 +429,7 @@ def apply_dealer_signatures_to_sale_folder(
 
             result["pencil_form20"] = prepare_details_pencil_and_form20_overlay(sale_dir)
         except Exception as exc:
-            logger.warning("dealer_sign_overlay: pencil Form 20 prep failed (non-fatal): %s", exc)
+            logger.warning("dealer_sign_overlay: Details pencil crop failed (non-fatal): %s", exc)
             result["pencil_form20"] = {"ok": False, "note": str(exc)}
 
     return result
@@ -415,10 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--after-sign-pencil-form20",
         action="store_true",
-        help=(
-            "After signature stamps: extract chassis pencil mark from Details sheet into pencil_mark.jpeg "
-            "and composite onto Form 20 page 1 top-right (*_with_pencil_mark.pdf)."
-        ),
+        help="After signature stamps: optional Details-sheet pencil_mark.jpeg crop only (no Form 20 stamp).",
     )
     p.add_argument("--json", action="store_true", help="Print JSON result on stdout")
     args = p.parse_args(argv)

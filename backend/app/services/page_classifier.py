@@ -1,7 +1,7 @@
 """
 Classify individual PDF pages by OCR text for bulk upload.
 Pages can be in any order; this module identifies Aadhar, Aadhar_back, Details, Insurance,
-and puts unrecognized pages into 'unused'.
+Form 20 cover page, and puts unrecognized pages into 'unused'.
 """
 
 import re
@@ -15,6 +15,7 @@ PAGE_TYPE_AADHAR_BACK = "Aadhar_back"
 PAGE_TYPE_AADHAR_COMBINED = "Aadhar_combined"  # Single page with both front and back
 PAGE_TYPE_DETAILS = "Details"
 PAGE_TYPE_INSURANCE = "Insurance"
+PAGE_TYPE_FORM_20_COVER = "Form_20_cover"
 PAGE_TYPE_UNUSED = "unused"
 
 # Sale-folder output names after pre-OCR / classification (root of mobile_ddmmyy/)
@@ -22,6 +23,7 @@ FILENAME_AADHAR_FRONT = "Aadhar_front.jpg"
 FILENAME_AADHAR_BACK = "Aadhar_back.jpg"
 FILENAME_SALES_DETAIL_SHEET_PDF = "Sales_Detail_Sheet.pdf"
 FILENAME_INSURANCE = "Insurance.jpg"
+FILENAME_FORM_20_COVER = "Form_20_Cover_Page.jpg"
 # Legacy manual-upload names (still accepted downstream)
 LEGACY_AADHAR_FRONT_JPG = "Aadhar.jpg"
 LEGACY_DETAILS_JPG = "Details.jpg"
@@ -31,7 +33,52 @@ PAGE_TYPE_TO_FILENAME = {
     PAGE_TYPE_AADHAR_BACK: FILENAME_AADHAR_BACK,
     PAGE_TYPE_DETAILS: FILENAME_SALES_DETAIL_SHEET_PDF,
     PAGE_TYPE_INSURANCE: FILENAME_INSURANCE,
+    PAGE_TYPE_FORM_20_COVER: FILENAME_FORM_20_COVER,
 }
+
+# Form 20 cover (Hindi/English registration application) — checked on top-of-page snippet only.
+_FORM_20_COVER_STRONG_PATTERNS = [
+    re.compile(r"(?i)form\s*(?:no\.?|number|सं)?\s*[-.]?\s*0?\s*20\b"),
+    re.compile(r"(?i)(?:form|zio|no\.?)\s*[-.]?\s*0?\s*20\b"),
+    re.compile(r"(?i)(?:rule|prin|rin|नियम)\s*[-.]?\s*47"),
+    re.compile(r"प्रारूप\s*सं"),
+    re.compile(r"सं[\.०]?\s*0?\s*20"),
+    re.compile(r"(?i)application\s+for\s+registration\s+of\s+motor"),
+    re.compile(r"मोटरयान.*रजिस्ट्रीकरण"),
+    re.compile(r"रजिस्ट्रीकरण.*मोटर"),
+]
+_FORM_20_COVER_WEAK_PATTERNS = [
+    re.compile(r"(?i)\bform\s*20\b"),
+    re.compile(r"प्रारूप"),
+    re.compile(r"मोटरयान"),
+    re.compile(r"(?i)rule\s*47"),
+    re.compile(r"नियम\s*47"),
+    re.compile(r"(?i)hero\s+motocorp"),
+    re.compile(r"(?i)motor\s*vehicle"),
+]
+
+_FORM_20_COVER_TOP_SNIPPET_CHARS = 1200
+
+
+def _form20_cover_top_snippet(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return ""
+    lines = t.splitlines()[:20]
+    joined = "\n".join(lines)
+    return joined[:_FORM_20_COVER_TOP_SNIPPET_CHARS]
+
+
+def form20_cover_detected_in_top(text: str) -> bool:
+    """True when OCR at/near the top of the page matches Form 20 cover cues."""
+    top = _form20_cover_top_snippet(text)
+    if len(top.strip()) < 12:
+        return False
+    strong = sum(1 for pat in _FORM_20_COVER_STRONG_PATTERNS if pat.search(top))
+    if strong >= 1:
+        return True
+    weak = sum(1 for pat in _FORM_20_COVER_WEAK_PATTERNS if pat.search(top))
+    return weak >= 2
 
 # Patterns to identify each page type. Order matters: more specific first.
 # Details: vehicle/customer sheet with Frame No, Chassis, Key No, etc.
@@ -151,6 +198,9 @@ def classify_aadhar_page_forced_single_face(text: str) -> str:
     if len(t) < 20:
         return PAGE_TYPE_UNUSED
 
+    if form20_cover_detected_in_top(t):
+        return PAGE_TYPE_FORM_20_COVER
+
     details_score = sum(1 for pat in _DETAILS_PATTERNS if pat.search(t))
     insurance_score = sum(1 for pat in _INSURANCE_PATTERNS if pat.search(t))
 
@@ -202,6 +252,9 @@ def classify_page_by_text(text: str) -> str:
     t = text.strip()
     if len(t) < 20:
         return PAGE_TYPE_UNUSED
+
+    if form20_cover_detected_in_top(t):
+        return PAGE_TYPE_FORM_20_COVER
 
     # ── Details / Insurance (early exit) ──
     details_score = sum(1 for pat in _DETAILS_PATTERNS if pat.search(t))

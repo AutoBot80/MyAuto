@@ -716,6 +716,16 @@ export async function fillCpaAllianceInsuranceLocal(
  * Electron-aware Warm Vahan Browser: routes through the local sidecar when in Electron,
  * falls back to the cloud API otherwise.
  */
+export function formatVahanWarmError(err: unknown): string {
+  if (isFillDmsAbortError(err)) {
+    return (
+      "Vahan warm-browser timed out. Ensure the API is running, log in on Vahan, " +
+      "then press Fill Vahan Site again."
+    );
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 export async function warmVahanBrowserLocal(): Promise<WarmVahanBrowserResponse> {
   if (!isElectron()) return warmVahanBrowser();
   try {
@@ -724,6 +734,7 @@ export async function warmVahanBrowserLocal(): Promise<WarmVahanBrowserResponse>
       api_url: getBaseUrl(),
       jwt: getAccessToken() ?? "",
       params: {},
+      timeoutMs: DMS_WARM_BROWSER_TIMEOUT_MS,
     });
     if (result.timedOut) return { success: false, error: "Vahan warm-browser timed out." };
     const data = (result.parsed as { data?: WarmVahanBrowserResponse })?.data;

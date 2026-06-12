@@ -184,3 +184,44 @@ export async function printGatePassLocal(req: PrintForm20Request): Promise<Print
     error: null,
   };
 }
+
+export interface UploadRtoQueueFormsRequest {
+  dealer_id: number;
+  subfolder: string;
+  rto_queue_id: number;
+  mobile?: string | null;
+  uploads: { category_key: string; source_path: string }[];
+}
+
+export interface UploadRtoQueueFormsResponse {
+  success: boolean;
+  ready?: boolean;
+  missing?: string[];
+  error?: string | null;
+  status?: string;
+}
+
+export async function uploadRtoQueueFormsLocal(
+  req: UploadRtoQueueFormsRequest
+): Promise<UploadRtoQueueFormsResponse> {
+  if (!isElectron()) {
+    return { success: false, error: "Upload Forms requires the Electron app." };
+  }
+  const r = await runSidecarJob("upload_rto_queue_forms", { ...req }, SYNC_TIMEOUT_MS);
+  const d = r.data ?? {};
+  if (!r.success) {
+    return {
+      success: false,
+      ready: Boolean(d.ready),
+      missing: Array.isArray(d.missing) ? (d.missing as string[]) : undefined,
+      error: r.error ?? (typeof d.error === "string" ? d.error : "Upload failed."),
+    };
+  }
+  return {
+    success: Boolean(d.success ?? true),
+    ready: Boolean(d.ready),
+    missing: Array.isArray(d.missing) ? (d.missing as string[]) : undefined,
+    error: typeof d.error === "string" ? d.error : null,
+    status: typeof d.status === "string" ? d.status : undefined,
+  };
+}

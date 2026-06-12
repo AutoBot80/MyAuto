@@ -10,7 +10,7 @@ SELECT
     sm.dealer_id,
     COALESCE(dr.rto_name, 'RTO' || sm.dealer_id::text) AS dealer_rto,
     sm.customer_id,
-    cm.mobile_number AS mobile,
+    COALESCE(NULLIF(BTRIM(rq.customer_mobile), ''), cm.mobile_number::text) AS mobile,
     cm.name,
     cm.care_of,
     cm.address,

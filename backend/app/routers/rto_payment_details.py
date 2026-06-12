@@ -3,7 +3,10 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import tempfile
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.config import get_ocr_output_dir
@@ -61,10 +64,18 @@ class RtoMobileChangePayload(BaseModel):
     mobile: str = Field(..., min_length=10, max_length=15)
 
 
+class RtoInQueuePayload(BaseModel):
+    in_queue: bool
+
+
 def _serialize_row(row: dict) -> dict:
     d = dict(row)
     if d.get("staging_id") is not None:
         d["staging_id"] = str(d["staging_id"])
+    if "in_queue" in d:
+        d["in_queue"] = bool(d["in_queue"])
+    elif d.get("status") in ("Queued", "Pending", "Failed"):
+        d["in_queue"] = True
     for key in ("rto_application_date",):
         if d.get(key):
             d[key] = d[key].strftime("%d-%m-%Y")
@@ -233,6 +244,8 @@ def submit_operator_mobile_change(
             status_code=400,
             detail="Invalid mobile number (need 10 digits starting with 6–9) or automation is not waiting",
         )
+    if not repo.update_customer_mobile(payload.rto_queue_id, payload.mobile.strip()):
+        raise HTTPException(status_code=500, detail="Could not save alternate mobile on queue row")
     return {"ok": True}
 
 
@@ -254,6 +267,213 @@ def list_rto_payments(
     did = resolve_dealer_id(principal, dealer_id)
     rows = repo.list_all(dealer_id=did)
     return [_serialize_row(r) for r in rows]
+
+
+def _forms_status_for_row(row: dict) -> dict:
+    from pathlib import Path
+
+    from app.config import get_uploads_dir
+    from app.services.fill_rto_service import (
+        VAHAN_DOC_CATEGORY_LABELS,
+        resolve_vahan_upload_readiness,
+    )
+
+    subfolder = (row.get("subfolder") or "").strip()
+    mobile = (row.get("customer_mobile") or row.get("mobile") or "").strip()
+    dealer_id = row.get("dealer_id")
+    if not subfolder or dealer_id is None:
+        return {
+            "ready": False,
+            "missing": [{"key": k, "label": v} for k, v in VAHAN_DOC_CATEGORY_LABELS.items()],
+            "last_error": row.get("last_error"),
+        }
+    sale_dir = get_uploads_dir(int(dealer_id)) / subfolder
+    ready, missing_labels = resolve_vahan_upload_readiness(
+        Path(sale_dir), subfolder=subfolder, mobile=mobile
+    )
+    label_to_key = {v: k for k, v in VAHAN_DOC_CATEGORY_LABELS.items()}
+    missing = [{"key": label_to_key.get(lbl, lbl), "label": lbl} for lbl in missing_labels]
+    return {"ready": ready, "missing": missing, "last_error": row.get("last_error")}
+
+
+@router.get("/{rto_queue_id}/forms-status")
+def get_rto_forms_status(
+    rto_queue_id: int,
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    row = repo.get_by_queue_id(rto_queue_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="RTO queue row not found")
+    resolve_dealer_id(principal, row.get("dealer_id"))
+    return _forms_status_for_row(row)
+
+
+@router.post("/{rto_queue_id}/forms-ready")
+def mark_rto_forms_ready(
+    rto_queue_id: int,
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    row = repo.get_by_queue_id(rto_queue_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="RTO queue row not found")
+    resolve_dealer_id(principal, row.get("dealer_id"))
+    if (row.get("status") or "").strip() != "Forms Missing":
+        raise HTTPException(status_code=400, detail="Row is not in Forms Missing status")
+    st = _forms_status_for_row(row)
+    if not st.get("ready"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Documents still missing: {', '.join(m['label'] for m in st.get('missing', []))}",
+        )
+    if not repo.mark_forms_ready(rto_queue_id):
+        raise HTTPException(status_code=409, detail="Could not mark row ready")
+    return {"ok": True, "rto_queue_id": rto_queue_id, "status": "Queued"}
+
+
+@router.patch("/{rto_queue_id}/in-queue")
+def set_rto_in_queue(
+    rto_queue_id: int,
+    payload: RtoInQueuePayload,
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    enforce_max_text_depth(payload.model_dump())
+    row = repo.get_by_queue_id(rto_queue_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="RTO queue row not found")
+    resolve_dealer_id(principal, row.get("dealer_id"))
+    if (row.get("status") or "").strip() == "In Progress":
+        raise HTTPException(status_code=400, detail="Cannot change In Queue while row is In Progress")
+    if not repo.set_in_queue(rto_queue_id, payload.in_queue):
+        raise HTTPException(status_code=400, detail="In Queue can only be changed for Queued, Pending, or Failed rows")
+    return {"ok": True, "rto_queue_id": rto_queue_id, "in_queue": payload.in_queue}
+
+
+@router.post("/{rto_queue_id}/release")
+def release_rto_row(
+    rto_queue_id: int,
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    """Release a stuck In Progress / Pending row back to Queued."""
+    row = repo.get_by_queue_id(rto_queue_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="RTO queue row not found")
+    resolve_dealer_id(principal, row.get("dealer_id"))
+    if not repo.release_in_progress_row(rto_queue_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Release is only allowed for In Progress or Pending rows",
+        )
+    return {"ok": True, "rto_queue_id": rto_queue_id, "status": "Queued"}
+
+
+@router.post("/{rto_queue_id}/upload-forms")
+async def upload_rto_forms(
+    rto_queue_id: int,
+    principal: Principal = Depends(get_principal),
+    category_keys: list[str] = Form(..., description="Vahan doc category per file, same order as files"),
+    files: list[UploadFile] = File(...),
+) -> dict:
+    """Dev/browser path: save uploads to local sale folder (no EC2/S3 pull or push)."""
+    from app.config import get_uploads_dir
+    from app.services.fill_rto_service import (
+        place_rto_queue_category_upload,
+        resolve_mob_fn_for_row,
+        resolve_vahan_upload_readiness,
+    )
+    from app.services.form20_pencil_overlay import build_form20_with_cover_pdf
+
+    row = repo.get_by_queue_id(rto_queue_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="RTO queue row not found")
+    did = resolve_dealer_id(principal, row.get("dealer_id"))
+    if (row.get("status") or "").strip() != "Forms Missing":
+        raise HTTPException(status_code=400, detail="Row is not in Forms Missing status")
+    subfolder = (row.get("subfolder") or "").strip()
+    if not subfolder:
+        raise HTTPException(status_code=400, detail="Sale subfolder is missing on this row")
+    if len(category_keys) != len(files) or not files:
+        raise HTTPException(status_code=400, detail="Provide matching category_keys and files")
+
+    mobile = (row.get("customer_mobile") or row.get("mobile") or "").strip()
+    sale_dir = get_uploads_dir(int(did)) / subfolder
+    sale_dir.mkdir(parents=True, exist_ok=True)
+    mob_fn = resolve_mob_fn_for_row(mobile=mobile, subfolder=subfolder)
+
+    try:
+        for cat, upload in zip(category_keys, files, strict=True):
+            suffix = Path(upload.filename or "upload.bin").suffix or ".bin"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                content = await upload.read()
+                tmp.write(content)
+                tmp_path = Path(tmp.name)
+            try:
+                place_rto_queue_category_upload(
+                    sale_dir,
+                    cat.strip(),
+                    tmp_path,
+                    subfolder=subfolder,
+                    mobile=mobile,
+                )
+            finally:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        build_form20_with_cover_pdf(sale_dir, mob_fn)
+        ready, missing_labels = resolve_vahan_upload_readiness(
+            sale_dir, subfolder=subfolder, mobile=mobile
+        )
+        if not ready:
+            return {
+                "ok": True,
+                "ready": False,
+                "missing": missing_labels,
+                "error": "Some documents are still missing after upload.",
+            }
+        if not repo.mark_forms_ready(rto_queue_id):
+            raise HTTPException(status_code=409, detail="Could not mark row ready")
+        return {
+            "ok": True,
+            "ready": True,
+            "rto_queue_id": rto_queue_id,
+            "status": "Queued",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/{rto_queue_id}/mark-done")
+def mark_rto_done(
+    rto_queue_id: int,
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    row = repo.get_by_queue_id(rto_queue_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="RTO queue row not found")
+    resolve_dealer_id(principal, row.get("dealer_id"))
+    if not repo.mark_manually_completed(rto_queue_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Mark Done is only allowed for Queued, Pending, or Failed rows",
+        )
+    return {"ok": True, "rto_queue_id": rto_queue_id, "status": "Manually Completed"}
+
+
+@router.post("/{rto_queue_id}/requeue")
+def requeue_rto_row(
+    rto_queue_id: int,
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    row = repo.get_by_queue_id(rto_queue_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="RTO queue row not found")
+    resolve_dealer_id(principal, row.get("dealer_id"))
+    if not repo.requeue_completed_row(rto_queue_id):
+        raise HTTPException(status_code=400, detail="Send to Queue requires Completed or Manually Completed status")
+    return {"ok": True, "rto_queue_id": rto_queue_id, "status": "Queued", "in_queue": True}
 
 
 @router.post("/{rto_queue_id}/retry")

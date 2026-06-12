@@ -7,6 +7,7 @@ const ROLE_OPTIONS = [
   { value: "aadhar_front", label: "Aadhar_front.jpg" },
   { value: "aadhar_back", label: "Aadhar_back.jpg" },
   { value: "details", label: "Sales_Detail_Sheet (from page)" },
+  { value: "form_20_cover", label: "Form_20_Cover_Page (from page)" },
   { value: "unused", label: "Unused (append to unused.pdf)" },
 ] as const;
 

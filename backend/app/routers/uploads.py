@@ -127,7 +127,7 @@ async def apply_consolidated_manual_fallback(
     assignments_json: str = Form(
         ...,
         description='JSON object mapping page index (string "0","1",…) to '
-        '"aadhar_front" | "aadhar_back" | "details" | "unused"',
+        '"aadhar_front" | "aadhar_back" | "details" | "form_20_cover" | "unused"',
     ),
     dealer_id: int | None = Form(None, description="Dealer ID; uses token dealer if omitted"),
 ) -> dict:

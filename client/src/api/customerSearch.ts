@@ -89,6 +89,17 @@ export function getDocumentsListUrl(subfolder: string, dealerId?: number): strin
   return `${base}/documents/${encodeURIComponent(subfolder)}/list?dealer_id=${dealerId ?? DEALER_ID}`;
 }
 
+/** List sale-folder document basenames (sale root only; matches Identified documents links). */
+export async function listSaleDocumentNames(
+  subfolder: string,
+  dealerId?: number
+): Promise<string[]> {
+  const data = await apiFetch<{ files?: { name: string }[] }>(
+    `/documents/${encodeURIComponent(subfolder)}/list?dealer_id=${dealerId ?? DEALER_ID}`
+  );
+  return (data.files ?? []).map((f) => f.name);
+}
+
 /** Get document file URL for opening in new tab */
 export function getDocumentFileUrl(subfolder: string, filename: string, dealerId?: number): string {
   const base = getBaseUrl().replace(/\/$/, "");

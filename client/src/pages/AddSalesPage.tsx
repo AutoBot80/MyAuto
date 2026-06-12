@@ -76,6 +76,11 @@ import {
   cpaPolicyFromInsuranceRaw,
   insuranceFieldsFromStagingInsurance,
 } from "../utils/insuranceDisplay";
+import {
+  insurerLooksLikeFinancier,
+  resolveCanonicalFinancier,
+  resolvePortalInsurer,
+} from "../utils/addSalesInsurerResolve";
 /** Shown under Upload documents while upload or OCR polling runs; counts down toward 00m:00s. */
 const ADD_SALES_OCR_COUNTDOWN_START_SEC = 40;
 
@@ -164,20 +169,6 @@ function pickCpaPortalRow(
   }
   const first = insurers[0];
   return first?.login_url?.trim() ? first : undefined;
-}
-
-/** Insurer for Add Sales Section 3 when details fuzzy match is not portal-enabled (``comments = 'Y'``). */
-function effectivePortalInsurer(
-  currentInsurer: string | undefined,
-  preferInsurer: string | null | undefined,
-  portalInsurers: readonly string[]
-): string | null {
-  if (!portalInsurers.length) return null;
-  const S = (currentInsurer ?? "").trim();
-  const P = (preferInsurer ?? "").trim();
-  if (S && portalInsurers.includes(S)) return S;
-  if (P && portalInsurers.includes(P)) return P;
-  return null;
 }
 
 /** True when extracted-details payload has at least one structured OCR block — used before DMS warm-browser. */
@@ -285,9 +276,16 @@ function preferNonEmptyOcr(
   return c;
 }
 
+type MergeInsuranceFromOcrOpts = {
+  portalInsurers?: readonly string[];
+  preferInsurer?: string | null;
+  masterRefFinanciers?: readonly string[];
+};
+
 function mergeInsuranceFromOcrPayload(
   prev: ExtractedInsuranceDetails | null | undefined,
-  r: Record<string, unknown>
+  r: Record<string, unknown>,
+  mergeOpts?: MergeInsuranceFromOcrOpts
 ): ExtractedInsuranceDetails {
   const current = prev ?? {};
   const fromServer = {
@@ -306,7 +304,25 @@ function mergeInsuranceFromOcrPayload(
   const ocrFinancierRaw = Object.prototype.hasOwnProperty.call(r, "financier")
     ? normalizeFinancierInput(r.financier)
     : preferNonEmptyOcr(undefined, normalizeFinancierInput(current.financier) ?? current.financier);
-  const ocrFinancier = sanitizeOptionalFormField(ocrFinancierRaw ?? undefined);
+  const ocrFinancier = sanitizeOptionalFormField(
+    resolveCanonicalFinancier(ocrFinancierRaw, mergeOpts?.masterRefFinanciers ?? []) ?? undefined
+  );
+  const portalList = mergeOpts?.portalInsurers ?? [];
+  const prefer = mergeOpts?.preferInsurer;
+  const insurerFromJson = sanitizeOptionalFormField(
+    normalizeInsurerOcrValue(fromServer.insurer) ?? undefined
+  );
+  const insurerFromJsonSafe =
+    insurerFromJson && insurerLooksLikeFinancier(insurerFromJson, mergeOpts?.masterRefFinanciers ?? [])
+      ? undefined
+      : insurerFromJson;
+  const insurerFromCurrent = sanitizeOptionalFormField(
+    normalizeInsurerOcrValue(current.insurer) ?? undefined
+  );
+  const resolvedInsurer = Object.prototype.hasOwnProperty.call(r, "insurer")
+    ? resolvePortalInsurer(insurerFromJsonSafe, prefer, portalList) ??
+      resolvePortalInsurer(insurerFromCurrent, prefer, portalList)
+    : resolvePortalInsurer(insurerFromCurrent, prefer, portalList);
   return {
     ...current,
     profession: preferNonEmptyOcr(
@@ -336,10 +352,7 @@ function mergeInsuranceFromOcrPayload(
       sanitizeOptionalFormField(fromServer.nominee_relationship),
       sanitizeOptionalFormField(current.nominee_relationship)
     ),
-    insurer: preferNonEmptyOcr(
-      sanitizeOptionalFormField(normalizeInsurerOcrValue(fromServer.insurer) ?? undefined),
-      sanitizeOptionalFormField(normalizeInsurerOcrValue(current.insurer) ?? undefined)
-    ),
+    insurer: resolvedInsurer,
     policy_num: preferNonEmptyOcr(
       sanitizeOptionalFormField(fromServer.policy_num),
       sanitizeOptionalFormField(current.policy_num)
@@ -430,6 +443,7 @@ export function AddSalesPage({
   const [portalInsurers, setPortalInsurers] = useState<string[]>([]);
   /** ``master_ref`` FINANCER rows (Section 2 financier dropdown). */
   const [masterRefFinanciers, setMasterRefFinanciers] = useState<string[]>([]);
+  const [dealerCpaContextError, setDealerCpaContextError] = useState<string | null>(null);
   const [section2ValidationErrors, setSection2ValidationErrors] = useState<Section2FieldError[]>([]);
   const [section2SubmitAttempted, setSection2SubmitAttempted] = useState(false);
   const [addressLine2Input, setAddressLine2Input] = useState("");
@@ -542,6 +556,19 @@ export function AddSalesPage({
   );
   const cpaSelectedPortalUrl = (resolvedCpaPortal?.login_url ?? "").trim();
 
+  const reloadDealerCpaContext = useCallback(async () => {
+    if (dealerId <= 0) return;
+    try {
+      const res = await fetchDealerCpaContext(dealerId);
+      applyDealerCpaFromApiSlice(res);
+      setDealerCpaContextError(null);
+    } catch (e) {
+      setDealerCpaContextError(
+        e instanceof Error ? e.message : "Could not load financier and insurer lists."
+      );
+    }
+  }, [dealerId, applyDealerCpaFromApiSlice]);
+
   useEffect(() => {
     if (dealerId <= 0) {
       setHeroCpi(null);
@@ -550,6 +577,7 @@ export function AddSalesPage({
       setPortalInsurers([]);
       setMasterRefFinanciers([]);
       setCpaAlliancePortalEnabled(false);
+      setDealerCpaContextError(null);
       return;
     }
     let cancelled = false;
@@ -558,14 +586,12 @@ export function AddSalesPage({
         const res = await fetchDealerCpaContext(dealerId);
         if (cancelled) return;
         applyDealerCpaFromApiSlice(res);
-      } catch {
+        setDealerCpaContextError(null);
+      } catch (e) {
         if (!cancelled) {
-          setHeroCpi(null);
-          setDealerCpaInsurer(null);
-          setCpaInsurers([]);
-          setPortalInsurers([]);
-          setMasterRefFinanciers([]);
-          setCpaAlliancePortalEnabled(false);
+          setDealerCpaContextError(
+            e instanceof Error ? e.message : "Could not load financier and insurer lists."
+          );
         }
       }
     })();
@@ -627,14 +653,20 @@ export function AddSalesPage({
       if (ins && typeof ins === "object" && !Array.isArray(ins)) {
         setInsuranceReadByTextract(true);
         const r = ins as Record<string, unknown>;
-        setExtractedInsurance((prev) => mergeInsuranceFromOcrPayload(prev, r));
+        setExtractedInsurance((prev) =>
+          mergeInsuranceFromOcrPayload(prev, r, {
+            portalInsurers,
+            preferInsurer,
+            masterRefFinanciers,
+          })
+        );
       }
       const sf = (opts?.savedToForWarm ?? "").trim();
       if (sf && detailsHasOcrPayloadForWarm(details)) {
         triggerWarmBrowsers(sf);
       }
     },
-    [triggerWarmBrowsers]
+    [triggerWarmBrowsers, portalInsurers, preferInsurer, masterRefFinanciers]
   );
 
   const { uploadConsolidatedV2, isUploading, isMobileValid, clearUploaded } = useUploadScans("", mobile, {
@@ -805,12 +837,6 @@ export function AddSalesPage({
       setCpaAllianceInsuranceReason(
         e instanceof Error ? e.message : "Could not verify CPA insurance eligibility for this sale."
       );
-      setHeroCpi(null);
-      setCpaAlliancePortalEnabled(false);
-      setCpaInsurers([]);
-      setPortalInsurers([]);
-      setMasterRefFinanciers([]);
-      setDealerCpaInsurer(null);
     } finally {
       setCreateInvoiceEligibilityLoading(false);
     }
@@ -864,11 +890,10 @@ export function AddSalesPage({
     setGenerateInsuranceCompleted(false);
     setCpaAlliancePortalEnabled(false);
     setCpaInsurers([]);
-    setPortalInsurers([]);
-    setMasterRefFinanciers([]);
     setDealerCpaInsurer(null);
     setHeroCpi(null);
     setIsFillCpaInsuranceLoading(false);
+    void reloadDealerCpaContext();
     setSection2ValidationErrors([]);
     setSection2SubmitAttempted(false);
     setAddressLine2Input("");
@@ -914,26 +939,38 @@ export function AddSalesPage({
   }, [lastStagingId, dealerId]);
 
   /** Section 3 dropdown: value in list, else rule (prefer_insurer) until ``useEffect`` syncs ``extractedInsurance.insurer``. */
-  const insuranceProviderSelectValue = useMemo(() => {
-    const raw = (ins?.insurer ?? "").trim();
-    if (portalInsurers.includes(raw)) return raw;
-    return effectivePortalInsurer(ins?.insurer, preferInsurer, portalInsurers) ?? "";
-  }, [ins?.insurer, preferInsurer, portalInsurers]);
+  const insuranceProviderSelectValue = useMemo(
+    () => resolvePortalInsurer(ins?.insurer, preferInsurer, portalInsurers) ?? "",
+    [ins?.insurer, preferInsurer, portalInsurers]
+  );
 
   useEffect(() => {
     if (!portalInsurers.length) return;
     const freshSale = !savedTo || String(savedTo).trim() === "";
-    const eff = effectivePortalInsurer(
+    const eff = resolvePortalInsurer(
       freshSale ? undefined : extractedInsurance?.insurer,
       preferInsurer,
       portalInsurers
     );
-    if (eff == null) return;
+    if (!eff) return;
     const cur = (extractedInsurance?.insurer ?? "").trim();
     if (freshSale || cur !== eff) {
       setExtractedInsurance((prev) => ({ ...(prev ?? {}), insurer: eff }));
     }
   }, [portalInsurers, preferInsurer, extractedInsurance?.insurer, savedTo]);
+
+  useEffect(() => {
+    if (!masterRefFinanciers.length) return;
+    const freshSale = !savedTo || String(savedTo).trim() === "";
+    const raw = (extractedInsurance?.financier ?? "").trim();
+    if (!raw) return;
+    const resolved = resolveCanonicalFinancier(raw, masterRefFinanciers);
+    if (!resolved || !masterRefFinanciers.includes(resolved)) return;
+    const cur = (extractedInsurance?.financier ?? "").trim();
+    if (freshSale || cur !== resolved) {
+      setExtractedInsurance((prev) => ({ ...(prev ?? {}), financier: resolved }));
+    }
+  }, [masterRefFinanciers, extractedInsurance?.financier, savedTo]);
 
   const clearSection2Validation = useCallback(() => {
     setSection2ValidationErrors([]);
@@ -1959,6 +1996,7 @@ export function AddSalesPage({
                           oemId,
                           stagingId: lastStagingId,
                           preferInsurer,
+                          portalInsurers,
                         });
                         setHasSubmittedInfo(true);
                         if (submitRes?.staging_id != null && String(submitRes.staging_id).trim())
@@ -2201,6 +2239,11 @@ export function AddSalesPage({
                   <div className="add-sales-v2-subsection-head">
                     <h3 className="add-sales-v2-subsection-title">Finance Details</h3>
                   </div>
+                  {dealerCpaContextError ? (
+                    <p className="add-sales-v2-field-note" role="alert">
+                      {dealerCpaContextError}
+                    </p>
+                  ) : null}
                   <dl className="add-sales-v2-dl add-sales-v2-dl--insurance">
                     <div className="add-sales-v2-dl-row">
                       <dt>Financier</dt>
@@ -2573,7 +2616,7 @@ export function AddSalesPage({
                             ))}
                           </select>
                         ) : (
-                          (ins?.insurer ?? preferInsurer ?? "").trim() || "—"
+                          (preferInsurer ?? ins?.insurer ?? "").trim() || "—"
                         )}
                       </dd>
                     </div>

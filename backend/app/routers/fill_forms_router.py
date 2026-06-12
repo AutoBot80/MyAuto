@@ -1038,37 +1038,7 @@ async def print_gate_pass(
                     {"filename": path_obj.name, "presigned_url": str(path_obj), "kind": kind}
                 )
 
-        # Best-effort: pencil_mark.* + Form 20 in ``sale_dir`` → ``*_with_pencil_mark.pdf`` (does not fail Print Forms).
-        try:
-            from app.services.form20_pencil_overlay import form20_pencil_overlay_write_only
-
-            mob10 = _mobile_10_digits_for_overlay(mob_for_resolve)
-            stamped, _pencil_note = form20_pencil_overlay_write_only(sale_dir, mob10, inplace=True)
-            if stamped is not None:
-                logger.info("print_gate_pass: Form 20 pencil overlay written: %s", stamped)
-                if STORAGE_USE_S3:
-                    try:
-                        from app.services.dealer_storage import sync_uploads_subfolder_to_s3
-
-                        sync_uploads_subfolder_to_s3(did, safe_sub)
-                    except Exception as sync_exc:
-                        logger.info(
-                            "print_gate_pass: S3 sync after pencil overlay skipped (non-fatal): %s",
-                            sync_exc,
-                        )
-            else:
-                logger.info(
-                    "print_gate_pass: Form 20 pencil overlay skipped (no Form 20 PDF and/or no pencil-mark asset in %s)",
-                    sale_dir,
-                )
-        except Exception as exc:
-            logger.info("print_gate_pass: Form 20 pencil overlay best-effort skipped: %s", exc)
-            append_print_rto_queue_line(
-                ocr_dir,
-                safe_sub,
-                "GATE_PASS",
-                f"pencil overlay skipped: {exc}",
-            )
+        # Pencil mark is no longer stamped onto DMS Form 20 (scanned cover page replaces this flow).
 
         job_names = [j.get("filename") for j in print_jobs]
         append_print_rto_queue_line(

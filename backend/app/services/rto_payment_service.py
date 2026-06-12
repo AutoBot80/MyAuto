@@ -186,6 +186,45 @@ def _run_dealer_rto_batch(
             try:
                 repo.mark_batch_row_in_progress(current_queue_id, session_id, worker_id)
 
+                from pathlib import Path
+
+                from app.config import get_uploads_dir
+                from app.services.fill_rto_service import resolve_vahan_upload_readiness
+
+                subfolder = (row.get("subfolder") or "").strip()
+                mobile = (row.get("customer_mobile") or row.get("mobile") or "").strip()
+                sale_dir = get_uploads_dir(dealer_id) / subfolder if subfolder else Path()
+                ready, missing_labels = resolve_vahan_upload_readiness(
+                    sale_dir, subfolder=subfolder, mobile=mobile
+                )
+                if not ready:
+                    reason = "Missing: " + ", ".join(missing_labels)
+                    repo.mark_batch_row_forms_missing(
+                        current_queue_id, session_id, worker_id, reason
+                    )
+                    updated = _read_batch_status(dealer_id) or {}
+                    processed_count = int(updated.get("processed_count") or 0) + 1
+                    _write_batch_status(
+                        dealer_id,
+                        processed_count=processed_count,
+                        message=f"Forms missing for row {processed_count} of {total_count}",
+                        last_error=reason,
+                    )
+                    _append_row_result(
+                        dealer_id,
+                        {
+                            "rto_queue_id": current_queue_id,
+                            "customer_name": row.get("customer_name"),
+                            "status": "Forms Missing",
+                            "rto_application_id": None,
+                            "rto_payment_amount": row.get("rto_payment_amount"),
+                            "error": reason,
+                        },
+                    )
+                    current_queue_id = None
+                    current_sales_id = None
+                    continue
+
                 # Run on the Playwright worker thread (same as warm-browser / Fill DMS). If fill_rto_row ran on
                 # this daemon batch thread, handle_browser_opening would start a second sync_playwright and
                 # discard the first driver — which can close the Vahan browser window.

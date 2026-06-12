@@ -87,6 +87,10 @@ export default defineConfig(({ command }) => ({
   base: command === 'build' ? './' : '/',
   define: { __APP_VERSION__: JSON.stringify(readAppVersion()) },
   plugins: [react(), devServerDisableRequestTimeout()],
+  test: {
+    environment: 'node',
+    include: ['src/**/*.test.ts'],
+  },
   server: {
     proxy: {
       '/rto-queue': 'http://127.0.0.1:8000',

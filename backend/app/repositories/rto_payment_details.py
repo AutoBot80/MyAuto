@@ -1,8 +1,20 @@
 """Data access for rto_queue table (redesigned schema: rto_queue_id serial PK)."""
 
+import re
 from datetime import date, datetime, timezone
 
 from app.db import get_connection
+
+
+def _normalize_indian_mobile_10(mobile: str) -> str | None:
+    """Return last 10 digits when valid Indian mobile (6–9 start); else None."""
+    d = re.sub(r"\D", "", str(mobile or "").strip())
+    if len(d) < 10:
+        return None
+    d10 = d[-10:]
+    if not re.match(r"^[6-9]\d{9}$", d10):
+        return None
+    return d10
 
 SELECT_COLUMNS = """
 rq.rto_queue_id,
@@ -16,6 +28,7 @@ rq.rto_application_date,
 rq.rto_payment_id,
 rq.rto_payment_amount,
 rq.status,
+rq.in_queue,
 rq.processing_session_id,
 rq.worker_id,
 rq.leased_until,
@@ -292,6 +305,7 @@ def claim_oldest_batch(
                     JOIN sales_master sm ON sm.sales_id = rq.sales_id
                     WHERE sm.dealer_id = %s
                       AND rq.status IN ('Queued', 'Pending')
+                      AND rq.in_queue = true
                       AND rq.rto_payment_id IS NULL
                       AND (rq.leased_until IS NULL OR rq.leased_until < NOW())
                     ORDER BY rq.created_at ASC
@@ -477,6 +491,29 @@ def release_batch_claims(processing_session_id: str) -> int:
         conn.close()
 
 
+def update_customer_mobile(rto_queue_id: int, mobile: str) -> bool:
+    """Persist operator-chosen Vahan OTP mobile on the queue row (per-sale override)."""
+    d10 = _normalize_indian_mobile_10(mobile)
+    if not d10:
+        return False
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rto_queue
+                SET customer_mobile = %s,
+                    updated_at = NOW()
+                WHERE rto_queue_id = %s
+                """,
+                (d10, int(rto_queue_id)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def retry_failed_row(rto_queue_id: int) -> bool:
     """Set one failed queue row back to Queued for operator retry."""
     conn = get_connection()
@@ -498,6 +535,160 @@ def retry_failed_row(rto_queue_id: int) -> bool:
                   AND status = 'Failed'
                 """,
                 (rto_queue_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def mark_batch_row_forms_missing(
+    rto_queue_id: int,
+    processing_session_id: str,
+    worker_id: str,
+    reason: str,
+) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rto_queue
+                SET status = 'Forms Missing',
+                    leased_until = NULL,
+                    locked_by_login_id = NULL,
+                    processing_session_id = NULL,
+                    worker_id = NULL,
+                    last_error = %s,
+                    updated_at = NOW()
+                WHERE rto_queue_id = %s
+                """,
+                (((reason or "").strip() or "Missing Vahan upload documents")[:4000], rto_queue_id),
+            )
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_forms_ready(rto_queue_id: int) -> bool:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rto_queue
+                SET status = 'Queued',
+                    last_error = NULL,
+                    leased_until = NULL,
+                    locked_by_login_id = NULL,
+                    processing_session_id = NULL,
+                    worker_id = NULL,
+                    updated_at = NOW()
+                WHERE rto_queue_id = %s
+                  AND status = 'Forms Missing'
+                """,
+                (rto_queue_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def mark_manually_completed(rto_queue_id: int) -> bool:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rto_queue
+                SET status = 'Manually Completed',
+                    finished_at = NOW(),
+                    leased_until = NULL,
+                    locked_by_login_id = NULL,
+                    processing_session_id = NULL,
+                    worker_id = NULL,
+                    last_error = NULL,
+                    updated_at = NOW()
+                WHERE rto_queue_id = %s
+                  AND status IN ('Queued', 'Pending', 'Failed')
+                """,
+                (rto_queue_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def requeue_completed_row(rto_queue_id: int) -> bool:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rto_queue
+                SET status = 'Queued',
+                    in_queue = true,
+                    rto_application_id = NULL,
+                    leased_until = NULL,
+                    locked_by_login_id = NULL,
+                    processing_session_id = NULL,
+                    worker_id = NULL,
+                    last_error = NULL,
+                    started_at = NULL,
+                    finished_at = NULL,
+                    updated_at = NOW()
+                WHERE rto_queue_id = %s
+                  AND status IN ('Completed', 'Manually Completed')
+                """,
+                (rto_queue_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def release_in_progress_row(rto_queue_id: int) -> bool:
+    """Operator release: In Progress / Pending lock back to Queued."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rto_queue
+                SET status = 'Queued',
+                    leased_until = NULL,
+                    locked_by_login_id = NULL,
+                    processing_session_id = NULL,
+                    worker_id = NULL,
+                    last_error = NULL,
+                    updated_at = NOW()
+                WHERE rto_queue_id = %s
+                  AND status IN ('In Progress', 'Pending')
+                """,
+                (rto_queue_id,),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def set_in_queue(rto_queue_id: int, in_queue: bool) -> bool:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE rto_queue
+                SET in_queue = %s,
+                    updated_at = NOW()
+                WHERE rto_queue_id = %s
+                  AND status = ANY(%s)
+                """,
+                (bool(in_queue), rto_queue_id, ["Queued", "Pending", "Failed"]),
             )
             conn.commit()
             return cur.rowcount > 0

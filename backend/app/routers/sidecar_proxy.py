@@ -845,6 +845,13 @@ async def vahan_row_result(
         repo.mark_batch_row_pending(
             req.rto_queue_id, req.session_id, req.worker_id, req.error
         )
+    elif status == "Forms Missing":
+        repo.mark_batch_row_forms_missing(
+            req.rto_queue_id,
+            req.session_id,
+            req.worker_id,
+            req.error or "Missing Vahan upload documents",
+        )
     else:
         raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
 

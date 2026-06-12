@@ -171,6 +171,10 @@ run alter/23a_challan_master_staging_last_run_at.sql
 # rto_queue schema redesign (must run after all earlier rto alters)
 run alter/24a_rto_queue_schema_redesign.sql
 
+# form_vahan_view: prefer rto_queue.customer_mobile for Vahan OTP override
+run alter/33a_form_vahan_view_queue_mobile.sql
+run alter/33b_rto_queue_in_queue.sql
+
 # login_ref redesign
 run alter/26b_login_ref_redesign.sql
 

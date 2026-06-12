@@ -39,7 +39,7 @@ def test_composite_jpeg_pencil_onto_form20(tmp_path: Path) -> None:
     assert out.stat().st_size > 500
 
 
-def test_form20_pencil_inplace_updates_same_pdf(tmp_path: Path) -> None:
+def test_form20_pencil_inplace_disabled(tmp_path: Path) -> None:
     sale = tmp_path / "8278671032_160526"
     sale.mkdir()
     form20 = sale / "8278671032_Form_20.pdf"
@@ -48,18 +48,19 @@ def test_form20_pencil_inplace_updates_same_pdf(tmp_path: Path) -> None:
     _minimal_pencil_jpeg(pencil)
     before = form20.stat().st_size
     stamped, note = form20_pencil_overlay_write_only(sale, "8278671032", inplace=True)
-    assert note is None
-    assert stamped == form20
-    assert form20.is_file()
-    assert form20.stat().st_size >= before
+    assert stamped is None
+    assert note == "pencil_on_form20_disabled"
+    assert form20.stat().st_size == before
 
 
-def test_prepare_overlay_uses_existing_pencil_mark(tmp_path: Path) -> None:
+def test_prepare_overlay_crop_only_no_form20_stamp(tmp_path: Path) -> None:
     sale = tmp_path / "8278671032_160526"
     sale.mkdir()
     _minimal_form20(sale / "8278671032_Form_20.pdf")
     _minimal_pencil_jpeg(sale / "pencil_mark.jpeg")
     result = prepare_details_pencil_and_form20_overlay(sale)
     assert result["pencil_crop_written"] is True
-    assert result["form20_stamped_path"] is not None
-    assert "used_existing_pencil_mark" in str(result.get("note") or "")
+    assert result["form20_stamped_path"] is None
+    assert "pencil_on_form20_disabled" in str(result.get("note") or "") or "used_existing" in str(
+        result.get("note") or ""
+    )

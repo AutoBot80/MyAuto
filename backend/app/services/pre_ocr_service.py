@@ -67,6 +67,7 @@ from app.services.page_classifier import (
     classify_page_by_text,
     classify_pages_from_ocr_text,
     extract_page_text_from_pre_ocr_blocks,
+    form20_cover_detected_in_top,
     maybe_swap_aadhar_page_indices,
     should_swap_aadhar_pages_by_dob_gender,
     PAGE_TYPE_TO_FILENAME,
@@ -74,9 +75,11 @@ from app.services.page_classifier import (
     PAGE_TYPE_AADHAR_BACK,
     PAGE_TYPE_AADHAR_COMBINED,
     PAGE_TYPE_DETAILS,
+    PAGE_TYPE_FORM_20_COVER,
     PAGE_TYPE_INSURANCE,
     PAGE_TYPE_UNUSED,
     FILENAME_AADHAR_FRONT,
+    FILENAME_FORM_20_COVER,
     FILENAME_SALES_DETAIL_SHEET_PDF,
 )
 
@@ -957,6 +960,108 @@ def _tesseract_ocr(image_bytes: bytes) -> str:
     return _tesseract_ocr_image(Image.open(io.BytesIO(image_bytes)))
 
 
+_FORM20_TOP_BAND_FRACTION = 0.25
+
+
+def _tesseract_ocr_top_band(img: Image.Image, *, top_fraction: float = _FORM20_TOP_BAND_FRACTION) -> str:
+    """OCR the top band of a page (eng+hin) for Form 20 header detection."""
+    w, h = img.size
+    band_h = max(1, int(h * top_fraction))
+    top = img.crop((0, 0, w, band_h))
+    return _tesseract_ocr_image(top)
+
+
+def _page_text_enriched_for_form20(
+    full_ocr_text: str,
+    page_idx: int,
+    page_images: dict[int, Image.Image] | None,
+) -> str:
+    """DDT page text plus optional Tesseract top-band for Form 20 header checks."""
+    ddt_text = extract_page_text_from_pre_ocr_blocks(full_ocr_text, page_idx)
+    if not page_images or page_idx not in page_images:
+        return ddt_text
+    try:
+        tess_top = _tesseract_ocr_top_band(page_images[page_idx])
+    except Exception as exc:
+        logger.warning("Form 20 top-band Tesseract failed page %d: %s", page_idx + 1, exc)
+        return ddt_text
+    if not tess_top.strip():
+        return ddt_text
+    return f"{ddt_text}\n{tess_top}"
+
+
+def classify_pages_with_form20_tesseract(
+    full_ocr_text: str,
+    page_images: dict[int, Image.Image] | None,
+) -> list[tuple[int, str]]:
+    """
+    Classify pages from pre-OCR text, enriching each page with Tesseract top-band OCR
+    so Hindi Form 20 headers missed by Textract DDT can still be detected.
+    """
+    base = classify_pages_from_ocr_text(full_ocr_text)
+    if not page_images:
+        return base
+
+    out: list[tuple[int, str]] = []
+    for idx, ptype in base:
+        enriched = _page_text_enriched_for_form20(full_ocr_text, idx, page_images)
+        new_ptype = classify_page_by_text(enriched)
+        if new_ptype != ptype:
+            logger.info(
+                "Page %d reclassified %s -> %s (Tesseract top-band Form 20 check)",
+                idx + 1,
+                ptype,
+                new_ptype,
+            )
+            ptype = new_ptype
+        out.append((idx, ptype))
+    return out
+
+
+def assign_classified_page_slots(
+    classifications: list[tuple[int, str]],
+    full_ocr_text: str,
+    page_images: dict[int, Image.Image] | None,
+) -> tuple[dict[str, int], list[int]]:
+    """
+    Map first page index per document type; collect unused indices and rescue orphan
+    duplicate Details pages as Form 20 cover or unused.
+    """
+    page_type_to_idx: dict[str, int] = {}
+    unused_indices: list[int] = []
+    for idx, ptype in classifications:
+        if ptype == PAGE_TYPE_UNUSED:
+            rescue_text = _page_text_enriched_for_form20(full_ocr_text, idx, page_images)
+            if (
+                PAGE_TYPE_FORM_20_COVER not in page_type_to_idx
+                and form20_cover_detected_in_top(rescue_text)
+            ):
+                page_type_to_idx[PAGE_TYPE_FORM_20_COVER] = idx
+                logger.info("Rescued UNUSED page %d -> Form_20_Cover_Page", idx + 1)
+            else:
+                unused_indices.append(idx)
+        elif ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK, PAGE_TYPE_AADHAR_COMBINED):
+            continue
+        elif ptype not in page_type_to_idx:
+            page_type_to_idx[ptype] = idx
+        elif ptype == PAGE_TYPE_DETAILS:
+            rescue_text = _page_text_enriched_for_form20(full_ocr_text, idx, page_images)
+            if (
+                PAGE_TYPE_FORM_20_COVER not in page_type_to_idx
+                and form20_cover_detected_in_top(rescue_text)
+            ):
+                page_type_to_idx[PAGE_TYPE_FORM_20_COVER] = idx
+                logger.info("Rescued orphan Details page %d -> Form_20_Cover_Page", idx + 1)
+            else:
+                unused_indices.append(idx)
+                logger.info("Orphan Details page %d -> unused.pdf", idx + 1)
+        else:
+            unused_indices.append(idx)
+            logger.info("Duplicate %s page %d -> unused.pdf", ptype, idx + 1)
+
+    return page_type_to_idx, unused_indices
+
+
 def crop_aadhar_letter_below_scissors(image_bytes: bytes) -> bytes | None:
     """
     Aadhaar *letter* (A4 printout from UIDAI) has scissors marks on the left and
@@ -1532,8 +1637,8 @@ def _process_same_page_aadhar(page_bytes: bytes, out_dir: Path) -> bool:
 
 
 def orient_common_sale_jpegs(subdir: Path) -> None:
-    """Run :func:`correct_image_orientation_upright` on Details (legacy JPEG) / Insurance / Financing."""
-    for name in ("Details.jpg", "Insurance.jpg", "Financing.jpg"):
+    """Run :func:`correct_image_orientation_upright` on Details (legacy JPEG) / Insurance / Financing / Form 20 cover."""
+    for name in ("Details.jpg", "Insurance.jpg", "Financing.jpg", "Form_20_Cover_Page.jpg"):
         p = subdir / name
         if p.is_file():
             p.write_bytes(correct_image_orientation_upright(p.read_bytes()))
@@ -1740,16 +1845,41 @@ def _detect_multi_customer(classifications: list[tuple[int, str]]) -> bool:
     return count_fronts >= 2 or count_backs >= 2 or count_details >= 2 or count_insurance >= 2
 
 
+def _resolve_form20_cover_idx(
+    classifications: list[tuple[int, str]],
+    full_ocr_text: str,
+    page_images: dict[int, Image.Image] | None,
+    *,
+    exclude_indices: set[int] | None = None,
+) -> int | None:
+    """Pick the best Form 20 cover page index (explicit type, or rescued from UNUSED/Details)."""
+    exclude = exclude_indices or set()
+    for idx, ptype in classifications:
+        if idx in exclude:
+            continue
+        if ptype == PAGE_TYPE_FORM_20_COVER:
+            return idx
+    for idx, ptype in classifications:
+        if idx in exclude:
+            continue
+        if ptype in (PAGE_TYPE_UNUSED, PAGE_TYPE_DETAILS):
+            text = _page_text_enriched_for_form20(full_ocr_text, idx, page_images)
+            if form20_cover_detected_in_top(text):
+                return idx
+    return None
+
+
 def _build_multi_customer_bundles(
     pdf_path: Path,
     full_ocr_text: str,
     classifications: list[tuple[int, str]],
     all_mobiles: list[str] | None = None,
+    page_images: dict[int, Image.Image] | None = None,
 ) -> list[dict] | None:
     """
     Build per-customer bundles when multi-customer detected.
-    Returns list of {aadhar_front_idx, aadhar_back_idx, details_idx, insurance_idx, mobile, name} or None if invalid.
-    Each bundle must have: mobile, aadhar front, aadhar back, details.
+    Returns list of {aadhar_front_idx, aadhar_back_idx, details_idx, insurance_idx, form20_cover_idx, mobile, name}
+    or None if invalid. Each bundle must have: mobile, aadhar front, aadhar back, details.
     """
     page_texts = {idx: text for idx, text in _parse_page_texts(full_ocr_text)}
 
@@ -1902,6 +2032,19 @@ def _build_multi_customer_bundles(
 
     if len(bundles) < len(customer_slots) or not bundles:
         return None
+
+    bundle_used: set[int] = set()
+    for b in bundles:
+        for key in ("aadhar_front_idx", "aadhar_back_idx", "details_idx", "insurance_idx"):
+            idx = b.get(key)
+            if idx is not None:
+                bundle_used.add(idx)
+    form20_idx = _resolve_form20_cover_idx(
+        classifications, full_ocr_text, page_images, exclude_indices=bundle_used
+    )
+    if form20_idx is not None:
+        bundles[0]["form20_cover_idx"] = form20_idx
+
     return bundles
 
 
@@ -2000,6 +2143,16 @@ def _split_pdf_multi_customer_to_sale_dirs(
         if didx is not None and didx in page_images:
             write_pencil_mark_from_details_page(sale_dir, _pil_rgb_to_jpeg_bytes(page_images[didx]))
 
+        f20_idx = bundle.get("form20_cover_idx")
+        if f20_idx is not None and f20_idx in page_images:
+            page_images[f20_idx].save(for_ocr_dir / FILENAME_FORM_20_COVER, "JPEG", quality=90)
+            logger.info(
+                "Multi-customer: bundle %d page %d -> %s",
+                i + 1,
+                f20_idx + 1,
+                FILENAME_FORM_20_COVER,
+            )
+
         page_type_to_idx_m: dict[str, int] = {}
         if bundle.get("aadhar_front_idx") is not None:
             page_type_to_idx_m[PAGE_TYPE_AADHAR] = bundle["aadhar_front_idx"]
@@ -2009,6 +2162,8 @@ def _split_pdf_multi_customer_to_sale_dirs(
             page_type_to_idx_m[PAGE_TYPE_DETAILS] = bundle["details_idx"]
         if bundle.get("insurance_idx") is not None:
             page_type_to_idx_m[PAGE_TYPE_INSURANCE] = bundle["insurance_idx"]
+        if f20_idx is not None:
+            page_type_to_idx_m[PAGE_TYPE_FORM_20_COVER] = f20_idx
         combined_m: set[int] = set()
         if fi is not None and bi is not None and fi == bi:
             combined_m.add(fi)
@@ -2252,15 +2407,9 @@ def _split_pdf_by_classification(
             _export_pdf_pages_to_raw(pdf_path, raw_dir, osd_rotations=osd_rotations)
 
     classifications = classifications_override if classifications_override is not None else classify_pages_from_ocr_text(full_ocr_text)
-    page_type_to_idx: dict[str, int] = {}  # first page index per non-Aadhaar type
-    unused_indices: list[int] = []
-    for idx, ptype in classifications:
-        if ptype == PAGE_TYPE_UNUSED:
-            unused_indices.append(idx)
-        elif ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK, PAGE_TYPE_AADHAR_COMBINED):
-            continue
-        elif ptype not in page_type_to_idx:
-            page_type_to_idx[ptype] = idx
+    page_type_to_idx, unused_indices = assign_classified_page_slots(
+        classifications, full_ocr_text, page_images_cache
+    )
 
     page_type_to_idx.update(_aadhar_slot_indices_from_classifications(classifications))
 
@@ -2386,6 +2535,8 @@ def _suggested_roles_from_classifications(
             roles.append("aadhar_back")
         elif ptype == PAGE_TYPE_DETAILS:
             roles.append("details")
+        elif ptype == PAGE_TYPE_FORM_20_COVER:
+            roles.append("form_20_cover")
         else:
             roles.append("unused")
     return roles
@@ -2667,16 +2818,12 @@ def run_pre_ocr_and_prepare(
     orchestration.extend(pre_steps)
 
     t_cls0 = time.perf_counter()
-    classifications = classify_pages_from_ocr_text(full_text)
+    classifications = classify_pages_with_form20_tesseract(full_text, page_images)
     classifications = reconcile_aadhar_classifications_multipage(classifications, full_text)
     cls_ms = int((time.perf_counter() - t_cls0) * 1000)
     orchestration.append(
-        ("classify_pages_from_ocr_text", cls_ms, f"slots={len(classifications)}", _off()),
+        ("classify_pages_with_form20_tesseract", cls_ms, f"slots={len(classifications)}", _off()),
     )
-
-    # DDT was already run for all pages inside pre_ocr_pdf (parallel), so no
-    # conditional per-page DDT passes are needed here — classification text is
-    # already Textract quality.
 
     t_ms0 = time.perf_counter()
     mobile_scope = _pre_ocr_text_from_sales_detail_sheet_onward(full_text)
@@ -2695,7 +2842,9 @@ def run_pre_ocr_and_prepare(
     # Multi-customer: when multiple document sets OR 2+ distinct mobiles in full text
     if is_multi:
         t_bd0 = time.perf_counter()
-        bundles_data = _build_multi_customer_bundles(dest_pdf, full_text, classifications, all_mobiles)
+        bundles_data = _build_multi_customer_bundles(
+            dest_pdf, full_text, classifications, all_mobiles, page_images=page_images
+        )
         bd_ms = int((time.perf_counter() - t_bd0) * 1000)
         orchestration.append(("build_multi_customer_bundles", bd_ms, f"bundles_data={len(bundles_data) if bundles_data else 0}", _off()))
         if bundles_data:

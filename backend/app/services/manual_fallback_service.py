@@ -21,6 +21,7 @@ from app.services.ocr_extraction_log import append_ocr_extraction_log
 from app.services.page_classifier import (
     FILENAME_AADHAR_BACK,
     FILENAME_AADHAR_FRONT,
+    FILENAME_FORM_20_COVER,
     FILENAME_SALES_DETAIL_SHEET_PDF,
 )
 from app.services.post_ocr_service import POST_OCR_MAX_FILE_BYTES, _jpeg_bytes_to_single_page_pdf, _jpeg_bytes_under_max
@@ -36,6 +37,7 @@ ROLE_AADHAR_FRONT = "aadhar_front"
 ROLE_AADHAR_BACK = "aadhar_back"
 ROLE_AADHAR_FRONT_AND_BACK = "aadhar_front_and_back"
 ROLE_DETAILS = "details"
+ROLE_FORM_20_COVER = "form_20_cover"
 ROLE_UNUSED = "unused"
 
 
@@ -117,7 +119,7 @@ def apply_manual_session(
     merge unused pages into ``unused.pdf``. Does not run OcrService (callers such as consolidated
     manual-apply run Textract after this).
 
-    ``assignments`` maps "0".."n-1" to aadhar_front | aadhar_back | aadhar_front_and_back | details | unused.
+    ``assignments`` maps "0".."n-1" to aadhar_front | aadhar_back | aadhar_front_and_back | details | form_20_cover | unused.
     Returns (subfolder_name e.g. mobile_ddmmyy, list of saved file basenames at sale root and under for_OCR).
     """
     import fitz
@@ -139,7 +141,14 @@ def apply_manual_session(
     if page_count < 2:
         raise ValueError("Session has fewer than 2 pages")
 
-    valid_roles = {ROLE_AADHAR_FRONT, ROLE_AADHAR_BACK, ROLE_AADHAR_FRONT_AND_BACK, ROLE_DETAILS, ROLE_UNUSED}
+    valid_roles = {
+        ROLE_AADHAR_FRONT,
+        ROLE_AADHAR_BACK,
+        ROLE_AADHAR_FRONT_AND_BACK,
+        ROLE_DETAILS,
+        ROLE_FORM_20_COVER,
+        ROLE_UNUSED,
+    }
     for i in range(page_count):
         key = str(i)
         if key not in assignments:
@@ -160,6 +169,8 @@ def apply_manual_session(
             "Assign one page to Aadhar front + back (same page), "
             "or one page each to Aadhar front and Aadhar back."
         )
+    if c.get(ROLE_FORM_20_COVER, 0) > 1:
+        raise ValueError("Assign at most one page to Form 20 Cover Page.")
 
     subfolder = get_uploaded_scans_sale_subfolder_leaf(digits)
     uploads_dir = get_uploads_dir(dealer_id)
@@ -185,8 +196,18 @@ def apply_manual_session(
     det_pdf = _jpeg_bytes_to_single_page_pdf(det_jpeg)
     (for_ocr / FILENAME_SALES_DETAIL_SHEET_PDF).write_bytes(det_pdf)
 
+    form20_indices = [i for i, r in role_by_page.items() if r == ROLE_FORM_20_COVER]
+    if form20_indices:
+        shutil.copy2(page_path(form20_indices[0]), for_ocr / FILENAME_FORM_20_COVER)
+
     unused_indices = [i for i, r in role_by_page.items() if r == ROLE_UNUSED]
-    saved: list[str] = [FOR_OCR_SUBDIR + "/" + FILENAME_AADHAR_FRONT, FOR_OCR_SUBDIR + "/" + FILENAME_AADHAR_BACK, FOR_OCR_SUBDIR + "/" + FILENAME_SALES_DETAIL_SHEET_PDF]
+    saved: list[str] = [
+        FOR_OCR_SUBDIR + "/" + FILENAME_AADHAR_FRONT,
+        FOR_OCR_SUBDIR + "/" + FILENAME_AADHAR_BACK,
+        FOR_OCR_SUBDIR + "/" + FILENAME_SALES_DETAIL_SHEET_PDF,
+    ]
+    if form20_indices:
+        saved.append(FOR_OCR_SUBDIR + "/" + FILENAME_FORM_20_COVER)
 
     if unused_indices:
         merged = fitz.open()
