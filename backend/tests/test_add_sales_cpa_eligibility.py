@@ -10,6 +10,7 @@ from app.routers.add_sales import (
     _cpa_alliance_insurance_eligibility,
     _eligibility_by_customer_vehicle_ids,
     _has_cpa_insurance_master_row,
+    _resolve_cpi_reqd_context,
 )
 
 
@@ -20,13 +21,25 @@ def test_cpa_alliance_insurance_eligibility_no_ids() -> None:
 
 
 def test_cpa_alliance_insurance_eligibility_no_row() -> None:
-    out = _cpa_alliance_insurance_eligibility(has_cpa_row=False, ids_resolved=True)
+    out = _cpa_alliance_insurance_eligibility(
+        has_cpa_row=False, ids_resolved=True, effective_cpi_reqd="Y"
+    )
     assert out["cpa_alliance_insurance_enabled"] is True
     assert out["cpa_alliance_insurance_reason"] is None
 
 
+def test_cpa_alliance_insurance_eligibility_cpi_not_required() -> None:
+    out = _cpa_alliance_insurance_eligibility(
+        has_cpa_row=False, ids_resolved=True, effective_cpi_reqd="N"
+    )
+    assert out["cpa_alliance_insurance_enabled"] is False
+    assert "not required" in str(out["cpa_alliance_insurance_reason"]).lower()
+
+
 def test_cpa_alliance_insurance_eligibility_row_exists() -> None:
-    out = _cpa_alliance_insurance_eligibility(has_cpa_row=True, ids_resolved=True)
+    out = _cpa_alliance_insurance_eligibility(
+        has_cpa_row=True, ids_resolved=True, effective_cpi_reqd="Y"
+    )
     assert out["cpa_alliance_insurance_enabled"] is False
     assert "already recorded" in str(out["cpa_alliance_insurance_reason"])
 
@@ -63,7 +76,7 @@ def test_eligibility_by_ids_cpa_row_disables_cpa() -> None:
     with patch("app.routers.add_sales.get_connection") as gc:
         with _fake_connection([None, {"insurance_id": 10}]) as conn:
             gc.return_value = conn
-            out = _eligibility_by_customer_vehicle_ids(100, 200)
+            out = _eligibility_by_customer_vehicle_ids(100, 200, effective_cpi_reqd="Y")
     assert out["cpa_alliance_insurance_enabled"] is False
     assert "already recorded" in str(out["cpa_alliance_insurance_reason"])
 
@@ -78,6 +91,24 @@ def test_eligibility_by_ids_no_cpa_row_enables_cpa() -> None:
             ]
         ) as conn:
             gc.return_value = conn
-            out = _eligibility_by_customer_vehicle_ids(100, 200)
+            out = _eligibility_by_customer_vehicle_ids(100, 200, effective_cpi_reqd="Y")
     assert out["cpa_alliance_insurance_enabled"] is True
     assert out["generate_insurance_enabled"] is True
+
+
+def test_resolve_cpi_reqd_context_staging_wins() -> None:
+    cur = MagicMock()
+    cur.fetchone.side_effect = [{"cpi_reqd": "N"}, {"cpi_reqd": "Y"}]
+    cm = MagicMock()
+    cm.__enter__.return_value = cur
+    cm.__exit__.return_value = False
+    conn = MagicMock()
+    conn.cursor.return_value = cm
+    with patch("app.routers.add_sales.get_connection", return_value=conn):
+        ctx = _resolve_cpi_reqd_context(
+            100001,
+            "11111111-1111-1111-1111-111111111111",
+        )
+    assert ctx["dealer_cpi_reqd"] == "N"
+    assert ctx["staging_cpi_reqd"] == "Y"
+    assert ctx["effective_cpi_reqd"] == "Y"

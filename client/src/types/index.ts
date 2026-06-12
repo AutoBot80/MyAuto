@@ -181,6 +181,8 @@ export interface ExtractedInsuranceDetails {
   policy_to?: string;
   /** Gross Premium */
   premium?: string;
+  /** Sales Detail Sheet CPA Required (Y/N); maps to staging ``cpi_reqd`` on Submit Info. */
+  cpa_reqd?: string;
 }
 
 export interface ExtractedDetailsResponse {

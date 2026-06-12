@@ -28,11 +28,17 @@ export interface CreateInvoiceEligibilityResponse {
   portal_insurers?: string[] | null;
   /** ``master_ref`` FINANCER ``ref_value`` rows (Section 2 financier dropdown). */
   financiers?: string[] | null;
+  /** ``dealer_ref.cpi_reqd`` when ``dealer_id`` was sent. */
+  dealer_cpi_reqd?: string | null;
+  /** ``add_sales_staging.cpi_reqd`` when ``staging_id`` was sent. */
+  staging_cpi_reqd?: string | null;
+  /** Staging value when present, else dealer (sheet wins). */
+  effective_cpi_reqd?: string | null;
 }
 
 export type FetchCreateInvoiceEligibilityParams =
-  | { customerId: number; vehicleId: number; dealerId?: number | null }
-  | { chassisNum: string; engineNum: string; mobile: string; dealerId?: number | null };
+  | { customerId: number; vehicleId: number; dealerId?: number | null; stagingId?: string | null }
+  | { chassisNum: string; engineNum: string; mobile: string; dealerId?: number | null; stagingId?: string | null };
 
 export async function fetchCreateInvoiceEligibility(
   opts: FetchCreateInvoiceEligibilityParams
@@ -49,6 +55,10 @@ export async function fetchCreateInvoiceEligibility(
   if (opts.dealerId != null && opts.dealerId > 0) {
     q.set("dealer_id", String(opts.dealerId));
   }
+  const sid = ("stagingId" in opts ? opts.stagingId : undefined)?.trim();
+  if (sid) {
+    q.set("staging_id", sid);
+  }
   return apiFetch<CreateInvoiceEligibilityResponse>(`/add-sales/create-invoice-eligibility?${q.toString()}`);
 }
 
@@ -61,6 +71,7 @@ export type DealerCpaContextResponse = Pick<
   | "cpa_alliance_portal_enabled"
   | "portal_insurers"
   | "financiers"
+  | "dealer_cpi_reqd"
 >;
 
 export async function fetchDealerCpaContext(dealerId: number): Promise<DealerCpaContextResponse> {
@@ -83,6 +94,8 @@ export interface AddSalesInProcessRow {
   vehicle_id_text?: string | null;
   file_location?: string | null;
   subfolder?: string | null;
+  /** Per-sale CPA Required snapshot from ``add_sales_staging.cpi_reqd``. */
+  cpi_reqd?: string | null;
 }
 
 export async function fetchAddSalesInProcess(
@@ -143,9 +156,9 @@ export async function fetchAddSalesInvoices(
 export async function fetchAddSalesStagingPayload(
   stagingId: string,
   dealerId: number
-): Promise<{ staging_id: string; payload_json: Record<string, unknown> }> {
+): Promise<{ staging_id: string; payload_json: Record<string, unknown>; cpi_reqd?: string | null }> {
   const q = new URLSearchParams({ dealer_id: String(dealerId) });
-  return apiFetch<{ staging_id: string; payload_json: Record<string, unknown> }>(
+  return apiFetch<{ staging_id: string; payload_json: Record<string, unknown>; cpi_reqd?: string | null }>(
     `/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`
   );
 }

@@ -141,7 +141,7 @@ export function UploadScansPanel({
       ) : (
         <>
           <p className="app-panel-hint-consolidated" role="note">
-            Upload a multi-page PDF or select multiple JPEG/PNG page images (Sales Detail Sheet + Aadhaar Front + Back + optional Form 20 Cover Page)
+            Upload one multi-page PDF, or multiple files in any mix of PDF and JPEG/PNG (Sales Detail Sheet + Aadhaar Front + Back + optional Form 20 Cover Page)
           </p>
           <div className="app-panel-row app-panel-scan-row">
             <label className="app-panel-scan-label" htmlFor="upload-scan-consolidated">

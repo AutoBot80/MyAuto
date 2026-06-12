@@ -1,5 +1,7 @@
 """Submit Info: persist customer, vehicle, sales, insurance from Add Sales form."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -61,6 +63,10 @@ class SubmitInfoPayload(BaseModel):
         default=None,
         description="When set, updates that draft add_sales_staging row if dealer_id matches; otherwise inserts a new UUID.",
     )
+    cpi_reqd: Literal["Y", "N"] | None = Field(
+        default=None,
+        description="CPA Required from Section C; persisted on add_sales_staging.cpi_reqd.",
+    )
 
 
 def _to_dict(m: BaseModel) -> dict:
@@ -84,6 +90,7 @@ def post_submit_info(
             file_location=payload.file_location,
             staging_id=payload.staging_id,
             login_id=principal.login_id,
+            cpi_reqd=payload.cpi_reqd,
         )
         return result
     except HTTPException:

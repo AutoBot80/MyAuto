@@ -32,6 +32,16 @@ import type { ExtractedCustomerDetails, ExtractedInsuranceDetails, ExtractedVehi
 import { cpaPolicyFromInsuranceRaw } from "../utils/insuranceDisplay";
 import { sanitizeFormFieldInputValue, sanitizeFormFieldValue } from "../utils/formFieldSanitize";
 
+function normalizeCpaRequiredFlag(raw: unknown): "Y" | "N" {
+  const s = String(raw ?? "").trim().toUpperCase();
+  if (s === "Y" || s === "YES") return "Y";
+  return "N";
+}
+
+function formatCpaRequiredDisplay(raw: unknown): string {
+  return normalizeCpaRequiredFlag(raw) === "Y" ? "Yes" : "No";
+}
+
 function formatTenDigitSegment(raw: unknown): string {
   const d = String(raw ?? "").replace(/\D/g, "").slice(-10);
   return d.length === 10 ? d : "";
@@ -229,6 +239,7 @@ export function AddSalesInProcessPanel({
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailPayload, setDetailPayload] = useState<Record<string, unknown> | null>(null);
+  const [stagingCpiReqd, setStagingCpiReqd] = useState<"Y" | "N" | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
   const [rowMsg, setRowMsg] = useState<{ text: string; success: boolean } | null>(null);
@@ -318,6 +329,7 @@ export function AddSalesInProcessPanel({
   useEffect(() => {
     if (!selectedId || dealerId <= 0) {
       setDetailPayload(null);
+      setStagingCpiReqd(null);
       setDetailErr(null);
       return;
     }
@@ -328,6 +340,9 @@ export function AddSalesInProcessPanel({
         const r = await fetchAddSalesStagingPayload(selectedId, dealerId);
         if (c) return;
         setDetailPayload(r.payload_json ?? null);
+        setStagingCpiReqd(
+          r.cpi_reqd != null ? normalizeCpaRequiredFlag(r.cpi_reqd) : null
+        );
       } catch (e) {
         if (!c) setDetailErr(e instanceof Error ? e.message : "Could not load row details.");
       }
@@ -465,6 +480,7 @@ export function AddSalesInProcessPanel({
                 customerId: cid,
                 vehicleId: vid,
                 dealerId: dealerId > 0 ? dealerId : undefined,
+                stagingId: selectedId,
               })
             : ch && eng && mob.length >= 10
               ? await fetchCreateInvoiceEligibility({
@@ -472,6 +488,7 @@ export function AddSalesInProcessPanel({
                   engineNum: eng,
                   mobile: mob,
                   dealerId: dealerId > 0 ? dealerId : undefined,
+                  stagingId: selectedId,
                 })
               : null;
         if (!cancelled && res) setElig(res);
@@ -571,6 +588,7 @@ export function AddSalesInProcessPanel({
     dealerId <= 0 ||
     !!siteUrlsLoading ||
     !!siteUrlsError ||
+    normalizeCpaRequiredFlag(r.cpi_reqd) !== "Y" ||
     (selectedId === r.staging_id
       ? cpaPrimaryDisabled
       : !rowHasCommittedIds(r));
@@ -1055,6 +1073,12 @@ export function AddSalesInProcessPanel({
                   <div className="add-sales-v2-dl-row">
                     <dt>Policy#</dt>
                     <dd className="add-sales-in-process-dd--readonly">{ins?.policy_num?.trim() ? ins.policy_num : "—"}</dd>
+                  </div>
+                  <div className="add-sales-v2-dl-row">
+                    <dt>CPA Required</dt>
+                    <dd className="add-sales-in-process-dd--readonly">
+                      {formatCpaRequiredDisplay(stagingCpiReqd ?? elig?.staging_cpi_reqd ?? elig?.effective_cpi_reqd)}
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>CPA Provider</dt>

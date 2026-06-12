@@ -12,7 +12,13 @@ from app.config import MAX_TEXT_CHARS
 from app.db import get_connection
 from app.repositories.add_sales_invoices import list_recent_sales_invoices
 from app.repositories.ist_date_ranges import validate_date_range
-from app.repositories.add_sales_staging import fetch_staging_payload, list_in_process_staging_rows
+from app.repositories.add_sales_staging import (
+    _normalize_cpi_reqd_flag,
+    fetch_dealer_cpi_reqd_on_cursor,
+    fetch_staging_cpi_reqd_on_cursor,
+    fetch_staging_payload,
+    list_in_process_staging_rows,
+)
 from app.repositories.master_ref import (
     REF_TYPE_FINANCER,
     list_cpa_portals,
@@ -55,13 +61,23 @@ def _has_cpa_insurance_master_row(cur: Any, customer_id: int, vehicle_id: int) -
     return row is not None and row.get("insurance_id") is not None
 
 
-def _cpa_alliance_insurance_eligibility(*, has_cpa_row: bool, ids_resolved: bool) -> dict[str, object]:
+def _cpa_alliance_insurance_eligibility(
+    *,
+    has_cpa_row: bool,
+    ids_resolved: bool,
+    effective_cpi_reqd: str = "N",
+) -> dict[str, object]:
     if not ids_resolved:
         return {
             "cpa_alliance_insurance_enabled": False,
             "cpa_alliance_insurance_reason": (
                 "Customer and vehicle master IDs are required for CPA Insurance."
             ),
+        }
+    if effective_cpi_reqd != "Y":
+        return {
+            "cpa_alliance_insurance_enabled": False,
+            "cpa_alliance_insurance_reason": "CPA is not required for this sale.",
         }
     if has_cpa_row:
         return {
@@ -71,6 +87,37 @@ def _cpa_alliance_insurance_eligibility(*, has_cpa_row: bool, ids_resolved: bool
     return {
         "cpa_alliance_insurance_enabled": True,
         "cpa_alliance_insurance_reason": None,
+    }
+
+
+def _resolve_cpi_reqd_context(
+    dealer_id: int | None,
+    staging_id: str | None,
+) -> dict[str, str | None]:
+    """Staging ``cpi_reqd`` wins when a staging row exists; else ``dealer_ref.cpi_reqd``."""
+    dealer_cpi = "N"
+    staging_cpi: str | None = None
+    if dealer_id is not None and int(dealer_id) > 0:
+        sid = (staging_id or "").strip() or None
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                dealer_cpi = fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=int(dealer_id))
+                if sid:
+                    try:
+                        uuid.UUID(sid)
+                        staging_cpi = fetch_staging_cpi_reqd_on_cursor(
+                            cur, staging_id=sid, dealer_id=int(dealer_id)
+                        )
+                    except ValueError:
+                        staging_cpi = None
+        finally:
+            conn.close()
+    effective = staging_cpi if staging_cpi is not None else dealer_cpi
+    return {
+        "dealer_cpi_reqd": dealer_cpi,
+        "staging_cpi_reqd": staging_cpi,
+        "effective_cpi_reqd": effective,
     }
 
 
@@ -87,6 +134,7 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         "cpa_insurers": None,
         "hero_cpi": None,
         "dealer_cpa_insurer": None,
+        "dealer_cpi_reqd": "N",
         "cpa_alliance_portal_enabled": False,
         "portal_insurers": [],
         "financiers": [],
@@ -100,7 +148,7 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         financiers = list_ref_values(conn, REF_TYPE_FINANCER)
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT hero_cpi, cpa_insurer FROM dealer_ref WHERE dealer_id = %s LIMIT 1",
+                "SELECT hero_cpi, cpa_insurer, cpi_reqd FROM dealer_ref WHERE dealer_id = %s LIMIT 1",
                 (int(dealer_id),),
             )
             row = cur.fetchone()
@@ -108,23 +156,28 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         conn.close()
     hero = "N"
     dcpa: str | None = None
+    dealer_cpi = "N"
     if row:
         if isinstance(row, dict):
             hero_raw = row.get("hero_cpi")
             dcpa_raw = row.get("cpa_insurer")
+            cpi_raw = row.get("cpi_reqd")
         else:
             hero_raw = row[0] if row else None
             dcpa_raw = row[1] if row and len(row) > 1 else None
+            cpi_raw = row[2] if row and len(row) > 2 else None
         hero = str(hero_raw or "N").strip().upper()[:1] or "N"
         if hero not in ("Y", "N"):
             hero = "N"
         if dcpa_raw is not None and str(dcpa_raw).strip():
             dcpa = str(dcpa_raw).strip()
+        dealer_cpi = _normalize_cpi_reqd_flag(cpi_raw)
     enabled = hero != "Y" and len(portals) > 0
     return {
         "cpa_insurers": portals,
         "hero_cpi": hero,
         "dealer_cpa_insurer": dcpa,
+        "dealer_cpi_reqd": dealer_cpi,
         "cpa_alliance_portal_enabled": enabled,
         "portal_insurers": portal_insurers,
         "financiers": financiers,
@@ -198,7 +251,12 @@ def get_add_sales_staging_payload(
     payload = fetch_staging_payload(staging_id.strip(), did)
     if not payload:
         raise HTTPException(status_code=404, detail="Staging not found or not accessible for this dealer.")
-    return {"staging_id": staging_id.strip(), "payload_json": payload}
+    cpi_ctx = _resolve_cpi_reqd_context(did, staging_id.strip())
+    return {
+        "staging_id": staging_id.strip(),
+        "payload_json": payload,
+        "cpi_reqd": cpi_ctx.get("staging_cpi_reqd") or cpi_ctx.get("dealer_cpi_reqd") or "N",
+    }
 
 
 @router.patch("/staging/{staging_id}/payload")
@@ -239,7 +297,12 @@ def get_dealer_cpa_context(
     return _cpa_eligibility_extras(dealer_id)
 
 
-def _eligibility_by_customer_vehicle_ids(customer_id: int, vehicle_id: int) -> dict:
+def _eligibility_by_customer_vehicle_ids(
+    customer_id: int,
+    vehicle_id: int,
+    *,
+    effective_cpi_reqd: str = "N",
+) -> dict:
     """
     Same rules as natural-key eligibility, but keyed by committed ``sales_master`` pair.
     Used after Create Invoice when chassis/engine strings from the UI may not match ``raw_*`` LIKE patterns.
@@ -285,7 +348,11 @@ def _eligibility_by_customer_vehicle_ids(customer_id: int, vehicle_id: int) -> d
 
     resolved_cid = int(customer_id)
     resolved_vid = int(vehicle_id)
-    cpa_fields = _cpa_alliance_insurance_eligibility(has_cpa_row=has_cpa_row, ids_resolved=True)
+    cpa_fields = _cpa_alliance_insurance_eligibility(
+        has_cpa_row=has_cpa_row,
+        ids_resolved=True,
+        effective_cpi_reqd=effective_cpi_reqd,
+    )
 
     if srow is None:
         return {
@@ -365,6 +432,11 @@ def get_create_invoice_eligibility(
         ge=1,
         description="Optional: when set, response includes CPA portal list and dealer hero_cpi / cpa_insurer for Add Sales UI.",
     ),
+    staging_id: str | None = Query(
+        None,
+        max_length=64,
+        description="Optional: resolve staging.cpi_reqd for CPA Insurance eligibility (sheet wins over dealer).",
+    ),
 ) -> dict:
     """
     Eligibility uses **vehicle** identity (``raw_frame_num`` + ``raw_engine_num``) and **customer**
@@ -388,9 +460,18 @@ def get_create_invoice_eligibility(
     When **dealer_id** is provided, the response also includes **CPA Alliance** portal metadata
     (``cpa_insurers``, ``hero_cpi``, ``dealer_cpa_insurer``, ``cpa_alliance_portal_enabled``).
     """
-    cpa_x = _cpa_eligibility_extras(dealer_id)
+    cpi_ctx = _resolve_cpi_reqd_context(dealer_id, staging_id)
+    cpa_x = {**_cpa_eligibility_extras(dealer_id), **cpi_ctx}
+    effective_cpi = str(cpi_ctx.get("effective_cpi_reqd") or "N")
     if customer_id is not None and vehicle_id is not None:
-        return {**_eligibility_by_customer_vehicle_ids(int(customer_id), int(vehicle_id)), **cpa_x}
+        return {
+            **_eligibility_by_customer_vehicle_ids(
+                int(customer_id),
+                int(vehicle_id),
+                effective_cpi_reqd=effective_cpi,
+            ),
+            **cpa_x,
+        }
 
     ch = (chassis_num or "").strip()
     eng = (engine_num or "").strip()
@@ -479,11 +560,19 @@ def get_create_invoice_eligibility(
             "generate_insurance_reason": "Create Invoice before Generating Insurance",
             "resolved_customer_id": None,
             "resolved_vehicle_id": None,
-            **_cpa_alliance_insurance_eligibility(has_cpa_row=False, ids_resolved=False),
+            **_cpa_alliance_insurance_eligibility(
+                has_cpa_row=False,
+                ids_resolved=False,
+                effective_cpi_reqd=effective_cpi,
+            ),
             **cpa_x,
         }
 
-    cpa_fields = _cpa_alliance_insurance_eligibility(has_cpa_row=has_cpa_row, ids_resolved=True)
+    cpa_fields = _cpa_alliance_insurance_eligibility(
+        has_cpa_row=has_cpa_row,
+        ids_resolved=True,
+        effective_cpi_reqd=effective_cpi,
+    )
 
     if srow is None:
         return {

@@ -9,7 +9,7 @@ from typing import Any
 
 from app.config import DEALER_ID
 from app.db import get_connection
-from app.repositories.add_sales_staging import persist_staging_for_submit
+from app.repositories.add_sales_staging import persist_staging_for_submit, _normalize_cpi_reqd_flag
 from app.services.customer_address_infer import enrich_customer_address_from_freeform
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
 from app.services.sales_ocr_service import _sanitize_details_profession_value
@@ -55,6 +55,7 @@ def submit_info(
     file_location: str | None = None,
     staging_id: str | None = None,
     login_id: str | None = None,
+    cpi_reqd: str | None = None,
 ) -> dict[str, Any]:
     """
     Validate, enrich address, INSERT/UPDATE draft ``add_sales_staging`` only.
@@ -133,6 +134,7 @@ def submit_info(
             pass
 
     effective_dealer_id = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
+    staging_cpi_reqd = _normalize_cpi_reqd_flag(cpi_reqd) if cpi_reqd is not None else None
 
     staging_payload: dict[str, Any] = {
         "dealer_id": effective_dealer_id,
@@ -184,6 +186,7 @@ def submit_info(
                 payload=staging_payload,
                 staging_id_existing=staging_id,
                 login_id=login_id,
+                cpi_reqd=staging_cpi_reqd,
             )
         conn.commit()
 

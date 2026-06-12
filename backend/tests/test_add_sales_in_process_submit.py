@@ -20,6 +20,44 @@ def test_normalize_text_casefold_collapse_space():
     assert repo.normalize_staging_natural_key_text("") is None
 
 
+def test_normalize_cpi_reqd_flag():
+    assert repo._normalize_cpi_reqd_flag("Y") == "Y"
+    assert repo._normalize_cpi_reqd_flag("n") == "N"
+    assert repo._normalize_cpi_reqd_flag(None) == "N"
+
+
+def test_fetch_dealer_cpi_reqd_on_cursor():
+    cur = MagicMock()
+    cur.fetchone.return_value = {"cpi_reqd": "Y"}
+    assert repo.fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=100001) == "Y"
+    cur.fetchone.return_value = None
+    assert repo.fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=999) == "N"
+
+
+def test_persist_submit_updates_cpi_reqd_on_draft():
+    cur = MagicMock()
+    cur.fetchone.return_value = {"status": "draft"}
+    cur.rowcount = 1
+    payload = {
+        "dealer_id": 1,
+        "file_location": None,
+        "customer": {"mobile_number": 9876543210, "name": "X"},
+        "vehicle": {"frame_no": "CH1", "engine_no": "EN1"},
+        "insurance": {},
+    }
+    sid = repo.persist_staging_for_submit(
+        cur,
+        dealer_id=1,
+        payload=payload,
+        staging_id_existing="11111111-1111-1111-1111-111111111111",
+        login_id=None,
+        cpi_reqd="Y",
+    )
+    assert sid == "11111111-1111-1111-1111-111111111111"
+    sql = cur.execute.call_args_list[-1][0][0]
+    assert "cpi_reqd = %s" in sql
+
+
 def test_persist_submit_raises_when_staging_id_is_committed():
     cur = MagicMock()
     cur.fetchone.return_value = {"status": "committed"}

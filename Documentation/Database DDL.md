@@ -189,17 +189,18 @@ This document lists the current database tables and their columns. **Executable 
 | `rto_name` | `varchar(128)` | YES |  | Dealer-mapped RTO office name (e.g. `RTO-Bharatpur`) |
 | `prefer_insurer` | `varchar(255)` | YES |  | Optional canonical MISP insurer label; when merged details-sheet insurer fuzzy-matches (≥20%) to this string, **`build_insurance_fill_values`** uses **`prefer_insurer`** for KYC (**`DDL/alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql`**) |
 | `hero_cpi` | `char(1)` | NO | `'N'` | **Y** or **N**: MISP proposal CPA add-on row (label varies — NIC/CPI/Hero CPI); automation checks when **Y**, unchecks when **N** (**`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**) |
+| `cpi_reqd` | `char(1)` | NO | `'N'` | **Y** or **N**: whether dealer requires/participates in CPI (separate from **`hero_cpi`**); **Arya Agencies** seeded **Y**, others **N** (**`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**) |
 | `cpa_insurer` | `varchar(512)` | YES |  | Optional CPA third-party portal row (**`ref_type`** = **CPA** on **`master_ref`**); portal login URL stored in **`master_ref.comments`**; composite FK **`fk_dealer_ref_cpa_insurer`** — **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**, greenfield **`DDL/04b_dealer_ref.sql`** |
 
 **Primary key:** `dealer_ref_pkey` on (`dealer_id`)
 
-**Checks:** `chk_dealer_ref_auto_sms_reminders` — `auto_sms_reminders` IN ('Y', 'N'); `chk_dealer_ref_hero_cpi` — `hero_cpi` IN ('Y', 'N')
+**Checks:** `chk_dealer_ref_auto_sms_reminders` — `auto_sms_reminders` IN ('Y', 'N'); `chk_dealer_ref_hero_cpi` — `hero_cpi` IN ('Y', 'N'); `chk_dealer_ref_cpi_reqd` — `cpi_reqd` IN ('Y', 'N')
 
 **Foreign keys:**
 - `fk_dealer_ref_oem`: (`oem_id`) → `oem_ref(oem_id)`
 - `fk_dealer_ref_cpa_insurer`: (`cpa_insurer_ref_type`, `cpa_insurer`) → `master_ref(ref_type, ref_value)` when **`cpa_insurer`** is set (**`DDL/alter/29a_*.sql`**)
 
-**Scripts:** `DDL/04b_dealer_ref.sql` (greenfield); add **`subdealer_type`**, reordered columns on new installs: same file; **upgrade** existing DB: **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**, **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**, **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**
+**Scripts:** `DDL/04b_dealer_ref.sql` (greenfield); add **`subdealer_type`**, reordered columns on new installs: same file; **upgrade** existing DB: **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**, **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**, **`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**, **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**
 
 ---
 
@@ -714,6 +715,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `status` | `varchar(32)` | NO | `'draft'` | `draft` / `committed` / `abandoned` |
 | `dms_state` | `integer` | NO | `0` | DMS processing state (**`0`** = not started; **`1`** = vehicle prep complete + **`vehicle_master`** upserted; **`2`** = customer prep complete + **`customer_master`** upserted) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`**, **`fill_hero_dms_service`**, **`hero_dms_db_service`** |
 | `insurance_state` | `integer` | NO | `0` | Insurance processing state (**`0`** = not started; **`2`** = policy preview Submit clicked on MISP) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`** |
+| `cpi_reqd` | `char(1)` | NO |  | **Y** or **N**: CPA required for this staging snapshot; legacy rows backfilled **Y**; set from Sales Detail Sheet OCR (**`insurance.cpa_reqd`**) and Section C on **Submit Info** (staging wins over **`dealer_ref.cpi_reqd`** for CPA Insurance eligibility) — **`DDL/alter/34b_add_sales_staging_cpi_reqd.sql`**, **`persist_staging_for_submit`** |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
 | `expires_at` | `timestamptz` | YES |  | Optional TTL for cleanup |
@@ -722,7 +724,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 **Foreign keys:** `dealer_id` → `dealer_ref(dealer_id)`; `login_id` → `login_ref(login_id)` (nullable)
 
-**Scripts:** `DDL/alter/13a_add_sales_staging.sql`; **`DDL/alter/13c_add_sales_staging_login_id.sql`**; **`DDL/alter/13d_add_sales_staging_subfolder.sql`**; **`DDL/alter/31b_add_sales_staging_processing_state.sql`**
+**Scripts:** `DDL/alter/13a_add_sales_staging.sql`; **`DDL/alter/13c_add_sales_staging_login_id.sql`**; **`DDL/alter/13d_add_sales_staging_subfolder.sql`**; **`DDL/alter/31b_add_sales_staging_processing_state.sql`**; **`DDL/alter/34b_add_sales_staging_cpi_reqd.sql`**
 
 ---
 
@@ -853,6 +855,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 2.98 | Jun 2026 | **`ocr_run_log`** — append-only Add Sales OCR runs with missing derived fields; Admin Usage **OCR Logs** tab; **`GET /admin/ocr-logs`** (15-day window); **`DDL/31_ocr_run_log.sql`** |
 | 3.00 | Jun 2026 | **`form_vahan_view.mobile`**: **`COALESCE(rto_queue.customer_mobile, customer_master.mobile_number)`** for operator alternate Vahan OTP mobile; **`rto_queue.customer_mobile`** note updated — **`DDL/alter/33a_form_vahan_view_queue_mobile.sql`**, **`DDL/alter/10e_form_vahan_view.sql`**; **`rto_payment_details.update_customer_mobile`**, **`fill_rto_service`** |
 | 3.01 | Jun 2026 | **`rto_queue.in_queue`** (default true) for per-row Vahan batch opt-in; statuses **Forms Missing**, **Manually Completed** — **`DDL/alter/33b_rto_queue_in_queue.sql`**, RTO Queue subtabs UI |
+| 3.02 | Jun 2026 | **`dealer_ref.cpi_reqd`** (**Y**/**N**, default **N**; **Arya Agencies** **Y**); **`add_sales_staging.cpi_reqd`** (legacy backfill **Y**; OCR **CPA Required** + Section C on Submit Info; staging wins for CPA Insurance eligibility) — **`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**, **`DDL/alter/34b_add_sales_staging_cpi_reqd.sql`**, **`sales_ocr_service`**, **`add_sales.py`** |
 
 
 ## `process_failure_log`

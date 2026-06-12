@@ -59,15 +59,19 @@ FOR_OCR_SUBDIR = "for_OCR"
 
 
 def _prefer_for_ocr_input(subdir: Path, pdf_name: str, jpg_name: str, *legacy_root: str) -> Path:
-    """Prefer ``for_OCR/<pdf_name>`` when present (bulk pipeline); else first existing sale-folder file."""
+    """Prefer ``for_OCR/`` inputs (PDF then JPEG) when present; else legacy sale-root JPEG names."""
     p = subdir / FOR_OCR_SUBDIR / pdf_name
     if p.is_file():
         return p
     for name in (jpg_name,) + legacy_root:
+        fo = subdir / FOR_OCR_SUBDIR / name
+        if fo.is_file():
+            return fo
+    for name in (jpg_name,) + legacy_root:
         r = subdir / name
         if r.is_file():
             return r
-    return subdir / jpg_name
+    return subdir / FOR_OCR_SUBDIR / jpg_name
 
 
 def _prefer_details_sheet_input(subdir: Path) -> Path:
@@ -1101,8 +1105,8 @@ def _pipeline_merge_aadhar_customer(
         )
 
     bt = back_textract
-    if back_bytes and not _aadhar_geo_ok(customer):
-        if not bt or bt.get("error") or not _ftext(bt):
+    if not _aadhar_geo_ok(customer):
+        if back_bytes and (not bt or bt.get("error") or not _ftext(bt)):
             t_tx = time.perf_counter()
             try:
                 bt = extract_text_from_bytes(back_bytes)
@@ -1351,7 +1355,7 @@ def _apply_aadhar_textract_fallbacks_from_parts(
 
     def _aadhar_section_order(fn: str) -> int:
         fl = fn.strip().replace("\\", "/").split("/")[-1].lower()
-        if fl in ("aadhar.jpg", "aadhar.pdf"):
+        if fl in ("aadhar.jpg", "aadhar.pdf", "aadhar_front.jpg", "aadhar_front.pdf"):
             return 0
         if fl in ("aadhar_back.jpg", "aadhar_back.pdf"):
             return 1
@@ -1361,7 +1365,7 @@ def _apply_aadhar_textract_fallbacks_from_parts(
         if not tx or not str(tx).strip():
             continue
         fl = fn.strip().replace("\\", "/").split("/")[-1].lower()
-        if fl in ("aadhar.jpg", "aadhar.pdf"):
+        if fl in ("aadhar.jpg", "aadhar.pdf", "aadhar_front.jpg", "aadhar_front.pdf"):
             customer = _merge_aadhar_textract_fallback_dict(
                 customer, _parse_aadhar_front_textract_fallback(tx)
             )
@@ -1476,6 +1480,8 @@ _INSURANCE_KEY_ALIASES = {
         "married status",
         "martial status",
         "customer martial status",
+        "married (yes/ no)?",
+        "married (yes/no)?",
     ],
     "nominee_gender": ["nominee gender", "gender of nominee", "sex of nominee", "nominee sex"],
     "nominee_name": [
@@ -1514,6 +1520,14 @@ _INSURANCE_KEY_ALIASES = {
         "mode of payment",
         "payment type",
     ],
+    "cpa_reqd": [
+        "cpa required",
+        "cpa reqd",
+        "cpa req",
+        "cpa required:",
+        "cpa required (yes/ no)?",
+        "cpa required (yes/no)?",
+    ],
 }
 
 # Map Textract form keys to customer name on Details sheet.
@@ -1541,6 +1555,8 @@ _DETAILS_CUSTOMER_KEY_ALIASES = {
         "customer marital status",
         "martial status",
         "customer martial status",
+        "married (yes/ no)?",
+        "married (yes/no)?",
     ],
     "financier": [
         "financier name",
@@ -1589,6 +1605,31 @@ def _normalize_key_for_match(key: str) -> str:
     return re.sub(r"\s+", " ", (key or "").lower().strip())
 
 
+# Sales Detail Sheet v4 yes/no labels (``Married (Yes/ No)?``, ``CPA Required (Yes/ No)?``).
+_V4_MARRIED_YES_NO_LINE_RE = re.compile(
+    r"(?i)^\s*Married\s*\(\s*Yes\s*/\s*No\s*\)\s*\?\s*(.*)$",
+)
+_V4_CPA_REQUIRED_YES_NO_LINE_RE = re.compile(
+    r"(?i)^\s*CPA\s+Required\s*\(\s*Yes\s*/\s*No\s*\)\s*\?\s*(.*)$",
+)
+_V4_MARRIED_YES_NO_REGION_RE = re.compile(
+    r"(?i)married\s*\(\s*yes\s*/\s*no\s*\)\s*\?",
+)
+_V4_CPA_REQUIRED_YES_NO_REGION_RE = re.compile(
+    r"(?i)cpa\s+required\s*\(\s*yes\s*/\s*no\s*\)\s*\?",
+)
+
+
+def _is_v4_marital_label_text(low: str) -> bool:
+    return bool(_V4_MARRIED_YES_NO_REGION_RE.search(low)) or ("marital" in low and "status" in low)
+
+
+def _is_v4_cpa_required_label_text(low: str) -> bool:
+    return bool(_V4_CPA_REQUIRED_YES_NO_REGION_RE.search(low)) or (
+        "cpa" in low and ("required" in low or "reqd" in low or " req" in low)
+    )
+
+
 # Printed Details sheets: **handwritten or typed words** for Profession, Marital status, Nominee (fuzzy ≥ 0.5);
 # legacy checkbox / tick / **filled-box** rows still supported via ``_normalize_kv_value_for_checkbox_fields`` and
 # ``_normalize_filled_box_marks_to_selected_token``.
@@ -1609,6 +1650,16 @@ _FIELD_CHECKBOX_ALIASES: dict[str, list[tuple[str, str]]] = {
         ("divorced", "Single"),
         ("widowed", "Single"),
         ("never married", "Single"),
+        ("yes", "Married"),
+        ("y", "Married"),
+        ("no", "Single"),
+        ("n", "Single"),
+    ],
+    "cpa_reqd": [
+        ("yes", "Y"),
+        ("y", "Y"),
+        ("no", "N"),
+        ("n", "N"),
     ],
     "nominee_gender": [
         ("male", "Male"),
@@ -1988,6 +2039,7 @@ def details_fragment_to_api_payload(frag_d: dict[str, Any]) -> dict[str, Any]:
                 "nominee_gender",
                 "nominee_relationship",
                 "payment_mode",
+                "cpa_reqd",
             )
             and v
         },
@@ -1995,6 +2047,8 @@ def details_fragment_to_api_payload(frag_d: dict[str, Any]) -> dict[str, Any]:
     if "profession" in insurance_merged:
         sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
         insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
+    if "cpa_reqd" in insurance_merged:
+        insurance_merged["cpa_reqd"] = _normalize_cpa_required_value(insurance_merged.get("cpa_reqd"))
 
     _apply_nominee_relationship_gender_to_mapping(insurance_merged)
     customer = enrich_customer_address_from_freeform(customer)
@@ -2608,11 +2662,20 @@ def _canonical_marital_status_from_text(s: str) -> str | None:
         "",
         t,
     ).strip()
+    t = re.sub(
+        r"(?i)^[\s\-–—:._]*married\s*\(\s*yes\s*/\s*no\s*\)\s*\?\s*",
+        "",
+        t,
+    ).strip()
     # Handwriting / OCR: "Mar...", "Mar…" (ellipsis) — remove so **Mar** fuzzy-maps to **Married** (see tests below).
     t = re.sub(r"\u2026|\.{2,}", "", t).strip()
     sl = re.sub(r"\s+", " ", t.lower())
     if not sl:
         return None
+    if sl in ("y", "yes"):
+        return "Married"
+    if sl in ("n", "no"):
+        return "Single"
     if re.search(r"\bnever\s+married\b", sl):
         return "Single"
     if re.search(r"\b(unmarried|unmaried|un-maried)\b", sl):
@@ -2701,13 +2764,43 @@ def _sanitize_details_profession_value(val: str | None) -> str | None:
     return None
 
 
+def _normalize_cpa_required_value(val: str | None) -> str:
+    """Map Sales Detail Sheet CPA Required to **Y** or **N** (default **N** when blank)."""
+    if val is None or not str(val).strip():
+        return "N"
+    raw = str(val).strip()
+    raw = re.sub(
+        r"(?i)^[\s\-–—:._]*cpa\s+required\s*\(\s*yes\s*/\s*no\s*\)\s*\?\s*",
+        "",
+        raw,
+    ).strip()
+    s = re.sub(r"\s+", " ", raw.lower())
+    s = re.sub(
+        r"(?i)^[\s\-–—:._]*(?:cpa\s*)?(?:required|reqd|req)\s*[:\s]*",
+        "",
+        s,
+    ).strip()
+    if not s:
+        return "N"
+    if s in ("y", "yes"):
+        return "Y"
+    if s in ("n", "no"):
+        return "N"
+    if s.startswith("y"):
+        return "Y"
+    if s.startswith("n"):
+        return "N"
+    return "N"
+
+
 def _normalize_details_marital_status_value(val: str | None) -> str | None:
     """
     Normalize to **Married** or **Single** only. **Single** includes unmarried, divorced, widowed,
     never married (plus OCR **Unmaried**). Fuzzy match ≥ 0.5 vs Married/Single when keywords do not apply.
+    v4 template blank → **Married** (default Y).
     """
     if val is None or not str(val).strip():
-        return None
+        return "Married"
     s = str(val).strip()
     s = s.replace("\u2013", "-").replace("\u2014", "-").lstrip("-–—").strip()
     sl = re.sub(r"\s+", " ", s.lower())
@@ -3004,6 +3097,8 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             out["payment_mode"] = pm
         else:
             out.pop("payment_mode", None)
+    if "cpa_reqd" in out:
+        out["cpa_reqd"] = _normalize_cpa_required_value(out.get("cpa_reqd"))
     if "insurer" in out:
         ins = sanitize_details_sheet_insurer_value(out.get("insurer"))
         if ins:
@@ -3095,7 +3190,14 @@ def _full_text_from_sales_detail_sheet_heading(text: str) -> str:
 
 # Textract FORMS may omit checkbox ticks on scanned PDFs; LINE ``full_text`` + TABLE cells still carry marks.
 _CHECKBOX_MERGE_FIELDS = frozenset(
-    {"profession", "marital_status", "nominee_gender", "nominee_relationship", "payment_mode"}
+    {
+        "profession",
+        "marital_status",
+        "nominee_gender",
+        "nominee_relationship",
+        "payment_mode",
+        "cpa_reqd",
+    }
 )
 
 
@@ -3116,6 +3218,8 @@ def _checkbox_field_fully_resolved(field: str, val: str | None) -> bool:
         return bool(normalize_nominee_relationship_value(v))
     if field == "payment_mode":
         return bool(_normalize_payment_mode_sheet_value(v))
+    if field == "cpa_reqd":
+        return _normalize_cpa_required_value(v) in ("Y", "N")
     return bool(v)
 
 
@@ -3131,10 +3235,13 @@ def _parse_sales_detail_checkbox_regions(full_text: str) -> dict[str, str]:
     # (regex after heading, field)
     regions: list[tuple[str, str]] = [
         (r"(?i)profession(?:\s+of\s+customer)?", "profession"),
+        (r"(?i)married\s*\(\s*yes\s*/\s*no\s*\)\s*\?", "marital_status"),
         (r"(?i)(?:customer\s+)?marital\s*status", "marital_status"),
         (r"(?i)nominee\s*relationship(?:\s*with\s*customer)?", "nominee_relationship"),
         (r"(?i)relationship\s*with\s*customer", "nominee_relationship"),
         (r"(?i)nominee\s*gender|gender\s*of\s*nominee|sex\s*of\s*nominee", "nominee_gender"),
+        (r"(?i)cpa\s+required\s*\(\s*yes\s*/\s*no\s*\)\s*\?", "cpa_reqd"),
+        (r"(?i)cpa\s*(?:required|reqd|req)", "cpa_reqd"),
     ]
     for pat, field in regions:
         if field in out:
@@ -3145,8 +3252,13 @@ def _parse_sales_detail_checkbox_regions(full_text: str) -> dict[str, str]:
             if cb:
                 out[field] = cb
                 break
-            tail = text[m.end() : m.end() + 400]
-            cb = _extract_checkbox_selection_value(tail, field)
+            tail = text[m.end() : m.end() + 400].strip()
+            tail_line = tail.splitlines()[0].strip() if tail else ""
+            cb = _extract_checkbox_selection_value(tail_line, field)
+            if not cb and field == "marital_status" and tail_line:
+                cb = _normalize_details_marital_status_value(tail_line)
+            if not cb and field == "cpa_reqd" and tail_line:
+                cb = _normalize_cpa_required_value(tail_line)
             if cb:
                 out[field] = cb
                 break
@@ -3169,8 +3281,12 @@ def _parse_sales_detail_checkbox_from_tables(tables: list[list[list[str]]]) -> d
                 cb = _extract_checkbox_selection_value(joined, "profession")
                 if cb:
                     out["profession"] = cb
-            if "marital" in low and "status" in low and "marital_status" not in out:
+            if _is_v4_marital_label_text(low) and "marital_status" not in out:
                 cb = _extract_checkbox_selection_value(joined, "marital_status")
+                if not cb:
+                    m_v4 = _V4_MARRIED_YES_NO_REGION_RE.search(joined)
+                    if m_v4:
+                        cb = _normalize_details_marital_status_value(joined[m_v4.end() :].strip())
                 if cb:
                     out["marital_status"] = cb
             if (
@@ -3184,6 +3300,14 @@ def _parse_sales_detail_checkbox_from_tables(tables: list[list[list[str]]]) -> d
                 cb = _extract_checkbox_selection_value(joined, "nominee_gender")
                 if cb:
                     out["nominee_gender"] = cb
+            if _is_v4_cpa_required_label_text(low) and "cpa_reqd" not in out:
+                cb = _extract_checkbox_selection_value(joined, "cpa_reqd")
+                if not cb:
+                    m_v4 = _V4_CPA_REQUIRED_YES_NO_REGION_RE.search(joined)
+                    if m_v4:
+                        cb = _normalize_cpa_required_value(joined[m_v4.end() :].strip())
+                if cb:
+                    out["cpa_reqd"] = cb
     return out
 
 
@@ -3206,6 +3330,8 @@ def _normalize_scanned_checkbox_candidate(field: str, cand: str) -> str:
     if field == "payment_mode":
         pm = _normalize_payment_mode_sheet_value(v)
         return pm if pm else ""
+    if field == "cpa_reqd":
+        return _normalize_cpa_required_value(v)
     return v.strip()
 
 
@@ -3307,7 +3433,13 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
         ("financier", "financier"),
         ("mode of payment", "payment_mode"),
         ("payment mode", "payment_mode"),
+        ("married (yes/ no)?", "marital_status"),
+        ("married (yes/no)?", "marital_status"),
         ("marital status", "marital_status"),
+        ("cpa required (yes/ no)?", "cpa_reqd"),
+        ("cpa required (yes/no)?", "cpa_reqd"),
+        ("cpa required", "cpa_reqd"),
+        ("cpa reqd", "cpa_reqd"),
         ("nominee gender", "nominee_gender"),
         ("sex of nominee", "nominee_gender"),
         ("name of the nominee", "nominee_name"),
@@ -3353,6 +3485,13 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                 if cb:
                     val = cb
                 val = _normalize_nominee_gender_sheet_value(val)
+                if not val:
+                    continue
+            elif key == "cpa_reqd":
+                cb = _extract_checkbox_selection_value(val, "cpa_reqd")
+                if cb:
+                    val = cb
+                val = _normalize_cpa_required_value(val)
                 if not val:
                     continue
             elif key == "payment_mode":
@@ -3432,7 +3571,10 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
     # Single LINE blocks with label + checkbox row (new template): "Profession: [✓] Private [ ] Job ..."
     _inline_checkbox = [
         (re.compile(r"(?i)^\s*Profession\s*:\s*(.+)$"), "profession"),
+        (_V4_MARRIED_YES_NO_LINE_RE, "marital_status"),
         (re.compile(r"(?i)^\s*Marital\s+Status\s*:\s*(.+)$"), "marital_status"),
+        (_V4_CPA_REQUIRED_YES_NO_LINE_RE, "cpa_reqd"),
+        (re.compile(r"(?i)^\s*CPA\s+Required\s*:\s*(.+)$"), "cpa_reqd"),
         (re.compile(r"(?i)^\s*Nominee\s+Gender\s*:\s*(.+)$"), "nominee_gender"),
         (re.compile(r"(?i)^\s*Nominee\s+Relationship\s*:\s*(.+)$"), "nominee_relationship"),
         (re.compile(r"(?i)^\s*Relation\s*:\s*(.+)$"), "nominee_relationship"),
@@ -3453,6 +3595,10 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                     out[key] = cand
             elif field == "marital_status":
                 cand = _extract_checkbox_selection_value(rest, field) or _normalize_details_marital_status_value(rest)
+                if cand:
+                    out[key] = cand
+            elif field == "cpa_reqd":
+                cand = _extract_checkbox_selection_value(rest, field) or _normalize_cpa_required_value(rest)
                 if cand:
                     out[key] = cand
             elif field == "nominee_gender":
@@ -3772,6 +3918,7 @@ class OcrService:
                         "nominee_gender",
                         "nominee_relationship",
                         "payment_mode",
+                        "cpa_reqd",
                     )
                     and v
                 },
@@ -3779,6 +3926,8 @@ class OcrService:
             if "profession" in insurance_merged:
                 sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
                 insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
+            if "cpa_reqd" in insurance_merged:
+                insurance_merged["cpa_reqd"] = _normalize_cpa_required_value(insurance_merged.get("cpa_reqd"))
 
             _apply_nominee_relationship_gender_to_mapping(insurance_merged)
 

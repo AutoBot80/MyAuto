@@ -2608,7 +2608,7 @@ def run_fill_dms_only(
                 try:
                     _frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
                     _mob_pf = (dms_values.get("mobile_phone") or "").strip()
-                    _dl_dir = get_uploaded_scans_sale_folder(int(DEALER_ID), _mob_pf).resolve()
+                    _dl_dir = get_uploaded_scans_sale_folder(did_eff, _mob_pf).resolve()
                     _ok_pf, _err_pf, _paths_pf, _reports_pf = run_hero_dms_reports(
                         page,
                         mobile=_mob_pf,
@@ -3148,7 +3148,7 @@ def Playwright_Hero_DMS_fill(
             order_scraped=order_scraped,
             preexisting_customer_id=customer_id,
             preexisting_vehicle_id=vehicle_id,
-            dealer_id=int(DEALER_ID),
+            dealer_id=did_eff,
             log_fp=log_fp,
             note=note,
         )
@@ -3163,7 +3163,7 @@ def Playwright_Hero_DMS_fill(
         if _should_run_reports:
             try:
                 _frame_sel_pf = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
-                _dl_dir_pf = get_uploaded_scans_sale_folder(int(DEALER_ID), mobile).resolve()
+                _dl_dir_pf = get_uploaded_scans_sale_folder(did_eff, mobile).resolve()
                 _ok_pf, _err_pf, _paths_pf, _reports_pf = run_hero_dms_reports(
                     page,
                     mobile=mobile,

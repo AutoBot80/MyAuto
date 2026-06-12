@@ -146,6 +146,7 @@ def list_in_process_staging_rows(*, dealer_id: int, days: int = 7) -> list[dict[
                     s.staging_id::text AS staging_id,
                     s.updated_at,
                     s.status,
+                    s.cpi_reqd,
                     NULLIF(trim(s.payload_json->'customer'->>'name'), '') AS customer_name,
                     NULLIF(trim(s.payload_json->'customer'->>'mobile_number'), '') AS mobile,
                     NULLIF(trim(s.payload_json->'vehicle'->>'frame_no'), '') AS chassis,
@@ -247,6 +248,53 @@ def fetch_staging_id_status_on_cursor(cur, *, staging_id: str, dealer_id: int) -
         return None
     v = row["status"] if isinstance(row, dict) else row[0]
     return str(v).strip() if v is not None else None
+
+
+def _normalize_cpi_reqd_flag(raw: object | None) -> str:
+    return "Y" if str(raw or "").strip().upper() == "Y" else "N"
+
+
+def fetch_dealer_cpi_reqd_on_cursor(cur, *, dealer_id: int) -> str:
+    """Return ``dealer_ref.cpi_reqd`` as Y/N; ``N`` when dealer row is missing."""
+    cur.execute(
+        """
+        SELECT cpi_reqd
+        FROM dealer_ref
+        WHERE dealer_id = %s
+        LIMIT 1
+        """,
+        (int(dealer_id),),
+    )
+    row = cur.fetchone()
+    if not row:
+        return "N"
+    raw = row["cpi_reqd"] if isinstance(row, dict) else row[0]
+    return _normalize_cpi_reqd_flag(raw)
+
+
+def fetch_staging_cpi_reqd_on_cursor(cur, *, staging_id: str, dealer_id: int) -> str | None:
+    """Return ``add_sales_staging.cpi_reqd`` when row exists; else None."""
+    sid = (staging_id or "").strip()
+    if not sid:
+        return None
+    try:
+        uuid.UUID(sid)
+    except ValueError:
+        return None
+    cur.execute(
+        """
+        SELECT cpi_reqd
+        FROM add_sales_staging
+        WHERE staging_id = %s::uuid AND dealer_id = %s
+        LIMIT 1
+        """,
+        (sid, int(dealer_id)),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    raw = row["cpi_reqd"] if isinstance(row, dict) else row[0]
+    return _normalize_cpi_reqd_flag(raw)
 
 
 def fetch_staging_payload(staging_id: str, dealer_id: int) -> dict[str, Any] | None:
@@ -402,6 +450,7 @@ def persist_staging_for_submit(
     payload: dict[str, Any],
     staging_id_existing: str | None,
     login_id: str | None = None,
+    cpi_reqd: str | None = None,
 ) -> str:
     """
     Upsert **draft** ``add_sales_staging`` for Submit Info: update by client ``staging_id`` when draft;
@@ -413,6 +462,7 @@ def persist_staging_for_submit(
     payload_str = json.dumps(payload, default=str)
     lid = (login_id or "").strip() or None
     sf = (payload.get("file_location") or "").strip() or None
+    submitted_cpi = _normalize_cpi_reqd_flag(cpi_reqd) if cpi_reqd is not None else None
 
     sid_in = (staging_id_existing or "").strip()
     if sid_in:
@@ -426,16 +476,18 @@ def persist_staging_for_submit(
         if st == "committed":
             raise ValueError(SUBMIT_INFO_COMMITTED_SALE_MSG)
         if st == "draft":
+            cpi_val = submitted_cpi if submitted_cpi is not None else fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=dealer_id)
             cur.execute(
                 """
                 UPDATE add_sales_staging
                 SET payload_json = %s::jsonb,
                     updated_at = now(),
                     login_id = COALESCE(%s, login_id),
-                    subfolder = COALESCE(%s, subfolder)
+                    subfolder = COALESCE(%s, subfolder),
+                    cpi_reqd = %s
                 WHERE staging_id = %s::uuid AND dealer_id = %s AND status = 'draft'
                 """,
-                (payload_str, lid, sf, sid_in, dealer_id),
+                (payload_str, lid, sf, cpi_val, sid_in, dealer_id),
             )
             if cur.rowcount:
                 return sid_in
@@ -458,27 +510,30 @@ def persist_staging_for_submit(
             if str(hit.get("status") or "").strip() == "committed":
                 raise ValueError(SUBMIT_INFO_COMMITTED_SALE_MSG)
             upd_id = str(hit["staging_id"]).strip()
+            cpi_val = submitted_cpi if submitted_cpi is not None else fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=dealer_id)
             cur.execute(
                 """
                 UPDATE add_sales_staging
                 SET payload_json = %s::jsonb,
                     updated_at = now(),
                     login_id = COALESCE(%s, login_id),
-                    subfolder = COALESCE(%s, subfolder)
+                    subfolder = COALESCE(%s, subfolder),
+                    cpi_reqd = %s
                 WHERE staging_id = %s::uuid AND dealer_id = %s AND status = 'draft'
                 """,
-                (payload_str, lid, sf, upd_id, dealer_id),
+                (payload_str, lid, sf, cpi_val, upd_id, dealer_id),
             )
             if cur.rowcount:
                 return upd_id
 
     new_id = str(uuid.uuid4())
+    cpi_val = submitted_cpi if submitted_cpi is not None else fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=dealer_id)
     cur.execute(
         """
-        INSERT INTO add_sales_staging (staging_id, dealer_id, payload_json, status, login_id, subfolder)
-        VALUES (%s::uuid, %s, %s::jsonb, 'draft', %s, %s)
+        INSERT INTO add_sales_staging (staging_id, dealer_id, payload_json, status, login_id, subfolder, cpi_reqd)
+        VALUES (%s::uuid, %s, %s::jsonb, 'draft', %s, %s, %s)
         """,
-        (new_id, dealer_id, payload_str, lid, sf),
+        (new_id, dealer_id, payload_str, lid, sf, cpi_val),
     )
     return new_id
 

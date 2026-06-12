@@ -324,7 +324,9 @@ class UploadService:
 
             try:
                 t_split0 = time.perf_counter()
-                session_id, page_count = write_manual_session_jpegs(dealer_id, dest_pdf, page_images or {})
+                session_id, page_count = write_manual_session_jpegs(
+                    dealer_id, dest_pdf, page_images or {}, extra_image_paths=extra_image_paths,
+                )
                 split_ms = int((time.perf_counter() - t_split0) * 1000)
                 post_pre_steps.append(
                     (

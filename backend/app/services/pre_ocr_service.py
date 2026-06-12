@@ -330,6 +330,75 @@ def _is_image_file(path: Path) -> bool:
     return head[:3] == b"\xff\xd8\xff" or head[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def _shift_step_page_num(step_id: str, page_offset: int) -> str:
+    """Add *page_offset* to the trailing page number in raster/osd/load_image step ids."""
+    for prefix in ("raster_page_", "osd_page_", "load_image_page_"):
+        if step_id.startswith(prefix):
+            suffix = step_id[len(prefix) :]
+            if suffix.isdigit():
+                return f"{prefix}{int(suffix) + page_offset}"
+            break
+    return step_id
+
+
+def _paths_to_page_images(
+    paths: list[Path],
+    *,
+    fix_orientation: bool = True,
+    max_pages: int = 20,
+) -> tuple[list[tuple[int, Image.Image]], dict[int, int], list[tuple[str, int, str]]]:
+    """Build one page list from upload paths — each JPEG/PNG is one page; each PDF contributes N pages."""
+    result: list[tuple[int, Image.Image]] = []
+    osd_rotations: dict[int, int] = {}
+    page_timings: list[tuple[str, int, str]] = []
+    next_idx = 0
+
+    for p in paths:
+        if next_idx >= max_pages:
+            break
+        if _is_image_file(p):
+            page_no = next_idx + 1
+            t_r = time.perf_counter()
+            img = Image.open(p)
+            img.load()
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            img = _cap_raster_size(img, f"page_{page_no}")
+            raster_ms = int((time.perf_counter() - t_r) * 1000)
+            page_timings.append(
+                (f"load_image_page_{page_no}", raster_ms, f"native px={img.width}x{img.height} file={p.name}"),
+            )
+
+            if fix_orientation:
+                t_osd = time.perf_counter()
+                rot_cw = osd_deskew_clockwise_degrees_from_image(img)
+                osd_ms = int((time.perf_counter() - t_osd) * 1000)
+                osd_rotations[next_idx] = rot_cw
+                page_timings.append((f"osd_page_{page_no}", osd_ms, f"rotation={rot_cw}"))
+                if rot_cw:
+                    img = img.rotate(-rot_cw, expand=True, fillcolor="white")
+            else:
+                osd_rotations[next_idx] = 0
+
+            result.append((next_idx, img))
+            next_idx += 1
+        else:
+            remaining = max_pages - next_idx
+            pdf_pages, pdf_osd, pdf_timings = _pdf_to_page_images(
+                p, max_pages=remaining, fix_orientation=fix_orientation,
+            )
+            base = next_idx
+            for local_idx, img in pdf_pages:
+                osd_rotations[next_idx] = pdf_osd.get(local_idx, 0)
+                result.append((next_idx, img))
+                next_idx += 1
+            for step_id, ms, detail in pdf_timings:
+                shifted = _shift_step_page_num(step_id, base)
+                page_timings.append((shifted, ms, f"{detail} file={p.name}" if detail else f"file={p.name}"))
+
+    return result, osd_rotations, page_timings
+
+
 def _image_to_page_images(
     image_path: Path,
     *,
@@ -339,38 +408,13 @@ def _image_to_page_images(
     """Load raster image(s) directly as pages — no PDF rasterization loss.
 
     When *extra_image_paths* is given, each path becomes an additional page
-    (page 0 = *image_path*, page 1 = extra[0], …).
+    (page 0 = *image_path*, page 1 = extra[0], …). PDF paths in *extra_image_paths*
+    are rasterized via :func:`_paths_to_page_images`.
     """
-    all_paths = [image_path] + (extra_image_paths or [])
-    result: list[tuple[int, Image.Image]] = []
-    page_timings: list[tuple[str, int, str]] = []
-    osd_rotations: dict[int, int] = {}
-
-    for i, p in enumerate(all_paths):
-        page_no = i + 1
-        t_r = time.perf_counter()
-        img = Image.open(p)
-        img.load()
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        img = _cap_raster_size(img, f"page_{page_no}")
-        raster_ms = int((time.perf_counter() - t_r) * 1000)
-        page_timings.append((f"load_image_page_{page_no}", raster_ms, f"native px={img.width}x{img.height}"))
-
-        if fix_orientation:
-            t_osd = time.perf_counter()
-            rot_cw = osd_deskew_clockwise_degrees_from_image(img)
-            osd_ms = int((time.perf_counter() - t_osd) * 1000)
-            osd_rotations[i] = rot_cw
-            page_timings.append((f"osd_page_{page_no}", osd_ms, f"rotation={rot_cw}"))
-            if rot_cw:
-                img = img.rotate(-rot_cw, expand=True, fillcolor="white")
-        else:
-            osd_rotations[i] = 0
-
-        result.append((i, img))
-
-    return result, osd_rotations, page_timings
+    return _paths_to_page_images(
+        [image_path] + (extra_image_paths or []),
+        fix_orientation=fix_orientation,
+    )
 
 
 def _rasterize_single_pdf_page(pdf_path: Path, page_0: int, *, dpi: int = OCR_PRE_OCR_RASTER_DPI) -> Image.Image:
@@ -1869,6 +1913,67 @@ def _resolve_form20_cover_idx(
     return None
 
 
+def _correct_aadhar_front_back_indices(
+    full_ocr_text: str,
+    front_idx: int,
+    back_idx: int,
+) -> tuple[int, int]:
+    """Swap bundle indices when DOB+gender show the assigned front/back pages are reversed."""
+    if front_idx == back_idx:
+        return front_idx, back_idx
+    ta = extract_page_text_from_pre_ocr_blocks(full_ocr_text, front_idx)
+    tb = extract_page_text_from_pre_ocr_blocks(full_ocr_text, back_idx)
+    by_face = should_swap_aadhar_pages_by_dob_gender(ta, tb)
+    if by_face is True:
+        logger.info(
+            "Multi-customer bundle: swapped Aadhaar front/back pages %s <-> %s [dob_gender_front]",
+            front_idx + 1,
+            back_idx + 1,
+        )
+        return back_idx, front_idx
+    return front_idx, back_idx
+
+
+def _is_sales_detail_sheet_page_text(text: str) -> bool:
+    return bool(re.search(r"(?i)sales\s+detail\s+sheet", text or ""))
+
+
+def _looks_like_form20_details_misclass(text: str) -> bool:
+    """Form 20 cover pages often score as Details (chassis/engine/key) without being the sales sheet."""
+    if not text or not str(text).strip():
+        return False
+    if form20_cover_detected_in_top(text):
+        return True
+    if _is_sales_detail_sheet_page_text(text):
+        return False
+    low = text.lower()
+    vehicle_hits = sum(1 for token in ("chassis", "engine", "key number") if token in low)
+    has_mobile = bool(re.search(r"(?i)mobile\s*number", text))
+    return vehicle_hits >= 2 and not has_mobile
+
+
+def _rank_details_pages_for_bundle(
+    details_list: list[tuple[int, str | None, str | None]],
+    page_texts: dict[int, str],
+) -> list[tuple[int, str | None, str | None]]:
+    """Prefer Sales Detail Sheet + mobile-bearing pages; deprioritize Form 20 misclassified as Details."""
+    filtered = [
+        item
+        for item in details_list
+        if not _looks_like_form20_details_misclass(page_texts.get(item[0], ""))
+    ]
+    candidates = filtered or list(details_list)
+
+    def _rank(item: tuple[int, str | None, str | None]) -> tuple[int, int, int]:
+        idx, mobile, _name = item
+        text = page_texts.get(idx, "")
+        sales = 1 if _is_sales_detail_sheet_page_text(text) else 0
+        mob = 1 if mobile else 0
+        return (sales, mob, idx)
+
+    return sorted(candidates, key=_rank, reverse=True)
+
+
 def _build_multi_customer_bundles(
     pdf_path: Path,
     full_ocr_text: str,
@@ -1906,6 +2011,8 @@ def _build_multi_customer_bundles(
             details_list.append((idx, mobile, name))
         elif ptype == PAGE_TYPE_INSURANCE:
             insurance_list.append((idx, name))
+
+    ranked_details = _rank_details_pages_for_bundle(details_list, page_texts)
 
     # Fallback: when 2+ mobiles and 2+ Details but only 1 Aadhar pair, promote UNUSED pages with Aadhar number
     need_more = 2 - min(len(fronts), len(backs))
@@ -1981,7 +2088,7 @@ def _build_multi_customer_bundles(
 
         # Find Details sheet matching this customer by name
         d_idx, mobile, d_name = None, None, None
-        for i, (idx, m, dn) in enumerate(details_list):
+        for i, (idx, m, dn) in enumerate(ranked_details):
             if idx in used_details:
                 continue
             if _names_match(aadhar_name, dn):
@@ -1991,8 +2098,8 @@ def _build_multi_customer_bundles(
                 used_details.add(idx)
                 break
         if d_idx is None or not mobile:
-            # Fallback: use first unused Details (sequential) if no name match
-            for idx, m, dn in details_list:
+            # Fallback: best-ranked unused Details (Sales Detail Sheet before Form 20 misclass)
+            for idx, m, dn in ranked_details:
                 if idx not in used_details:
                     d_idx, d_name = idx, dn
                     mobile = m or (all_mobiles[mobile_fallback_idx] if mobile_fallback_idx < len(all_mobiles) else None)
@@ -2021,9 +2128,12 @@ def _build_multi_customer_bundles(
                     break
 
         name = aadhar_name or d_name
+        front_idx, back_idx = _correct_aadhar_front_back_indices(
+            full_ocr_text, slot["front_idx"], slot["back_idx"],
+        )
         bundles.append({
-            "aadhar_front_idx": slot["front_idx"],
-            "aadhar_back_idx": slot["back_idx"],
+            "aadhar_front_idx": front_idx,
+            "aadhar_back_idx": back_idx,
             "details_idx": d_idx,
             "insurance_idx": insurance_idx,
             "mobile": mobile,
@@ -2214,16 +2324,27 @@ def pre_ocr_pdf(
 
     try:
         t0 = time.perf_counter()
-        if _is_image_file(pdf_path):
-            pages, osd_rotations, raster_timings = _image_to_page_images(
-                pdf_path, extra_image_paths=extra_image_paths, fix_orientation=OCR_PRE_OCR_OSD_ENABLED,
+        all_paths = [pdf_path] + (extra_image_paths or [])
+        if len(all_paths) == 1 and not _is_image_file(pdf_path):
+            pages, osd_rotations, raster_timings = _pdf_to_page_images(
+                pdf_path, fix_orientation=OCR_PRE_OCR_OSD_ENABLED,
             )
             raster_ms = int((time.perf_counter() - t0) * 1000)
-            _step("image_to_page_rasters", raster_ms, f"pages={len(pages)} osd={OCR_PRE_OCR_OSD_ENABLED} file={pdf_path.name}")
+            _step(
+                "pdf_to_page_rasters",
+                raster_ms,
+                f"pages={len(pages)} osd={OCR_PRE_OCR_OSD_ENABLED} file={pdf_path.name}",
+            )
         else:
-            pages, osd_rotations, raster_timings = _pdf_to_page_images(pdf_path, fix_orientation=OCR_PRE_OCR_OSD_ENABLED)
+            pages, osd_rotations, raster_timings = _paths_to_page_images(
+                all_paths, fix_orientation=OCR_PRE_OCR_OSD_ENABLED,
+            )
             raster_ms = int((time.perf_counter() - t0) * 1000)
-            _step("pdf_to_page_rasters", raster_ms, f"pages={len(pages)} osd={OCR_PRE_OCR_OSD_ENABLED} file={pdf_path.name}")
+            _step(
+                "paths_to_page_rasters",
+                raster_ms,
+                f"pages={len(pages)} paths={len(all_paths)} osd={OCR_PRE_OCR_OSD_ENABLED}",
+            )
         for rt_id, rt_ms, rt_detail in raster_timings:
             _step(rt_id, rt_ms, rt_detail)
         page_images: dict[int, Image.Image] = {idx: im for idx, im in pages}
@@ -2836,7 +2957,7 @@ def run_pre_ocr_and_prepare(
     orchestration.append(("extract_all_mobiles", am_ms, f"count={len(all_mobiles)}", _off()))
 
     t_mc0 = time.perf_counter()
-    is_multi = _detect_multi_customer(classifications) or len(all_mobiles) >= 2
+    is_multi = _detect_multi_customer(classifications)
     orchestration.append(("detect_multi_customer", int((time.perf_counter() - t_mc0) * 1000), f"is_multi={is_multi}", _off()))
 
     # Multi-customer: when multiple document sets OR 2+ distinct mobiles in full text

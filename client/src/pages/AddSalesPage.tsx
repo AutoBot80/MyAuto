@@ -146,6 +146,13 @@ function normalizeHeroCpiFlag(raw: unknown): "Y" | "N" | null {
   return s === "Y" || s === "N" ? s : null;
 }
 
+/** Normalize CPA Required / ``cpi_reqd`` to Y/N. */
+function normalizeCpaRequiredFlag(raw: unknown): "Y" | "N" {
+  const s = String(raw ?? "").trim().toUpperCase();
+  if (s === "Y" || s === "YES") return "Y";
+  return "N";
+}
+
 function deriveCpaAllianceUiState(res: CreateInvoiceEligibilityResponse): {
   enabled: boolean;
   insurers: CpaInsurerPortalRow[];
@@ -300,6 +307,7 @@ function mergeInsuranceFromOcrPayload(
     policy_from: typeof r.policy_from === "string" ? r.policy_from : undefined,
     policy_to: typeof r.policy_to === "string" ? r.policy_to : undefined,
     premium: typeof r.premium === "string" ? r.premium : r.premium != null ? String(r.premium) : undefined,
+    cpa_reqd: typeof r.cpa_reqd === "string" ? r.cpa_reqd : undefined,
   };
   const ocrFinancierRaw = Object.prototype.hasOwnProperty.call(r, "financier")
     ? normalizeFinancierInput(r.financier)
@@ -377,6 +385,10 @@ function mergeInsuranceFromOcrPayload(
       sanitizeOptionalFormField(fromServer.premium),
       sanitizeOptionalFormField(current.premium)
     ),
+    cpa_reqd: preferNonEmptyOcr(
+      fromServer.cpa_reqd != null ? normalizeCpaRequiredFlag(fromServer.cpa_reqd) : undefined,
+      current.cpa_reqd != null ? normalizeCpaRequiredFlag(current.cpa_reqd) : undefined
+    ),
   };
 }
 
@@ -451,6 +463,8 @@ export function AddSalesPage({
   const threeColRef = useRef<HTMLDivElement>(null);
   const [dealerCpaInsurer, setDealerCpaInsurer] = useState<string | null>(null);
   const [heroCpi, setHeroCpi] = useState<string | null>(null);
+  const [dealerCpiReqd, setDealerCpiReqd] = useState<"Y" | "N">("N");
+  const [cpaRequired, setCpaRequired] = useState<"Y" | "N">("N");
   const [isFillCpaInsuranceLoading, setIsFillCpaInsuranceLoading] = useState(false);
   /** DMS-scraped vehicle; shown in Fill Forms > DMS. Only populated when user presses Fill Forms. */
   const [dmsScrapedVehicle, setDmsScrapedVehicle] = useState<ExtractedVehicleDetails | null>(null);
@@ -536,6 +550,7 @@ export function AddSalesPage({
     | "cpa_alliance_portal_enabled"
     | "portal_insurers"
     | "financiers"
+    | "dealer_cpi_reqd"
   >;
 
   const applyDealerCpaFromApiSlice = useCallback((res: CpaEligibilitySlice) => {
@@ -544,6 +559,7 @@ export function AddSalesPage({
     setCpaAlliancePortalEnabled(cpa.enabled);
     setCpaInsurers(cpa.insurers);
     setDealerCpaInsurer(cpa.dealerCpa);
+    setDealerCpiReqd(normalizeCpaRequiredFlag(res.dealer_cpi_reqd ?? "N"));
     const pi = res.portal_insurers;
     setPortalInsurers(Array.isArray(pi) ? pi.map((x) => String(x).trim()).filter(Boolean) : []);
     const fin = res.financiers;
@@ -660,6 +676,9 @@ export function AddSalesPage({
             masterRefFinanciers,
           })
         );
+        if (Object.prototype.hasOwnProperty.call(r, "cpa_reqd")) {
+          setCpaRequired(normalizeCpaRequiredFlag(r.cpa_reqd));
+        }
       }
       const sf = (opts?.savedToForWarm ?? "").trim();
       if (sf && detailsHasOcrPayloadForWarm(details)) {
@@ -803,12 +822,14 @@ export function AddSalesPage({
             customerId: lastSubmittedCustomerId!,
             vehicleId: lastSubmittedVehicleId!,
             dealerId: dealerId > 0 ? dealerId : undefined,
+            stagingId: lastStagingId,
           })
         : await fetchCreateInvoiceEligibility({
             chassisNum: ch,
             engineNum: eng,
             mobile: mob,
             dealerId: dealerId > 0 ? dealerId : undefined,
+            stagingId: lastStagingId,
           });
       setCreateInvoiceEnabled(res.create_invoice_enabled);
       setCreateInvoiceEligibilityReason(res.reason);
@@ -848,6 +869,7 @@ export function AddSalesPage({
     lastSubmittedCustomerId,
     lastSubmittedVehicleId,
     dealerId,
+    lastStagingId,
     applyDealerCpaFromApiSlice,
   ]);
 
@@ -891,6 +913,7 @@ export function AddSalesPage({
     setCpaAlliancePortalEnabled(false);
     setCpaInsurers([]);
     setDealerCpaInsurer(null);
+    setCpaRequired(dealerCpiReqd);
     setHeroCpi(null);
     setIsFillCpaInsuranceLoading(false);
     void reloadDealerCpaContext();
@@ -1392,6 +1415,7 @@ export function AddSalesPage({
                 customerId: cid,
                 vehicleId: vid,
                 dealerId: dealerId > 0 ? dealerId : undefined,
+                stagingId: lastStagingId,
               })
             );
           } else if (ch && eng && mob) {
@@ -1401,6 +1425,7 @@ export function AddSalesPage({
                 engineNum: eng,
                 mobile: mob,
                 dealerId: dealerId > 0 ? dealerId : undefined,
+                stagingId: lastStagingId,
               })
             );
           } else {
@@ -1997,6 +2022,7 @@ export function AddSalesPage({
                           stagingId: lastStagingId,
                           preferInsurer,
                           portalInsurers,
+                          cpiReqd: cpaRequired,
                         });
                         setHasSubmittedInfo(true);
                         if (submitRes?.staging_id != null && String(submitRes.staging_id).trim())
@@ -2674,6 +2700,22 @@ export function AddSalesPage({
                   </button>
                 </div>
                 <dl className="add-sales-v2-dl add-sales-v2-dl--dms">
+                  <div className="add-sales-v2-dl-row-group">
+                    <div className="add-sales-v2-dl-row">
+                      <dt>CPA Required</dt>
+                      <dd>
+                        <select
+                          className="add-sales-v2-input"
+                          value={cpaRequired}
+                          onChange={(e) => setCpaRequired(normalizeCpaRequiredFlag(e.target.value))}
+                          aria-label="CPA Required"
+                        >
+                          <option value="Y">Yes</option>
+                          <option value="N">No</option>
+                        </select>
+                      </dd>
+                    </div>
+                  </div>
                   <div className="add-sales-v2-dl-row-group">
                     <div className="add-sales-v2-dl-row">
                       <dt>CPA Provider</dt>

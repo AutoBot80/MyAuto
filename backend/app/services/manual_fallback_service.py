@@ -76,19 +76,22 @@ def write_manual_session_jpegs(
     dealer_id: int,
     dest_pdf: Path,
     page_images: dict[int, Image.Image],
+    *,
+    extra_image_paths: list[Path] | None = None,
 ) -> tuple[str, int]:
     """
     Write one JPEG per page under manual_sessions/{uuid}/page_NN.jpg, each ≤ POST_OCR_MAX_FILE_BYTES.
     Returns (session_id, page_count).
     """
-    from app.services.pre_ocr_service import _pdf_to_page_images, _image_to_page_images, _is_image_file, _pil_rgb_to_jpeg_bytes
+    from app.services.pre_ocr_service import _is_image_file, _paths_to_page_images, _pdf_to_page_images, _pil_rgb_to_jpeg_bytes
 
     imgs = page_images
     if not imgs:
-        if _is_image_file(dest_pdf):
-            pages, _osd, _timings = _image_to_page_images(dest_pdf)
-        else:
+        all_paths = [dest_pdf] + (extra_image_paths or [])
+        if len(all_paths) == 1 and not _is_image_file(dest_pdf):
             pages, _osd, _timings = _pdf_to_page_images(dest_pdf)
+        else:
+            pages, _osd, _timings = _paths_to_page_images(all_paths)
         imgs = {idx: im for idx, im in pages}
 
     if not imgs:

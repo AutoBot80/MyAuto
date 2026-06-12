@@ -49,6 +49,8 @@ export interface SubmitInfoPayload {
   file_location?: string | null;
   /** Resubmit: update this draft staging row when dealer matches. */
   staging_id?: string | null;
+  /** CPA Required (Section C) → ``add_sales_staging.cpi_reqd``. */
+  cpi_reqd?: "Y" | "N";
 }
 
 export interface SubmitInfoResponse {
@@ -134,6 +136,8 @@ export async function submitInfo(
     preferInsurer?: string | null;
     /** ``master_ref`` portal insurers (``comments = 'Y'``) for canonical insurer selection. */
     portalInsurers?: readonly string[] | null;
+    /** CPA Required from Section C. */
+    cpiReqd?: "Y" | "N";
   }
 ): Promise<SubmitInfoResponse> {
   const payload: SubmitInfoPayload = {
@@ -143,6 +147,7 @@ export async function submitInfo(
     dealer_id: opts.dealerId,
     file_location: opts.fileLocation ?? undefined,
     staging_id: opts.stagingId ?? undefined,
+    cpi_reqd: opts.cpiReqd,
   };
   return apiFetch<SubmitInfoResponse>("/submit-info", {
     method: "POST",

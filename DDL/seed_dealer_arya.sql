@@ -40,7 +40,8 @@ INSERT INTO dealer_ref (
     rto_name,
     parent_id,
     phone,
-    prefer_insurer
+    prefer_insurer,
+    cpi_reqd
 ) VALUES (
     100001,
     'Arya Agencies',
@@ -52,6 +53,7 @@ INSERT INTO dealer_ref (
     'RTO-Bharatpur',
     100000,
     '9413112499',
-    'Universal Sompo General Insurance'
+    'Universal Sompo General Insurance',
+    'Y'
 )
 ON CONFLICT (dealer_id) DO NOTHING;
