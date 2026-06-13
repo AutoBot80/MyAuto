@@ -189,11 +189,16 @@ def _run_dealer_rto_batch(
                 from pathlib import Path
 
                 from app.config import get_uploads_dir
-                from app.services.fill_rto_service import resolve_vahan_upload_readiness
+                from app.services.fill_rto_service import (
+                    _rto_sale_subfolder_leaf,
+                    resolve_rto_sale_dir,
+                    resolve_vahan_upload_readiness,
+                )
 
-                subfolder = (row.get("subfolder") or "").strip()
+                subfolder_raw = (row.get("subfolder") or "").strip()
+                subfolder = _rto_sale_subfolder_leaf(subfolder_raw)
                 mobile = (row.get("customer_mobile") or row.get("mobile") or "").strip()
-                sale_dir = get_uploads_dir(dealer_id) / subfolder if subfolder else Path()
+                sale_dir = resolve_rto_sale_dir(dealer_id, subfolder_raw) if subfolder else Path()
                 ready, missing_labels = resolve_vahan_upload_readiness(
                     sale_dir, subfolder=subfolder, mobile=mobile
                 )

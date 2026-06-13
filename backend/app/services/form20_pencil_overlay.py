@@ -136,8 +136,21 @@ def form20_with_cover_pdf_path(sale_dir: Path, mobile_10: str) -> Path:
     return sale_dir / f"{mobile_10}_Form_20_with_cover.pdf"
 
 
+def find_form20_with_cover_pdf(sale_dir: Path, mobile_10: str) -> Path | None:
+    """Prefer ``{mobile}_Form_20_with_cover.pdf``; else any ``*_Form_20_with_cover.pdf`` in the sale folder."""
+    if not sale_dir.is_dir():
+        return None
+    canon = form20_with_cover_pdf_path(sale_dir, mobile_10)
+    if canon.is_file():
+        return canon
+    for p in sorted(sale_dir.glob("*_Form_20_with_cover.pdf"), key=lambda x: x.name.lower()):
+        if p.is_file():
+            return p
+    return None
+
+
 def is_form20_with_cover_ready(sale_dir: Path, mobile_10: str) -> bool:
-    return form20_with_cover_pdf_path(sale_dir, mobile_10).is_file()
+    return find_form20_with_cover_pdf(sale_dir, mobile_10) is not None
 
 
 def _place_stamp_top_right(page, pr, stamp_path: Path, max_w: float, max_h: float) -> None:

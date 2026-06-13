@@ -5,6 +5,7 @@ import {
   getRtoFormsStatus,
   listRtoPayments,
   markRtoDone,
+  markRtoFormsReady,
   releaseRtoQueueRow,
   requeueRtoQueueRow,
   retryRtoQueueRow,
@@ -67,6 +68,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
 
   const [uploadRow, setUploadRow] = useState<RtoPaymentRow | null>(null);
   const [uploadMissing, setUploadMissing] = useState<RtoFormsMissingItem[]>([]);
+  const [uploadFormsLoading, setUploadFormsLoading] = useState(false);
   const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({});
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSubmitting, setUploadSubmitting] = useState(false);
@@ -332,18 +334,23 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     setUploadError(null);
     setUploadRow(row);
     setUploadFiles({});
+    setUploadMissing([]);
+    setUploadFormsLoading(true);
     try {
       const st = await getRtoFormsStatus(row.rto_queue_id);
       setUploadMissing(st.missing ?? []);
     } catch (err) {
       setUploadMissing([]);
       setUploadError(err instanceof Error ? err.message : "Could not load missing forms");
+    } finally {
+      setUploadFormsLoading(false);
     }
   };
 
   const closeUploadForms = () => {
     setUploadRow(null);
     setUploadMissing([]);
+    setUploadFormsLoading(false);
     setUploadFiles({});
     setUploadError(null);
   };
@@ -380,6 +387,13 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
     setUploadSubmitting(true);
     setUploadError(null);
     try {
+      if (uploadMissing.length === 0) {
+        await markRtoFormsReady(uploadRow.rto_queue_id);
+        closeUploadForms();
+        fetchFromDb(false);
+        setSubTab("in_process");
+        return;
+      }
       const res = isElectron()
         ? await uploadRtoQueueFormsLocal({
             dealer_id: did,
@@ -796,8 +810,10 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                 : "Dev: files are saved to the local uploads folder on the API host (no cloud sync)."}
             </p>
             <form onSubmit={handleUploadFormsSubmit}>
-              {uploadMissing.length === 0 ? (
+              {uploadFormsLoading ? (
                 <p>Loading missing forms…</p>
+              ) : uploadMissing.length === 0 ? (
+                <p>All required forms are already on disk. Close this dialog or use Upload & check to re-verify.</p>
               ) : (
                 uploadMissing.map((item) => (
                   <label key={item.key} className="rto-upload-forms-field">
@@ -826,9 +842,13 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                 <button
                   type="submit"
                   className="app-button app-button--primary"
-                  disabled={uploadSubmitting || uploadMissing.length === 0}
+                  disabled={uploadSubmitting || uploadFormsLoading}
                 >
-                  {uploadSubmitting ? "Uploading…" : "Upload & check"}
+                  {uploadSubmitting
+                    ? "Uploading…"
+                    : uploadMissing.length === 0
+                      ? "Re-verify & queue"
+                      : "Upload & check"}
                 </button>
               </div>
             </form>

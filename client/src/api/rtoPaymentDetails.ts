@@ -172,6 +172,18 @@ export async function getRtoFormsStatus(rtoQueueId: number): Promise<RtoFormsSta
   return apiFetch<RtoFormsStatusResponse>(`/rto-queue/${encodeURIComponent(rtoQueueId)}/forms-status`);
 }
 
+export async function markRtoFormsReady(
+  rtoQueueId: number
+): Promise<{ ok: boolean; rto_queue_id: number; status: string }> {
+  return apiFetch<{ ok: boolean; rto_queue_id: number; status: string }>(
+    `/rto-queue/${encodeURIComponent(rtoQueueId)}/forms-ready`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+}
+
 export async function setRtoInQueue(
   rtoQueueId: number,
   inQueue: boolean

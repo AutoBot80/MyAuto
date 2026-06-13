@@ -192,6 +192,12 @@ _SCREEN3_FIN_STATE_PF_WRAPPERS: tuple[str, ...] = (
 _SCREEN3_FIN_STATE_NATIVE: tuple[str, ...] = (
     'select[id="workbench_tabview:hpa_fncr_state_input"]',
 )
+_SCREEN2_CORR_DISTRICT_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:tf_c_district"]',
+)
+_SCREEN2_CORR_DISTRICT_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:tf_c_district_input"]',
+)
 _SCREEN3_FIN_DISTRICT_PF_WRAPPERS: tuple[str, ...] = (
     '[id="workbench_tabview:hpa_fncr_district"]',
 )
@@ -432,6 +438,29 @@ def _init_cap_place_name(s: str) -> str:
     return " ".join(parts)
 
 
+def _district_from_dealer_rto(raw_rto_name: str) -> str:
+    """``RTO-Bharatpur`` / ``BHARATPUR RTO`` → ``Bharatpur`` for the Vahan district dropdown."""
+    raw = (raw_rto_name or "").strip()
+    if not raw:
+        return ""
+    if len(raw) > 4 and raw[:4].upper() == "RTO-":
+        return _init_cap_place_name(raw[4:].strip())
+    if raw.upper().endswith(" RTO"):
+        return _init_cap_place_name(raw[:-4].strip())
+    return ""
+
+
+def _resolve_vahan_district(data: dict) -> str:
+    """District for Vahan address fields — use explicit district or dealer RTO, not village/city."""
+    explicit = _init_cap_place_name((data.get("district") or "").strip())
+    if explicit:
+        return explicit
+    from_rto = _district_from_dealer_rto((data.get("dealer_rto") or "").strip())
+    if from_rto:
+        return from_rto
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Document resolution
 # ---------------------------------------------------------------------------
@@ -520,13 +549,45 @@ _DOC_PATTERNS: list[tuple[str, list[str], list[str]]] = [
 
 
 def _ddmmyyyy_suffix_from_sale_subfolder(subfolder: str, mob_fn: str) -> str | None:
-    """If subfolder leaf is ``{mob_fn}_{ddmmyyyy}``, return the ``ddmmyyyy`` segment."""
+    """If subfolder leaf is ``{mob_fn}_{ddmmyy}`` or ``{mob_fn}_{ddmmyyyy}``, return the date segment."""
     leaf = Path(str(subfolder).strip().replace("\\", "/")).name
     prefix = f"{mob_fn}_"
-    if not leaf.startswith(prefix):
-        return None
-    rest = leaf[len(prefix) :]
-    return rest if re.fullmatch(r"\d{8}", rest) else None
+    if leaf.startswith(prefix):
+        rest = leaf[len(prefix) :]
+        if re.fullmatch(r"\d{6,8}", rest):
+            return rest
+    m = re.match(r"^\d{10}_(\d{6,8})$", leaf)
+    return m.group(1) if m else None
+
+
+def _rto_sale_subfolder_leaf(subfolder: str) -> str:
+    """One path segment for uploads/OCR sale folder (handles full ``file_location`` paths)."""
+    from app.services.fill_hero_dms_service import _ocr_sale_folder_leaf
+
+    return _ocr_sale_folder_leaf(subfolder)
+
+
+def resolve_rto_sale_dir(dealer_id: int, subfolder: str) -> Path:
+    """``uploads/{dealer_id}/{leaf}/`` for RTO document resolution and operator uploads."""
+    leaf = _rto_sale_subfolder_leaf(subfolder)
+    return get_uploads_dir(int(dealer_id)) / leaf
+
+
+def _insurance_certificate_dest_path(
+    sale_dir: Path,
+    subfolder: str,
+    mob_fn: str,
+    *,
+    original_filename: str = "",
+) -> Path:
+    """Target path when placing an insurance PDF upload."""
+    suf = _ddmmyyyy_suffix_from_sale_subfolder(subfolder, mob_fn)
+    if suf:
+        return sale_dir / f"{mob_fn}_Insurance_{suf}.pdf"
+    name = Path((original_filename or "").strip()).name
+    if name.lower().endswith(".pdf"):
+        return sale_dir / name
+    return sale_dir / f"{mob_fn}_Insurance.pdf"
 
 
 def _canonical_insurance_certificate_pdf(sale_dir: Path, subfolder: str, mob_fn: str) -> Path | None:
@@ -635,11 +696,10 @@ def _resolve_sale_documents(
     result["INSURANCE CERTIFICATE"] = _resolve_insurance_certificate(
         sale_dir, all_files, subfolder, mob_fn
     )
-    from app.services.form20_pencil_overlay import build_form20_with_cover_pdf
+    from app.services.form20_pencil_overlay import find_form20_pdf, find_form20_with_cover_pdf
 
-    form20_merged = build_form20_with_cover_pdf(sale_dir, mob_fn)
-    if form20_merged is not None:
-        result["FORM 20"] = form20_merged
+    merged = find_form20_with_cover_pdf(sale_dir, mob_fn)
+    result["FORM 20"] = merged if merged is not None else find_form20_pdf(sale_dir, mob_fn)
     return result
 
 
@@ -676,7 +736,7 @@ def resolve_mob_fn_for_row(*, mobile: str, subfolder: str) -> str:
     mob_fn = _mobile_fn_from_mobile(mobile)
     if mob_fn and mob_fn != "0000000000":
         return mob_fn
-    leaf = Path(str(subfolder or "").strip().replace("\\", "/")).name
+    leaf = _rto_sale_subfolder_leaf(subfolder)
     m = re.match(r"^(\d{10})", leaf)
     return m.group(1) if m else mob_fn
 
@@ -686,6 +746,7 @@ def resolve_vahan_upload_readiness(
     *,
     subfolder: str,
     mobile: str,
+    try_build_form20: bool = False,
 ) -> tuple[bool, list[str]]:
     """Return (ready, missing_labels) for Screen 5 Vahan document uploads."""
     if not sale_dir.is_dir():
@@ -694,8 +755,13 @@ def resolve_vahan_upload_readiness(
     mob_fn = resolve_mob_fn_for_row(mobile=mobile, subfolder=subfolder)
     missing: list[str] = []
 
-    from app.services.form20_pencil_overlay import is_form20_with_cover_ready
+    from app.services.form20_pencil_overlay import build_form20_with_cover_pdf, is_form20_with_cover_ready
 
+    if try_build_form20:
+        try:
+            build_form20_with_cover_pdf(sale_dir, mob_fn)
+        except Exception as exc:
+            logger.warning("fill_rto: Form 20 merge skipped: %s", exc)
     if not is_form20_with_cover_ready(sale_dir, mob_fn):
         missing.append(VAHAN_DOC_CATEGORY_LABELS["FORM 20"])
 
@@ -714,10 +780,12 @@ def place_rto_queue_category_upload(
     *,
     subfolder: str,
     mobile: str,
+    original_filename: str = "",
 ) -> Path:
     """Copy one operator upload into the sale folder with a canonical name when known."""
     import shutil
 
+    from app.services.form20_pencil_overlay import form20_with_cover_pdf_path
     from app.services.hero_dms_playwright_invoice import _mobile_report_pdf_filename
 
     if not source_path.is_file():
@@ -726,6 +794,21 @@ def place_rto_queue_category_upload(
     sale_dir.mkdir(parents=True, exist_ok=True)
     key = (category_key or "").strip().upper()
     mob_fn = resolve_mob_fn_for_row(mobile=mobile, subfolder=subfolder)
+    orig_name = (original_filename or source_path.name or "").strip()
+    orig_low = orig_name.lower()
+
+    if key == "FORM 20":
+        if source_path.suffix.lower() == ".pdf":
+            if "with_cover" in orig_low.replace("-", "_"):
+                dest = form20_with_cover_pdf_path(sale_dir, mob_fn)
+            elif "form" in orig_low and "20" in orig_low:
+                dest = sale_dir / _mobile_report_pdf_filename(mob_fn, "Form 20")
+            else:
+                dest = form20_with_cover_pdf_path(sale_dir, mob_fn)
+        else:
+            dest = sale_dir / RTO_QUEUE_UPLOAD_FILENAMES["FORM 20"]
+        shutil.copy2(source_path, dest)
+        return dest
 
     fixed = RTO_QUEUE_UPLOAD_FILENAMES.get(key)
     if fixed:
@@ -746,19 +829,20 @@ def place_rto_queue_category_upload(
         return dest
 
     if key == "INSURANCE CERTIFICATE":
-        canon = _canonical_insurance_certificate_pdf(sale_dir, subfolder, mob_fn)
-        dest = canon if canon is not None else sale_dir / source_path.name
+        dest = _insurance_certificate_dest_path(
+            sale_dir, subfolder, mob_fn, original_filename=orig_name
+        )
         shutil.copy2(source_path, dest)
         return dest
 
     if key == "INVOICE ORIGINAL":
-        dest = sale_dir / source_path.name
-        if "gst" not in source_path.name.lower() and "invoice" not in source_path.name.lower():
+        dest = sale_dir / (Path(orig_name).name if orig_name else source_path.name)
+        if "gst" not in dest.name.lower() and "invoice" not in dest.name.lower():
             dest = sale_dir / f"{mob_fn}_GST_Retail_Invoice.pdf"
         shutil.copy2(source_path, dest)
         return dest
 
-    dest = sale_dir / source_path.name
+    dest = sale_dir / (Path(orig_name).name if orig_name else source_path.name)
     shutil.copy2(source_path, dest)
     return dest
 
@@ -3116,37 +3200,34 @@ def _screen_2(page: Page, data: dict) -> None:
     elif state_val:
         _rto_log("skip: correspondence State already set on form")
 
-    # District — use ``district`` from row, or default to **city**; if district option missing, retry with city
-    district_raw_in = (data.get("district") or "").strip()
+    # State AJAX loads district options — wait even when state was pre-filled on the form.
+    if state_val:
+        _wait_for_progress_close_loop(page)
+
+    district_disp = _resolve_vahan_district(data)
     city_raw_in = (data.get("city") or "").strip()
-    district_val = _init_cap_place_name(district_raw_in)
-    city_val_norm = _init_cap_place_name(city_raw_in)
-    primary_district = district_val or city_val_norm
-    if primary_district:
-        try:
-            _select_pf_dropdown(
+    if district_disp:
+        _rto_log(
+            f"District (correspondence): {district_disp!r} "
+            f"(city={city_raw_in!r}, dealer_rto={(data.get('dealer_rto') or '')!r})"
+        )
+        if not _screen_3_pf_dropdown_chain(
+            page,
+            _SCREEN2_CORR_DISTRICT_PF_WRAPPERS,
+            district_disp,
+            label="District (correspondence)",
+        ):
+            if not _screen_3_native_select_chain(
                 page,
-                '[id="workbench_tabview:tf_c_district"]',
-                primary_district,
+                _SCREEN2_CORR_DISTRICT_NATIVE,
+                district_disp,
                 label="District (correspondence)",
-                timeout=_DEFAULT_TIMEOUT_MS,
-            )
-        except PwTimeout:
-            if district_raw_in and city_raw_in and district_raw_in.upper() != city_raw_in.upper():
-                try:
-                    _select_pf_dropdown(
-                        page,
-                        '[id="workbench_tabview:tf_c_district"]',
-                        city_val_norm,
-                        label="District (fallback to city)",
-                        timeout=_DEFAULT_TIMEOUT_MS,
-                    )
-                except PwTimeout:
-                    _rto_log("WARNING: District not set (tried district and city names)")
-            else:
-                _rto_log("WARNING: District not set")
+            ):
+                _rto_log(f"WARNING: District not set (tried {district_disp!r})")
         _close_pf_selectonemenu_overlay(page, "workbench_tabview:tf_c_district")
         _pause()
+    else:
+        _rto_log("WARNING: District not resolved (no district or dealer_rto)")
 
     _fill(page, "input[id*='pin'], input[name*='pin']", data.get("pin", ""), label="Pin")
     _pause()
@@ -3683,19 +3764,16 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
         # State AJAX populates district options — wait for progress overlay to close
         _wait_for_progress_close_loop(page)
 
-    # District — use district from data; fall back to city (initcap) when district is empty
-    dist = (data.get("district") or "").strip()
-    if not dist:
-        dist = city
-    if dist:
-        d_disp = _init_cap_place_name(dist)
+    # District — dealer RTO place name (e.g. Bharatpur), not village/city (e.g. Barakhur).
+    dist_disp = _resolve_vahan_district(data)
+    if dist_disp:
         if not _screen_3_pf_dropdown_chain(
-            page, _SCREEN3_FIN_DISTRICT_PF_WRAPPERS, d_disp, label="Financier District"
+            page, _SCREEN3_FIN_DISTRICT_PF_WRAPPERS, dist_disp, label="Financier District"
         ):
             if not _screen_3_native_select_chain(
-                page, _SCREEN3_FIN_DISTRICT_NATIVE, d_disp, label="Financier District"
+                page, _SCREEN3_FIN_DISTRICT_NATIVE, dist_disp, label="Financier District"
             ):
-                _rto_log(f"WARNING: Financier District not set (tried {d_disp!r})")
+                _rto_log(f"WARNING: Financier District not set (tried {dist_disp!r})")
                 _dump_page_state(page, "dropdown not set: Financier District")
         _close_pf_selectonemenu_overlay(page, "workbench_tabview:hpa_fncr_district")
 
@@ -4656,6 +4734,7 @@ def fill_rto_row(row: dict) -> dict:
         "address": row.get("address") or "",
         "city": row.get("city") or "",
         "district": (row.get("district") or "").strip(),
+        "dealer_rto": (row.get("dealer_rto") or "").strip(),
         "state": row.get("state") or "",
         "pin": (row.get("pin") or "").strip(),
         "financier": row.get("financier") or "",

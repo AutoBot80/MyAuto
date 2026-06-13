@@ -270,15 +270,15 @@ def list_rto_payments(
 
 
 def _forms_status_for_row(row: dict) -> dict:
-    from pathlib import Path
-
-    from app.config import get_uploads_dir
     from app.services.fill_rto_service import (
         VAHAN_DOC_CATEGORY_LABELS,
+        _rto_sale_subfolder_leaf,
+        resolve_rto_sale_dir,
         resolve_vahan_upload_readiness,
     )
 
-    subfolder = (row.get("subfolder") or "").strip()
+    subfolder_raw = (row.get("subfolder") or "").strip()
+    subfolder = _rto_sale_subfolder_leaf(subfolder_raw)
     mobile = (row.get("customer_mobile") or row.get("mobile") or "").strip()
     dealer_id = row.get("dealer_id")
     if not subfolder or dealer_id is None:
@@ -287,9 +287,9 @@ def _forms_status_for_row(row: dict) -> dict:
             "missing": [{"key": k, "label": v} for k, v in VAHAN_DOC_CATEGORY_LABELS.items()],
             "last_error": row.get("last_error"),
         }
-    sale_dir = get_uploads_dir(int(dealer_id)) / subfolder
+    sale_dir = resolve_rto_sale_dir(int(dealer_id), subfolder_raw)
     ready, missing_labels = resolve_vahan_upload_readiness(
-        Path(sale_dir), subfolder=subfolder, mobile=mobile
+        sale_dir, subfolder=subfolder, mobile=mobile
     )
     label_to_key = {v: k for k, v in VAHAN_DOC_CATEGORY_LABELS.items()}
     missing = [{"key": label_to_key.get(lbl, lbl), "label": lbl} for lbl in missing_labels]
@@ -374,10 +374,11 @@ async def upload_rto_forms(
     files: list[UploadFile] = File(...),
 ) -> dict:
     """Dev/browser path: save uploads to local sale folder (no EC2/S3 pull or push)."""
-    from app.config import get_uploads_dir
     from app.services.fill_rto_service import (
+        _rto_sale_subfolder_leaf,
         place_rto_queue_category_upload,
         resolve_mob_fn_for_row,
+        resolve_rto_sale_dir,
         resolve_vahan_upload_readiness,
     )
     from app.services.form20_pencil_overlay import build_form20_with_cover_pdf
@@ -388,14 +389,15 @@ async def upload_rto_forms(
     did = resolve_dealer_id(principal, row.get("dealer_id"))
     if (row.get("status") or "").strip() != "Forms Missing":
         raise HTTPException(status_code=400, detail="Row is not in Forms Missing status")
-    subfolder = (row.get("subfolder") or "").strip()
-    if not subfolder:
+    subfolder_raw = (row.get("subfolder") or "").strip()
+    if not subfolder_raw:
         raise HTTPException(status_code=400, detail="Sale subfolder is missing on this row")
+    subfolder = _rto_sale_subfolder_leaf(subfolder_raw)
     if len(category_keys) != len(files) or not files:
         raise HTTPException(status_code=400, detail="Provide matching category_keys and files")
 
     mobile = (row.get("customer_mobile") or row.get("mobile") or "").strip()
-    sale_dir = get_uploads_dir(int(did)) / subfolder
+    sale_dir = resolve_rto_sale_dir(int(did), subfolder_raw)
     sale_dir.mkdir(parents=True, exist_ok=True)
     mob_fn = resolve_mob_fn_for_row(mobile=mobile, subfolder=subfolder)
 
@@ -413,6 +415,7 @@ async def upload_rto_forms(
                     tmp_path,
                     subfolder=subfolder,
                     mobile=mobile,
+                    original_filename=upload.filename or "",
                 )
             finally:
                 try:
@@ -422,7 +425,7 @@ async def upload_rto_forms(
 
         build_form20_with_cover_pdf(sale_dir, mob_fn)
         ready, missing_labels = resolve_vahan_upload_readiness(
-            sale_dir, subfolder=subfolder, mobile=mobile
+            sale_dir, subfolder=subfolder, mobile=mobile, try_build_form20=False
         )
         if not ready:
             return {
