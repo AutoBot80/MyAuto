@@ -668,6 +668,26 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 ---
 
+## 19a) `admin_dealer_access_ref`
+
+**Purpose:** Admin Saathi scope — which dealers each login may view in **Usage** (matrices, folders, logs) and **Dealers** tab. Managed via SQL (no Admin UI). Table name ends with **`ref`** → preserved on Admin **Delete All Data**.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `admin_dealer_access_id` | `integer` | NO | serial | Primary key |
+| `login_id` | `varchar(128)` | NO | | FK → `login_ref(login_id)` |
+| `dealer_id` | `integer` | NO | | FK → `dealer_ref(dealer_id)` |
+
+**Unique index:** `uq_admin_dealer_access_login_dealer` on (`login_id`, `dealer_id`)
+
+**Foreign keys:**
+- `fk_admin_dealer_access_login`: (`login_id`) → `login_ref(login_id)` **ON DELETE CASCADE**
+- `fk_admin_dealer_access_dealer`: (`dealer_id`) → `dealer_ref(dealer_id)` **ON DELETE CASCADE**
+
+**Script:** `DDL/alter/35a_admin_dealer_access_ref.sql` (bootstrap from `login_roles_ref` + `roles_ref.admin_flag`)
+
+---
+
 ## Table Usage Summary
 
 | Table | Used by |
@@ -856,6 +876,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 3.00 | Jun 2026 | **`form_vahan_view.mobile`**: **`COALESCE(rto_queue.customer_mobile, customer_master.mobile_number)`** for operator alternate Vahan OTP mobile; **`rto_queue.customer_mobile`** note updated — **`DDL/alter/33a_form_vahan_view_queue_mobile.sql`**, **`DDL/alter/10e_form_vahan_view.sql`**; **`rto_payment_details.update_customer_mobile`**, **`fill_rto_service`** |
 | 3.01 | Jun 2026 | **`rto_queue.in_queue`** (default true) for per-row Vahan batch opt-in; statuses **Forms Missing**, **Manually Completed** — **`DDL/alter/33b_rto_queue_in_queue.sql`**, RTO Queue subtabs UI |
 | 3.02 | Jun 2026 | **`dealer_ref.cpi_reqd`** (**Y**/**N**, default **N**; **Arya Agencies** **Y**); **`add_sales_staging.cpi_reqd`** (legacy backfill **Y**; OCR **CPA Required** + Section C on Submit Info; staging wins for CPA Insurance eligibility) — **`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**, **`DDL/alter/34b_add_sales_staging_cpi_reqd.sql`**, **`sales_ocr_service`**, **`add_sales.py`** |
+| 3.03 | Jun 2026 | **`admin_dealer_access_ref`** — Admin Saathi dealer scope per login; **`GET /admin/dealers`**, Usage matrix/logs/folders, Dealers tab filtered — **`DDL/alter/35a_admin_dealer_access_ref.sql`**, **`backend/app/repositories/admin_dealer_access.py`** |
 
 
 ## `process_failure_log`

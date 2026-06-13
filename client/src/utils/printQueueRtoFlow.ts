@@ -74,13 +74,10 @@ export async function runPrintQueueRtoFlow(
     };
   }
 
-  if (!isElectron()) {
-    return {
-      success: false,
-      statusLines: ["Print / Queue RTO requires the Electron app."],
-      gatePassSucceeded: false,
-      error: "Electron required",
-    };
+  const browserDev = !isElectron();
+  const devNonFatalGatePass = browserDev && import.meta.env.DEV;
+  if (browserDev) {
+    statusLines.push("Browser dev: skipping local print/pull/push; gate pass via API.");
   }
 
   const pull = await pullSaleScanAssetsFromServer({ dealer_id: dealerId, subfolder });
@@ -114,7 +111,7 @@ export async function runPrintQueueRtoFlow(
     });
   }
 
-  let gatePassRes: PrintForm20Response;
+  let gatePassRes: PrintForm20Response | null = null;
   try {
     gatePassRes = await printGatePassLocal({
       subfolder,
@@ -127,41 +124,52 @@ export async function runPrintQueueRtoFlow(
   } catch (printErr) {
     const msg = printErr instanceof Error ? printErr.message : "Generate Gate Pass failed.";
     traceLines.push({ prefix: "UI", message: `gate pass exception: ${msg}` });
-    await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
-    await logPrintQueueRtoFailure(input, `Gate pass: ${msg}`);
-    return {
-      success: false,
-      statusLines: [`Gate Pass: ${msg} ${printRtoQueueLogHint(subfolder)}`],
-      gatePassSucceeded: false,
-      error: msg,
-    };
+    if (devNonFatalGatePass) {
+      statusLines.push(`Gate Pass (dev, non-fatal): ${msg}`);
+      traceLines.push({ prefix: "UI", message: `gate pass dev-continue after exception: ${msg}` });
+    } else {
+      await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
+      await logPrintQueueRtoFailure(input, `Gate pass: ${msg}`);
+      return {
+        success: false,
+        statusLines: [`Gate Pass: ${msg} ${printRtoQueueLogHint(subfolder)}`],
+        gatePassSucceeded: false,
+        error: msg,
+      };
+    }
   }
 
-  const gatePassSucceeded = !!gatePassRes.success;
+  let gatePassSucceeded = !!gatePassRes?.success;
   if (!gatePassSucceeded) {
-    const err = gatePassRes.error ?? "Gate Pass generation failed.";
+    const err = gatePassRes?.error ?? "Gate Pass generation failed.";
     traceLines.push({ prefix: "UI", message: `gate pass FAIL: ${err}` });
-    await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
-    await logPrintQueueRtoFailure(input, `Gate pass: ${err}`);
-    return {
-      success: false,
-      statusLines: [`Gate Pass: ${err} ${printRtoQueueLogHint(subfolder)}`],
-      gatePassSucceeded: false,
-      error: err,
-    };
-  }
-
-  statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
-  const jobNames = (gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ");
-  if (gatePassRes.print_jobs?.length) {
-    void dispatchPrintJobsFromApi(gatePassRes.print_jobs, { failureLog });
-    statusLines.push(
-      `Printing ${gatePassRes.print_jobs.length} document(s) in the background (Sale Certificate, Insurance, Gate Pass).`
-    );
-    traceLines.push({
-      prefix: "UI",
-      message: `print started (background) jobs=${jobNames}`,
-    });
+    if (devNonFatalGatePass) {
+      statusLines.push(`Gate Pass (dev, non-fatal): ${err}`);
+      traceLines.push({ prefix: "UI", message: `gate pass dev-continue: ${err}` });
+      gatePassSucceeded = false;
+    } else {
+      await finalizePrintRtoQueueLog({ dealer_id: dealerId, subfolder, lines: traceLines });
+      await logPrintQueueRtoFailure(input, `Gate pass: ${err}`);
+      return {
+        success: false,
+        statusLines: [`Gate Pass: ${err} ${printRtoQueueLogHint(subfolder)}`],
+        gatePassSucceeded: false,
+        error: err,
+      };
+    }
+  } else if (gatePassRes) {
+    statusLines.push(`Gate Pass saved: ${(gatePassRes.pdfs_saved ?? []).join(", ")}`);
+    const jobNames = (gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ");
+    if (gatePassRes.print_jobs?.length) {
+      void dispatchPrintJobsFromApi(gatePassRes.print_jobs, { failureLog });
+      statusLines.push(
+        `Printing ${gatePassRes.print_jobs.length} document(s) in the background (Sale Certificate, Insurance, Gate Pass).`
+      );
+      traceLines.push({
+        prefix: "UI",
+        message: `print started (background) jobs=${jobNames}`,
+      });
+    }
   }
 
   traceLines.push({ prefix: "UI", message: "uploading trace log (pre-push)" });
@@ -196,7 +204,7 @@ export async function runPrintQueueRtoFlow(
         ...statusLines,
         `${err} ${printRtoQueueLogHint(subfolder)}`,
       ],
-      gatePassSucceeded: true,
+      gatePassSucceeded,
       error: err,
     };
   }
@@ -224,7 +232,7 @@ export async function runPrintQueueRtoFlow(
         "RTO queue: staging_id missing.",
         printRtoQueueLogHint(subfolder),
       ],
-      gatePassSucceeded: true,
+      gatePassSucceeded,
       error: "staging_id missing",
     };
   }
@@ -253,7 +261,7 @@ export async function runPrintQueueRtoFlow(
     return {
       success: false,
       statusLines: [...statusLines, `${msg} ${printRtoQueueLogHint(subfolder)}`],
-      gatePassSucceeded: true,
+      gatePassSucceeded,
       error: msg,
     };
   }
@@ -263,6 +271,6 @@ export async function runPrintQueueRtoFlow(
   return {
     success: true,
     statusLines,
-    gatePassSucceeded: true,
+    gatePassSucceeded,
   };
 }

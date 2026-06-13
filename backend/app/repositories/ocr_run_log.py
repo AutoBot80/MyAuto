@@ -67,14 +67,25 @@ def insert_ocr_run_log(
         conn.close()
 
 
-def list_recent_for_admin(*, limit: int = 200, days: int = _DEFAULT_LIST_DAYS) -> list[dict[str, Any]]:
+def list_recent_for_admin(
+    *,
+    limit: int = 200,
+    days: int = _DEFAULT_LIST_DAYS,
+    dealer_ids: list[int] | None = None,
+) -> list[dict[str, Any]]:
     lim = max(1, min(int(limit), 1000))
     window_days = max(1, min(int(days), 365))
+    dealer_filter = ""
+    params: list[Any] = [window_days]
+    if dealer_ids:
+        dealer_filter = "AND o.dealer_id = ANY(%s)"
+        params.append(dealer_ids)
+    params.append(lim)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
                     o.id,
                     o.dealer_id,
@@ -86,10 +97,11 @@ def list_recent_for_admin(*, limit: int = 200, days: int = _DEFAULT_LIST_DAYS) -
                 FROM ocr_run_log o
                 LEFT JOIN dealer_ref d ON d.dealer_id = o.dealer_id
                 WHERE o.occurred_at >= NOW() - (%s * INTERVAL '1 day')
+                {dealer_filter}
                 ORDER BY o.occurred_at DESC
                 LIMIT %s
                 """,
-                (window_days, lim),
+                tuple(params),
             )
             rows = cur.fetchall() or []
             return [dict(r) for r in rows]

@@ -23,14 +23,31 @@ function UsageDealerMatrixTable({
   days,
   rows,
   ariaLabel,
+  equalColumns = false,
 }: {
   days: string[];
   rows: AdminUsageDealerMatrixRow[];
   ariaLabel: string;
+  equalColumns?: boolean;
 }) {
+  const tableClass = equalColumns
+    ? "app-table admin-usage-matrix-table admin-usage-matrix-table--equal-cols"
+    : "app-table admin-usage-matrix-table";
   return (
     <div className="app-table-wrap admin-usage-matrix-wrap">
-      <table className="app-table admin-usage-matrix-table" aria-label={ariaLabel}>
+      <table
+        className={tableClass}
+        aria-label={ariaLabel}
+        style={equalColumns ? ({ ["--admin-usage-day-cols" as string]: days.length } as React.CSSProperties) : undefined}
+      >
+        {equalColumns ? (
+          <colgroup>
+            <col className="admin-usage-matrix-col-dealer" />
+            {days.map((d) => (
+              <col key={d} className="admin-usage-matrix-col-day" />
+            ))}
+          </colgroup>
+        ) : null}
         <thead>
           <tr>
             <th scope="col" className="admin-usage-matrix-dealer-col">
@@ -58,7 +75,7 @@ function UsageDealerMatrixTable({
                 </th>
                 {r.counts.map((c, i) => (
                   <td key={i} className="admin-usage-matrix-num">
-                    {c}
+                    {c === 0 ? "" : c}
                   </td>
                 ))}
               </tr>
@@ -292,6 +309,7 @@ export function AdminUsagePage({ dealerId }: AdminUsagePageProps) {
                   days={matrix.days}
                   rows={matrix.sales}
                   ariaLabel="Sales master counts by dealer and IST day"
+                  equalColumns
                 />
               </div>
             ) : !matrixErr ? (
@@ -300,15 +318,15 @@ export function AdminUsagePage({ dealerId }: AdminUsagePageProps) {
           </section>
 
           <section className="admin-usage-folder-embed" aria-label="Sales folder browsers">
-            <h3>Browse folders (session dealer)</h3>
+            <h3>Browse folders</h3>
             <div className="admin-usage-sales-folder-grid">
               <div className="admin-usage-sales-folder-cell">
                 <h4>Upload scans</h4>
-                <AdminDataFolderPage dealerId={dealerId} kind="upload-scans" dealerPicker="hidden" />
+                <AdminDataFolderPage dealerId={dealerId} kind="upload-scans" />
               </div>
               <div className="admin-usage-sales-folder-cell">
                 <h4>OCR output</h4>
-                <AdminDataFolderPage dealerId={dealerId} kind="run-logs" dealerPicker="hidden" />
+                <AdminDataFolderPage dealerId={dealerId} kind="run-logs" />
               </div>
             </div>
           </section>

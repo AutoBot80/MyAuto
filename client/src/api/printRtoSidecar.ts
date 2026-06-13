@@ -1,7 +1,13 @@
 import { getAccessToken } from "../auth/token";
 import { getBaseUrl } from "./client";
 import { isElectron } from "../electron";
-import type { PrintForm20Request, PrintForm20Response, UploadSaleFolderRequest, UploadSaleFolderResponse } from "./fillForms";
+import {
+  printGatePass,
+  type PrintForm20Request,
+  type PrintForm20Response,
+  type UploadSaleFolderRequest,
+  type UploadSaleFolderResponse,
+} from "./fillForms";
 
 const SYNC_TIMEOUT_MS = 600_000;
 const GATE_PASS_LOCAL_TIMEOUT_MS = 300_000;
@@ -158,6 +164,9 @@ export async function printGatePassLocal(req: PrintForm20Request): Promise<Print
   const subfolder = (req.subfolder || "").trim();
   if (!subfolder) {
     return { success: false, pdfs_saved: [], error: "subfolder is required." };
+  }
+  if (!isElectron()) {
+    return printGatePass(req);
   }
   const r = await runSidecarJob(
     "print_gate_pass_local",

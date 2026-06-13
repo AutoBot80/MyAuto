@@ -182,6 +182,7 @@ FROM sales_master sm
 LEFT JOIN dealer_ref dr ON dr.dealer_id = sm.dealer_id
 WHERE (sm.billing_date AT TIME ZONE 'Asia/Kolkata')::date >= %s::date
   AND (sm.billing_date AT TIME ZONE 'Asia/Kolkata')::date <= %s::date
+  AND sm.dealer_id = ANY(%s)
 GROUP BY COALESCE(sm.dealer_id, -1), COALESCE(dr.dealer_name, '(no dealer)'),
          (sm.billing_date AT TIME ZONE 'Asia/Kolkata')::date
 ORDER BY dealer_name, bucket
@@ -233,6 +234,7 @@ FROM (
     SELECT cm.dealer_from,
            ({bucket_expr}) AS bucket
     FROM challan_master cm
+    WHERE cm.dealer_from = ANY(%s)
 ) x
 LEFT JOIN dealer_ref dr ON dr.dealer_id = x.dealer_from
 WHERE x.bucket IS NOT NULL
@@ -288,27 +290,81 @@ def _pivot_dealer_day_counts(raw_rows: list, day_sequence: list[date]) -> list[U
     return out
 
 
+def _fill_matrix_scope_dealers(
+    rows: list[UsageDealerMatrixRow],
+    scoped_ids: list[int],
+    dealer_names: dict[int, str],
+    day_count: int,
+) -> list[UsageDealerMatrixRow]:
+    """Ensure every scoped dealer appears (zero counts when no activity in window)."""
+    by_id = {r.dealer_id: r for r in rows}
+    out: list[UsageDealerMatrixRow] = []
+    for did in scoped_ids:
+        if did in by_id:
+            out.append(by_id[did])
+        else:
+            out.append(
+                UsageDealerMatrixRow(
+                    dealer_id=did,
+                    dealer_name=dealer_names.get(did, f"Dealer {did}"),
+                    counts=[0] * day_count,
+                )
+            )
+    out.sort(key=lambda x: x.dealer_name.casefold())
+    return out
+
+
+def _require_admin_dealer_scope(principal: Principal, dealer_id: int) -> None:
+    from app.repositories.admin_dealer_access import assert_dealer_in_admin_scope
+
+    assert_dealer_in_admin_scope(principal.login_id, dealer_id)
+
+
 @router.get("/usage-dealer-matrix", response_model=UsageDealerMatrixResponse)
 def get_usage_dealer_matrix(
-    _principal: Principal = Depends(get_principal),
+    principal: Principal = Depends(get_principal),
 ) -> UsageDealerMatrixResponse:
-    """Past 7 IST calendar days: ``sales_master`` / ``challan_master`` counts per dealer × day."""
+    """Past 7 IST calendar days: ``sales_master`` / ``challan_master`` counts per scoped dealer × day."""
+    from app.repositories.admin_dealer_access import (
+        dealer_names_for_ids,
+        list_dealer_ids_for_admin_login,
+        parent_dealer_ids_in_scope,
+    )
+
+    scoped = list_dealer_ids_for_admin_login(principal.login_id)
+    if not scoped:
+        raise HTTPException(
+            status_code=403,
+            detail="No dealers assigned for Admin Saathi access. Ask an administrator to add admin_dealer_access_ref rows.",
+        )
+    chall_scoped = parent_dealer_ids_in_scope(scoped)
     days, start_s, end_s = _ist_last_7_days()
     day_strs = [d.isoformat() for d in days]
+    chall_names = dealer_names_for_ids(chall_scoped)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(_SALES_MATRIX_SQL, (start_s, end_s))
+            cur.execute(_SALES_MATRIX_SQL, (start_s, end_s, scoped))
             sales_raw = cur.fetchall() or []
-            cur.execute(_challan_matrix_sql(cur), (start_s, end_s))
-            chall_raw = cur.fetchall() or []
+            if chall_scoped:
+                cur.execute(_challan_matrix_sql(cur), (chall_scoped, start_s, end_s))
+                chall_raw = cur.fetchall() or []
+            else:
+                chall_raw = []
     finally:
         conn.close()
+    sales_rows = _pivot_dealer_day_counts(list(sales_raw), days)
+    chall_rows = _fill_matrix_scope_dealers(
+        _pivot_dealer_day_counts(list(chall_raw), days),
+        chall_scoped,
+        chall_names,
+        len(days),
+    )
     return UsageDealerMatrixResponse(
         timezone_label="Asia/Kolkata (IST)",
         days=day_strs,
-        sales=_pivot_dealer_day_counts(list(sales_raw), days),
-        challans=_pivot_dealer_day_counts(list(chall_raw), days),
+        sales=sales_rows,
+        challans=chall_rows,
     )
 
 
@@ -336,13 +392,20 @@ def _occurred_at_to_ist_display_ddmm_hhmm(val) -> str:
 
 @router.get("/failure-logs", response_model=ProcessFailureLogListResponse)
 def get_process_failure_logs(
-    _principal: Principal = Depends(get_principal),
+    principal: Principal = Depends(get_principal),
     limit: int = Query(200, ge=1, le=1000),
 ) -> ProcessFailureLogListResponse:
-    """Recent terminal automation failures (all dealers), newest first."""
+    """Recent terminal automation failures for scoped dealers, newest first."""
+    from app.repositories.admin_dealer_access import list_dealer_ids_for_admin_login
     from app.repositories.process_failure_log import list_recent_for_admin
 
-    raw = list_recent_for_admin(limit=limit, days=_ADMIN_LOG_WINDOW_DAYS)
+    scoped = list_dealer_ids_for_admin_login(principal.login_id)
+    if not scoped:
+        raise HTTPException(
+            status_code=403,
+            detail="No dealers assigned for Admin Saathi access. Ask an administrator to add admin_dealer_access_ref rows.",
+        )
+    raw = list_recent_for_admin(limit=limit, days=_ADMIN_LOG_WINDOW_DAYS, dealer_ids=scoped)
     rows: list[ProcessFailureLogRow] = []
     for r in raw:
         rows.append(
@@ -366,13 +429,20 @@ def get_process_failure_logs(
 
 @router.get("/ocr-logs", response_model=OcrRunLogListResponse)
 def get_ocr_run_logs(
-    _principal: Principal = Depends(get_principal),
+    principal: Principal = Depends(get_principal),
     limit: int = Query(200, ge=1, le=1000),
 ) -> OcrRunLogListResponse:
-    """Add Sales OCR runs with missing fields (all dealers), newest first."""
+    """Add Sales OCR runs with missing fields for scoped dealers, newest first."""
+    from app.repositories.admin_dealer_access import list_dealer_ids_for_admin_login
     from app.repositories.ocr_run_log import list_recent_for_admin
 
-    raw = list_recent_for_admin(limit=limit, days=_ADMIN_LOG_WINDOW_DAYS)
+    scoped = list_dealer_ids_for_admin_login(principal.login_id)
+    if not scoped:
+        raise HTTPException(
+            status_code=403,
+            detail="No dealers assigned for Admin Saathi access. Ask an administrator to add admin_dealer_access_ref rows.",
+        )
+    raw = list_recent_for_admin(limit=limit, days=_ADMIN_LOG_WINDOW_DAYS, dealer_ids=scoped)
     rows: list[OcrRunLogRow] = []
     for r in raw:
         rows.append(
@@ -646,21 +716,11 @@ class LoginAssignmentsUpsertRequest(BaseModel):
 
 
 @router.get("/dealers")
-def list_dealers_for_admin() -> list[dict]:
-    """All dealers for Admin dropdown: ``dealer_id``, ``dealer_name``."""
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT dealer_id, dealer_name
-                FROM dealer_ref
-                ORDER BY dealer_name ASC
-                """
-            )
-            rows = cur.fetchall() or []
-    finally:
-        conn.close()
+def list_dealers_for_admin(principal: Principal = Depends(get_principal)) -> list[dict]:
+    """Dealers in this admin's ``admin_dealer_access_ref`` scope (dropdowns / Dealers tab)."""
+    from app.repositories.admin_dealer_access import list_dealers_for_admin_login
+
+    rows = list_dealers_for_admin_login(principal.login_id)
     return [_jsonable_row(dict(r)) for r in rows]
 
 
@@ -706,8 +766,9 @@ def create_dealer(payload: CreateDealerRequest) -> dict:
 
 
 @router.get("/dealers/{dealer_id:int}")
-def get_dealer_ref_full(dealer_id: int) -> dict:
+def get_dealer_ref_full(dealer_id: int, principal: Principal = Depends(get_principal)) -> dict:
     """``dealer_ref`` for Admin UI: ``oem_name`` instead of ``oem_id``; no ``dealer_id`` / ``city`` / ``state``."""
+    _require_admin_dealer_scope(principal, dealer_id)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -720,8 +781,11 @@ def get_dealer_ref_full(dealer_id: int) -> dict:
 
 
 @router.patch("/dealers/{dealer_id:int}")
-def patch_dealer_ref_insurer_cpi(dealer_id: int, payload: UpdateDealerRefInsurerRequest) -> dict:
+def patch_dealer_ref_insurer_cpi(
+    dealer_id: int, payload: UpdateDealerRefInsurerRequest, principal: Principal = Depends(get_principal)
+) -> dict:
     """Update ``prefer_insurer`` and ``hero_cpi`` on ``dealer_ref``. Send both fields (current values)."""
+    _require_admin_dealer_scope(principal, dealer_id)
     pi = payload.prefer_insurer
     if pi is not None:
         pi = pi.strip() or None
@@ -761,11 +825,12 @@ def patch_dealer_ref_insurer_cpi(dealer_id: int, payload: UpdateDealerRefInsurer
 
 
 @router.get("/dealers/{dealer_id:int}/logins")
-def list_dealer_login_assignments(dealer_id: int) -> list[dict]:
+def list_dealer_login_assignments(dealer_id: int, principal: Principal = Depends(get_principal)) -> list[dict]:
     """
     ``login_ref`` joined with ``login_roles_ref`` and ``roles_ref`` where
     ``login_roles_ref.dealer_id`` matches *dealer_id*. Password hash is omitted.
     """
+    _require_admin_dealer_scope(principal, dealer_id)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -800,8 +865,11 @@ def list_dealer_login_assignments(dealer_id: int) -> list[dict]:
 
 
 @router.put("/dealers/{dealer_id:int}/login-assignments/upsert")
-def upsert_login_assignments(dealer_id: int, payload: LoginAssignmentsUpsertRequest) -> list[dict]:
+def upsert_login_assignments(
+    dealer_id: int, payload: LoginAssignmentsUpsertRequest, principal: Principal = Depends(get_principal)
+) -> list[dict]:
     """Insert or update ``login_roles_ref`` rows for this dealer and sync ``login_ref.active_flag`` per row."""
+    _require_admin_dealer_scope(principal, dealer_id)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -942,8 +1010,11 @@ def patch_login_active_flag(login_id: str, payload: LoginActiveFlagRequest) -> d
 
 
 @router.post("/dealers/{dealer_id:int}/login-roles", status_code=201)
-def add_dealer_login_role(dealer_id: int, payload: AddDealerLoginRoleRequest) -> dict:
+def add_dealer_login_role(
+    dealer_id: int, payload: AddDealerLoginRoleRequest, principal: Principal = Depends(get_principal)
+) -> dict:
     """Insert ``login_roles_ref`` for this dealer (``login_id``, ``role_id``, ``dealer_id``)."""
+    _require_admin_dealer_scope(principal, dealer_id)
     lid = payload.login_id.strip()
     if not lid:
         raise HTTPException(status_code=400, detail="login_id is required")
@@ -996,8 +1067,9 @@ def add_dealer_login_role(dealer_id: int, payload: AddDealerLoginRoleRequest) ->
 
 
 @router.get("/dealers/{dealer_id:int}/discounts")
-def list_dealer_discounts(dealer_id: int) -> list[dict]:
+def list_dealer_discounts(dealer_id: int, principal: Principal = Depends(get_principal)) -> list[dict]:
     """Per-dealer model discounts from ``subdealer_discount_master_ref`` (no separate ``discounts`` table in schema)."""
+    _require_admin_dealer_scope(principal, dealer_id)
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -1022,8 +1094,11 @@ def list_dealer_discounts(dealer_id: int) -> list[dict]:
 
 
 @router.post("/dealers/{dealer_id:int}/discounts", status_code=201)
-def create_dealer_discount(dealer_id: int, payload: CreateDiscountRequest) -> dict:
+def create_dealer_discount(
+    dealer_id: int, payload: CreateDiscountRequest, principal: Principal = Depends(get_principal)
+) -> dict:
     """Insert one ``subdealer_discount_master_ref`` row for the dealer."""
+    _require_admin_dealer_scope(principal, dealer_id)
     m = payload.model.strip()
     if not m:
         raise HTTPException(status_code=400, detail="model is required")

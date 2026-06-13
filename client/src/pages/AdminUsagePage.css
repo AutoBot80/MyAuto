@@ -59,6 +59,28 @@
   max-width: 100%;
 }
 
+.admin-usage-matrix-table--equal-cols {
+  table-layout: fixed;
+  width: 100%;
+}
+
+.admin-usage-matrix-table--equal-cols col.admin-usage-matrix-col-dealer {
+  width: 26%;
+}
+
+.admin-usage-matrix-table--equal-cols col.admin-usage-matrix-col-day {
+  width: calc(74% / var(--admin-usage-day-cols, 7));
+}
+
+.admin-usage-matrix-table--equal-cols .admin-usage-matrix-day,
+.admin-usage-matrix-table--equal-cols .admin-usage-matrix-num {
+  text-align: center;
+}
+
+.admin-usage-matrix-table--equal-cols .admin-usage-matrix-dealer {
+  max-width: none;
+}
+
 .admin-usage-matrix-table .admin-usage-matrix-day,
 .admin-usage-matrix-table .admin-usage-matrix-num {
   text-align: right;

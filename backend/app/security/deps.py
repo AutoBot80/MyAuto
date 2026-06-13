@@ -17,8 +17,11 @@ def require_admin(principal: Principal = Depends(get_principal)) -> Principal:
 
 
 def assert_can_access_dealer(principal: Principal, target_dealer_id: int) -> None:
-    """Operators may only access their dealer; admins may access any dealer (admin UI)."""
+    """Operators may only access their dealer; admins use ``admin_dealer_access_ref`` scope."""
     if principal.admin:
+        from app.repositories.admin_dealer_access import assert_dealer_in_admin_scope
+
+        assert_dealer_in_admin_scope(principal.login_id, int(target_dealer_id))
         return
     if int(target_dealer_id) == int(principal.dealer_id):
         return
@@ -27,6 +30,10 @@ def assert_can_access_dealer(principal: Principal, target_dealer_id: int) -> Non
 
 def resolve_dealer_id(principal: Principal, dealer_id: int | None) -> int:
     """Use query/form dealer_id or default to token dealer_id; forbid cross-tenant for non-admins."""
+    if principal.admin:
+        from app.repositories.admin_dealer_access import resolve_admin_scoped_dealer_id
+
+        return resolve_admin_scoped_dealer_id(principal.login_id, int(principal.dealer_id), dealer_id)
     did = int(dealer_id) if dealer_id is not None else int(principal.dealer_id)
     assert_can_access_dealer(principal, did)
     return did

@@ -101,6 +101,7 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `17a_dealer_ref_hero_cpi_form_insurance_view.sql` — **`dealer_ref.hero_cpi`** (**Y**/**N**, default **N**); recreates **`form_insurance_view`** with **`hero_cpi`**.
 - `34a_dealer_ref_cpi_reqd.sql` — **`dealer_ref.cpi_reqd`** (**Y**/**N**, default **N**; **Arya Agencies** **Y**); separate from **`hero_cpi`**.
 - `34b_add_sales_staging_cpi_reqd.sql` — **`add_sales_staging.cpi_reqd`**; legacy rows **Y**; new inserts from **`dealer_ref.cpi_reqd`**.
+- `35a_admin_dealer_access_ref.sql` — **`admin_dealer_access_ref`**; Admin Saathi dealer scope per login (Usage + Dealers tab).
 - `18a_challan_master_add_order_invoice_totals.sql` — **`challan_master`**: **`order_number`**, **`invoice_number`**, **`total_ex_showroom_price`**, **`total_discount`**.
 - `18b_vehicle_inventory_master_add_discount.sql` — **`vehicle_inventory_master`**: **`discount`**.
 - `19a_challan_staging_batch_status.sql` — legacy **`challan_staging`**: **`challan_batch_id`**, **`last_error`**, **`inventory_line_id`**.

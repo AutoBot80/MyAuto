@@ -72,6 +72,7 @@ from app.services.insurance_kyc_payloads import insurance_kyc_png_payloads
 from app.services.utility_functions import (
     clean_text,
     fuzzy_best_option_label,
+    fuzzy_option_match_score,
     insurer_prefer_matches,
     normalize_dob_for_misp,
     normalize_for_fuzzy_match,
@@ -121,6 +122,12 @@ HERO_MISP_MODEL_NAME_CPH1_SUFFIXES = (
 MISP_PROPOSAL_MODEL_FUZZY_FLOOR = 0.1
 # Financier names are often short aliases in DB vs long legal-name labels in MISP.
 MISP_PROPOSAL_FINANCER_FUZZY_FLOOR = 0.35
+# RTO dropdown: ``RJ - City`` labels; prefer exact city casing over typo variants (e.g. BHARTPUR).
+MISP_PROPOSAL_RTO_FUZZY_FLOOR = 0.55
+
+_MISP_RTO_STATE_PREFIX: dict[str, str] = {
+    "rajasthan": "RJ",
+}
 
 # Return from ``_proposal_step_checkbox_by_cph1_id`` when no control matched (caller may use label/regex fallback).
 PROPOSAL_CHECKBOX_ID_NOT_FOUND = "__proposal_checkbox_id_not_found__"
@@ -745,11 +752,27 @@ _FRAME_DOM_ELEMENTS_JS = r"""() => {
       if (out.selects.length >= cap.selects) break;
       if (!vis(el)) continue;
       let sel = '';
+      const eid = el.id || '';
+      const isRto = /ddlRTO/i.test(eid);
+      const optCap = isRto ? 60 : 8;
+      let nOpt = 0;
+      let optionsPreview = [];
+      try {
+        nOpt = el.options ? el.options.length : 0;
+        for (let oi = 0; oi < nOpt && optionsPreview.length < optCap; oi++) {
+          const ot = clip(el.options[oi].textContent, 80);
+          if (ot) optionsPreview.push(ot);
+        }
+      } catch (e3) {}
       try {
         const i = el.selectedIndex;
         if (i >= 0 && el.options[i]) sel = clip(el.options[i].textContent, 60);
       } catch (e2) {}
-      out.selects.push({ id: el.id || '', name: el.name || '', selected: sel, disabled: !!el.disabled });
+      const row = { id: eid, name: el.name || '', selected: sel, disabled: !!el.disabled, nOpt: nOpt };
+      if (isRto || optionsPreview.length > 0) {
+        row.optionsPreview = optionsPreview;
+      }
+      out.selects.push(row);
     }
   } catch (e) { out.selects.push({ error: String(e).slice(0, 80) }); }
   return out;
@@ -3063,6 +3086,177 @@ def _pick_misp_financer_option_label(query: str, candidates: list[str]) -> str |
     )
 
 
+def _misp_rto_state_prefix(state: str | None) -> str | None:
+    s = normalize_for_fuzzy_match(state or "")
+    if not s:
+        return None
+    return _MISP_RTO_STATE_PREFIX.get(s)
+
+
+def _misp_rto_city_from_query(query: str) -> str:
+    q = (query or "").strip()
+    if not q:
+        return ""
+    if " - " in q:
+        return q.split(" - ", 1)[1].strip()
+    if "-" in q:
+        left, right = q.split("-", 1)
+        if len(left.strip()) <= 4 and right.strip():
+            return right.strip()
+    return q
+
+
+def _misp_rto_fuzzy_query(*, city: str, state: str | None) -> str:
+    """Primary MISP RTO query: ``RJ - Bharatpur`` when state maps; else city alone."""
+    c = (city or "").strip()
+    if not c:
+        return ""
+    prefix = _misp_rto_state_prefix(state)
+    if prefix:
+        return f"{prefix} - {c}"
+    return c
+
+
+def _pick_misp_rto_option_label(
+    query: str,
+    candidates: list[str],
+    *,
+    state_prefix: str | None = None,
+) -> str | None:
+    """
+    Pick RTO ``<option>`` label: prefer exact city casing (``RJ - Bharatpur``) over
+    all-caps typo variants (``RJ - BHARTPUR``) when both match.
+    """
+    q = (query or "").strip()
+    if not q or not candidates:
+        return None
+    city = _misp_rto_city_from_query(q)
+    city_n = normalize_for_fuzzy_match(city)
+
+    hits: list[str] = []
+    for raw in candidates:
+        t = (raw or "").strip()
+        if not t or _misp_ddl_option_text_is_placeholder(t):
+            continue
+        cn = normalize_for_fuzzy_match(t).replace("-", " ")
+        if city_n and (city_n in cn or city_n in normalize_for_fuzzy_match(t)):
+            hits.append(t)
+
+    if hits:
+
+        def _rto_hit_score(label: str) -> tuple[float, float]:
+            score = 0.0
+            label_u = label.strip().upper()
+            if state_prefix:
+                sp = state_prefix.strip().upper()
+                if label_u.startswith(f"{sp} -"):
+                    score += 0.3
+                elif label_u.startswith(sp):
+                    score += 0.2
+            if city and city in label:
+                score += 0.5
+            elif city_n and city_n in normalize_for_fuzzy_match(label):
+                score += 0.35
+            after_dash = label.split("-", 1)[-1].strip() if "-" in label else label
+            if (
+                city
+                and city != city.upper()
+                and after_dash == after_dash.upper()
+                and city.lower() in after_dash.lower()
+                and city not in label
+            ):
+                score -= 0.15
+            fuzzy = fuzzy_option_match_score(q, label)
+            return (score + fuzzy, fuzzy)
+
+        hits.sort(key=lambda c: (-_rto_hit_score(c)[0], -_rto_hit_score(c)[1], -len(c)))
+        return hits[0]
+
+    return fuzzy_best_option_label(q, candidates, min_score=MISP_PROPOSAL_RTO_FUZZY_FLOOR)
+
+
+def _wait_misp_select_options_ready(
+    loc,
+    *,
+    min_real: int = 1,
+    timeout_ms: int = 8_000,
+) -> int:
+    """Poll until ``<select>`` has real options (not only ``--Select--``)."""
+    deadline = time.monotonic() + max(500, int(timeout_ms)) / 1000.0
+    last_count = 0
+    while time.monotonic() < deadline:
+        try:
+            sel = loc.first
+            labels = _collect_select_option_labels(sel, skip_select_prefix=True)
+            real = [lbl for lbl in labels if not _misp_ddl_option_text_is_placeholder(lbl)]
+            last_count = len(real)
+            if last_count >= min_real:
+                return last_count
+            try:
+                sel.click(timeout=500)
+            except Exception:
+                try:
+                    sel.focus(timeout=500)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            time.sleep(0.25)
+        except Exception:
+            pass
+    return last_count
+
+
+def _proposal_read_cph1_select_text(page, id_suffix: str) -> str | None:
+    """Read selected text from a proposal ``ContentPlaceHolder1`` ``<select>``."""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        try:
+            loc = _proposal_cph1_locator(root, id_suffix)
+            if loc.count() == 0:
+                continue
+            snap = _read_locator_value_snapshot(loc)
+            st = (snap.get("selected_text") or "").strip()
+            if st and st.lower() not in ("--select--", "select", "-select-", ""):
+                return st
+        except Exception:
+            continue
+    return None
+
+
+def _collect_misp_select_fuzzy_fail_debug(page, *, id_suffix: str, query: str) -> list[str]:
+    """Extra frame-dump lines when proposal ``<select>`` fuzzy match fails."""
+    lines = [
+        "--- select fuzzy fail debug ---",
+        f"query={query!r} id_suffix={id_suffix!r}",
+    ]
+    proposer_state = _proposal_read_cph1_select_text(page, "ddlProposerState")
+    proposer_city = _proposal_read_cph1_select_text(page, "ddlProposerCity")
+    lines.append(f"proposer_state={proposer_state!r} proposer_city={proposer_city!r}")
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        try:
+            loc = _proposal_cph1_locator(root, id_suffix)
+            if loc.count() == 0:
+                continue
+            labels = _collect_select_option_labels(loc.first, skip_select_prefix=False, max_n=500)
+            real = [lbl for lbl in labels if not _misp_ddl_option_text_is_placeholder(lbl)]
+            lines.append(f"nOpt_total={len(labels)} nOpt_real={len(real)}")
+            lines.append(f"options_preview={labels[:120]!r}")
+            if query and real:
+                scored = sorted(
+                    ((fuzzy_option_match_score(query, c), c) for c in real),
+                    key=lambda x: -x[0],
+                )[:5]
+                lines.append(
+                    "top_fuzzy_scores="
+                    + ", ".join(f"{c!r}:{s:.3f}" for s, c in scored)
+                )
+            break
+        except Exception as exc:
+            lines.append(f"debug_error={exc!s}")
+    return lines
+
+
 def _select_option_fuzzy_in_select(
     page,
     select_locator,
@@ -3147,6 +3341,14 @@ def _select_option_fuzzy_in_select(
                     pick = _pick_misp_model_option_label(q_strip, candidates)
                 elif option_match == "financer":
                     pick = _pick_misp_financer_option_label(q_strip, candidates)
+                elif option_match == "rto":
+                    pick = _pick_misp_rto_option_label(
+                        q_strip,
+                        candidates,
+                        state_prefix=(
+                            match_out.get("rto_state_prefix") if match_out else None
+                        ),
+                    )
                 if not pick:
                     pick = fuzzy_best_option_label(
                         q_strip, candidates, min_score=fuzzy_min_score
@@ -3156,6 +3358,12 @@ def _select_option_fuzzy_in_select(
                 pick = _pick_misp_model_option_label(q_strip, candidates)
             elif option_match == "financer":
                 pick = _pick_misp_financer_option_label(q_strip, candidates)
+            elif option_match == "rto":
+                pick = _pick_misp_rto_option_label(
+                    q_strip,
+                    candidates,
+                    state_prefix=(match_out.get("rto_state_prefix") if match_out else None),
+                )
             else:
                 pick = None
             if not pick:
@@ -5869,6 +6077,18 @@ def _proposal_model_expected_matches_readback(expected: str, readback: str) -> b
     return set(e_tokens).issubset(set(r_tokens))
 
 
+def _proposal_select_readback_is_placeholder(readback: str) -> bool:
+    s = (readback or "").strip().lower()
+    return s in ("--select--", "select", "-select-", "")
+
+
+def _proposal_model_portal_auto_populated(step_id: str, readback: str) -> bool:
+    """MISP/DMS may pre-fill **Model Name**; accept non-placeholder portal value without OCR match."""
+    if step_id != "model_name":
+        return False
+    return bool((readback or "").strip()) and not _proposal_select_readback_is_placeholder(readback)
+
+
 def _proposal_financer_expected_matches_readback(expected: str, readback: str) -> bool:
     """Accept short financier aliases when readback is a longer legal-name variant."""
     if _proposal_expected_matches_readback(expected, readback):
@@ -5884,6 +6104,16 @@ def _proposal_financer_expected_matches_readback(expected: str, readback: str) -
         return False
     hit = sum(1 for t in e_tokens if t in r_key)
     return (hit / len(e_tokens)) >= 0.6
+
+
+def _proposal_rto_expected_matches_readback(expected: str, readback: str) -> bool:
+    """Accept ``RJ - Bharatpur`` readback when query is full prefix or bare city."""
+    if _proposal_expected_matches_readback(expected, readback):
+        return True
+    city = _misp_rto_city_from_query(expected)
+    if city and city != expected and _proposal_expected_matches_readback(city, readback):
+        return True
+    return False
 
 
 def _proposal_first_label_control_locator(page, label_pattern: str):
@@ -6159,6 +6389,8 @@ def _proposal_step_select_fuzzy(
     q = (query or "").strip()
     if not q and step_id != "model_name":
         return None
+    if step_id == "rto" and q:
+        _proposal_log(ocr_output_dir, subfolder, step_id, f"RTO fuzzy query={q!r}")
     last = "no select control matched labels"
     cph1_opt_match = "default"
     cph1_fuzzy_floor = float(KYC_INSURER_FUZZY_MIN_SCORE)
@@ -6168,6 +6400,9 @@ def _proposal_step_select_fuzzy(
     elif cph1_id_suffix == "ddlFinancerName" or step_id == "financer_name":
         cph1_opt_match = "financer"
         cph1_fuzzy_floor = MISP_PROPOSAL_FINANCER_FUZZY_FLOOR
+    elif cph1_id_suffix == "ddlRTO" or step_id == "rto":
+        cph1_opt_match = "rto"
+        cph1_fuzzy_floor = MISP_PROPOSAL_RTO_FUZZY_FLOOR
     if cph1_id_suffix:
         _suffixes: tuple[str, ...] = (cph1_id_suffix,)
         if cph1_id_suffix == "ddlNomineeRelation":
@@ -6201,9 +6436,22 @@ def _proposal_step_select_fuzzy(
                         else (
                             _proposal_financer_expected_matches_readback
                             if step_id == "financer_name"
-                            else _proposal_expected_matches_readback
+                            else (
+                                _proposal_rto_expected_matches_readback
+                                if step_id == "rto"
+                                else _proposal_expected_matches_readback
+                            )
                         )
                     )
+                    if _proposal_model_portal_auto_populated(step_id, pre_st):
+                        _proposal_log(
+                            ocr_output_dir,
+                            subfolder,
+                            step_id,
+                            f"portal auto-populated id_suffix={_suf!r} readback={pre_st!r} "
+                            f"(skip selection; OCR expected {q!r})",
+                        )
+                        return None
                     if pre_st and not is_placeholder and _match_fn(q, pre_st):
                         _proposal_log(
                             ocr_output_dir,
@@ -6346,6 +6594,31 @@ def _proposal_step_select_fuzzy(
                                     pass
                             break
                     cph1_match_out: dict[str, Any] = {}
+                    if cph1_id_suffix == "ddlRTO":
+                        prefix = None
+                        if " - " in q:
+                            prefix = q.split(" - ", 1)[0].strip()
+                        if not prefix:
+                            prefix = _misp_rto_state_prefix(
+                                _proposal_read_cph1_select_text(page, "ddlProposerState") or ""
+                            )
+                        cph1_match_out["rto_state_prefix"] = prefix
+                        n_ready = _wait_misp_select_options_ready(loc, timeout_ms=timeout_ms)
+                        if n_ready <= 0:
+                            last = "ddlRTO options not populated (nOpt=0 after wait)"
+                            if ocr_output_dir and (subfolder or "").strip():
+                                base = _collect_hero_misp_frame_dump_lines(page)
+                                extra = _collect_misp_select_fuzzy_fail_debug(
+                                    page, id_suffix="ddlRTO", query=q
+                                )
+                                _append_hero_misp_frame_dump(
+                                    page,
+                                    reason="proposal_rto_options_empty",
+                                    ocr_output_dir=ocr_output_dir,
+                                    subfolder=subfolder,
+                                    lines=base + extra,
+                                )
+                            continue
                     if not _select_option_fuzzy_in_select(
                         page,
                         loc,
@@ -6355,7 +6628,29 @@ def _proposal_step_select_fuzzy(
                         option_match=cph1_opt_match,
                         match_out=cph1_match_out,
                     ):
+                        if cph1_id_suffix == "ddlRTO" and ocr_output_dir and (subfolder or "").strip():
+                            base = _collect_hero_misp_frame_dump_lines(page)
+                            extra = _collect_misp_select_fuzzy_fail_debug(
+                                page, id_suffix="ddlRTO", query=q
+                            )
+                            _append_hero_misp_frame_dump(
+                                page,
+                                reason=f"proposal_rto_fuzzy_fail id_suffix={_suf!r}",
+                                ocr_output_dir=ocr_output_dir,
+                                subfolder=subfolder,
+                                lines=base + extra,
+                            )
                         last = f"fuzzy select failed for id suffix {_suf!r}"
+                        st_fail = (_read_locator_value_snapshot(loc).get("selected_text") or "").strip()
+                        if _proposal_model_portal_auto_populated(step_id, st_fail):
+                            _proposal_log(
+                                ocr_output_dir,
+                                subfolder,
+                                step_id,
+                                f"fuzzy select failed but portal readback={st_fail!r} "
+                                f"(accept auto-populated; OCR expected {q!r})",
+                            )
+                            return None
                         continue
                     snap = _read_locator_value_snapshot(loc)
                     st = (snap.get("selected_text") or "").strip()
@@ -6371,6 +6666,15 @@ def _proposal_step_select_fuzzy(
                         )
                         return None
                     if not _match_fn(q, st):
+                        if _proposal_model_portal_auto_populated(step_id, st):
+                            _proposal_log(
+                                ocr_output_dir,
+                                subfolder,
+                                step_id,
+                                f"accept portal readback={st!r} id_suffix={_suf!r} "
+                                f"(OCR expected {q!r}; skip mismatch)",
+                            )
+                            return None
                         return (
                             f"{step_id}: readback mismatch expected={q!r} selected_text={st!r} "
                             f"(id_suffix={_suf!r})"
@@ -6407,9 +6711,22 @@ def _proposal_step_select_fuzzy(
             else (
                 _proposal_financer_expected_matches_readback
                 if step_id == "financer_name"
-                else _proposal_expected_matches_readback
+                else (
+                    _proposal_rto_expected_matches_readback
+                    if step_id == "rto"
+                    else _proposal_expected_matches_readback
+                )
             )
         )
+        if _proposal_model_portal_auto_populated(step_id, pre_st):
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                f"portal auto-populated label_pattern={lp[:48]!r} readback={pre_st!r} "
+                f"(skip selection; OCR expected {q!r})",
+            )
+            return None
         if pre_st and not is_placeholder and _match_fn(q, pre_st):
             _proposal_log(
                 ocr_output_dir,
@@ -6421,7 +6738,11 @@ def _proposal_step_select_fuzzy(
         _lp_match = (
             "model"
             if step_id == "model_name"
-            else ("financer" if step_id == "financer_name" else "default")
+            else (
+                "financer"
+                if step_id == "financer_name"
+                else ("rto" if step_id == "rto" else "default")
+            )
         )
         _lp_fuzzy = (
             MISP_PROPOSAL_MODEL_FUZZY_FLOOR
@@ -6429,7 +6750,11 @@ def _proposal_step_select_fuzzy(
             else (
                 MISP_PROPOSAL_FINANCER_FUZZY_FLOOR
                 if _lp_match == "financer"
-                else float(KYC_INSURER_FUZZY_MIN_SCORE)
+                else (
+                    MISP_PROPOSAL_RTO_FUZZY_FLOOR
+                    if _lp_match == "rto"
+                    else float(KYC_INSURER_FUZZY_MIN_SCORE)
+                )
             )
         )
         lp_match_out: dict[str, Any] = {}
@@ -6456,6 +6781,15 @@ def _proposal_step_select_fuzzy(
             )
             return None
         if not _match_fn(q, st):
+            if _proposal_model_portal_auto_populated(step_id, st):
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    step_id,
+                    f"accept portal readback={st!r} label_pattern={lp[:48]!r} "
+                    f"(OCR expected {q!r}; skip mismatch)",
+                )
+                return None
             return (
                 f"{step_id}: readback mismatch expected={q!r} selected_text={st!r} "
                 f"(after label pattern {lp!r})"
@@ -9829,7 +10163,12 @@ def _hero_misp_fill_proposal_and_review(
                 return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 
     city = (values.get("city") or "").strip()
-    rto_query = city if city else "City"
+    state = (values.get("state") or "").strip()
+    if not state:
+        state = (_proposal_read_cph1_select_text(page, "ddlProposerState") or "").strip()
+    rto_query = _misp_rto_fuzzy_query(city=city, state=state)
+    if not rto_query:
+        rto_query = (values.get("rto_name") or "").strip() or "City"
     err = _proposal_step_select_fuzzy(
         page,
         (r"RTO", r"Registering\s*Authority|R\.?T\.?O"),

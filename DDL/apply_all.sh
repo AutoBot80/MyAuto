@@ -181,6 +181,9 @@ run alter/33b_rto_queue_in_queue.sql
 # login_ref redesign
 run alter/26b_login_ref_redesign.sql
 
+# admin Saathi dealer scope
+run alter/35a_admin_dealer_access_ref.sql
+
 # drop legacy ai_reader_queue (last — no dependents)
 run alter/01z_drop_ai_reader_queue.sql
 run alter/01a_ai_reader_queue_add_classification.sql
