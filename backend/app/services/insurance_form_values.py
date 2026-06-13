@@ -66,7 +66,11 @@ def read_insurance_insurer_from_ocr_json(ocr_output_dir: Path | None, subfolder:
 
 
 def _apply_staging_insurance_overlay(values: dict, staging_payload: dict | None) -> None:
-    """Fill empty insurer / DOB / nominee / nominee_gender from staging ``insurance`` / ``customer`` blobs; merge **marital_status** from staging when set."""
+    """Fill empty insurer / DOB / nominee / nominee_gender from staging ``insurance`` / ``customer`` blobs.
+
+    **Staging wins** when non-empty: ``marital_status``, ``city``, ``state``, ``address``, ``pin_code``
+    (In-process Save / Submit Info corrections flow to MISP proposal, including RTO).
+    """
     if not staging_payload or not isinstance(staging_payload, dict):
         return
     ins = staging_payload.get("insurance") if isinstance(staging_payload.get("insurance"), dict) else {}
@@ -111,6 +115,20 @@ def _apply_staging_insurance_overlay(values: dict, staging_payload: dict | None)
     t_mar = clean_text(ins.get("marital_status") or cust.get("marital_status") or "")
     if t_mar:
         values["marital_status"] = t_mar
+
+    # Address fields: **staging wins** when non-empty (In-process PATCH sets city/state/pin from normalized address).
+    t_city = clean_text(cust.get("city") or "")
+    if t_city:
+        values["city"] = t_city
+    t_state = clean_text(cust.get("state") or "")
+    if t_state:
+        values["state"] = t_state
+    t_addr = clean_text(cust.get("address") or "")
+    if t_addr:
+        values["address"] = t_addr
+    t_pin = clean_text(cust.get("pin_code") or cust.get("pin") or "")[:6]
+    if t_pin:
+        values["pin_code"] = t_pin
 
 
 def load_latest_insurance_values(customer_id: int, vehicle_id: int) -> dict:
