@@ -148,11 +148,65 @@ def _get_ssl_context() -> ssl.SSLContext:
     return ctx
 
 
+_SCRIPT_BUNDLE_MAX_ATTEMPTS = 3
+
+
+def _normalize_git_commit(commit: str) -> str:
+    return (commit or "").strip().lower()
+
+
+def _git_commits_match(expected: str, actual: str) -> bool:
+    """True when two git commit ids refer to the same revision (short or full)."""
+    a = _normalize_git_commit(expected)
+    b = _normalize_git_commit(actual)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short_len = min(len(a), len(b), 7)
+    return a[:short_len] == b[:short_len]
+
+
+def _fetch_script_bundle_zip(base: str, jwt: str) -> tuple[bytes, str]:
+    req = urllib.request.Request(
+        f"{base}/sidecar/scripts/bundle",
+        headers={"Authorization": f"Bearer {jwt}"},
+    )
+    with urllib.request.urlopen(req, timeout=60, context=_get_ssl_context()) as resp:
+        bundle_commit = (resp.getheader("X-Git-Commit") or "").strip()
+        return resp.read(), bundle_commit
+
+
+def _extract_script_cache(cache: Path, zip_bytes: bytes, server_commit: str) -> None:
+    import io
+    import shutil
+    import zipfile
+
+    staging = cache.parent / "script_cache_staging"
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        zf.extractall(staging)
+    if cache.exists():
+        shutil.rmtree(cache, ignore_errors=True)
+    staging.rename(cache)
+    version_file = cache / ".version"
+    version_file.write_text(server_commit, encoding="utf-8")
+    logging.info("script-sync: cache updated to commit=%s", server_commit)
+
+
 def _sync_scripts(api_url: str, jwt: str, saathi_base: str) -> None:
     """
     In frozen (packaged) mode, check whether the local script cache matches
     the server's git commit.  If stale or absent, download the bundle zip and
     extract it.  In dev mode this is a no-op.
+
+    When the API fleet is behind an ALB, ``/scripts/version`` and
+    ``/scripts/bundle`` may hit different instances during a rolling deploy.
+    The bundle's ``X-Git-Commit`` must match the version endpoint before the
+    cache is swapped (avoids poisoning ``script_cache/.version`` with mismatched
+    Python on disk).
     """
     global _scripts_synced
     if _scripts_synced or not _is_frozen:
@@ -181,42 +235,73 @@ def _sync_scripts(api_url: str, jwt: str, saathi_base: str) -> None:
         logging.warning("script-sync: version check failed (%s); using cache", exc)
         return
 
+    server_commit = (server_commit or "").strip()
     if server_commit and server_commit == cached_commit:
         logging.info("script-sync: cache up-to-date (commit=%s)", cached_commit)
         return
 
     logging.info(
         "script-sync: updating cache (server=%s, cached=%s)",
-        server_commit or "?", cached_commit or "none",
+        server_commit or "?",
+        cached_commit or "none",
     )
-    try:
-        req = urllib.request.Request(
-            f"{base}/sidecar/scripts/bundle",
-            headers={"Authorization": f"Bearer {jwt}"},
-        )
-        with urllib.request.urlopen(req, timeout=60, context=_get_ssl_context()) as resp:
-            zip_bytes = resp.read()
-    except Exception as exc:
-        logging.warning("script-sync: bundle download failed (%s); using cache", exc)
+
+    zip_bytes: bytes | None = None
+    bundle_commit = ""
+    for attempt in range(1, _SCRIPT_BUNDLE_MAX_ATTEMPTS + 1):
+        try:
+            zip_bytes, bundle_commit = _fetch_script_bundle_zip(base, jwt)
+        except Exception as exc:
+            logging.warning(
+                "script-sync: bundle download failed (attempt %s/%s): %s",
+                attempt,
+                _SCRIPT_BUNDLE_MAX_ATTEMPTS,
+                exc,
+            )
+            zip_bytes = None
+            bundle_commit = ""
+            continue
+
+        bundle_commit = (bundle_commit or "").strip()
+        if server_commit and bundle_commit:
+            if _git_commits_match(server_commit, bundle_commit):
+                break
+            logging.warning(
+                "script-sync: bundle commit %s != version %s (attempt %s/%s); retrying",
+                bundle_commit,
+                server_commit,
+                attempt,
+                _SCRIPT_BUNDLE_MAX_ATTEMPTS,
+            )
+            zip_bytes = None
+            continue
+
+        if not server_commit and bundle_commit:
+            server_commit = bundle_commit
+            break
+
+        if server_commit and not bundle_commit:
+            logging.warning(
+                "script-sync: bundle missing X-Git-Commit (attempt %s/%s); retrying",
+                attempt,
+                _SCRIPT_BUNDLE_MAX_ATTEMPTS,
+            )
+            zip_bytes = None
+            continue
+
+        break
+
+    if not zip_bytes:
+        logging.warning("script-sync: no matching bundle after retries; using stale cache")
         return
 
-    import io
-    import shutil
-    import zipfile
+    commit_for_cache = server_commit or bundle_commit
+    if not commit_for_cache:
+        logging.warning("script-sync: no commit id for cache metadata; using stale cache")
+        return
 
     try:
-        staging = cache.parent / "script_cache_staging"
-        if staging.exists():
-            shutil.rmtree(staging, ignore_errors=True)
-        staging.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            zf.extractall(staging)
-        if cache.exists():
-            shutil.rmtree(cache, ignore_errors=True)
-        staging.rename(cache)
-        version_file = cache / ".version"
-        version_file.write_text(server_commit, encoding="utf-8")
-        logging.info("script-sync: cache updated to commit=%s", server_commit)
+        _extract_script_cache(cache, zip_bytes, commit_for_cache)
     except Exception as exc:
         logging.warning("script-sync: extract/swap failed (%s); using stale cache", exc)
 

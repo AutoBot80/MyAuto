@@ -211,6 +211,8 @@ After that, `cd /opt/saathi && git pull` works from that account. The workstatio
 
 > **Challans folder:** Runtime subdealer-challan output lives under `Challans/` and is not in git. If a manual `git pull` fails with *untracked files would be overwritten* under `Challans/`, run `sudo git -C /opt/saathi clean -fd -- Challans`, then pull again. [Update-Prod-App-Backend.ps1](../../Update-Prod-App-Backend.ps1) runs that clean automatically before `git pull`.
 
+> **Multi-instance ALB:** When the ASG runs **more than one** app instance, **every** running node must receive the same `git pull` and `systemctl restart saathi-api`. [Update-Prod-App-Backend.ps1](../../Update-Prod-App-Backend.ps1) deploys to **all** instances with the target Name tag. If you deploy manually via Session Manager, repeat Step 4 on each instance; mixed commits behind the ALB can poison Electron `script_cache` (version endpoint vs bundle zip from different boxes).
+
 ```bash
 cd /opt/saathi
 chmod +x deploy/ec2/run-gunicorn.sh

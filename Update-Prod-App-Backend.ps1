@@ -21,6 +21,7 @@
   - IAM permissions: ec2:DescribeInstances, ssm:SendCommand, ssm:GetCommandInvocation
   - EC2: SSM Agent, IAM role with AmazonSSMManagedInstanceCore, app at /opt/saathi
   - Remote git uses: sudo git -C /opt/saathi (repo often root-owned; avoids dubious-ownership failures)
+  - When multiple running instances share the InstanceTag, deploy runs on **all** of them (ALB fleet must stay on the same commit).
 
   See also: deploy/ec2/DEPLOY.md
 
@@ -390,14 +391,15 @@ if ($ids.Count -eq 0) {
     Exit-Script 1
 }
 
-$InstanceId = $ids[0]
-if ($ids.Count -gt 1) {
-    Write-Host ('Multiple instances found; using first: {0} [total: {1}]' -f $InstanceId, $ids.Count) -ForegroundColor DarkYellow
+$InstanceIds = @($ids)
+if ($InstanceIds.Count -gt 1) {
+    Write-Host ('Multiple instances found; deploying to all ({0}): {1}' -f $InstanceIds.Count, ($InstanceIds -join ', ')) -ForegroundColor Cyan
+} else {
+    Write-Ok "InstanceId=$($InstanceIds[0])"
 }
-Write-Ok "InstanceId=$InstanceId"
 
 # --- Phase 3: SSM deploy ---
-Write-Step "Phase 3: SSM remote deploy (sudo git pull, pip, restart saathi-api)"
+Write-Step ('Phase 3: SSM remote deploy on {0} instance(s) (sudo git pull, pip, restart saathi-api)' -f $InstanceIds.Count)
 
 # One logical script on the instance (bash). SSM AWS-RunShellScript expects "commands" as an array of lines.
 $remoteLines = @(
@@ -420,7 +422,7 @@ $remoteLines = @(
 # Full request JSON avoids Windows quoting issues with --parameters file://...
 $cliInputObj = [ordered]@{
     DocumentName   = "AWS-RunShellScript"
-    InstanceIds    = @($InstanceId)
+    InstanceIds    = $InstanceIds
     Parameters     = @{ commands = $remoteLines }
 }
 $cliInputJson = $cliInputObj | ConvertTo-Json -Depth 10 -Compress
@@ -447,49 +449,67 @@ try {
     Remove-Item -Path $cliInputFile -ErrorAction SilentlyContinue
 }
 
-Write-Host "CommandId=$CommandId - waiting for completion..."
+Write-Host "CommandId=$CommandId - waiting for completion on $($InstanceIds.Count) instance(s)..."
 
 $maxWaitSec = 300
 $elapsed = 0
-$status = "InProgress"
-while ($elapsed -lt $maxWaitSec -and $status -in @("InProgress", "Pending", "Delayed")) {
+$terminalStatuses = @("Success", "Cancelled", "TimedOut", "Failed", "Cancelling")
+while ($elapsed -lt $maxWaitSec) {
     Start-Sleep -Seconds 2
     $elapsed += 2
-    $inv = aws ssm get-command-invocation `
+    $anyPending = $false
+    foreach ($targetId in $InstanceIds) {
+        $inv = aws ssm get-command-invocation `
+            --region $Region `
+            --command-id $CommandId `
+            --instance-id $targetId `
+            --output json 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "get-command-invocation $targetId (retry): $inv" -ForegroundColor DarkGray
+            $anyPending = $true
+            continue
+        }
+        $invObj = $inv | ConvertFrom-Json
+        if ($invObj.Status -notin $terminalStatuses) {
+            $anyPending = $true
+        }
+    }
+    if (-not $anyPending) {
+        break
+    }
+}
+
+$allSuccess = $true
+foreach ($targetId in $InstanceIds) {
+    $final = aws ssm get-command-invocation `
         --region $Region `
         --command-id $CommandId `
-        --instance-id $InstanceId `
+        --instance-id $targetId `
         --output json 2>&1
+
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "get-command-invocation (retry): $inv" -ForegroundColor DarkGray
+        Write-Fail "Could not read command result for $targetId : $final"
+        $allSuccess = $false
         continue
     }
-    $invObj = $inv | ConvertFrom-Json
-    $status = $invObj.Status
+
+    $finalObj = $final | ConvertFrom-Json
+    Write-Host ""
+    Write-Host "--- Remote stdout ($targetId) ---" -ForegroundColor DarkCyan
+    Write-Host ($finalObj.StandardOutputContent)
+    Write-Host "--- Remote stderr ($targetId) ---" -ForegroundColor DarkYellow
+    Write-Host ($finalObj.StandardErrorContent)
+
+    if ($finalObj.Status -ne "Success") {
+        Write-Fail "SSM command on $targetId Status=$($finalObj.Status)"
+        $allSuccess = $false
+    } else {
+        Write-Ok "SSM command on $targetId Status=Success"
+    }
 }
 
-$final = aws ssm get-command-invocation `
-    --region $Region `
-    --command-id $CommandId `
-    --instance-id $InstanceId `
-    --output json 2>&1
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "Could not read command result: $final"
-    Exit-Script 1
-}
-
-$finalObj = $final | ConvertFrom-Json
-Write-Host ""
-Write-Host "--- Remote stdout ---" -ForegroundColor DarkCyan
-Write-Host ($finalObj.StandardOutputContent)
-Write-Host "--- Remote stderr ---" -ForegroundColor DarkYellow
-Write-Host ($finalObj.StandardErrorContent)
-
-if ($finalObj.Status -eq "Success") {
-    Write-Ok "SSM command Status=Success"
+if ($allSuccess) {
     Exit-Script 0
 }
 
-Write-Fail "SSM command Status=$($finalObj.Status)"
 Exit-Script 1
