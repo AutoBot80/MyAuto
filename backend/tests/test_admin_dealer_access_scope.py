@@ -89,7 +89,9 @@ def test_get_dealer_detail_allowed_in_scope(admin_client: TestClient) -> None:
 
 def test_list_portal_insurers_for_admin(admin_client: TestClient) -> None:
     portal = ["National Insurance Co. Ltd.", "BAJAJ GENERAL INSURANCE LIMITED"]
-    with patch("app.routers.admin.list_portal_insurers", return_value=portal):
+    with patch("app.routers.admin.list_portal_insurers", return_value=portal), patch(
+        "app.routers.admin.get_connection"
+    ):
         r = admin_client.get("/admin/portal-insurers")
     assert r.status_code == 200
     assert r.json()["insurers"] == portal
