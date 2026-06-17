@@ -27,12 +27,15 @@ from app.config import (
 )
 from app.services.dealer_storage import sync_challans_subfolder_to_s3
 from app.services.process_failure_log_service import entity_key_challan, record_safe as _record_process_failure_safe
+from app.db import get_connection
 from app.repositories import challan_details_staging as detail_repo
 from app.repositories import challan_master_staging as master_repo
+from app.repositories.dealer_ref import DealerRefRepository
 from app.repositories.vehicle_inventory import (
     fetch_lines_for_batch_inventory,
     get_by_id,
     get_subdealer_challan_discount,
+    update_dealer_id_for_inventory_line_ids,
     update_discount_and_ex_showroom,
     upsert_from_prepare_vehicle_scrape,
 )
@@ -1142,6 +1145,63 @@ def patch_staging_failed_line_raw_vehicles(
     ):
         return {"ok": False, "error": "Could not update (line not in Failed status?)."}
     return {"ok": True, "error": None}
+
+
+def patch_staging_master_to_dealer(
+    *,
+    challan_batch_id: uuid.UUID,
+    dealer_id: int,
+    to_dealer_id: int,
+) -> dict[str, object]:
+    """
+    Correct ``to_dealer_id`` on an in-process batch before Retry.
+    Syncs ``vehicle_inventory_master.dealer_id`` for lines already linked on detail staging.
+    """
+    master = master_repo.fetch_master(challan_batch_id)
+    if not master:
+        return {"ok": False, "error": "Batch not found."}
+    from_dealer_id = int(master["from_dealer_id"])
+    if from_dealer_id != int(dealer_id):
+        return {"ok": False, "error": "Not authorized for this batch."}
+    if bool(master.get("invoice_complete")):
+        return {"ok": False, "error": "Invoice is complete; To Dealer cannot be changed."}
+    dms_ord = (str(master.get("dms_order_number") or "")).strip()
+    if dms_ord:
+        return {
+            "ok": False,
+            "error": (
+                "To Dealer cannot be changed after a DMS Order# is saved. "
+                "Complete or clear the order in DMS before changing subdealer."
+            ),
+        }
+    new_to = int(to_dealer_id)
+    old_to = int(master["to_dealer_id"])
+    if new_to == old_to:
+        return {"ok": True, "error": None, "to_dealer_id": new_to}
+
+    conn = get_connection()
+    try:
+        child = DealerRefRepository.get_by_id(conn, new_to)
+    finally:
+        conn.close()
+    if not child:
+        return {"ok": False, "error": "to_dealer_id not found in dealer_ref."}
+    child_parent = child.get("parent_id")
+    if child_parent is None or int(child_parent) != from_dealer_id:
+        return {
+            "ok": False,
+            "error": "to_dealer_id must be a subdealer of the sending dealer (parent_id match).",
+        }
+
+    if not master_repo.update_master_to_dealer(challan_batch_id, new_to):
+        return {"ok": False, "error": "Could not update batch To Dealer."}
+
+    rows = detail_repo.fetch_batch_rows(challan_batch_id)
+    inv_ids = [int(r["inventory_line_id"]) for r in rows if r.get("inventory_line_id")]
+    if inv_ids:
+        update_dealer_id_for_inventory_line_ids(inv_ids, new_to)
+
+    return {"ok": True, "error": None, "to_dealer_id": new_to}
 
 
 def create_challan_staging_batch(

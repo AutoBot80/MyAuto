@@ -107,11 +107,25 @@ export function buildAddressLine2(c: ExtractedCustomerDetails | null | undefined
   return parts.map((s) => String(s).trim()).join(", ");
 }
 
-/** In-process Sales Details: use stored ``address`` only (do not merge city/state/PIN from separate columns). */
+/**
+ * In-process Sales Details address from staging ``customer``.
+ * When ``address`` is already a full normalized operator line, use it alone (avoids duplicating
+ * city/state/PIN after In-process PATCH). Otherwise combine New Sales line 1 + line 2 columns.
+ */
 export function inProcessAddressFromStaging(c: ExtractedCustomerDetails | null | undefined): string {
-  const fromField = (c?.address ?? "").trim();
+  if (!c) return "";
+  const fromField = (c.address ?? "").trim();
+  const line2 = buildAddressLine2(c);
+
+  if (fromField && validateFreeformAddressLine(fromField) === null) {
+    return fromField;
+  }
+  if (fromField && line2) {
+    return `${fromField}, ${line2}`;
+  }
   if (fromField) return fromField;
-  return "";
+  if (line2) return line2;
+  return buildSection2FullAddress(c);
 }
 
 /** Full address for Section 2 required-field checks (both rows). */

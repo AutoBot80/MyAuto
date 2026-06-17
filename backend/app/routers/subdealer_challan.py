@@ -19,6 +19,7 @@ from app.repositories import challan_master_staging as master_repo
 from app.services.add_subdealer_challan_service import (
     create_challan_staging_batch,
     patch_staging_failed_line_raw_vehicles,
+    patch_staging_master_to_dealer,
     retry_failed_staging_row,
     retry_order_only_batch,
     run_subdealer_challan_batch,
@@ -104,6 +105,10 @@ class ProcessChallanRequest(BaseModel):
 class PatchStagingDetailRequest(BaseModel):
     raw_chassis: str | None = Field(None, description="Corrected chassis; may combine with existing if omitted")
     raw_engine: str | None = Field(None, description="Corrected engine; may combine with existing if omitted")
+
+
+class PatchStagingMasterRequest(BaseModel):
+    to_dealer_id: int = Field(..., description="Subdealer receiving stock (child of from_dealer_id)")
 
 
 @router.post("/staging", response_model=CreateChallanStagingResponse)
@@ -335,6 +340,29 @@ def patch_staging_detail_raw(
         dealer_id=did,
         raw_chassis=req.raw_chassis,
         raw_engine=req.raw_engine,
+    )
+    if not out.get("ok"):
+        err = (out.get("error") or "Update failed").strip()
+        raise HTTPException(status_code=400, detail=err)
+    return out
+
+
+@router.patch("/staging/master/{challan_batch_id}")
+def patch_staging_master_to_dealer_endpoint(
+    challan_batch_id: str,
+    req: PatchStagingMasterRequest,
+    principal: Principal = Depends(get_principal),
+) -> dict[str, object]:
+    """Update ``to_dealer_id`` on an in-process batch (before **Retry**). Blocked when invoice is complete or DMS Order# exists."""
+    try:
+        bid = uuid.UUID(challan_batch_id.strip())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
+    did = int(resolve_dealer_id(principal, None))
+    out = patch_staging_master_to_dealer(
+        challan_batch_id=bid,
+        dealer_id=did,
+        to_dealer_id=int(req.to_dealer_id),
     )
     if not out.get("ok"):
         err = (out.get("error") or "Update failed").strip()

@@ -156,11 +156,19 @@ export async function fetchAddSalesInvoices(
 export async function fetchAddSalesStagingPayload(
   stagingId: string,
   dealerId: number
-): Promise<{ staging_id: string; payload_json: Record<string, unknown>; cpi_reqd?: string | null }> {
+): Promise<{
+  staging_id: string;
+  payload_json: Record<string, unknown>;
+  cpi_reqd?: string | null;
+  insurance_state?: number | null;
+}> {
   const q = new URLSearchParams({ dealer_id: String(dealerId) });
-  return apiFetch<{ staging_id: string; payload_json: Record<string, unknown>; cpi_reqd?: string | null }>(
-    `/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`
-  );
+  return apiFetch<{
+    staging_id: string;
+    payload_json: Record<string, unknown>;
+    cpi_reqd?: string | null;
+    insurance_state?: number | null;
+  }>(`/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`);
 }
 
 /** Whitelisted operator edits for In-process Sales Details (PATCH merge into staging). */
@@ -180,6 +188,8 @@ export interface PatchAddSalesStagingPayloadBody {
     nominee_name?: string | null;
     nominee_relationship?: string | null;
   };
+  /** CPA Required → ``add_sales_staging.cpi_reqd``. */
+  cpi_reqd?: "Y" | "N";
 }
 
 export async function patchAddSalesStagingPayload(

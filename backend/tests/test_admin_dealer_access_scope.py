@@ -85,3 +85,28 @@ def test_get_dealer_detail_allowed_in_scope(admin_client: TestClient) -> None:
         r = admin_client.get("/admin/dealers/100003")
     assert r.status_code == 200
     assert r.json()["dealer_name"] == "Test Dealer 100003"
+
+
+def test_list_portal_insurers_for_admin(admin_client: TestClient) -> None:
+    portal = ["National Insurance Co. Ltd.", "BAJAJ GENERAL INSURANCE LIMITED"]
+    with patch("app.routers.admin.list_portal_insurers", return_value=portal):
+        r = admin_client.get("/admin/portal-insurers")
+    assert r.status_code == 200
+    assert r.json()["insurers"] == portal
+
+
+def test_patch_prefer_insurer_rejects_non_portal_label(admin_client: TestClient) -> None:
+    portal = ["National Insurance Co. Ltd."]
+    with patch(
+        "app.repositories.admin_dealer_access.list_dealer_ids_for_admin_login",
+        return_value=[100003],
+    ), patch("app.routers.admin.list_portal_insurers", return_value=portal), patch(
+        "app.routers.admin.get_connection"
+    ) as mock_conn:
+        mock_cur = mock_conn.return_value.cursor.return_value.__enter__.return_value
+        mock_cur.fetchone.return_value = (1,)
+        r = admin_client.patch(
+            "/admin/dealers/100003",
+            json={"prefer_insurer": "National Insurance Co. Ltd", "hero_cpi": "N", "cpi_reqd": "N"},
+        )
+    assert r.status_code == 400

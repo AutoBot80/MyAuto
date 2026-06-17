@@ -38,6 +38,10 @@ export interface SubdealerDiscountRow {
   create_date: string | null;
 }
 
+export function getAdminPortalInsurers() {
+  return apiFetch<{ insurers: string[] }>("/admin/portal-insurers");
+}
+
 export function getAdminDealerNames() {
   return apiFetch<AdminDealerNameRow[]>("/admin/dealers");
 }
@@ -81,7 +85,7 @@ export function createAdminDealerDiscount(
 
 export function patchAdminDealerInsurerCpi(
   dealerId: number,
-  body: { prefer_insurer: string | null; hero_cpi: "Y" | "N" }
+  body: { prefer_insurer: string | null; hero_cpi: "Y" | "N"; cpi_reqd: "Y" | "N" }
 ) {
   return apiFetch<JsonRecord>(`/admin/dealers/${dealerId}`, {
     method: "PATCH",

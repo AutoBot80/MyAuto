@@ -8,6 +8,7 @@ from typing import Any
 from app.db import get_connection
 from app.repositories.add_sales_staging import (
     _load_payload_json_for_update_on_cursor,
+    _normalize_cpi_reqd_flag,
     merge_staging_payload_on_cursor,
 )
 from app.schemas.add_sales_staging_patch import PatchAddSalesStagingPayloadRequest
@@ -101,6 +102,25 @@ def _enrich_customer_patch(
             cust_patch["dms_relation_prefix"] = _str_or_none(rel, 8) or rel
 
 
+def _fetch_insurance_state_on_cursor(cur, *, staging_id: str, dealer_id: int) -> int | None:
+    cur.execute(
+        """
+        SELECT insurance_state
+        FROM add_sales_staging
+        WHERE staging_id = %s::uuid AND dealer_id = %s
+          AND status IN ('draft', 'committed')
+        """,
+        (staging_id, int(dealer_id)),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    raw = row["insurance_state"] if isinstance(row, dict) else row[0]
+    if raw is None:
+        return None
+    return int(raw)
+
+
 def patch_add_sales_staging_payload(
     *,
     staging_id: str,
@@ -115,7 +135,8 @@ def patch_add_sales_staging_payload(
     if not sid:
         raise ValueError("staging_id is required")
     patch = _build_patch_from_request(req)
-    if not patch:
+    cpi_patch = req.cpi_reqd if "cpi_reqd" in req.model_fields_set else None
+    if not patch and cpi_patch is None:
         raise ValueError("At least one editable field is required")
 
     cust_patch = patch.get("customer")
@@ -140,11 +161,39 @@ def patch_add_sales_staging_payload(
             )
             if existing is None:
                 raise ValueError("Staging not found or not accessible for this dealer.")
-            _enrich_customer_patch(patch, existing)
-            rows = merge_staging_payload_on_cursor(
-                cur, sid, int(dealer_id), patch
-            )
-            if rows < 1:
+
+            ins_patch = patch.get("insurance")
+            if isinstance(ins_patch, dict) and "insurer" in ins_patch:
+                ins_state = _fetch_insurance_state_on_cursor(
+                    cur, staging_id=sid, dealer_id=int(dealer_id)
+                )
+                if ins_state is not None and ins_state != 0:
+                    raise ValueError(
+                        "Insurance provider cannot be changed after insurance processing has started."
+                    )
+
+            updated = False
+            if patch:
+                _enrich_customer_patch(patch, existing)
+                if merge_staging_payload_on_cursor(cur, sid, int(dealer_id), patch) >= 1:
+                    updated = True
+
+            if cpi_patch is not None:
+                cpi_val = _normalize_cpi_reqd_flag(cpi_patch)
+                cur.execute(
+                    """
+                    UPDATE add_sales_staging
+                    SET updated_at = now(),
+                        cpi_reqd = %s
+                    WHERE staging_id = %s::uuid AND dealer_id = %s
+                      AND status IN ('draft', 'committed')
+                    """,
+                    (cpi_val, sid, int(dealer_id)),
+                )
+                if int(cur.rowcount or 0) >= 1:
+                    updated = True
+
+            if not updated:
                 raise ValueError(
                     "Staging row could not be updated (missing, wrong dealer, or abandoned)."
                 )

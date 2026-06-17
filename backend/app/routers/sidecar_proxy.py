@@ -72,6 +72,7 @@ class DmsResolveResponse(BaseModel):
     dms_values: dict[str, Any]
     staging_payload: dict[str, Any] | None = None
     staging_id: str | None = None
+    dealer_id: int
     dms_state: int = 0
     dms_base_url: str
     headed: bool
@@ -350,6 +351,7 @@ async def dms_resolve(
         dms_values=dms_values,
         staging_payload=staging_payload,
         staging_id=sid_resolved,
+        dealer_id=int(did),
         dms_state=dms_state,
         dms_base_url=(DMS_BASE_URL or "").strip(),
         headed=bool(DMS_PLAYWRIGHT_HEADED),

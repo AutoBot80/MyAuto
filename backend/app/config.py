@@ -305,6 +305,23 @@ OCR_PSM = int(os.getenv("OCR_PSM", "3"))
 # Preprocess image before OCR (grayscale + contrast) to improve text extraction when logos/pictures are present.
 OCR_PREPROCESS = os.getenv("OCR_PREPROCESS", "true").lower() in ("1", "true", "yes")
 
+# Form 20 cover classification: Hindi-primary Tesseract on header bands (Textract DDT is poor on Devanagari).
+FORM20_TESSERACT_LANG = (os.getenv("FORM20_TESSERACT_LANG") or "hin").strip() or "hin"
+try:
+    FORM20_TESSERACT_PSM = int((os.getenv("FORM20_TESSERACT_PSM") or "6").strip())
+except ValueError:
+    FORM20_TESSERACT_PSM = 6
+try:
+    _FORM20_PROBE_TOP = float((os.getenv("FORM20_PROBE_TOP_FRACTION") or "0.35").strip())
+except ValueError:
+    _FORM20_PROBE_TOP = 0.35
+try:
+    _FORM20_PROBE_BOTTOM = float((os.getenv("FORM20_PROBE_BOTTOM_FRACTION") or "0.35").strip())
+except ValueError:
+    _FORM20_PROBE_BOTTOM = 0.35
+FORM20_PROBE_TOP_FRACTION = max(0.15, min(0.55, _FORM20_PROBE_TOP))
+FORM20_PROBE_BOTTOM_FRACTION = max(0.15, min(0.55, _FORM20_PROBE_BOTTOM))
+
 # Two-step pipeline: Step 1 = AI classify image, Step 2 = Tesseract OCR. Set to "true" to use CLIP for classification.
 USE_AI_CLASSIFIER = os.getenv("USE_AI_CLASSIFIER", "false").lower() in ("1", "true", "yes")
 # Labels for zero-shot classification (comma-separated). Used when USE_AI_CLASSIFIER=true.

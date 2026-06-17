@@ -36,16 +36,17 @@ PAGE_TYPE_TO_FILENAME = {
     PAGE_TYPE_FORM_20_COVER: FILENAME_FORM_20_COVER,
 }
 
-# Form 20 cover (Hindi/English registration application) — checked on top-of-page snippet only.
+# Form 20 cover (Hindi/English registration application).
 _FORM_20_COVER_STRONG_PATTERNS = [
     re.compile(r"(?i)form\s*(?:no\.?|number|सं)?\s*[-.]?\s*0?\s*20\b"),
     re.compile(r"(?i)(?:form|zio|no\.?)\s*[-.]?\s*0?\s*20\b"),
-    re.compile(r"(?i)(?:rule|prin|rin|नियम)\s*[-.]?\s*47"),
+    re.compile(r"(?i)(?:rule|prin|pron|rin|नियम)\s*[-.]?\s*47"),
     re.compile(r"प्रारूप\s*सं"),
     re.compile(r"सं[\.०]?\s*0?\s*20"),
     re.compile(r"(?i)application\s+for\s+registration\s+of\s+motor"),
     re.compile(r"मोटरयान.*रजिस्ट्रीकरण"),
     re.compile(r"रजिस्ट्रीकरण.*मोटर"),
+    re.compile(r"देखिये|देखिए"),
 ]
 _FORM_20_COVER_WEAK_PATTERNS = [
     re.compile(r"(?i)\bform\s*20\b"),
@@ -57,28 +58,81 @@ _FORM_20_COVER_WEAK_PATTERNS = [
     re.compile(r"(?i)motor\s*vehicle"),
 ]
 
-_FORM_20_COVER_TOP_SNIPPET_CHARS = 1200
+_FORM_20_COVER_SNIPPET_CHARS = 1200
+_FORM_20_COVER_SNIPPET_LINES = 20
+
+_FORM20_WEAK_HINT_PATTERNS = [
+    re.compile(r"(?i)hero\s+motocorp"),
+    re.compile(r"(?i)(?:rule|prin|pron|rin)\s*[-.]?\s*47"),
+    re.compile(r"(?i)(?:form|zio)\s*[-.]?\s*0?\s*20\b"),
+    re.compile(r"प्रारूप"),
+    re.compile(r"नियम\s*47"),
+]
 
 
 def _form20_cover_top_snippet(text: str) -> str:
     t = (text or "").strip()
     if not t:
         return ""
-    lines = t.splitlines()[:20]
+    lines = t.splitlines()[:_FORM_20_COVER_SNIPPET_LINES]
     joined = "\n".join(lines)
-    return joined[:_FORM_20_COVER_TOP_SNIPPET_CHARS]
+    return joined[:_FORM_20_COVER_SNIPPET_CHARS]
+
+
+def _form20_cover_bottom_snippet(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return ""
+    lines = t.splitlines()
+    tail = lines[-_FORM_20_COVER_SNIPPET_LINES :] if len(lines) > _FORM_20_COVER_SNIPPET_LINES else lines
+    joined = "\n".join(tail)
+    if len(joined) > _FORM_20_COVER_SNIPPET_CHARS:
+        joined = joined[-_FORM_20_COVER_SNIPPET_CHARS :]
+    return joined
+
+
+def _form20_cover_snippet_matches(snippet: str) -> bool:
+    if len((snippet or "").strip()) < 12:
+        return False
+    strong = sum(1 for pat in _FORM_20_COVER_STRONG_PATTERNS if pat.search(snippet))
+    if strong >= 1:
+        return True
+    weak = sum(1 for pat in _FORM_20_COVER_WEAK_PATTERNS if pat.search(snippet))
+    return weak >= 2
 
 
 def form20_cover_detected_in_top(text: str) -> bool:
     """True when OCR at/near the top of the page matches Form 20 cover cues."""
-    top = _form20_cover_top_snippet(text)
-    if len(top.strip()) < 12:
+    return _form20_cover_snippet_matches(_form20_cover_top_snippet(text))
+
+
+def form20_cover_detected(text: str) -> bool:
+    """True when Form 20 header cues appear at the top **or** bottom of the OCR stream."""
+    t = text or ""
+    return form20_cover_detected_in_top(t) or _form20_cover_snippet_matches(_form20_cover_bottom_snippet(t))
+
+
+def form20_weak_hint_in_text(text: str) -> bool:
+    """Loose cue that a page may be Form 20 (triggers Hindi Tesseract probe)."""
+    t = text or ""
+    if not t.strip():
         return False
-    strong = sum(1 for pat in _FORM_20_COVER_STRONG_PATTERNS if pat.search(top))
-    if strong >= 1:
-        return True
-    weak = sum(1 for pat in _FORM_20_COVER_WEAK_PATTERNS if pat.search(top))
-    return weak >= 2
+    return any(pat.search(t) for pat in _FORM20_WEAK_HINT_PATTERNS)
+
+
+def page_credible_aadhaar_back(text: str) -> bool:
+    """
+    True when OCR supports a **separate** Aadhaar back page (not Form 20 filled fields / noise).
+    Used to avoid demoting ``Aadhar_combined`` when a sibling page was mis-tagged ``Aadhar_back``.
+    """
+    t = text or ""
+    if not t.strip() or form20_cover_detected(t):
+        return False
+    aadhar_general = sum(1 for pat in _AADHAR_GENERAL_PATTERNS if pat.search(t))
+    back_score = sum(1 for pat in _AADHAR_BACK_PATTERNS if pat.search(t))
+    if aadhar_general >= 1:
+        return back_score >= 1
+    return back_score >= 2
 
 # Patterns to identify each page type. Order matters: more specific first.
 # Details: vehicle/customer sheet with Frame No, Chassis, Key No, etc.
@@ -198,7 +252,7 @@ def classify_aadhar_page_forced_single_face(text: str) -> str:
     if len(t) < 20:
         return PAGE_TYPE_UNUSED
 
-    if form20_cover_detected_in_top(t):
+    if form20_cover_detected(t):
         return PAGE_TYPE_FORM_20_COVER
 
     details_score = sum(1 for pat in _DETAILS_PATTERNS if pat.search(t))
@@ -214,7 +268,7 @@ def classify_aadhar_page_forced_single_face(text: str) -> str:
         if aadhar_front_face_ocr(t):
             return PAGE_TYPE_AADHAR
         back_score = sum(1 for pat in _AADHAR_BACK_PATTERNS if pat.search(t))
-        if back_score >= 1:
+        if back_score >= 1 and not form20_cover_detected(t):
             return PAGE_TYPE_AADHAR_BACK
         return PAGE_TYPE_AADHAR
 
@@ -230,6 +284,8 @@ def classify_aadhar_page_forced_single_face(text: str) -> str:
             best_type = ptype
     if best_score == 0:
         return PAGE_TYPE_UNUSED
+    if best_type == PAGE_TYPE_AADHAR_BACK and form20_cover_detected(t):
+        return PAGE_TYPE_FORM_20_COVER
     return best_type
 
 
@@ -253,7 +309,7 @@ def classify_page_by_text(text: str) -> str:
     if len(t) < 20:
         return PAGE_TYPE_UNUSED
 
-    if form20_cover_detected_in_top(t):
+    if form20_cover_detected(t):
         return PAGE_TYPE_FORM_20_COVER
 
     # ── Details / Insurance (early exit) ──
@@ -274,7 +330,7 @@ def classify_page_by_text(text: str) -> str:
         if aadhar_front_face_ocr(t):
             return PAGE_TYPE_AADHAR
         back_score = sum(1 for pat in _AADHAR_BACK_PATTERNS if pat.search(t))
-        if back_score >= 1:
+        if back_score >= 1 and not form20_cover_detected(t):
             return PAGE_TYPE_AADHAR_BACK
         return PAGE_TYPE_AADHAR
 
@@ -291,6 +347,8 @@ def classify_page_by_text(text: str) -> str:
             best_type = ptype
     if best_score == 0:
         return PAGE_TYPE_UNUSED
+    if best_type == PAGE_TYPE_AADHAR_BACK and form20_cover_detected(t):
+        return PAGE_TYPE_FORM_20_COVER
     return best_type
 
 

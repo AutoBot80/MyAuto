@@ -9,6 +9,7 @@ import {
   listRecentCommittedChallanInvoices,
   parseSubdealerChallanScans,
   patchChallanStagingFailedLine,
+  patchChallanStagingMasterToDealer,
   processChallanBatchLocal,
   retryChallanOrderOnlyLocal,
   type ChallanFailedDetailLine,
@@ -247,6 +248,19 @@ function showRetryFullBatch(r: ChallanMasterProcessedRow): boolean {
   return n > 0 && prep < n;
 }
 
+/** In-process To Dealer dropdown: editable only when Retry is available and no DMS Order# yet. */
+function showProcessedToDealerEditable(r: ChallanMasterProcessedRow): boolean {
+  if ((r.dms_order_number || "").trim()) return false;
+  return showRetryOrderOnly(r) || showRetryFullBatch(r);
+}
+
+function effectiveProcessedToDealerId(
+  row: ChallanMasterProcessedRow,
+  drafts: Record<string, number>,
+): number {
+  return drafts[row.challan_batch_id] ?? row.to_dealer_id;
+}
+
 /** Last row must be blank (both engine and chassis empty) so user can add more. */
 function ensureTrailingBlankRow(rows: ChallanRow[]): ChallanRow[] {
   if (rows.length === 0) return [newEmptyRow()];
@@ -302,6 +316,8 @@ export function SubdealerChallanPage({
   const [failedLineDrafts, setFailedLineDrafts] = useState<
     Record<number, { raw_chassis: string; raw_engine: string }>
   >({});
+  /** Pending To Dealer corrections on In-process rows (before Retry). */
+  const [processedToDealerDrafts, setProcessedToDealerDrafts] = useState<Record<string, number>>({});
   const [savingFailedLineEdits, setSavingFailedLineEdits] = useState(false);
   /** Master row selection drives the lower vehicle lines sub-table. */
   const [selectedProcessedBatchId, setSelectedProcessedBatchId] = useState<string | null>(null);
@@ -530,6 +546,39 @@ export function SubdealerChallanPage({
     ],
   );
 
+  const onSaveToDealerIfChanged = useCallback(
+    async (batchIdForSave?: string | null): Promise<boolean> => {
+      const bid = (batchIdForSave ?? selectedProcessedBatchId)?.trim() || null;
+      const row = bid !== null ? processedRows.find((r) => r.challan_batch_id === bid) ?? null : null;
+      if (!row) return true;
+      const nextId = effectiveProcessedToDealerId(row, processedToDealerDrafts);
+      if (nextId === row.to_dealer_id) return true;
+      setProcessedError(null);
+      try {
+        await patchChallanStagingMasterToDealer(bid!, { to_dealer_id: nextId });
+        const nextName =
+          subdealerOptions.find((d) => d.dealer_id === nextId)?.dealer_name ?? row.to_dealer_name;
+        setProcessedRows((prev) =>
+          prev.map((r) =>
+            r.challan_batch_id === row.challan_batch_id
+              ? { ...r, to_dealer_id: nextId, to_dealer_name: nextName }
+              : r,
+          ),
+        );
+        setProcessedToDealerDrafts((prev) => {
+          const out = { ...prev };
+          delete out[row.challan_batch_id];
+          return out;
+        });
+        return true;
+      } catch (err) {
+        setProcessedError(err instanceof Error ? err.message : String(err));
+        return false;
+      }
+    },
+    [selectedProcessedBatchId, processedRows, processedToDealerDrafts, subdealerOptions],
+  );
+
   const applyProcessedChallanSearch = useCallback(() => {
     setProcessedChallanSearchApplied(processedChallanSearchDraft.trim());
   }, [processedChallanSearchDraft]);
@@ -609,6 +658,8 @@ export function SubdealerChallanPage({
   /** Re-run full batch (re-queues all Failed lines server-side, then prepare_vehicle + order). */
   const onRetryFailedBatch = async (challanBatchId: string) => {
     setSelectedProcessedBatchId(challanBatchId);
+    const toDealerOk = await onSaveToDealerIfChanged(challanBatchId);
+    if (!toDealerOk) return;
     const saveOk = await onSaveAllFailedLineEdits(challanBatchId);
     if (!saveOk) return;
 
@@ -647,6 +698,8 @@ export function SubdealerChallanPage({
 
   const onRetryOrderOnly = async (challanBatchId: string) => {
     setSelectedProcessedBatchId(challanBatchId);
+    const toDealerOk = await onSaveToDealerIfChanged(challanBatchId);
+    if (!toDealerOk) return;
     setRetryingOrderBatchId(challanBatchId);
     setProcessedError(null);
     try {
@@ -1430,7 +1483,60 @@ export function SubdealerChallanPage({
                             }
                           }}
                         >
-                          <td>{formatDealerDisplay(r.to_dealer_name, r.to_dealer_id)}</td>
+                          <td
+                            onClick={(e) => {
+                              if (showProcessedToDealerEditable(r)) e.stopPropagation();
+                            }}
+                          >
+                            {showProcessedToDealerEditable(r) ? (
+                              <select
+                                className="subdealer-challan-select challans-proc-to-dealer-select"
+                                value={String(effectiveProcessedToDealerId(r, processedToDealerDrafts))}
+                                onChange={(e) => {
+                                  const v = parseInt(e.target.value, 10);
+                                  if (!Number.isFinite(v)) return;
+                                  setProcessedToDealerDrafts((prev) => ({
+                                    ...prev,
+                                    [bid]: v,
+                                  }));
+                                }}
+                                disabled={
+                                  subdealersLoading ||
+                                  Boolean(subdealersError) ||
+                                  retryingProcessBatchId !== null ||
+                                  retryingOrderBatchId !== null
+                                }
+                                aria-label={`To dealer for challan ${(r.challan_book_num || "").trim() || bid}`}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {subdealersLoading ? (
+                                  <option value="">Loading subdealers…</option>
+                                ) : null}
+                                {!subdealerOptions.some(
+                                  (d) =>
+                                    d.dealer_id === effectiveProcessedToDealerId(r, processedToDealerDrafts),
+                                ) ? (
+                                  <option
+                                    value={String(
+                                      effectiveProcessedToDealerId(r, processedToDealerDrafts),
+                                    )}
+                                  >
+                                    {formatDealerDisplay(
+                                      r.to_dealer_name,
+                                      effectiveProcessedToDealerId(r, processedToDealerDrafts),
+                                    )}
+                                  </option>
+                                ) : null}
+                                {subdealerOptions.map((d) => (
+                                  <option key={d.dealer_id} value={d.dealer_id}>
+                                    {d.dealer_name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              formatDealerDisplay(r.to_dealer_name, r.to_dealer_id)
+                            )}
+                          </td>
                           <td>{formatChallanDateDisplay(r.challan_date)}</td>
                           <td>{(r.challan_book_num || "").trim() || "—"}</td>
                           <td className="challans-proc-col--transport">{formatDiscountReductionDisplay(r)}</td>

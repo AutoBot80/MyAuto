@@ -7,6 +7,7 @@ import {
   getAdminDealerLogins,
   getAdminDealerNames,
   getAdminLoginCatalog,
+  getAdminPortalInsurers,
   getAdminRoles,
   patchAdminDealerInsurerCpi,
   upsertLoginAssignments,
@@ -78,6 +79,10 @@ function normalizeHeroCpi(raw: unknown): "Y" | "N" {
   return raw === "Y" ? "Y" : "N";
 }
 
+function normalizeCpiReqd(raw: unknown): "Y" | "N" {
+  return raw === "Y" ? "Y" : "N";
+}
+
 function normalizeLoginActive(raw: unknown): "Y" | "N" {
   return raw === "Y" ? "Y" : "N";
 }
@@ -104,7 +109,10 @@ export function AdminDealersPage() {
   const [addOemId, setAddOemId] = useState("");
   const [addParentId, setAddParentId] = useState("");
   const [preferInsurerEdit, setPreferInsurerEdit] = useState("");
+  const [portalInsurers, setPortalInsurers] = useState<string[]>([]);
+  const [portalInsurersError, setPortalInsurersError] = useState<string | null>(null);
   const [heroCpiEdit, setHeroCpiEdit] = useState<"Y" | "N">("N");
+  const [cpiReqdEdit, setCpiReqdEdit] = useState<"Y" | "N">("N");
   const [saveDetailError, setSaveDetailError] = useState<string | null>(null);
   const [savingDetail, setSavingDetail] = useState(false);
   const [rolesCatalog, setRolesCatalog] = useState<{ role_id: number; role_name: string }[]>([]);
@@ -138,6 +146,19 @@ export function AdminDealersPage() {
   useEffect(() => {
     void refreshNames();
   }, [refreshNames]);
+
+  useEffect(() => {
+    setPortalInsurersError(null);
+    getAdminPortalInsurers()
+      .then((res) => {
+        const rows = Array.isArray(res.insurers) ? res.insurers.map((x) => String(x).trim()).filter(Boolean) : [];
+        setPortalInsurers(rows);
+      })
+      .catch((e) => {
+        setPortalInsurers([]);
+        setPortalInsurersError(e instanceof Error ? e.message : "Could not load portal insurers.");
+      });
+  }, []);
 
   useEffect(() => {
     if (selectedId == null) {
@@ -219,11 +240,13 @@ export function AdminDealersPage() {
     if (!detail) {
       setPreferInsurerEdit("");
       setHeroCpiEdit("N");
+      setCpiReqdEdit("N");
       return;
     }
     const pi = detail.prefer_insurer;
     setPreferInsurerEdit(pi != null && pi !== "" ? String(pi) : "");
     setHeroCpiEdit(normalizeHeroCpi(detail.hero_cpi));
+    setCpiReqdEdit(normalizeCpiReqd(detail.cpi_reqd));
   }, [detail]);
 
   const detailRows = useMemo(() => {
@@ -242,7 +265,8 @@ export function AdminDealersPage() {
     }
     rows.push(
       { key: "prefer_insurer", label: "Prefered Insurance" },
-      { key: "hero_cpi", label: "Hero CPI" }
+      { key: "hero_cpi", label: "Hero CPI" },
+      { key: "cpi_reqd", label: "CPA Reqd" }
     );
     return rows.map(({ key, label }) => ({
       key,
@@ -255,8 +279,13 @@ export function AdminDealersPage() {
     if (!detail || selectedId == null) return false;
     const savedPi = detail.prefer_insurer != null && detail.prefer_insurer !== "" ? String(detail.prefer_insurer) : "";
     const savedHero = normalizeHeroCpi(detail.hero_cpi);
-    return preferInsurerEdit !== savedPi || heroCpiEdit !== savedHero;
-  }, [detail, selectedId, preferInsurerEdit, heroCpiEdit]);
+    const savedCpiReqd = normalizeCpiReqd(detail.cpi_reqd);
+    return (
+      preferInsurerEdit !== savedPi ||
+      heroCpiEdit !== savedHero ||
+      cpiReqdEdit !== savedCpiReqd
+    );
+  }, [detail, selectedId, preferInsurerEdit, heroCpiEdit, cpiReqdEdit]);
 
   function addLoginDraftRow() {
     setLoginDrafts((prev) => [...prev, newLoginDraft()]);
@@ -388,6 +417,7 @@ export function AdminDealersPage() {
       const updated = await patchAdminDealerInsurerCpi(selectedId, {
         prefer_insurer: preferInsurerEdit.trim() || null,
         hero_cpi: heroCpiEdit,
+        cpi_reqd: cpiReqdEdit,
       });
       setDetail(updated);
     } catch (e) {
@@ -473,6 +503,7 @@ export function AdminDealersPage() {
             Dealer reference
           </h4>
           {saveDetailError ? <p className="view-vehicles-error">{saveDetailError}</p> : null}
+          {portalInsurersError ? <p className="view-vehicles-error">{portalInsurersError}</p> : null}
           {detail ? (
             <>
               <div className="view-vehicles-kv-grid">
@@ -483,15 +514,44 @@ export function AdminDealersPage() {
                     </span>
                     <div className="view-vehicles-kv-value" aria-labelledby={`admin-dealers-k-${key}-l`}>
                       {key === "prefer_insurer" ? (
-                        <input
-                          type="text"
-                          className="view-vehicles-kv-input"
-                          value={preferInsurerEdit}
-                          onChange={(e) => setPreferInsurerEdit(e.target.value)}
-                          disabled={busy || savingDetail}
-                          autoComplete="off"
-                          aria-label="Prefered Insurance"
-                        />
+                        portalInsurers.length > 0 ? (
+                          <select
+                            className="view-vehicles-kv-select"
+                            value={
+                              portalInsurers.includes(preferInsurerEdit) || preferInsurerEdit === ""
+                                ? preferInsurerEdit
+                                : ""
+                            }
+                            onChange={(e) => setPreferInsurerEdit(e.target.value)}
+                            disabled={busy || savingDetail}
+                            aria-label="Preferred Insurance"
+                          >
+                            <option value="">— None —</option>
+                            {preferInsurerEdit &&
+                            preferInsurerEdit !== "" &&
+                            !portalInsurers.includes(preferInsurerEdit) ? (
+                              <option value="" disabled>
+                                {preferInsurerEdit} (not in portal list — pick a value below)
+                              </option>
+                            ) : null}
+                            {portalInsurers.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            type="text"
+                            className="view-vehicles-kv-input"
+                            value={preferInsurerEdit}
+                            onChange={(e) => setPreferInsurerEdit(e.target.value)}
+                            disabled={busy || savingDetail}
+                            autoComplete="off"
+                            aria-label="Preferred Insurance"
+                            placeholder="Portal insurers not loaded"
+                          />
+                        )
                       ) : key === "hero_cpi" ? (
                         <select
                           className="view-vehicles-kv-select"
@@ -499,6 +559,17 @@ export function AdminDealersPage() {
                           onChange={(e) => setHeroCpiEdit(e.target.value === "Y" ? "Y" : "N")}
                           disabled={busy || savingDetail}
                           aria-label="Hero CPI"
+                        >
+                          <option value="N">N</option>
+                          <option value="Y">Y</option>
+                        </select>
+                      ) : key === "cpi_reqd" ? (
+                        <select
+                          className="view-vehicles-kv-select"
+                          value={cpiReqdEdit}
+                          onChange={(e) => setCpiReqdEdit(e.target.value === "Y" ? "Y" : "N")}
+                          disabled={busy || savingDetail}
+                          aria-label="CPA Required"
                         >
                           <option value="N">N</option>
                           <option value="Y">Y</option>

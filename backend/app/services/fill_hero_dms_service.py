@@ -1857,12 +1857,18 @@ def vehicle_scrape_from_staging_or_db(
     staging_id: str,
     dealer_id: int,
     vehicle_id: int | None = None,
+    *,
+    staging_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Restore vehicle scrape dict for DMS resume when ``dms_state >= 1``."""
+    from app.config import DATABASE_URL
     from app.repositories.add_sales_staging import fetch_staging_payload
     from app.services.form20_service import _get_vehicle_from_db
 
-    payload = fetch_staging_payload(staging_id, int(dealer_id)) or {}
+    if isinstance(staging_payload, dict):
+        payload = staging_payload
+    else:
+        payload = fetch_staging_payload(staging_id, int(dealer_id)) or {}
     saved = payload.get("dms_vehicle_scrape")
     if isinstance(saved, dict) and saved:
         return dict(saved)
@@ -1873,7 +1879,7 @@ def vehicle_scrape_from_staging_or_db(
             vid = int(raw_v) if raw_v is not None else None
         except (TypeError, ValueError):
             vid = None
-    if vid is not None and int(vid) > 0:
+    if vid is not None and int(vid) > 0 and DATABASE_URL:
         db_v = _get_vehicle_from_db(int(vid))
         if db_v:
             out: dict[str, Any] = {}
@@ -1911,11 +1917,16 @@ def restore_customer_context_from_staging(
     out: dict[str, Any],
     staging_id: str,
     dealer_id: int,
+    *,
+    staging_payload: dict[str, Any] | None = None,
 ) -> None:
     """Rebuild ``dms_customer_master_collated`` when ``dms_state >= 2`` skips prepare_customer."""
     from app.repositories.add_sales_staging import fetch_staging_payload
 
-    payload = fetch_staging_payload(staging_id, int(dealer_id)) or {}
+    if isinstance(staging_payload, dict):
+        payload = staging_payload
+    else:
+        payload = fetch_staging_payload(staging_id, int(dealer_id)) or {}
     saved = payload.get("dms_customer_collated")
     if isinstance(saved, dict) and saved:
         out["dms_customer_master_collated"] = {
@@ -2196,6 +2207,7 @@ def _run_fill_dms_real_siebel_playwright(
     staging_id: str | None = None,
     dealer_id: int | None = None,
     dms_state_hint: int | None = None,
+    staging_payload: dict[str, Any] | None = None,
 ) -> None:
     """
     Hero Connect / Siebel Open UI: ``Playwright_Hero_DMS_fill`` — **Find Contact Enquiry** path
@@ -2283,6 +2295,7 @@ def _run_fill_dms_real_siebel_playwright(
         staging_id=staging_id,
         dealer_id=dealer_id,
         dms_state_hint=dms_state_hint,
+        staging_payload=staging_payload,
     )
 
     result["vehicle"] = frag.get("vehicle") or {}
@@ -2545,6 +2558,7 @@ def run_fill_dms_only(
             staging_id=sid_clean or None,
             dealer_id=did_eff,
             dms_state_hint=dms_state_hint,
+            staging_payload=staging_payload,
         )
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
@@ -2770,6 +2784,7 @@ def Playwright_Hero_DMS_fill(
     staging_id: str | None = None,
     dealer_id: int | None = None,
     dms_state_hint: int | None = None,
+    staging_payload: dict[str, Any] | None = None,
 ) -> dict:
     """
     Hero Connect / Siebel automation — **Find Contact Enquiry** path. Pipeline:
@@ -3004,6 +3019,7 @@ def Playwright_Hero_DMS_fill(
                 sid_clean,
                 did_eff,
                 vehicle_id=vehicle_id,
+                staging_payload=staging_payload,
             )
             if _pv_scraped:
                 _pv_ok = True
@@ -3084,7 +3100,9 @@ def Playwright_Hero_DMS_fill(
             return out
         video_first_name = first.strip()
         if sid_clean and dms_state_int >= 2:
-            restore_customer_context_from_staging(out, sid_clean, did_eff)
+            restore_customer_context_from_staging(
+                out, sid_clean, did_eff, staging_payload=staging_payload
+            )
             note(
                 "resume: dms_state>=2 — skip prepare_customer; continuing at prepare_order"
             )

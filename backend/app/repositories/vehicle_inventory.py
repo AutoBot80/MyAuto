@@ -142,6 +142,32 @@ def upsert_from_prepare_vehicle_scrape(
         conn.close()
 
 
+def update_dealer_id_for_inventory_line_ids(
+    inventory_line_ids: list[int],
+    dealer_id: int,
+) -> int:
+    """Batch-update ``vehicle_inventory_master.dealer_id`` for challan to-dealer corrections."""
+    ids = [int(x) for x in inventory_line_ids if x]
+    if not ids:
+        return 0
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE vehicle_inventory_master
+                SET dealer_id = %s
+                WHERE inventory_line_id = ANY(%s)
+                """,
+                (int(dealer_id), ids),
+            )
+            n = int(cur.rowcount or 0)
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
 def update_discount_and_ex_showroom(
     inventory_line_id: int,
     *,

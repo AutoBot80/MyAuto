@@ -41,6 +41,10 @@ from PIL import Image
 from app.placeholder_mobile import is_placeholder_indian_mobile
 from app.config import (
     BULK_UPLOAD_DIR,
+    FORM20_PROBE_BOTTOM_FRACTION,
+    FORM20_PROBE_TOP_FRACTION,
+    FORM20_TESSERACT_LANG,
+    FORM20_TESSERACT_PSM,
     OCR_LANG,
     OCR_PSM,
     OCR_PREPROCESS,
@@ -67,8 +71,11 @@ from app.services.page_classifier import (
     classify_page_by_text,
     classify_pages_from_ocr_text,
     extract_page_text_from_pre_ocr_blocks,
+    form20_cover_detected,
     form20_cover_detected_in_top,
+    form20_weak_hint_in_text,
     maybe_swap_aadhar_page_indices,
+    page_credible_aadhaar_back,
     should_swap_aadhar_pages_by_dob_gender,
     PAGE_TYPE_TO_FILENAME,
     PAGE_TYPE_AADHAR,
@@ -986,6 +993,11 @@ def _export_single_page_pdfs_to_raw(
 
 def _tesseract_ocr_image(img: Image.Image) -> str:
     """Run Tesseract OCR on a PIL image (RGB or L). Prefer this over bytes to skip JPEG encode/decode."""
+    return _tesseract_ocr_image_with_config(img, lang=OCR_LANG, psm=OCR_PSM)
+
+
+def _tesseract_ocr_image_with_config(img: Image.Image, *, lang: str, psm: int) -> str:
+    """Run Tesseract with explicit language and PSM (Form 20 Hindi probe uses hin + PSM 6)."""
     import pytesseract
     from PIL import ImageEnhance
 
@@ -994,7 +1006,7 @@ def _tesseract_ocr_image(img: Image.Image) -> str:
         work = work.convert("L")
         enhancer = ImageEnhance.Contrast(work)
         work = enhancer.enhance(2.0)
-    return pytesseract.image_to_string(work, lang=OCR_LANG, config=f"--psm {OCR_PSM}")
+    return pytesseract.image_to_string(work, lang=lang, config=f"--psm {psm}")
 
 
 def _tesseract_ocr(image_bytes: bytes) -> str:
@@ -1004,15 +1016,59 @@ def _tesseract_ocr(image_bytes: bytes) -> str:
     return _tesseract_ocr_image(Image.open(io.BytesIO(image_bytes)))
 
 
-_FORM20_TOP_BAND_FRACTION = 0.25
-
-
-def _tesseract_ocr_top_band(img: Image.Image, *, top_fraction: float = _FORM20_TOP_BAND_FRACTION) -> str:
-    """OCR the top band of a page (eng+hin) for Form 20 header detection."""
+def _tesseract_ocr_vertical_band(
+    img: Image.Image,
+    *,
+    from_top: bool,
+    fraction: float,
+    lang: str | None = None,
+    psm: int | None = None,
+) -> str:
+    """OCR a horizontal band at the top or bottom of a page."""
     w, h = img.size
-    band_h = max(1, int(h * top_fraction))
-    top = img.crop((0, 0, w, band_h))
-    return _tesseract_ocr_image(top)
+    band_h = max(1, int(h * fraction))
+    if from_top:
+        band = img.crop((0, 0, w, band_h))
+    else:
+        band = img.crop((0, h - band_h, w, h))
+    return _tesseract_ocr_image_with_config(
+        band,
+        lang=lang or OCR_LANG,
+        psm=psm if psm is not None else OCR_PSM,
+    )
+
+
+def _tesseract_ocr_top_band(img: Image.Image, *, top_fraction: float = FORM20_PROBE_TOP_FRACTION) -> str:
+    """OCR the top band of a page (eng+hin) for Form 20 header detection."""
+    return _tesseract_ocr_vertical_band(img, from_top=True, fraction=top_fraction)
+
+
+def _tesseract_ocr_bottom_band(img: Image.Image, *, bottom_fraction: float = FORM20_PROBE_BOTTOM_FRACTION) -> str:
+    """OCR the bottom band of a page for upside-down Form 20 headers."""
+    return _tesseract_ocr_vertical_band(img, from_top=False, fraction=bottom_fraction)
+
+
+def _tesseract_form20_probe(img: Image.Image) -> str:
+    """
+    Hindi-primary Tesseract on top + bottom header bands.
+    Returns probe text only (no Textract) for :func:`form20_cover_detected`.
+    """
+    top = _tesseract_ocr_vertical_band(
+        img,
+        from_top=True,
+        fraction=FORM20_PROBE_TOP_FRACTION,
+        lang=FORM20_TESSERACT_LANG,
+        psm=FORM20_TESSERACT_PSM,
+    )
+    bottom = _tesseract_ocr_vertical_band(
+        img,
+        from_top=False,
+        fraction=FORM20_PROBE_BOTTOM_FRACTION,
+        lang=FORM20_TESSERACT_LANG,
+        psm=FORM20_TESSERACT_PSM,
+    )
+    parts = [p.strip() for p in (top, bottom) if p and p.strip()]
+    return "\n---\n".join(parts)
 
 
 def _page_text_enriched_for_form20(
@@ -1020,18 +1076,43 @@ def _page_text_enriched_for_form20(
     page_idx: int,
     page_images: dict[int, Image.Image] | None,
 ) -> str:
-    """DDT page text plus optional Tesseract top-band for Form 20 header checks."""
+    """DDT page text plus Tesseract top/bottom bands for Form 20 header checks."""
     ddt_text = extract_page_text_from_pre_ocr_blocks(full_ocr_text, page_idx)
     if not page_images or page_idx not in page_images:
         return ddt_text
     try:
-        tess_top = _tesseract_ocr_top_band(page_images[page_idx])
+        img = page_images[page_idx]
+        tess_top = _tesseract_ocr_top_band(img)
+        tess_bottom = _tesseract_ocr_bottom_band(img)
     except Exception as exc:
-        logger.warning("Form 20 top-band Tesseract failed page %d: %s", page_idx + 1, exc)
+        logger.warning("Form 20 top/bottom-band Tesseract failed page %d: %s", page_idx + 1, exc)
         return ddt_text
-    if not tess_top.strip():
+    extras = [p for p in (tess_top, tess_bottom) if p and p.strip()]
+    if not extras:
         return ddt_text
-    return f"{ddt_text}\n{tess_top}"
+    return f"{ddt_text}\n" + "\n".join(extras)
+
+
+def _skip_form20_tesseract_probe(page_type: str, ddt_text: str) -> bool:
+    """Pages that should not run the Hindi Form 20 probe."""
+    if page_type in (PAGE_TYPE_INSURANCE, PAGE_TYPE_FORM_20_COVER):
+        return True
+    if page_type in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_COMBINED):
+        if page_type == PAGE_TYPE_AADHAR_COMBINED or aadhar_combined_ocr_looks_ok(ddt_text):
+            return True
+        if aadhar_front_face_ocr(ddt_text):
+            return True
+    if page_type == PAGE_TYPE_DETAILS and _is_sales_detail_sheet_page_text(ddt_text):
+        return True
+    return False
+
+
+def _needs_form20_tesseract_probe(page_type: str, ddt_text: str) -> bool:
+    if _skip_form20_tesseract_probe(page_type, ddt_text):
+        return False
+    if page_type in (PAGE_TYPE_UNUSED, PAGE_TYPE_AADHAR_BACK, PAGE_TYPE_DETAILS):
+        return True
+    return form20_weak_hint_in_text(ddt_text)
 
 
 def classify_pages_with_form20_tesseract(
@@ -1039,25 +1120,61 @@ def classify_pages_with_form20_tesseract(
     page_images: dict[int, Image.Image] | None,
 ) -> list[tuple[int, str]]:
     """
-    Classify pages from pre-OCR text, enriching each page with Tesseract top-band OCR
-    so Hindi Form 20 headers missed by Textract DDT can still be detected.
+    Classify pages from pre-OCR Textract text, enrich with Tesseract bands, then run a Hindi-primary
+    Form 20 probe on candidate pages (Textract is poor on Devanagari headers).
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     base = classify_pages_from_ocr_text(full_ocr_text)
     if not page_images:
         return base
 
-    out: list[tuple[int, str]] = []
+    phase_a: list[tuple[int, str]] = []
+    probe_indices: list[int] = []
+
     for idx, ptype in base:
+        ddt_text = extract_page_text_from_pre_ocr_blocks(full_ocr_text, idx)
         enriched = _page_text_enriched_for_form20(full_ocr_text, idx, page_images)
         new_ptype = classify_page_by_text(enriched)
         if new_ptype != ptype:
             logger.info(
-                "Page %d reclassified %s -> %s (Tesseract top-band Form 20 check)",
+                "Page %d reclassified %s -> %s (Tesseract band Form 20 check)",
                 idx + 1,
                 ptype,
                 new_ptype,
             )
             ptype = new_ptype
+        if _needs_form20_tesseract_probe(ptype, ddt_text):
+            probe_indices.append(idx)
+        phase_a.append((idx, ptype))
+
+    if not probe_indices:
+        return phase_a
+
+    probe_texts: dict[int, str] = {}
+    max_workers = min(4, len(probe_indices))
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(_tesseract_form20_probe, page_images[i]): i for i in probe_indices}
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            try:
+                probe_texts[idx] = fut.result()
+            except Exception as exc:
+                logger.warning("Form 20 Hindi probe failed page %d: %s", idx + 1, exc)
+                probe_texts[idx] = ""
+
+    out: list[tuple[int, str]] = []
+    for idx, ptype in phase_a:
+        tess = probe_texts.get(idx, "")
+        if tess and form20_cover_detected(tess):
+            if ptype != PAGE_TYPE_FORM_20_COVER:
+                logger.info(
+                    "Page %d reclassified %s -> %s (Hindi Tesseract Form 20 probe)",
+                    idx + 1,
+                    ptype,
+                    PAGE_TYPE_FORM_20_COVER,
+                )
+            ptype = PAGE_TYPE_FORM_20_COVER
         out.append((idx, ptype))
     return out
 
@@ -1078,21 +1195,40 @@ def assign_classified_page_slots(
             rescue_text = _page_text_enriched_for_form20(full_ocr_text, idx, page_images)
             if (
                 PAGE_TYPE_FORM_20_COVER not in page_type_to_idx
-                and form20_cover_detected_in_top(rescue_text)
+                and form20_cover_detected(rescue_text)
             ):
                 page_type_to_idx[PAGE_TYPE_FORM_20_COVER] = idx
                 logger.info("Rescued UNUSED page %d -> Form_20_Cover_Page", idx + 1)
             else:
                 unused_indices.append(idx)
-        elif ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK, PAGE_TYPE_AADHAR_COMBINED):
+        elif ptype in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_COMBINED):
             continue
+        elif ptype == PAGE_TYPE_AADHAR_BACK:
+            rescue_text = _page_text_enriched_for_form20(full_ocr_text, idx, page_images)
+            probe_text = ""
+            if page_images and idx in page_images:
+                try:
+                    probe_text = _tesseract_form20_probe(page_images[idx])
+                except Exception:
+                    probe_text = ""
+            if (
+                PAGE_TYPE_FORM_20_COVER not in page_type_to_idx
+                and (
+                    (probe_text and form20_cover_detected(probe_text))
+                    or form20_cover_detected(rescue_text)
+                )
+            ):
+                page_type_to_idx[PAGE_TYPE_FORM_20_COVER] = idx
+                logger.info("Rescued Aadhar_back page %d -> Form_20_Cover_Page", idx + 1)
+            else:
+                continue
         elif ptype not in page_type_to_idx:
             page_type_to_idx[ptype] = idx
         elif ptype == PAGE_TYPE_DETAILS:
             rescue_text = _page_text_enriched_for_form20(full_ocr_text, idx, page_images)
             if (
                 PAGE_TYPE_FORM_20_COVER not in page_type_to_idx
-                and form20_cover_detected_in_top(rescue_text)
+                and form20_cover_detected(rescue_text)
             ):
                 page_type_to_idx[PAGE_TYPE_FORM_20_COVER] = idx
                 logger.info("Rescued orphan Details page %d -> Form_20_Cover_Page", idx + 1)
@@ -1908,7 +2044,7 @@ def _resolve_form20_cover_idx(
             continue
         if ptype in (PAGE_TYPE_UNUSED, PAGE_TYPE_DETAILS):
             text = _page_text_enriched_for_form20(full_ocr_text, idx, page_images)
-            if form20_cover_detected_in_top(text):
+            if form20_cover_detected(text):
                 return idx
     return None
 
@@ -1942,7 +2078,7 @@ def _looks_like_form20_details_misclass(text: str) -> bool:
     """Form 20 cover pages often score as Details (chassis/engine/key) without being the sales sheet."""
     if not text or not str(text).strip():
         return False
-    if form20_cover_detected_in_top(text):
+    if form20_cover_detected(text):
         return True
     if _is_sales_detail_sheet_page_text(text):
         return False
@@ -2452,15 +2588,31 @@ def reconcile_aadhar_classifications_multipage(
             if p in (PAGE_TYPE_AADHAR, PAGE_TYPE_AADHAR_BACK) and i != ci
         ]
         if other:
-            text = extract_page_text_from_pre_ocr_blocks(full_ocr_text, ci)
-            new_p = classify_aadhar_page_forced_single_face(text)
-            out = [(i, new_p if i == ci else p) for i, p in out]
-            logger.info(
-                "Reconciled Aadhar_combined page %d -> %s (other Aadhaar page(s) on %s)",
-                ci + 1,
-                new_p,
-                [x + 1 for x in other],
-            )
+            credible = []
+            for oi in other:
+                otext = extract_page_text_from_pre_ocr_blocks(full_ocr_text, oi)
+                otype = next(p for i, p in out if i == oi)
+                if otype == PAGE_TYPE_AADHAR_BACK:
+                    if page_credible_aadhaar_back(otext):
+                        credible.append(oi)
+                elif otype == PAGE_TYPE_AADHAR and aadhar_front_face_ocr(otext):
+                    credible.append(oi)
+            if credible:
+                text = extract_page_text_from_pre_ocr_blocks(full_ocr_text, ci)
+                new_p = classify_aadhar_page_forced_single_face(text)
+                out = [(i, new_p if i == ci else p) for i, p in out]
+                logger.info(
+                    "Reconciled Aadhar_combined page %d -> %s (other Aadhaar page(s) on %s)",
+                    ci + 1,
+                    new_p,
+                    [x + 1 for x in credible],
+                )
+            else:
+                logger.info(
+                    "Keeping Aadhar_combined on page %d; sibling page(s) %s not credible Aadhaar",
+                    ci + 1,
+                    [x + 1 for x in other],
+                )
 
     return out
 

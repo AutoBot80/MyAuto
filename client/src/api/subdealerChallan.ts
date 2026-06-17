@@ -674,6 +674,23 @@ export async function patchChallanStagingFailedLine(
   );
 }
 
+/**
+ * PATCH /subdealer-challan/staging/master/{challan_batch_id} — correct To Dealer before batch Retry.
+ */
+export async function patchChallanStagingMasterToDealer(
+  challanBatchId: string,
+  body: { to_dealer_id: number }
+): Promise<{ ok?: boolean; error?: string | null; to_dealer_id?: number }> {
+  return apiFetch<{ ok?: boolean; error?: string | null; to_dealer_id?: number }>(
+    `/subdealer-challan/staging/master/${encodeURIComponent(challanBatchId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }
+  );
+}
+
 /** One committed ``challan_master`` row (GET /subdealer-challan/invoices/recent). */
 export type ChallanInvoiceMasterRow = {
   challan_id: number;

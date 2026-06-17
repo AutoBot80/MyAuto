@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -35,3 +37,7 @@ class PatchAddSalesStagingPayloadRequest(BaseModel):
     customer: PatchAddSalesStagingCustomer | None = None
     vehicle: PatchAddSalesStagingVehicle | None = None
     insurance: PatchAddSalesStagingInsurance | None = None
+    cpi_reqd: Literal["Y", "N"] | None = Field(
+        None,
+        description="CPA Required; persisted on add_sales_staging.cpi_reqd.",
+    )

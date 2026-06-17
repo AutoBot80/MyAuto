@@ -165,6 +165,26 @@ def touch_last_run_at(challan_batch_id: uuid.UUID) -> None:
         conn.close()
 
 
+def update_master_to_dealer(challan_batch_id: uuid.UUID, to_dealer_id: int) -> bool:
+    """Set ``to_dealer_id`` on an in-process batch header. Caller validates authorization and guards."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE challan_master_staging
+                SET to_dealer_id = %s
+                WHERE challan_batch_id = %s::uuid
+                """,
+                (int(to_dealer_id), str(challan_batch_id)),
+            )
+            ok = int(cur.rowcount or 0) > 0
+        conn.commit()
+        return ok
+    finally:
+        conn.close()
+
+
 def update_challan_dms_checkpoint(
     challan_batch_id: uuid.UUID,
     *,

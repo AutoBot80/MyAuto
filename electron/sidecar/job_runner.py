@@ -2261,7 +2261,9 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
 
     # Use LOCAL paths (SAATHI_BASE_DIR on dealer PC), not server-returned Linux paths.
     from app.config import get_uploads_dir, get_ocr_output_dir
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = int(
+        ctx.get("dealer_id") or params.get("dealer_id") or os.getenv("DEALER_ID", "100001")
+    )
     uploads_dir = get_uploads_dir(dealer_id)
     ocr_output_dir = get_ocr_output_dir(dealer_id)
 
@@ -2353,6 +2355,9 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
     _orig_persist_vehicle = _hdb.persist_vehicle_master_after_prepare_vehicle
     _orig_persist_customer = _hdb.persist_customer_master_after_prepare_customer
 
+    def _checkpoint_note(msg: str) -> None:
+        result["dms_step_messages"].append(f"NOTE: {msg}")
+
     def _mark_dms_state_via_api(staging_id: str, dealer_id: int, state: int) -> None:
         sid = (staging_id or "").strip()
         if not sid:
@@ -2387,7 +2392,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
                 "/sidecar/dms/vehicle-after-prepare",
                 {
                     "staging_id": sid,
-                    "dealer_id": kw.get("dealer_id") or dealer_id,
+                    "dealer_id": dealer_id,
                     "dms_values": kw.get("dms_values") or {},
                     "scraped_vehicle": kw.get("scraped_vehicle") or {},
                 },
@@ -2395,11 +2400,13 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
             err = (resp.get("error") or "").strip()
             if err:
                 logging.warning("fill_dms sidecar vehicle-after-prepare: %s", err)
+                _checkpoint_note(f"vehicle checkpoint not saved ({err}); continuing DMS.")
                 return None
             vid = resp.get("vehicle_id")
             return int(vid) if vid is not None else None
         except Exception as exc:
             logging.warning("fill_dms sidecar vehicle-after-prepare failed: %s", exc)
+            _checkpoint_note(f"vehicle checkpoint not saved ({exc}); continuing DMS.")
             return None
 
     def _persist_customer_via_api(**kw) -> int | None:
@@ -2413,7 +2420,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
                 "/sidecar/dms/customer-after-prepare",
                 {
                     "staging_id": sid,
-                    "dealer_id": kw.get("dealer_id") or dealer_id,
+                    "dealer_id": dealer_id,
                     "dms_values": kw.get("dms_values") or {},
                     "collated_customer": kw.get("collated_customer"),
                 },
@@ -2421,11 +2428,13 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
             err = (resp.get("error") or "").strip()
             if err:
                 logging.warning("fill_dms sidecar customer-after-prepare: %s", err)
+                _checkpoint_note(f"customer checkpoint not saved ({err}); continuing DMS.")
                 return None
             cid = resp.get("customer_id")
             return int(cid) if cid is not None else None
         except Exception as exc:
             logging.warning("fill_dms sidecar customer-after-prepare failed: %s", exc)
+            _checkpoint_note(f"customer checkpoint not saved ({exc}); continuing DMS.")
             return None
 
     _stg.mark_staging_dms_state = _mark_dms_state_via_api
@@ -2459,6 +2468,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
                 staging_id=sid_ctx,
                 dealer_id=dealer_id,
                 dms_state_hint=int(dms_state_hint) if dms_state_hint is not None else None,
+                staging_payload=staging_payload,
             )
     except Exception as e:
         result["error"] = str(e)
@@ -2487,7 +2497,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         "staging_id": params.get("staging_id"),
         "staging_payload": staging_payload,
         "scraped_vehicle": scraped,
-        "dealer_id": params.get("dealer_id"),
+        "dealer_id": dealer_id,
         "customer_id": result.get("customer_id") or params.get("customer_id"),
         "vehicle_id": result.get("vehicle_id") or params.get("vehicle_id"),
         "sales_id": result.get("sales_id"),

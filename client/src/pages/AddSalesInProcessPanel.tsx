@@ -30,6 +30,7 @@ import {
 } from "../utils/section2Validation";
 import type { ExtractedCustomerDetails, ExtractedInsuranceDetails, ExtractedVehicleDetails } from "../types";
 import { cpaPolicyFromInsuranceRaw } from "../utils/insuranceDisplay";
+import { resolvePortalInsurer } from "../utils/addSalesInsurerResolve";
 import { sanitizeFormFieldInputValue, sanitizeFormFieldValue } from "../utils/formFieldSanitize";
 
 function normalizeCpaRequiredFlag(raw: unknown): "Y" | "N" {
@@ -125,16 +126,21 @@ interface InProcessDetailDraft {
   battery_no: string;
   nominee_name: string;
   nominee_relationship: string;
+  insurer: string;
+  cpi_reqd: "Y" | "N";
 }
 
-function buildDraftFromPayload(payload: Record<string, unknown> | null): InProcessDetailDraft | null {
+function buildDraftFromPayload(
+  payload: Record<string, unknown> | null,
+  cpiReqd: "Y" | "N" | null
+): InProcessDetailDraft | null {
   if (!payload) return null;
   const cust = payloadCustomer((payload.customer as Record<string, unknown>) ?? null);
   const veh = payloadVehicle((payload.vehicle as Record<string, unknown>) ?? null);
   const ins = payloadInsurance((payload.insurance as Record<string, unknown>) ?? null);
   const address =
     inProcessAddressFromStaging(cust) ||
-    (cust ? buildDisplayAddress(cust) : "") ||
+    (cust ? buildSection2FullAddress(cust) : "") ||
     "";
   return {
     care_of: cust?.care_of?.trim() ?? "",
@@ -145,6 +151,8 @@ function buildDraftFromPayload(payload: Record<string, unknown> | null): InProce
     battery_no: veh?.battery_no?.trim() ?? "",
     nominee_name: ins?.nominee_name?.trim() ?? "",
     nominee_relationship: ins?.nominee_relationship?.trim() ?? "",
+    insurer: ins?.insurer?.trim() ?? "",
+    cpi_reqd: cpiReqd ?? "N",
   };
 }
 
@@ -157,7 +165,9 @@ function draftsEqual(a: InProcessDetailDraft, b: InProcessDetailDraft): boolean 
     a.key_no === b.key_no &&
     a.battery_no === b.battery_no &&
     a.nominee_name === b.nominee_name &&
-    a.nominee_relationship === b.nominee_relationship
+    a.nominee_relationship === b.nominee_relationship &&
+    a.insurer === b.insurer &&
+    a.cpi_reqd === b.cpi_reqd
   );
 }
 
@@ -177,8 +187,12 @@ function InProcessFieldError({
   );
 }
 
-function draftToPatchBody(draft: InProcessDetailDraft): PatchAddSalesStagingPayloadBody {
-  return {
+function draftToPatchBody(
+  draft: InProcessDetailDraft,
+  baseline: InProcessDetailDraft,
+  opts: { includeInsurer: boolean }
+): PatchAddSalesStagingPayloadBody {
+  const body: PatchAddSalesStagingPayloadBody = {
     customer: { care_of: draft.care_of, address: draft.address },
     vehicle: {
       frame_no: draft.frame_no,
@@ -191,6 +205,16 @@ function draftToPatchBody(draft: InProcessDetailDraft): PatchAddSalesStagingPayl
       nominee_relationship: draft.nominee_relationship,
     },
   };
+  if (opts.includeInsurer && draft.insurer !== baseline.insurer) {
+    body.insurance = {
+      ...body.insurance,
+      insurer: draft.insurer.trim() || null,
+    };
+  }
+  if (draft.cpi_reqd !== baseline.cpi_reqd) {
+    body.cpi_reqd = draft.cpi_reqd;
+  }
+  return body;
 }
 
 function payloadInsurance(rec: Record<string, unknown> | null): ExtractedInsuranceDetails | null {
@@ -240,6 +264,7 @@ export function AddSalesInProcessPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailPayload, setDetailPayload] = useState<Record<string, unknown> | null>(null);
   const [stagingCpiReqd, setStagingCpiReqd] = useState<"Y" | "N" | null>(null);
+  const [stagingInsuranceState, setStagingInsuranceState] = useState<number | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
   const [rowMsg, setRowMsg] = useState<{ text: string; success: boolean } | null>(null);
@@ -247,6 +272,7 @@ export function AddSalesInProcessPanel({
   const [eligLoading, setEligLoading] = useState(false);
 
   const [cpaInsurers, setCpaInsurers] = useState<CpaInsurerPortalRow[]>([]);
+  const [portalInsurers, setPortalInsurers] = useState<string[]>([]);
   const [dealerCpaInsurer, setDealerCpaInsurer] = useState<string | null>(null);
   const [dealerHeroCpi, setDealerHeroCpi] = useState<string | null>(null);
   const [panelRefreshToken, setPanelRefreshToken] = useState(0);
@@ -273,11 +299,14 @@ export function AddSalesInProcessPanel({
     try {
       const r = await fetchDealerCpaContext(dealerId);
       setCpaInsurers(r.cpa_insurers ?? []);
+      const pi = r.portal_insurers;
+      setPortalInsurers(Array.isArray(pi) ? pi.map((x) => String(x).trim()).filter(Boolean) : []);
       setDealerCpaInsurer(r.dealer_cpa_insurer?.trim() ? r.dealer_cpa_insurer.trim() : null);
       const hc = r.hero_cpi;
       setDealerHeroCpi(hc != null && String(hc).trim() !== "" ? String(hc).trim() : null);
     } catch {
       setCpaInsurers([]);
+      setPortalInsurers([]);
       setDealerCpaInsurer(null);
       setDealerHeroCpi(null);
     }
@@ -330,6 +359,7 @@ export function AddSalesInProcessPanel({
     if (!selectedId || dealerId <= 0) {
       setDetailPayload(null);
       setStagingCpiReqd(null);
+      setStagingInsuranceState(null);
       setDetailErr(null);
       return;
     }
@@ -343,6 +373,7 @@ export function AddSalesInProcessPanel({
         setStagingCpiReqd(
           r.cpi_reqd != null ? normalizeCpaRequiredFlag(r.cpi_reqd) : null
         );
+        setStagingInsuranceState(r.insurance_state ?? null);
       } catch (e) {
         if (!c) setDetailErr(e instanceof Error ? e.message : "Could not load row details.");
       }
@@ -353,10 +384,12 @@ export function AddSalesInProcessPanel({
   }, [selectedId, dealerId, panelRefreshToken]);
 
   useEffect(() => {
-    setDetailEditDraft(buildDraftFromPayload(detailPayload));
+    setDetailEditDraft(buildDraftFromPayload(detailPayload, stagingCpiReqd));
     setDetailValidationErrors([]);
     setDetailSaveAttempted(false);
-  }, [detailPayload, selectedId]);
+  }, [detailPayload, selectedId, stagingCpiReqd]);
+
+  const insurerEditable = stagingInsuranceState == null || stagingInsuranceState === 0;
 
   const clearDetailValidation = useCallback(() => {
     setDetailValidationErrors([]);
@@ -371,8 +404,8 @@ export function AddSalesInProcessPanel({
   const detailErrorsToShow = detailSaveAttempted ? detailValidationErrors : [];
 
   const detailDraftBaseline = useMemo(
-    () => buildDraftFromPayload(detailPayload),
-    [detailPayload]
+    () => buildDraftFromPayload(detailPayload, stagingCpiReqd),
+    [detailPayload, stagingCpiReqd]
   );
   const detailDirty = useMemo(() => {
     if (!detailEditDraft || !detailDraftBaseline) return false;
@@ -419,7 +452,11 @@ export function AddSalesInProcessPanel({
     setDetailSaveBusy(true);
     setDetailErr(null);
     try {
-      await patchAddSalesStagingPayload(selectedId, dealerId, draftToPatchBody(draftForSave));
+      await patchAddSalesStagingPayload(
+        selectedId,
+        dealerId,
+        draftToPatchBody(draftForSave, detailDraftBaseline!, { includeInsurer: insurerEditable })
+      );
       setPanelRefreshToken((t) => t + 1);
       await refreshList();
       setRowMsg({ text: "Changes saved.", success: true });
@@ -428,7 +465,7 @@ export function AddSalesInProcessPanel({
     } finally {
       setDetailSaveBusy(false);
     }
-  }, [selectedId, detailEditDraft, dealerId, detailDirty, refreshList]);
+  }, [selectedId, detailEditDraft, dealerId, detailDirty, refreshList, detailDraftBaseline, insurerEditable]);
 
   const saveDetailDisabled =
     !detailDirty ||
@@ -447,7 +484,7 @@ export function AddSalesInProcessPanel({
     return String(raw ?? "").replace(/\D/g, "").slice(-10);
   }, [detailPayload]);
 
-  const portalList = elig?.portal_insurers ?? [];
+  const portalList = portalInsurers.length > 0 ? portalInsurers : (elig?.portal_insurers ?? []);
   const insTrim = String(ins?.insurer ?? "").trim();
   const insuranceProviderDisplay =
     portalList.length > 0
@@ -455,6 +492,8 @@ export function AddSalesInProcessPanel({
         ? insTrim || "—"
         : (insTrim || String(preferInsurer ?? "").trim() || "—")
       : insTrim || String(preferInsurer ?? "").trim() || "—";
+  const insuranceProviderSelectValue =
+    resolvePortalInsurer(detailEditDraft?.insurer, preferInsurer, portalList) ?? "";
 
   useEffect(() => {
     if (!selectedId || !detailPayload) {
@@ -703,7 +742,12 @@ export function AddSalesInProcessPanel({
                             setSelectedId(r.staging_id);
                             void wrapRowAction(r.staging_id, async () => {
                               if (!dmsUrl.trim()) throw new Error("DMS URL missing.");
-                              const res = await fillDmsLocal({ staging_id: r.staging_id });
+                              const sf = (r.file_location ?? r.subfolder ?? subfolder).trim();
+                              const res = await fillDmsLocal({
+                                staging_id: r.staging_id,
+                                dealer_id: dealerId,
+                                subfolder: sf || undefined,
+                              });
                               if (!res.success) throw new Error(res.error ?? "Create Invoice failed.");
                               dispatchPrintJobsFromApi(res.print_jobs);
                             });
@@ -1064,7 +1108,36 @@ export function AddSalesInProcessPanel({
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Insurance Provider</dt>
-                    <dd className="add-sales-in-process-dd--readonly">{insuranceProviderDisplay}</dd>
+                    <dd
+                      className={
+                        insurerEditable && portalList.length > 0
+                          ? "add-sales-v2-dd--insurance-editable"
+                          : "add-sales-in-process-dd--readonly"
+                      }
+                    >
+                      {insurerEditable && portalList.length > 0 && detailEditDraft ? (
+                        <select
+                          className="add-sales-v2-dl-input add-sales-v2-dl-input--insurance-provider-wide"
+                          aria-label="Insurance provider"
+                          value={insuranceProviderSelectValue}
+                          onChange={(e) => {
+                            clearDetailValidation();
+                            setDetailEditDraft((prev) =>
+                              prev ? { ...prev, insurer: e.target.value } : prev
+                            );
+                          }}
+                          disabled={detailSaveBusy}
+                        >
+                          {portalList.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        insuranceProviderDisplay
+                      )}
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Hero CPA</dt>
@@ -1076,8 +1149,30 @@ export function AddSalesInProcessPanel({
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>CPA Required</dt>
-                    <dd className="add-sales-in-process-dd--readonly">
-                      {formatCpaRequiredDisplay(stagingCpiReqd ?? elig?.staging_cpi_reqd ?? elig?.effective_cpi_reqd)}
+                    <dd>
+                      {detailEditDraft ? (
+                        <select
+                          className="add-sales-v2-input"
+                          value={detailEditDraft.cpi_reqd}
+                          onChange={(e) => {
+                            clearDetailValidation();
+                            setDetailEditDraft((prev) =>
+                              prev
+                                ? { ...prev, cpi_reqd: normalizeCpaRequiredFlag(e.target.value) }
+                                : prev
+                            );
+                          }}
+                          aria-label="CPA Required"
+                          disabled={detailSaveBusy}
+                        >
+                          <option value="Y">Yes</option>
+                          <option value="N">No</option>
+                        </select>
+                      ) : (
+                        formatCpaRequiredDisplay(
+                          stagingCpiReqd ?? elig?.staging_cpi_reqd ?? elig?.effective_cpi_reqd
+                        )
+                      )}
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">

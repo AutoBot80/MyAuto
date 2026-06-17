@@ -3937,6 +3937,11 @@
   gap: 6px;
 }
 
+.challans-proc-to-dealer-select {
+  max-width: 100%;
+  min-width: 0;
+}
+
 .challans-proc-failed-toggle {
   white-space: nowrap;
 }

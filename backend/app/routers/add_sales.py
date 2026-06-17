@@ -16,6 +16,7 @@ from app.repositories.add_sales_staging import (
     _normalize_cpi_reqd_flag,
     fetch_dealer_cpi_reqd_on_cursor,
     fetch_staging_cpi_reqd_on_cursor,
+    fetch_staging_insurance_state,
     fetch_staging_payload,
     list_in_process_staging_rows,
 )
@@ -256,6 +257,7 @@ def get_add_sales_staging_payload(
         "staging_id": staging_id.strip(),
         "payload_json": payload,
         "cpi_reqd": cpi_ctx.get("staging_cpi_reqd") or cpi_ctx.get("dealer_cpi_reqd") or "N",
+        "insurance_state": fetch_staging_insurance_state(staging_id.strip(), did),
     }
 
 

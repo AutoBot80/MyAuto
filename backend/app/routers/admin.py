@@ -23,6 +23,7 @@ from app.services.dealer_storage import (
     presigned_uploads_get_by_rel_path,
 )
 from app.db import get_connection
+from app.repositories.master_ref import list_portal_insurers
 from app.security.deps import get_principal, require_admin, resolve_dealer_id
 from app.security.principal import Principal
 
@@ -675,10 +676,11 @@ class CreateDealerRequest(BaseModel):
 
 
 class UpdateDealerRefInsurerRequest(BaseModel):
-    """Both fields required so a partial JSON body cannot clear ``prefer_insurer`` by omission."""
+    """All fields required so a partial JSON body cannot clear values by omission."""
 
     prefer_insurer: str | None
     hero_cpi: Literal["Y", "N"]
+    cpi_reqd: Literal["Y", "N"]
 
 
 class LoginActiveFlagRequest(BaseModel):
@@ -713,6 +715,17 @@ class LoginAssignmentUpsertItem(BaseModel):
 
 class LoginAssignmentsUpsertRequest(BaseModel):
     rows: list[LoginAssignmentUpsertItem]
+
+
+@router.get("/portal-insurers")
+def list_portal_insurers_for_admin() -> dict[str, list[str]]:
+    """``master_ref`` INSURER rows with ``comments = 'Y'`` (Add Sales portal dropdown labels)."""
+    conn = get_connection()
+    try:
+        insurers = list_portal_insurers(conn)
+    finally:
+        conn.close()
+    return {"insurers": insurers}
 
 
 @router.get("/dealers")
@@ -784,7 +797,7 @@ def get_dealer_ref_full(dealer_id: int, principal: Principal = Depends(get_princ
 def patch_dealer_ref_insurer_cpi(
     dealer_id: int, payload: UpdateDealerRefInsurerRequest, principal: Principal = Depends(get_principal)
 ) -> dict:
-    """Update ``prefer_insurer`` and ``hero_cpi`` on ``dealer_ref``. Send both fields (current values)."""
+    """Update ``prefer_insurer``, ``hero_cpi``, and ``cpi_reqd`` on ``dealer_ref``."""
     _require_admin_dealer_scope(principal, dealer_id)
     pi = payload.prefer_insurer
     if pi is not None:
@@ -795,6 +808,13 @@ def patch_dealer_ref_insurer_cpi(
     conn = get_connection()
     out: dict | None = None
     try:
+        if pi is not None:
+            portal = list_portal_insurers(conn)
+            if portal and pi not in portal:
+                raise HTTPException(
+                    status_code=400,
+                    detail="prefer_insurer must be one of the portal insurers (master_ref INSURER with comments = Y)",
+                )
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM dealer_ref WHERE dealer_id = %s", (dealer_id,))
             if not cur.fetchone():
@@ -802,10 +822,10 @@ def patch_dealer_ref_insurer_cpi(
             cur.execute(
                 """
                 UPDATE dealer_ref
-                SET prefer_insurer = %s, hero_cpi = %s
+                SET prefer_insurer = %s, hero_cpi = %s, cpi_reqd = %s
                 WHERE dealer_id = %s
                 """,
-                (pi, payload.hero_cpi, dealer_id),
+                (pi, payload.hero_cpi, payload.cpi_reqd, dealer_id),
             )
         conn.commit()
         with conn.cursor() as cur:

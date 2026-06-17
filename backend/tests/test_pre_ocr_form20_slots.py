@@ -56,3 +56,24 @@ def test_duplicate_insurance_goes_to_unused() -> None:
     slots, unused = assign_classified_page_slots(classifications, full_text, None)
     assert slots[PAGE_TYPE_INSURANCE] == 0
     assert unused == [1]
+
+
+def test_aadhar_back_rescued_as_form20_when_bottom_cues_present() -> None:
+    garbled_top = "\n".join(f"noise {i}" for i in range(30))
+    form20_page = (
+        f"{garbled_top}\nHero Motocorp Ltd.\n(Pron 47 aRad)\n20 OH2 horin\n"
+    )
+    full_text = _ocr_blocks(
+        "Government of India\nDOB: 01/01/1990\nMale\nAddress:\nC/O Test",
+        form20_page,
+        "Sales Detail Sheet\nMobile Number:\n9999999999\nChassis No. 1\nEngine No. 2",
+    )
+    classifications = [
+        (0, PAGE_TYPE_AADHAR),
+        (1, PAGE_TYPE_AADHAR_BACK),
+        (2, PAGE_TYPE_DETAILS),
+    ]
+    slots, unused = assign_classified_page_slots(classifications, full_text, None)
+    assert slots[PAGE_TYPE_FORM_20_COVER] == 1
+    assert slots[PAGE_TYPE_DETAILS] == 2
+    assert unused == []
