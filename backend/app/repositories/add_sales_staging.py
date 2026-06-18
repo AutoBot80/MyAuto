@@ -172,6 +172,114 @@ def list_in_process_staging_rows(*, dealer_id: int, days: int = 7) -> list[dict[
         conn.close()
 
 
+def _sql_has_rto_correspondence(alias: str = "s") -> str:
+    return f"NOT ({_sql_no_rto_correspondence(alias).strip()})"
+
+
+def list_staging_rows_for_admin(
+    *,
+    dealer_id: int,
+    mobile_digits: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    Admin search: all staging rows for dealer + mobile (last 10 digits), any status/age,
+    including RTO-queued rows.
+    """
+    did = int(dealer_id)
+    mob = (mobile_digits or "").strip()
+    if len(mob) < 10:
+        return []
+    mob_key = mob[-10:]
+    lim = max(1, min(int(limit), 100))
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    s.staging_id::text AS staging_id,
+                    s.dealer_id,
+                    s.updated_at,
+                    s.status,
+                    s.cpi_reqd,
+                    s.dms_state,
+                    s.insurance_state,
+                    NULLIF(trim(s.payload_json->'customer'->>'name'), '') AS customer_name,
+                    NULLIF(trim(s.payload_json->'customer'->>'mobile_number'), '') AS mobile,
+                    NULLIF(trim(s.payload_json->'vehicle'->>'frame_no'), '') AS chassis,
+                    NULLIF(trim(s.payload_json->'vehicle'->>'engine_no'), '') AS engine,
+                    NULLIF(trim(s.payload_json->'vehicle'->>'order_number'), '') AS order_number,
+                    NULLIF(trim(s.payload_json->>'sales_id'), '') AS sales_id_text,
+                    NULLIF(trim(s.payload_json->>'customer_id'), '') AS customer_id_text,
+                    NULLIF(trim(s.payload_json->>'vehicle_id'), '') AS vehicle_id_text,
+                    NULLIF(trim(s.payload_json->>'file_location'), '') AS file_location,
+                    NULLIF(trim(s.subfolder), '') AS subfolder,
+                    ({_sql_has_rto_correspondence('s')}) AS has_rto_queue
+                FROM add_sales_staging s
+                WHERE s.dealer_id = %s
+                  AND right(
+                        regexp_replace(
+                          trim(COALESCE(s.payload_json->'customer'->>'mobile_number', '')),
+                          '[^0-9]', '', 'g'
+                        ),
+                        10
+                      ) = %s
+                ORDER BY s.updated_at DESC
+                LIMIT %s
+                """,
+                (did, mob_key, lim),
+            )
+            rows = cur.fetchall()
+            return [dict(r) for r in rows] if rows else []
+    finally:
+        conn.close()
+
+
+def fetch_staging_admin_detail(staging_id: str, dealer_id: int) -> dict[str, Any] | None:
+    """Return staging row fields for admin detail (any status)."""
+    sid = (staging_id or "").strip()
+    if not sid:
+        return None
+    try:
+        uuid.UUID(sid)
+    except ValueError:
+        return None
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    s.staging_id::text AS staging_id,
+                    s.dealer_id,
+                    s.status,
+                    s.cpi_reqd,
+                    s.dms_state,
+                    s.insurance_state,
+                    s.payload_json,
+                    ({_sql_has_rto_correspondence('s')}) AS has_rto_queue
+                FROM add_sales_staging s
+                WHERE s.staging_id::text = %s AND s.dealer_id = %s
+                """,
+                (sid, int(dealer_id)),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            out = dict(row)
+            raw = out.pop("payload_json", None)
+            if raw is None:
+                out["payload_json"] = {}
+            elif isinstance(raw, dict):
+                out["payload_json"] = dict(raw)
+            else:
+                out["payload_json"] = json.loads(raw)
+            return out
+    finally:
+        conn.close()
+
+
 def find_open_staging_by_natural_keys_on_cursor(
     cur,
     *,

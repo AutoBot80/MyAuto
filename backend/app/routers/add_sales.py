@@ -299,11 +299,36 @@ def get_dealer_cpa_context(
     return _cpa_eligibility_extras(dealer_id)
 
 
+def _apply_staging_insurance_resume_eligibility(
+    result: dict,
+    *,
+    staging_id: str | None,
+    dealer_id: int | None,
+) -> dict:
+    """When staging insurance_state=2 and invoice exists, enable Generate Insurance resume."""
+    sid = (staging_id or "").strip()
+    if not sid or dealer_id is None:
+        return result
+    ins_state = fetch_staging_insurance_state(sid, int(dealer_id))
+    if ins_state != 2:
+        return result
+    if not result.get("invoice_recorded"):
+        return result
+    patched = dict(result)
+    patched["generate_insurance_enabled"] = True
+    patched["generate_insurance_reason"] = (
+        "Resume: policy filled manually — run Print Policy / download docs."
+    )
+    return patched
+
+
 def _eligibility_by_customer_vehicle_ids(
     customer_id: int,
     vehicle_id: int,
     *,
     effective_cpi_reqd: str = "N",
+    staging_id: str | None = None,
+    dealer_id: int | None = None,
 ) -> dict:
     """
     Same rules as natural-key eligibility, but keyed by committed ``sales_master`` pair.
@@ -388,18 +413,22 @@ def _eligibility_by_customer_vehicle_ids(
     elif has_insurance_policy_num:
         gen_reason = "A policy number is already stored for this sale; Generate Insurance is not available."
 
-    return {
-        "create_invoice_enabled": create_invoice_enabled,
-        "matched_sales_row": True,
-        "invoice_number": inv or None,
-        "reason": reason,
-        "invoice_recorded": invoice_recorded,
-        "generate_insurance_enabled": generate_insurance_enabled,
-        "generate_insurance_reason": gen_reason,
-        "resolved_customer_id": resolved_cid,
-        "resolved_vehicle_id": resolved_vid,
-        **cpa_fields,
-    }
+    return _apply_staging_insurance_resume_eligibility(
+        {
+            "create_invoice_enabled": create_invoice_enabled,
+            "matched_sales_row": True,
+            "invoice_number": inv or None,
+            "reason": reason,
+            "invoice_recorded": invoice_recorded,
+            "generate_insurance_enabled": generate_insurance_enabled,
+            "generate_insurance_reason": gen_reason,
+            "resolved_customer_id": resolved_cid,
+            "resolved_vehicle_id": resolved_vid,
+            **cpa_fields,
+        },
+        staging_id=staging_id,
+        dealer_id=dealer_id,
+    )
 
 
 @router.get("/create-invoice-eligibility")
@@ -471,6 +500,8 @@ def get_create_invoice_eligibility(
                 int(customer_id),
                 int(vehicle_id),
                 effective_cpi_reqd=effective_cpi,
+                staging_id=staging_id,
+                dealer_id=dealer_id,
             ),
             **cpa_x,
         }
@@ -609,16 +640,20 @@ def get_create_invoice_eligibility(
     elif has_insurance_policy_num:
         gen_reason = "A policy number is already stored for this sale; Generate Insurance is not available."
 
-    return {
-        "create_invoice_enabled": create_invoice_enabled,
-        "matched_sales_row": True,
-        "invoice_number": inv or None,
-        "reason": reason,
-        "invoice_recorded": invoice_recorded,
-        "generate_insurance_enabled": generate_insurance_enabled,
-        "generate_insurance_reason": gen_reason,
-        "resolved_customer_id": resolved_cid,
-        "resolved_vehicle_id": resolved_vid,
-        **cpa_fields,
-        **cpa_x,
-    }
+    return _apply_staging_insurance_resume_eligibility(
+        {
+            "create_invoice_enabled": create_invoice_enabled,
+            "matched_sales_row": True,
+            "invoice_number": inv or None,
+            "reason": reason,
+            "invoice_recorded": invoice_recorded,
+            "generate_insurance_enabled": generate_insurance_enabled,
+            "generate_insurance_reason": gen_reason,
+            "resolved_customer_id": resolved_cid,
+            "resolved_vehicle_id": resolved_vid,
+            **cpa_fields,
+            **cpa_x,
+        },
+        staging_id=staging_id,
+        dealer_id=dealer_id,
+    )

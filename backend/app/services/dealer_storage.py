@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,25 @@ from app.config import (
 from app.services import s3_storage
 
 logger = logging.getLogger(__name__)
+
+ADMIN_FOLDER_ZIP_MAX_FILES = 500
+ADMIN_FOLDER_ZIP_MAX_BYTES = 200 * 1024 * 1024
+
+
+class AdminFolderZipError(Exception):
+    """Base error for admin folder zip export."""
+
+
+class AdminFolderNotFoundError(AdminFolderZipError):
+    pass
+
+
+class AdminFolderEmptyError(AdminFolderZipError):
+    pass
+
+
+class AdminFolderTooLargeError(AdminFolderZipError):
+    pass
 
 
 def uploads_s3_key(dealer_id: int, *relative_parts: str) -> str:
@@ -364,3 +385,132 @@ def list_admin_folder_s3(root: str, dealer_id: int, rel_path: str) -> tuple[str,
     for x in items:
         del x["_sort_mtime"]
     return display, items
+
+
+def _admin_s3_prefix(root: str, dealer_id: int, rel_parts: list[str]) -> str:
+    if root == "upload_scans":
+        prefix_base = f"{S3_UPLOADS_PREFIX}/{int(dealer_id)}/"
+    elif root == "ocr_output":
+        prefix_base = f"{S3_OCR_PREFIX}/{int(dealer_id)}/"
+    elif root == "challans":
+        prefix_base = f"{S3_CHALLANS_PREFIX}/"
+    else:
+        raise ValueError(f"Unknown admin S3 folder root: {root!r}")
+    return prefix_base + ("/".join(rel_parts) + "/" if rel_parts else "")
+
+
+def _admin_folder_base_local(root: str, dealer_id: int) -> Path:
+    if root == "upload_scans":
+        return get_uploads_dir(dealer_id)
+    if root == "ocr_output":
+        return get_ocr_output_dir(dealer_id)
+    if root == "challans":
+        return CHALLANS_DIR.resolve()
+    raise ValueError(f"Unknown admin folder root: {root!r}")
+
+
+def _resolve_admin_rel_path(base: Path, rel: str) -> Path:
+    """Resolve ``rel`` under ``base``; reject ``..`` and escapes."""
+    base_resolved = base.resolve()
+    rel = (rel or "").strip().replace("\\", "/")
+    if not rel:
+        raise ValueError("rel_path required")
+    parts = [p for p in rel.split("/") if p and p != "."]
+    for p in parts:
+        if p == "..":
+            raise ValueError("Invalid path")
+    target = base_resolved.joinpath(*parts)
+    target = target.resolve()
+    try:
+        target.relative_to(base_resolved)
+    except ValueError as e:
+        raise ValueError("Invalid path") from e
+    return target
+
+
+def _sanitize_admin_zip_filename(rel_path: str) -> str:
+    rel = (rel_path or "").strip().replace("\\", "/").strip("/")
+    last = rel.split("/")[-1] if rel else "folder"
+    safe = re.sub(r"[^\w.\-]", "_", last).strip("._-")
+    return safe or "folder"
+
+
+def _build_admin_folder_zip_s3(prefix: str, filename: str) -> tuple[bytes, str]:
+    objects = s3_storage.list_objects_with_prefix(prefix)
+    file_objects = [o for o in objects if not (o.get("Key") or "").endswith("/")]
+    if not file_objects:
+        raise AdminFolderEmptyError("Folder is empty")
+    if len(file_objects) > ADMIN_FOLDER_ZIP_MAX_FILES:
+        logger.warning("admin folder zip rejected: %s files under %s", len(file_objects), prefix)
+        raise AdminFolderTooLargeError(
+            f"Folder has too many files ({len(file_objects)}; max {ADMIN_FOLDER_ZIP_MAX_FILES})"
+        )
+    total_size = sum(int(o.get("Size") or 0) for o in file_objects)
+    if total_size > ADMIN_FOLDER_ZIP_MAX_BYTES:
+        logger.warning("admin folder zip rejected: %s bytes under %s", total_size, prefix)
+        raise AdminFolderTooLargeError(
+            f"Folder is too large ({total_size // (1024 * 1024)} MB; max {ADMIN_FOLDER_ZIP_MAX_BYTES // (1024 * 1024)} MB)"
+        )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for obj in file_objects:
+            key = obj["Key"]
+            arcname = key[len(prefix) :]
+            if not arcname or arcname.endswith("/"):
+                continue
+            data = s3_storage.download_bytes(key)
+            zf.writestr(arcname, data)
+    buf.seek(0)
+    return buf.read(), filename
+
+
+def _build_admin_folder_zip_local(folder: Path, filename: str) -> tuple[bytes, str]:
+    if not folder.is_dir():
+        raise AdminFolderNotFoundError("Folder not found")
+    files = [p for p in folder.rglob("*") if p.is_file() and not p.name.startswith(".")]
+    if not files:
+        raise AdminFolderEmptyError("Folder is empty")
+    if len(files) > ADMIN_FOLDER_ZIP_MAX_FILES:
+        logger.warning("admin folder zip rejected: %s files under %s", len(files), folder)
+        raise AdminFolderTooLargeError(
+            f"Folder has too many files ({len(files)}; max {ADMIN_FOLDER_ZIP_MAX_FILES})"
+        )
+    total_size = sum(p.stat().st_size for p in files)
+    if total_size > ADMIN_FOLDER_ZIP_MAX_BYTES:
+        logger.warning("admin folder zip rejected: %s bytes under %s", total_size, folder)
+        raise AdminFolderTooLargeError(
+            f"Folder is too large ({total_size // (1024 * 1024)} MB; max {ADMIN_FOLDER_ZIP_MAX_BYTES // (1024 * 1024)} MB)"
+        )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in files:
+            arcname = path.relative_to(folder).as_posix()
+            zf.write(path, arcname)
+    buf.seek(0)
+    return buf.read(), filename
+
+
+def build_admin_folder_zip_bytes(root: str, dealer_id: int, rel_path: str) -> tuple[bytes, str]:
+    """
+    Zip all files under an admin folder (recursive). ``rel_path`` must be non-empty.
+    Returns ``(zip_bytes, download_stem)`` where ``download_stem`` is the safe filename without ``.zip``.
+    """
+    rel = (rel_path or "").strip().replace("\\", "/").lstrip("/")
+    rel_parts = [p for p in rel.split("/") if p and p != "."]
+    for p in rel_parts:
+        if p == "..":
+            raise ValueError("Invalid path")
+    if not rel_parts:
+        raise ValueError("rel_path required")
+
+    filename = _sanitize_admin_zip_filename(rel)
+
+    if STORAGE_USE_S3:
+        prefix = _admin_s3_prefix(root, dealer_id, rel_parts)
+        if not prefix.endswith("/"):
+            prefix = prefix + "/"
+        return _build_admin_folder_zip_s3(prefix, filename)
+
+    base = _admin_folder_base_local(root, dealer_id)
+    folder = _resolve_admin_rel_path(base, rel)
+    return _build_admin_folder_zip_local(folder, filename)

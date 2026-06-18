@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchAdminFolderFileBlobUrl, listAdminFolderContents, type AdminFolderEntry, type AdminFolderRootApi } from "../api/admin";
+import { downloadAdminFolderZip, fetchAdminFolderFileBlobUrl, listAdminFolderContents, type AdminFolderEntry, type AdminFolderRootApi } from "../api/admin";
 import { getAdminDealerNames, type AdminDealerNameRow } from "../api/adminDealers";
 import "./AdminDataFolderPage.css";
 
@@ -124,6 +124,7 @@ export function AdminDataFolderPage({ dealerId, kind, dealerPicker = "full" }: A
   const [error, setError] = useState<string | null>(null);
   const [viewerFile, setViewerFile] = useState<AdminFolderViewerFile | null>(null);
   const [fileOpening, setFileOpening] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const viewerRef = useRef<AdminFolderViewerFile | null>(null);
 
   useEffect(() => {
@@ -262,6 +263,25 @@ export function AdminDataFolderPage({ dealerId, kind, dealerPicker = "full" }: A
     }
   }
 
+  async function downloadCurrentFolder() {
+    if (!relPath || downloading) return;
+    setDownloading(true);
+    try {
+      const { blob, filename } = await downloadAdminFolderZip(selectedDealerId, root, relPath);
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      a.rel = "noopener";
+      a.click();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 2_000);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Could not download folder.");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   const titleLine = relPath ? `${pageTitle} / ${relPath.split("/").join(" / ")}` : `${pageTitle} (root)`;
 
   return (
@@ -318,8 +338,13 @@ export function AdminDataFolderPage({ dealerId, kind, dealerPicker = "full" }: A
                 <code className="admin-data-folder-page__path" title={currentAbs}>
                   {currentAbs}
                 </code>
-                <button type="button" className="app-button app-button--small" onClick={copyCurrentPath}>
-                  Copy path
+                <button
+                  type="button"
+                  className="app-button app-button--small"
+                  onClick={relPath ? downloadCurrentFolder : copyCurrentPath}
+                  disabled={relPath ? downloading : false}
+                >
+                  {relPath ? (downloading ? "Downloading…" : "Download") : "Copy path"}
                 </button>
               </div>
             ) : null}

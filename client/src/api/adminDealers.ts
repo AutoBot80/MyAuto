@@ -124,9 +124,16 @@ export type LoginAssignmentUpsertRow = {
   login_id: string;
   role_id: number;
   active_flag: "Y" | "N";
+  phone?: string | null;
+  email?: string | null;
+  password?: string | null;
+  name?: string | null;
 };
 
-export function upsertLoginAssignments(dealerId: number, body: { rows: LoginAssignmentUpsertRow[] }) {
+export function upsertLoginAssignments(
+  dealerId: number,
+  body: { rows: LoginAssignmentUpsertRow[]; delete_login_roles_ref_ids?: number[] }
+) {
   return apiFetch<DealerLoginAssignmentRow[]>(`/admin/dealers/${dealerId}/login-assignments/upsert`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

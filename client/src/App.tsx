@@ -63,18 +63,18 @@ function isShashankLogin(loginId: string | null): boolean {
 
 function posPagesForSession(loginId: string | null): Page[] {
   const core: Page[] = ["add-sales", "subdealer-challan"];
-  const tail: Page[] = ["customer-details", "view-vehicles", "contact-us"];
+  const tail: Page[] = ["customer-details", "view-vehicles"];
   if (isShashankLogin(loginId)) {
     return [...core, "bulk-loads", ...tail];
   }
   return [...core, ...tail];
 }
 
-const SERVICE_PAGES: Page[] = ["service-reminders", "contact-us"];
+const SERVICE_PAGES: Page[] = ["service-reminders"];
 
-const RTO_PAGES: Page[] = ["rto-status", "contact-us"];
+const RTO_PAGES: Page[] = ["rto-status"];
 
-const DEALER_PAGES: Page[] = ["dealer-dashboard", "sales-reports", "customer-details", "view-vehicles", "contact-us"];
+const DEALER_PAGES: Page[] = ["dealer-dashboard", "sales-reports", "customer-details", "view-vehicles"];
 
 const ADMIN_PAGES: Page[] = ["admin-dealers", "admin-usage", "admin-tools"];
 
@@ -337,8 +337,6 @@ function App() {
         return <AdminDealersPage />;
       case "admin-usage":
         return <AdminUsagePage dealerId={dealerId} />;
-      case "contact-us":
-        return <PlaceholderPage title="Contact Us" />;
       default:
         return null;
     }

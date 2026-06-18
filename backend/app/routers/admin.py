@@ -7,7 +7,7 @@ from typing import Literal
 from psycopg2 import sql, IntegrityError
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.config import (
     CHALLANS_DIR,
@@ -17,6 +17,10 @@ from app.config import (
     get_uploads_dir,
 )
 from app.services.dealer_storage import (
+    AdminFolderEmptyError,
+    AdminFolderNotFoundError,
+    AdminFolderTooLargeError,
+    build_admin_folder_zip_bytes,
     list_admin_folder_s3,
     presigned_challans_get_by_rel_path,
     presigned_ocr_get_by_rel_path,
@@ -25,6 +29,7 @@ from app.services.dealer_storage import (
 from app.db import get_connection
 from app.repositories.master_ref import list_portal_insurers
 from app.security.deps import get_principal, require_admin, resolve_dealer_id
+from app.security.passwords import hash_password
 from app.security.principal import Principal
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -321,6 +326,26 @@ def _require_admin_dealer_scope(principal: Principal, dealer_id: int) -> None:
     assert_dealer_in_admin_scope(principal.login_id, dealer_id)
 
 
+def _hash_password_for_storage(plain_password: str) -> str:
+    """Hash for ``login_ref.pwd_hash``; maps backend/config errors to HTTP responses."""
+    from passlib.exc import MissingBackendError
+
+    try:
+        return hash_password(plain_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MissingBackendError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Password hashing unavailable on server (argon2). "
+                "Install argon2-cffi in the API venv and restart saathi-api."
+            ),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/usage-dealer-matrix", response_model=UsageDealerMatrixResponse)
 def get_usage_dealer_matrix(
     principal: Principal = Depends(get_principal),
@@ -599,6 +624,36 @@ def get_admin_folder_file(
     return FileResponse(file_path, filename=file_path.name, content_disposition_type="inline")
 
 
+@router.get("/folder-zip")
+def get_admin_folder_zip(
+    principal: Principal = Depends(get_principal),
+    root: AdminFolderRoot = Query(...),
+    rel_path: str = Query(..., description="Non-empty path under the folder root"),
+    dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
+):
+    """Download a subfolder and all nested files as a single zip."""
+    did = resolve_dealer_id(principal, dealer_id)
+    rel_norm = rel_path.strip().replace("\\", "/")
+    if not rel_norm or rel_norm in (".", "/"):
+        raise HTTPException(status_code=400, detail="rel_path is required for folder download")
+    try:
+        zip_bytes, stem = build_admin_folder_zip_bytes(str(root), did, rel_norm)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except AdminFolderNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except AdminFolderEmptyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except AdminFolderTooLargeError as e:
+        raise HTTPException(status_code=413, detail=str(e)) from e
+    filename = f"{stem}.zip"
+    return StreamingResponse(
+        iter([zip_bytes]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/reset-all-data")
 def reset_all_data(payload: ResetAllDataRequest) -> dict:
     """Delete all public base-table rows except *ref tables (LIKE '%ref') and PRESERVED_EXTRA_TABLES."""
@@ -711,10 +766,15 @@ class LoginAssignmentUpsertItem(BaseModel):
     login_id: str = Field(..., min_length=1, max_length=128)
     role_id: int
     active_flag: Literal["Y", "N"]
+    phone: str | None = Field(None, max_length=32)
+    email: str | None = Field(None, max_length=255)
+    password: str | None = Field(None, max_length=128)
+    name: str | None = Field(None, max_length=255)
 
 
 class LoginAssignmentsUpsertRequest(BaseModel):
     rows: list[LoginAssignmentUpsertItem]
+    delete_login_roles_ref_ids: list[int] = Field(default_factory=list)
 
 
 @router.get("/portal-insurers")
@@ -888,7 +948,7 @@ def list_dealer_login_assignments(dealer_id: int, principal: Principal = Depends
 def upsert_login_assignments(
     dealer_id: int, payload: LoginAssignmentsUpsertRequest, principal: Principal = Depends(get_principal)
 ) -> list[dict]:
-    """Insert or update ``login_roles_ref`` rows for this dealer and sync ``login_ref.active_flag`` per row."""
+    """Insert or update ``login_roles_ref`` rows for this dealer; sync ``login_ref`` contact, password, and active flag."""
     _require_admin_dealer_scope(principal, dealer_id)
     conn = get_connection()
     try:
@@ -897,18 +957,92 @@ def upsert_login_assignments(
             if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="Dealer not found")
 
+            deleted_login_ids: set[str] = set()
+            for lrr_id in payload.delete_login_roles_ref_ids:
+                cur.execute(
+                    """
+                    SELECT login_id FROM login_roles_ref
+                    WHERE login_roles_ref_id = %s AND dealer_id = %s
+                    """,
+                    (int(lrr_id), dealer_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"login_roles_ref_id {lrr_id} not found for this dealer",
+                    )
+                lid = str(row["login_id"])
+                deleted_login_ids.add(lid)
+                cur.execute(
+                    "DELETE FROM login_roles_ref WHERE login_roles_ref_id = %s AND dealer_id = %s",
+                    (int(lrr_id), dealer_id),
+                )
+
+            for lid in deleted_login_ids:
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM login_roles_ref WHERE login_id = %s",
+                    (lid,),
+                )
+                cnt_row = cur.fetchone()
+                remaining = int(cnt_row["n"])
+                if remaining == 0:
+                    cur.execute("DELETE FROM login_ref WHERE login_id = %s", (lid,))
+
             for item in payload.rows:
                 lid = item.login_id.strip()
                 if not lid:
                     raise HTTPException(status_code=400, detail="login_id is required")
 
-                cur.execute("SELECT 1 FROM login_ref WHERE login_id = %s", (lid,))
-                if not cur.fetchone():
-                    raise HTTPException(status_code=400, detail=f"login_id not in login_ref: {lid!r}")
-
                 cur.execute("SELECT 1 FROM roles_ref WHERE role_id = %s", (item.role_id,))
                 if not cur.fetchone():
                     raise HTTPException(status_code=400, detail="role_id does not exist in roles_ref")
+
+                cur.execute("SELECT 1 FROM login_ref WHERE login_id = %s", (lid,))
+                login_exists = cur.fetchone() is not None
+
+                phone = item.phone.strip() if item.phone is not None else None
+                if phone == "":
+                    phone = None
+                email = item.email.strip() if item.email is not None else None
+                if email == "":
+                    email = None
+                pwd_plain = item.password.strip() if item.password is not None else ""
+                name = item.name.strip() if item.name is not None else ""
+
+                if not login_exists:
+                    if not name:
+                        raise HTTPException(status_code=400, detail=f"name is required for new login: {lid!r}")
+                    if not pwd_plain:
+                        raise HTTPException(status_code=400, detail=f"password is required for new login: {lid!r}")
+                    pwd_hash = _hash_password_for_storage(pwd_plain)
+                    cur.execute(
+                        """
+                        INSERT INTO login_ref (login_id, pwd_hash, name, phone, email, active_flag)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (lid, pwd_hash, name, phone, email, item.active_flag),
+                    )
+                else:
+                    if pwd_plain:
+                        pwd_hash = _hash_password_for_storage(pwd_plain)
+                        cur.execute(
+                            """
+                            UPDATE login_ref
+                            SET active_flag = %s, phone = %s, email = %s, pwd_hash = %s
+                            WHERE login_id = %s
+                            """,
+                            (item.active_flag, phone, email, pwd_hash, lid),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            UPDATE login_ref
+                            SET active_flag = %s, phone = %s, email = %s
+                            WHERE login_id = %s
+                            """,
+                            (item.active_flag, phone, email, lid),
+                        )
 
                 if item.login_roles_ref_id is None:
                     try:
@@ -927,24 +1061,27 @@ def upsert_login_assignments(
                             ) from exc
                         raise
                 else:
-                    cur.execute(
-                        """
-                        UPDATE login_roles_ref
-                        SET role_id = %s
-                        WHERE login_roles_ref_id = %s AND dealer_id = %s
-                        """,
-                        (int(item.role_id), int(item.login_roles_ref_id), dealer_id),
-                    )
+                    try:
+                        cur.execute(
+                            """
+                            UPDATE login_roles_ref
+                            SET role_id = %s
+                            WHERE login_roles_ref_id = %s AND dealer_id = %s
+                            """,
+                            (int(item.role_id), int(item.login_roles_ref_id), dealer_id),
+                        )
+                    except IntegrityError as exc:
+                        if getattr(exc, "pgcode", None) == "23505":
+                            raise HTTPException(
+                                status_code=409,
+                                detail="This login already has this role for this dealer.",
+                            ) from exc
+                        raise
                     if cur.rowcount == 0:
                         raise HTTPException(
                             status_code=404,
                             detail=f"login_roles_ref_id {item.login_roles_ref_id} not found for this dealer",
                         )
-
-                cur.execute(
-                    "UPDATE login_ref SET active_flag = %s WHERE login_id = %s",
-                    (item.active_flag, lid),
-                )
 
         conn.commit()
     except HTTPException:
@@ -956,7 +1093,7 @@ def upsert_login_assignments(
     finally:
         conn.close()
 
-    return list_dealer_login_assignments(dealer_id)
+    return list_dealer_login_assignments(dealer_id, principal)
 
 
 @router.get("/roles")
@@ -1167,3 +1304,135 @@ def create_dealer_discount(
     if not row:
         raise HTTPException(status_code=500, detail="Insert did not return a row")
     return _jsonable_row(dict(row))
+
+
+class AdminStagingCancelInvoiceRequest(BaseModel):
+    confirmation: str = Field(..., min_length=1, max_length=256)
+
+
+class AdminInsuranceManuallyFilledRequest(BaseModel):
+    insurer: str = Field(..., min_length=1, max_length=255)
+
+
+def _staging_cancel_confirmation_from_payload(payload: dict) -> str:
+    cust = payload.get("customer")
+    if isinstance(cust, dict):
+        name = str(cust.get("name") or "").strip()
+        if name:
+            return name
+        for key in ("mobile_number", "mobile", "phone"):
+            mob = str(cust.get(key) or "").strip()
+            if mob:
+                return mob
+    return ""
+
+
+@router.get("/staging/search")
+def search_admin_staging(
+    dealer_id: int = Query(..., ge=1),
+    mobile: str = Query(..., min_length=10, max_length=32),
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    """Search add_sales_staging by scoped dealer and customer mobile (last 10 digits)."""
+    _require_admin_dealer_scope(principal, dealer_id)
+    from app.repositories.add_sales_staging import list_staging_rows_for_admin
+
+    digits = "".join(c for c in mobile if c.isdigit())
+    if len(digits) < 10:
+        raise HTTPException(status_code=400, detail="mobile must contain at least 10 digits")
+    rows = list_staging_rows_for_admin(dealer_id=dealer_id, mobile_digits=digits)
+    return {"dealer_id": dealer_id, "mobile": digits[-10:], "rows": [_jsonable_row(dict(r)) for r in rows]}
+
+
+@router.get("/staging/{staging_id}")
+def get_admin_staging_detail(
+    staging_id: str,
+    dealer_id: int = Query(..., ge=1),
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    """Full staging payload and processing state for admin tools."""
+    _require_admin_dealer_scope(principal, dealer_id)
+    from app.repositories.add_sales_staging import fetch_staging_admin_detail
+
+    detail = fetch_staging_admin_detail(staging_id.strip(), dealer_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Staging row not found")
+    conn = get_connection()
+    try:
+        portal_insurers = list_portal_insurers(conn)
+    finally:
+        conn.close()
+    payload = detail.pop("payload_json", {})
+    out = _jsonable_row(detail)
+    out["payload_json"] = payload
+    out["portal_insurers"] = portal_insurers
+    return out
+
+
+@router.post("/staging/{staging_id}/cancel-invoice")
+def post_admin_staging_cancel_invoice(
+    staging_id: str,
+    body: AdminStagingCancelInvoiceRequest,
+    dealer_id: int = Query(..., ge=1),
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    """Roll back Saathi masters for staging sale and reset staging (does not cancel Siebel invoice)."""
+    _require_admin_dealer_scope(principal, dealer_id)
+    from app.repositories.add_sales_staging import fetch_staging_admin_detail
+    from app.services.admin_staging_cancel_invoice_service import (
+        CancelStagingInvoiceError,
+        cancel_staging_invoice,
+    )
+
+    detail = fetch_staging_admin_detail(staging_id.strip(), dealer_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Staging row not found")
+    expected = _staging_cancel_confirmation_from_payload(detail.get("payload_json") or {})
+    if not expected:
+        raise HTTPException(
+            status_code=400,
+            detail="Staging row has no customer name or mobile for confirmation",
+        )
+    try:
+        summary = cancel_staging_invoice(
+            staging_id=staging_id.strip(),
+            dealer_id=dealer_id,
+            confirmation=body.confirmation,
+            expected_confirmation=expected,
+        )
+    except CancelStagingInvoiceError as exc:
+        msg = str(exc).strip() or "Cancel invoice failed"
+        status = 400
+        if "not found" in msg.lower():
+            status = 404
+        raise HTTPException(status_code=status, detail=msg) from exc
+    return _jsonable_row(summary)
+
+
+@router.post("/staging/{staging_id}/insurance-manually-filled")
+def post_admin_insurance_manually_filled(
+    staging_id: str,
+    body: AdminInsuranceManuallyFilledRequest,
+    dealer_id: int = Query(..., ge=1),
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    """Set staging insurer and insurance_state=2 for manual portal fill resume."""
+    _require_admin_dealer_scope(principal, dealer_id)
+    from app.services.admin_staging_insurance_manual_service import (
+        InsuranceManuallyFilledError,
+        mark_insurance_manually_filled,
+    )
+
+    try:
+        result = mark_insurance_manually_filled(
+            staging_id=staging_id.strip(),
+            dealer_id=dealer_id,
+            insurer=body.insurer.strip(),
+        )
+    except InsuranceManuallyFilledError as exc:
+        msg = str(exc).strip() or "Insurance manually filled failed"
+        status = 409 if "policy number" in msg.lower() else 400
+        if "not found" in msg.lower():
+            status = 404
+        raise HTTPException(status_code=status, detail=msg) from exc
+    return _jsonable_row(result)

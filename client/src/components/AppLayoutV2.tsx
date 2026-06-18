@@ -15,7 +15,6 @@ const PAGE_LABELS: Record<Page, string> = {
   "admin-tools": "Admin Tools",
   "admin-dealers": "Dealers",
   "admin-usage": "Usage",
-  "contact-us": "Contact Us",
 };
 
 interface AppLayoutV2Props {

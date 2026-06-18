@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { resetAllData } from "../api/admin";
+import { AdminStagingToolsPanel } from "./AdminStagingToolsPanel";
 import "./AdminPage.css";
 
 interface AdminPageProps {
@@ -50,7 +51,8 @@ export function AdminPage({ deleteAllDataDisabled }: AdminPageProps) {
           Delete All Data is disabled when ENVIRONMENT is prod or production.
         </p>
       ) : null}
+
+      <AdminStagingToolsPanel />
     </div>
   );
 }
-

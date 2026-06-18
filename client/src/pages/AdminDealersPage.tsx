@@ -46,6 +46,10 @@ function newDiscountDraft(): DiscountDraftRow {
 type LoginDraftRow = {
   tempId: string;
   login_id: string;
+  name: string;
+  password: string;
+  phone: string;
+  email: string;
   role_id: number | "";
   active_flag: "Y" | "N";
 };
@@ -58,6 +62,10 @@ function newLoginDraft(): LoginDraftRow {
   return {
     tempId,
     login_id: "",
+    name: "",
+    password: "",
+    phone: "",
+    email: "",
     role_id: "",
     active_flag: "Y",
   };
@@ -121,6 +129,10 @@ export function AdminDealersPage() {
   const [loginDrafts, setLoginDrafts] = useState<LoginDraftRow[]>([]);
   const [editRoleByLrrId, setEditRoleByLrrId] = useState<Record<number, number>>({});
   const [activeByLoginId, setActiveByLoginId] = useState<Record<string, "Y" | "N">>({});
+  const [phoneByLoginId, setPhoneByLoginId] = useState<Record<string, string>>({});
+  const [emailByLoginId, setEmailByLoginId] = useState<Record<string, string>>({});
+  const [passwordByLoginId, setPasswordByLoginId] = useState<Record<string, string>>({});
+  const [deletedLrrIds, setDeletedLrrIds] = useState<Set<number>>(() => new Set());
   const [loginDirty, setLoginDirty] = useState(false);
   const [loginSaveError, setLoginSaveError] = useState<string | null>(null);
   const [savingLogins, setSavingLogins] = useState(false);
@@ -202,17 +214,29 @@ export function AdminDealersPage() {
     setLoginDirty(false);
     setEditRoleByLrrId({});
     setActiveByLoginId({});
+    setPhoneByLoginId({});
+    setEmailByLoginId({});
+    setPasswordByLoginId({});
+    setDeletedLrrIds(new Set());
   }, [selectedId]);
 
   useEffect(() => {
-    const m: Record<string, "Y" | "N"> = {};
+    const activeM: Record<string, "Y" | "N"> = {};
+    const phoneM: Record<string, string> = {};
+    const emailM: Record<string, string> = {};
     for (const r of logins) {
-      if (!(r.login_id in m)) {
-        m[r.login_id] = normalizeLoginActive(r.login_active_flag);
+      if (!(r.login_id in activeM)) {
+        activeM[r.login_id] = normalizeLoginActive(r.login_active_flag);
+        phoneM[r.login_id] = r.login_phone != null ? String(r.login_phone) : "";
+        emailM[r.login_id] = r.login_email != null ? String(r.login_email) : "";
       }
     }
-    setActiveByLoginId(m);
+    setActiveByLoginId(activeM);
+    setPhoneByLoginId(phoneM);
+    setEmailByLoginId(emailM);
+    setPasswordByLoginId({});
     setEditRoleByLrrId({});
+    setDeletedLrrIds(new Set());
   }, [logins]);
 
   useEffect(() => {
@@ -296,6 +320,7 @@ export function AdminDealersPage() {
   function removeLoginDraft(tempId: string) {
     setLoginDrafts((prev) => prev.filter((r) => r.tempId !== tempId));
     setLoginSaveError(null);
+    setLoginDirty(true);
   }
 
   function updateLoginDraft(tempId: string, patch: Partial<LoginDraftRow>) {
@@ -303,35 +328,108 @@ export function AdminDealersPage() {
     setLoginDirty(true);
   }
 
+  function markLoginRowDeleted(loginRolesRefId: number) {
+    setDeletedLrrIds((prev) => new Set(prev).add(loginRolesRefId));
+    setLoginSaveError(null);
+    setLoginDirty(true);
+  }
+
+  function loginExistsGlobally(loginId: string): boolean {
+    const lid = loginId.trim();
+    if (!lid) return false;
+    return loginCatalog.some((l) => l.login_id === lid);
+  }
+
+  const visibleLogins = useMemo(
+    () => logins.filter((r) => !deletedLrrIds.has(r.login_roles_ref_id)),
+    [logins, deletedLrrIds]
+  );
+
+  /** First role row per login id — only that row edits shared ``login_ref`` contact/password fields. */
+  const firstLrrIdByLoginId = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const r of visibleLogins) {
+      if (!(r.login_id in m)) {
+        m[r.login_id] = r.login_roles_ref_id;
+      }
+    }
+    return m;
+  }, [visibleLogins]);
+
   async function handleSaveLoginAssignments() {
     if (selectedId == null || !loginDirty) return;
+
+    const pendingLoginIds = new Set<string>();
     for (const d of loginDrafts) {
-      if (!d.login_id.trim() || d.role_id === "" || Number.isNaN(Number(d.role_id))) {
-        setLoginSaveError("Each new row must have a login and a role.");
+      const lid = d.login_id.trim();
+      if (!lid || d.role_id === "" || Number.isNaN(Number(d.role_id))) {
+        setLoginSaveError("Each new row must have a login id and a role.");
+        return;
+      }
+      if (pendingLoginIds.has(lid)) {
+        setLoginSaveError(`Duplicate login id in pending rows: ${lid}`);
+        return;
+      }
+      pendingLoginIds.add(lid);
+      const isNewLogin = !loginExistsGlobally(lid);
+      if (isNewLogin && !d.name.trim()) {
+        setLoginSaveError(`Name is required for new login: ${lid}`);
+        return;
+      }
+      if (isNewLogin && !d.password.trim()) {
+        setLoginSaveError(`Password is required for new login: ${lid}`);
         return;
       }
     }
+
     setLoginSaveError(null);
     setSavingLogins(true);
     try {
-      const rows = [
-        ...logins.map((r) => ({
+      const existingRows = visibleLogins.map((r) => {
+        const isPrimaryContactRow = firstLrrIdByLoginId[r.login_id] === r.login_roles_ref_id;
+        const base = {
           login_roles_ref_id: r.login_roles_ref_id,
           login_id: r.login_id,
           role_id: editRoleByLrrId[r.login_roles_ref_id] ?? r.role_id,
           active_flag: activeByLoginId[r.login_id] ?? normalizeLoginActive(r.login_active_flag),
-        })),
-        ...loginDrafts.map((d) => ({
+        };
+        if (!isPrimaryContactRow) {
+          return base;
+        }
+        const pwd = passwordByLoginId[r.login_id]?.trim();
+        return {
+          ...base,
+          phone: phoneByLoginId[r.login_id] ?? (r.login_phone != null ? String(r.login_phone) : ""),
+          email: emailByLoginId[r.login_id] ?? (r.login_email != null ? String(r.login_email) : ""),
+          ...(pwd ? { password: pwd } : {}),
+        };
+      });
+
+      const draftRows = loginDrafts.map((d) => {
+        const lid = d.login_id.trim();
+        const isNewLogin = !loginExistsGlobally(lid);
+        const pwd = d.password.trim();
+        return {
           login_roles_ref_id: null as number | null,
-          login_id: d.login_id.trim(),
+          login_id: lid,
           role_id: Number(d.role_id),
           active_flag: d.active_flag,
-        })),
-      ];
-      const updated = await upsertLoginAssignments(selectedId, { rows });
+          phone: d.phone.trim() || null,
+          email: d.email.trim() || null,
+          ...(isNewLogin ? { name: d.name.trim(), password: pwd } : pwd ? { password: pwd } : {}),
+        };
+      });
+
+      const updated = await upsertLoginAssignments(selectedId, {
+        rows: [...existingRows, ...draftRows],
+        delete_login_roles_ref_ids: [...deletedLrrIds],
+      });
       setLogins(updated);
       setLoginDrafts([]);
+      setDeletedLrrIds(new Set());
       setLoginDirty(false);
+      const catalog = await getAdminLoginCatalog();
+      setLoginCatalog(catalog);
     } catch (e) {
       setLoginSaveError(e instanceof Error ? e.message : "Could not save login assignments.");
     } finally {
@@ -344,9 +442,12 @@ export function AdminDealersPage() {
     selectedId != null &&
     !savingLogins &&
     !busy &&
-    loginDrafts.every(
-      (d) => d.login_id.trim() !== "" && d.role_id !== "" && !Number.isNaN(Number(d.role_id))
-    );
+    loginDrafts.every((d) => {
+      if (d.login_id.trim() === "" || d.role_id === "" || Number.isNaN(Number(d.role_id))) return false;
+      const isNewLogin = !loginExistsGlobally(d.login_id.trim());
+      if (isNewLogin && (!d.name.trim() || !d.password.trim())) return false;
+      return true;
+    });
 
   function addDiscountDraftRow() {
     setDiscountDrafts((prev) => [...prev, newDiscountDraft()]);
@@ -626,7 +727,9 @@ export function AdminDealersPage() {
           <p className="view-vehicles-hint">
             Assignments in <code>login_roles_ref</code> for this dealer, with <code>login_ref</code> contact fields.
             Active flag is stored on <code>login_ref</code> (applies to all rows for that login). Use <strong>Add</strong> for new
-            rows, then <strong>Save changes</strong> to store them.
+            logins or role assignments, then <strong>Save changes</strong>. Password shows as **** for existing logins; leave blank to
+            keep the current password. Phone, email, and password apply to the login account and are shared across all role rows for
+            that login id (editable on the first row only).
           </p>
           {catalogError ? <p className="view-vehicles-error">{catalogError}</p> : null}
           {loginSaveError ? <p className="view-vehicles-error">{loginSaveError}</p> : null}
@@ -654,32 +757,98 @@ export function AdminDealersPage() {
               <thead>
                 <tr>
                   <th>Login id</th>
+                  <th>Password</th>
                   <th>Name</th>
                   <th>Phone</th>
                   <th>Email</th>
                   <th>Role</th>
                   <th>Active</th>
-                  <th aria-label="Actions" />
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {logins.length === 0 && loginDrafts.length === 0 ? (
+                {visibleLogins.length === 0 && loginDrafts.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="view-vehicles-table-empty">
+                    <td colSpan={8} className="view-vehicles-table-empty">
                       No login rows for this dealer.
                     </td>
                   </tr>
                 ) : null}
-                {logins.map((row) => {
+                {visibleLogins.map((row) => {
                   const roleVal = editRoleByLrrId[row.login_roles_ref_id] ?? row.role_id;
                   const activeVal =
                     activeByLoginId[row.login_id] ?? normalizeLoginActive(row.login_active_flag);
+                  const phoneVal =
+                    phoneByLoginId[row.login_id] ?? (row.login_phone != null ? String(row.login_phone) : "");
+                  const emailVal =
+                    emailByLoginId[row.login_id] ?? (row.login_email != null ? String(row.login_email) : "");
+                  const isPrimaryContactRow =
+                    firstLrrIdByLoginId[row.login_id] === row.login_roles_ref_id;
                   return (
                     <tr key={row.login_roles_ref_id}>
                       <td>{row.login_id}</td>
+                      <td>
+                        {isPrimaryContactRow ? (
+                          <input
+                            type="password"
+                            className="view-vehicles-kv-input admin-dealers-discount-cell-input"
+                            value={passwordByLoginId[row.login_id] ?? ""}
+                            onChange={(e) => {
+                              setPasswordByLoginId((prev) => ({ ...prev, [row.login_id]: e.target.value }));
+                              setLoginDirty(true);
+                            }}
+                            placeholder="****"
+                            disabled={busy || savingLogins}
+                            autoComplete="new-password"
+                            aria-label={`Password for ${row.login_id}`}
+                          />
+                        ) : (
+                          <span className="view-vehicles-table-muted" aria-label={`Password for ${row.login_id}`}>
+                            ****
+                          </span>
+                        )}
+                      </td>
                       <td>{formatCell(row.login_display_name)}</td>
-                      <td>{formatCell(row.login_phone)}</td>
-                      <td>{formatCell(row.login_email)}</td>
+                      <td>
+                        {isPrimaryContactRow ? (
+                          <input
+                            type="text"
+                            className="view-vehicles-kv-input admin-dealers-discount-cell-input"
+                            value={phoneVal}
+                            onChange={(e) => {
+                              setPhoneByLoginId((prev) => ({ ...prev, [row.login_id]: e.target.value }));
+                              setLoginDirty(true);
+                            }}
+                            disabled={busy || savingLogins}
+                            autoComplete="off"
+                            aria-label={`Phone for ${row.login_id}`}
+                          />
+                        ) : (
+                          <span className="view-vehicles-table-muted" title="Same as first row for this login">
+                            {phoneVal.trim() !== "" ? phoneVal : "—"}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        {isPrimaryContactRow ? (
+                          <input
+                            type="text"
+                            className="view-vehicles-kv-input admin-dealers-discount-cell-input"
+                            value={emailVal}
+                            onChange={(e) => {
+                              setEmailByLoginId((prev) => ({ ...prev, [row.login_id]: e.target.value }));
+                              setLoginDirty(true);
+                            }}
+                            disabled={busy || savingLogins}
+                            autoComplete="off"
+                            aria-label={`Email for ${row.login_id}`}
+                          />
+                        ) : (
+                          <span className="view-vehicles-table-muted" title="Same as first row for this login">
+                            {emailVal.trim() !== "" ? emailVal : "—"}
+                          </span>
+                        )}
+                      </td>
                       <td>
                         <select
                           className="view-vehicles-kv-select admin-dealers-active-select"
@@ -717,31 +886,81 @@ export function AdminDealersPage() {
                           <option value="N">N</option>
                         </select>
                       </td>
-                      <td />
+                      <td className="admin-dealers-actions-cell">
+                        <button
+                          type="button"
+                          className="subdealer-challan-row-delete"
+                          aria-label={`Remove assignment for ${row.login_id}`}
+                          onClick={() => markLoginRowDeleted(row.login_roles_ref_id)}
+                          disabled={busy || savingLogins}
+                        >
+                          ×
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
-                {loginDrafts.map((dr) => (
+                {loginDrafts.map((dr) => {
+                  const isNewLogin = dr.login_id.trim() !== "" && !loginExistsGlobally(dr.login_id);
+                  return (
                   <tr key={dr.tempId} className="admin-dealers-discount-draft-row">
                     <td>
-                      <select
-                        className="view-vehicles-kv-select admin-dealers-active-select"
+                      <input
+                        type="text"
+                        className="view-vehicles-kv-input admin-dealers-discount-cell-input"
                         value={dr.login_id}
                         onChange={(e) => updateLoginDraft(dr.tempId, { login_id: e.target.value })}
                         disabled={savingLogins}
-                        aria-label="Login"
-                      >
-                        <option value="">Select login…</option>
-                        {loginCatalog.map((l) => (
-                          <option key={l.login_id} value={l.login_id}>
-                            {l.login_id}
-                            {l.display_name != null && String(l.display_name).trim() !== "" ? ` — ${l.display_name}` : ""}
-                          </option>
-                        ))}
-                      </select>
+                        autoComplete="off"
+                        aria-label="Login id"
+                        placeholder="Login id"
+                      />
                     </td>
-                    <td colSpan={3} className="view-vehicles-table-muted">
-                      New assignment
+                    <td>
+                      <input
+                        type="password"
+                        className="view-vehicles-kv-input admin-dealers-discount-cell-input"
+                        value={dr.password}
+                        onChange={(e) => updateLoginDraft(dr.tempId, { password: e.target.value })}
+                        disabled={savingLogins}
+                        autoComplete="new-password"
+                        aria-label="Password"
+                        placeholder={isNewLogin ? "Required" : "Optional"}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        className="view-vehicles-kv-input admin-dealers-discount-cell-input"
+                        value={dr.name}
+                        onChange={(e) => updateLoginDraft(dr.tempId, { name: e.target.value })}
+                        disabled={savingLogins}
+                        autoComplete="off"
+                        aria-label="Name"
+                        placeholder={isNewLogin ? "Required" : "Existing login"}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        className="view-vehicles-kv-input admin-dealers-discount-cell-input"
+                        value={dr.phone}
+                        onChange={(e) => updateLoginDraft(dr.tempId, { phone: e.target.value })}
+                        disabled={savingLogins}
+                        autoComplete="off"
+                        aria-label="Phone"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        className="view-vehicles-kv-input admin-dealers-discount-cell-input"
+                        value={dr.email}
+                        onChange={(e) => updateLoginDraft(dr.tempId, { email: e.target.value })}
+                        disabled={savingLogins}
+                        autoComplete="off"
+                        aria-label="Email"
+                      />
                     </td>
                     <td>
                       <select
@@ -782,18 +1001,20 @@ export function AdminDealersPage() {
                         <option value="N">N</option>
                       </select>
                     </td>
-                    <td>
+                    <td className="admin-dealers-actions-cell">
                       <button
                         type="button"
-                        className="app-button app-button--ghost"
+                        className="subdealer-challan-row-delete"
+                        aria-label="Remove draft row"
                         onClick={() => removeLoginDraft(dr.tempId)}
                         disabled={savingLogins}
                       >
-                        Remove
+                        ×
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

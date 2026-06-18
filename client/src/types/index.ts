@@ -10,8 +10,7 @@ export type Page =
   | "sales-reports"
   | "admin-tools"
   | "admin-dealers"
-  | "admin-usage"
-  | "contact-us";
+  | "admin-usage";
 
 export type AddSalesStep =
   | "upload-scans"

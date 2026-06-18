@@ -31,3 +31,53 @@
   text-align: right;
 }
 
+.admin-staging-tools {
+  padding-right: 11rem;
+}
+
+.admin-staging-tools-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.admin-staging-tools-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.admin-staging-tools-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  color: #344054;
+}
+
+.admin-staging-tools-field select,
+.admin-staging-tools-field input {
+  min-width: 12rem;
+}
+
+.admin-staging-tools-split {
+  margin-top: 0.5rem;
+}
+
+.admin-staging-tools-detail {
+  margin-top: 0.75rem;
+}
+
+.admin-staging-tools-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.add-sales-v2-dl--compact {
+  margin-top: 0.5rem;
+}
+

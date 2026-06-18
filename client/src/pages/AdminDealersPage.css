@@ -94,6 +94,12 @@
   font-size: 13px;
 }
 
+.admin-dealers-actions-cell {
+  text-align: center;
+  vertical-align: middle;
+  width: 3rem;
+}
+
 .admin-dealers-modal-backdrop {
   position: fixed;
   inset: 0;

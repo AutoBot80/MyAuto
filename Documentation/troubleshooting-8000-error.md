@@ -379,6 +379,22 @@ pip install argon2-cffi
 sudo systemctl restart saathi-api
 ```
 
+### Admin Dealers → Logins: password save returns 500/503
+
+Saving phone/email works but password change fails → the upsert path calls `hash_password` (argon2). On EC2:
+
+```bash
+source /opt/saathi/venv/bin/activate
+cd /opt/saathi/backend
+python3 -c "from app.security.passwords import hash_password; print(hash_password('test')[:24])"
+```
+
+If that raises `MissingBackendError`, run `pip install -r requirements.txt` (or `pip install argon2-cffi`) and `sudo systemctl restart saathi-api`. After the fix, a missing backend returns **503** with an explicit message instead of a generic **500**.
+
+```bash
+sudo journalctl -u saathi-api -n 100 --no-pager | grep -i -E 'MissingBackend|argon2|hash_password'
+```
+
 ### Frontend rebuild and deploy (from Windows)
 
 ```powershell
