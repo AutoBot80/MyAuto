@@ -24,6 +24,7 @@ from app.config import (
     DMS_SIEBEL_INTER_ACTION_DELAY_MS,
     DMS_SIEBEL_POST_GOTO_WAIT_MS,
 )
+from app.repositories import form_dms as form_dms_repo
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
     _MOBILE_DOM_EVAL_JS,
@@ -8337,6 +8338,71 @@ def _select_dropdown_by_label_on_frame(
     return False
 
 
+def _dms_values_dealer_id(dms_values: dict) -> int | None:
+    raw = dms_values.get("dealer_id")
+    if raw is None:
+        row = dms_values.get("row")
+        if isinstance(row, dict):
+            raw = row.get("dealer_id")
+    try:
+        did = int(raw) if raw is not None else None
+        return did if did and did > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_add_enquiry_address_fields(
+    dms_values: dict,
+    dealer_addr: dict[str, str],
+) -> tuple[str, str, str, str]:
+    """
+    Merge customer OCR address with ``dealer_ref`` defaults for Add Enquiry only.
+
+    Returns ``(state_use, dist_use, tehsil_use, city_use)``.
+    """
+    state_customer = (dms_values.get("state") or "").strip()
+    district_customer = (dms_values.get("district") or "").strip()
+    tehsil = (dms_values.get("tehsil") or "").strip()
+    city_customer = (dms_values.get("city") or "").strip()
+
+    dealer_city = (dealer_addr.get("city") or "").strip()
+    dealer_state = (dealer_addr.get("state") or "").strip()
+    dealer_district = (dealer_addr.get("district") or "").strip()
+
+    state_use = dealer_state or state_customer
+    dist_use = dealer_district or district_customer or city_customer
+    tehsil_use = dealer_city or tehsil or city_customer
+    city_use = dealer_city or city_customer
+    return state_use, dist_use, tehsil_use, city_use
+
+
+def _enquiry_dealer_address_defaults(dms_values: dict) -> dict[str, str]:
+    did = _dms_values_dealer_id(dms_values)
+    if did is None:
+        did = int(DEALER_ID)
+    return form_dms_repo.lookup_dealer_enquiry_address(did)
+
+
+def _normalize_phone_last10(raw: str) -> str:
+    digits = "".join(c for c in (raw or "") if c.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def _add_enquiry_landline_to_fill(mobile: str, landline: str) -> tuple[str, bool]:
+    """
+    Returns ``(value_for_siebel, required)`` for Add Enquiry Landline only.
+
+    Skip when alternate is blank or the same 10 digits as mobile.
+    """
+    mob = _normalize_phone_last10(mobile)
+    alt = _normalize_phone_last10(landline)
+    if alt and mob and alt != mob:
+        return alt, True
+    if alt and not mob:
+        return alt, True
+    return "", False
+
+
 def _add_enquiry_opportunity(
     page: Page,
     dms_values: dict,
@@ -8792,11 +8858,18 @@ def _add_enquiry_opportunity(
     first = (dms_values.get("first_name") or "").strip()
     last = (dms_values.get("last_name") or "").strip() or "."
     mobile = (dms_values.get("mobile_phone") or "").strip()
-    landline = (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()
-    state = (dms_values.get("state") or "").strip()
-    district = (dms_values.get("district") or "").strip()
-    tehsil = (dms_values.get("tehsil") or "").strip()
-    city = (dms_values.get("city") or "").strip()
+    dealer_addr = _enquiry_dealer_address_defaults(dms_values)
+    state_use, dist_use, tehsil_use, city_use = _resolve_add_enquiry_address_fields(
+        dms_values,
+        dealer_addr,
+    )
+    if (dealer_addr.get("city") or dealer_addr.get("state") or dealer_addr.get("district")):
+        note(
+            "Add Enquiry: address defaults from dealer_ref — "
+            f"state={state_use!r}, district={dist_use!r}, "
+            f"tehsil/city={tehsil_use!r} "
+            f"(dealer_id={_dms_values_dealer_id(dms_values)})."
+        )
     addr = _address_line1_for_siebel_fill(dms_values.get("address_line_1") or "")
     pin = (dms_values.get("pin_code") or "").strip()
     age = (dms_values.get("age") or "").strip()
@@ -8813,9 +8886,26 @@ def _add_enquiry_opportunity(
         return False, "Could not set Contact Last Name.", ""
     if not try_field(("Mobile Phone", "Mobile Phone #", "Cellular Phone"), mobile, required=True):
         return False, "Could not set Mobile Phone.", ""
-    landline_use = landline or mobile
-
-    if not try_field(("Landline #", "Landline", "Home Phone #", "Home Phone", "Land Line", "Alternate Phone", "Alternate Number"), landline_use, required=True):
+    landline_raw = (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()
+    landline_use, landline_required = _add_enquiry_landline_to_fill(mobile, landline_raw)
+    if not landline_required:
+        note(
+            "Add Enquiry: Landline skipped "
+            f"(alternate blank or same as mobile {mobile!r})."
+        )
+    if not try_field(
+        (
+            "Landline #",
+            "Landline",
+            "Home Phone #",
+            "Home Phone",
+            "Land Line",
+            "Alternate Phone",
+            "Alternate Number",
+        ),
+        landline_use,
+        required=landline_required,
+    ):
         return False, "Could not set Landline.", ""
     if not try_field(("Email", "Email Address", "E-mail"), "NA", required=True):
         return False, "Could not set Email.", ""
@@ -8826,15 +8916,13 @@ def _add_enquiry_opportunity(
     if not try_field(("UIN No.", "UIN Number", "UIN No"), aadhar, required=True):
         return False, "Could not set UIN No.", ""
 
-    if not try_field(("State",), state, required=True):
+    if not try_field(("State",), state_use, required=True):
         return False, "Could not set State.", ""
-    dist_use = district or city
-    tehsil_use = tehsil or city
     if not try_field(("District",), dist_use, required=True):
         return False, "Could not set District.", ""
     if not try_field(("Tehsil", "Tehsil/Taluka", "Taluka"), tehsil_use, required=True):
         return False, "Could not set Tehsil/Taluka.", ""
-    if not try_field(("City", "City/Town/Village"), city, required=True):
+    if not try_field(("City", "City/Town/Village"), city_use, required=True):
         return False, "Could not set City/Town/Village.", ""
     if not _city_pick_any_then_ok(enq_frame):
         return False, "Could not pick City/Town/Village from search sub form.", ""

@@ -12,6 +12,7 @@ from typing import Any
 
 from app.db import get_connection
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
+from app.services.fill_rto_service import _district_from_dealer_rto
 
 
 def _st(val: object | None) -> str:
@@ -39,6 +40,49 @@ def lookup_dealer_name(dealer_id: int | None) -> str:
             return _st(row[0])
     finally:
         conn.close()
+
+
+def lookup_dealer_enquiry_address(dealer_id: int | None) -> dict[str, str]:
+    """
+    Dealer defaults for Add Enquiry opportunity address fields only.
+
+    Returns keys ``city``, ``state`` (uppercased), ``district`` (parsed from ``rto_name``).
+    """
+    empty: dict[str, str] = {"city": "", "state": "", "district": ""}
+    if dealer_id is None:
+        return empty
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(TRIM(city::text), '') AS city,
+                    COALESCE(TRIM(state::text), '') AS state,
+                    COALESCE(TRIM(rto_name::text), '') AS rto_name
+                FROM dealer_ref
+                WHERE dealer_id = %s
+                """,
+                (int(dealer_id),),
+            )
+            row = cur.fetchone()
+            if not row:
+                return empty
+            if isinstance(row, dict):
+                city = _st(row.get("city"))
+                state = _st(row.get("state"))
+                rto_name = _st(row.get("rto_name"))
+            else:
+                city = _st(row[0])
+                state = _st(row[1])
+                rto_name = _st(row[2])
+    finally:
+        conn.close()
+    return {
+        "city": city,
+        "state": state.upper() if state else "",
+        "district": _district_from_dealer_rto(rto_name),
+    }
 
 
 def build_dms_fill_row_from_staging_payload(payload: dict[str, Any]) -> dict[str, Any]:

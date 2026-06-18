@@ -1,0 +1,139 @@
+"""Add Enquiry opportunity form — dealer_ref address defaults."""
+
+from unittest.mock import MagicMock, patch
+
+from app.repositories import form_dms as form_dms_repo
+from app.services.hero_dms_playwright_customer import (
+    _add_enquiry_landline_to_fill,
+    _dms_values_dealer_id,
+    _enquiry_dealer_address_defaults,
+    _resolve_add_enquiry_address_fields,
+)
+
+
+def test_dms_values_dealer_id_from_top_level() -> None:
+    assert _dms_values_dealer_id({"dealer_id": 100003}) == 100003
+
+
+def test_dms_values_dealer_id_from_row() -> None:
+    assert _dms_values_dealer_id({"row": {"dealer_id": 100001}}) == 100001
+
+
+def test_dms_values_dealer_id_invalid() -> None:
+    assert _dms_values_dealer_id({"dealer_id": "x"}) is None
+    assert _dms_values_dealer_id({}) is None
+
+
+def test_resolve_add_enquiry_address_arora_subdealer() -> None:
+    """100003: KAMAN tehsil/city, Bharatpur district, RAJASTHAN state."""
+    dms = {
+        "state": "Rajasthan",
+        "district": "",
+        "tehsil": "",
+        "city": "Bharatpur",
+    }
+    dealer = {
+        "city": "KAMAN",
+        "state": "RAJASTHAN",
+        "district": "Bharatpur",
+    }
+    state, dist, tehsil, city = _resolve_add_enquiry_address_fields(dms, dealer)
+    assert state == "RAJASTHAN"
+    assert dist == "Bharatpur"
+    assert tehsil == "KAMAN"
+    assert city == "KAMAN"
+
+
+def test_resolve_add_enquiry_address_arya_parent() -> None:
+    """100001: all dealer defaults when customer city is also Bharatpur."""
+    dms = {
+        "state": "Rajasthan",
+        "district": "",
+        "tehsil": "",
+        "city": "Bharatpur",
+    }
+    dealer = {
+        "city": "Bharatpur",
+        "state": "RAJASTHAN",
+        "district": "Bharatpur",
+    }
+    state, dist, tehsil, city = _resolve_add_enquiry_address_fields(dms, dealer)
+    assert state == "RAJASTHAN"
+    assert dist == "Bharatpur"
+    assert tehsil == "Bharatpur"
+    assert city == "Bharatpur"
+
+
+def test_resolve_add_enquiry_address_customer_fallback_when_dealer_blank() -> None:
+    dms = {
+        "state": "RAJASTHAN",
+        "district": "Jaipur",
+        "tehsil": "Amber",
+        "city": "Jaipur",
+    }
+    dealer = {"city": "", "state": "", "district": ""}
+    state, dist, tehsil, city = _resolve_add_enquiry_address_fields(dms, dealer)
+    assert state == "RAJASTHAN"
+    assert dist == "Jaipur"
+    assert tehsil == "Amber"
+    assert city == "Jaipur"
+
+
+def test_resolve_add_enquiry_district_falls_back_to_customer_city() -> None:
+    dms = {"state": "RAJASTHAN", "district": "", "tehsil": "", "city": "Bharatpur"}
+    dealer = {"city": "KAMAN", "state": "RAJASTHAN", "district": ""}
+    _, dist, _, _ = _resolve_add_enquiry_address_fields(dms, dealer)
+    assert dist == "Bharatpur"
+
+
+@patch("app.repositories.form_dms.get_connection")
+def test_lookup_dealer_enquiry_address_parses_rto_district(mock_get_conn: MagicMock) -> None:
+    mock_cur = MagicMock()
+    mock_cur.fetchone.return_value = {
+        "city": "KAMAN",
+        "state": "Rajasthan",
+        "rto_name": "RTO-Bharatpur",
+    }
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    mock_get_conn.return_value = mock_conn
+
+    out = form_dms_repo.lookup_dealer_enquiry_address(100003)
+    assert out == {
+        "city": "KAMAN",
+        "state": "RAJASTHAN",
+        "district": "Bharatpur",
+    }
+
+
+@patch("app.repositories.form_dms.lookup_dealer_enquiry_address")
+def test_enquiry_dealer_address_defaults_uses_row_dealer_id(mock_lookup: MagicMock) -> None:
+    mock_lookup.return_value = {"city": "KAMAN", "state": "RAJASTHAN", "district": "Bharatpur"}
+    out = _enquiry_dealer_address_defaults({"row": {"dealer_id": 100003}})
+    mock_lookup.assert_called_once_with(100003)
+    assert out["city"] == "KAMAN"
+
+
+def test_add_enquiry_landline_skip_blank_alternate() -> None:
+    value, required = _add_enquiry_landline_to_fill("9414687819", "")
+    assert value == ""
+    assert required is False
+
+
+def test_add_enquiry_landline_skip_same_as_mobile() -> None:
+    value, required = _add_enquiry_landline_to_fill("9414687819", "9414687819")
+    assert value == ""
+    assert required is False
+
+
+def test_add_enquiry_landline_fill_different_alternate() -> None:
+    value, required = _add_enquiry_landline_to_fill("9414687819", "9568564536")
+    assert value == "9568564536"
+    assert required is True
+
+
+def test_add_enquiry_landline_normalizes_formatted_alternate() -> None:
+    value, required = _add_enquiry_landline_to_fill("9414687819", "+91 95685 64536")
+    assert value == "9568564536"
+    assert required is True
