@@ -1,12 +1,22 @@
 """Form 20 cover slot assignment and orphan Details rescue."""
 
+from unittest.mock import patch
+
+from PIL import Image
+
 from app.services.page_classifier import (
     PAGE_TYPE_AADHAR,
     PAGE_TYPE_AADHAR_BACK,
     PAGE_TYPE_DETAILS,
     PAGE_TYPE_FORM_20_COVER,
+    PAGE_TYPE_FORM_20_COVER_BACK,
 )
-from app.services.pre_ocr_service import assign_classified_page_slots
+from app.services.pre_ocr_service import (
+    _rescue_form20_cover_back_slot,
+    assign_classified_page_slots,
+)
+
+HINDI_FORM20_COVER_BACK = "मोटरयान ब्हे निरीक्षण वा प्रमाण पतन"
 
 
 def _ocr_blocks(*page_texts: str) -> str:
@@ -77,3 +87,31 @@ def test_aadhar_back_rescued_as_form20_when_bottom_cues_present() -> None:
     assert slots[PAGE_TYPE_FORM_20_COVER] == 1
     assert slots[PAGE_TYPE_DETAILS] == 2
     assert unused == []
+
+
+def test_unused_rescued_as_form20_cover_back() -> None:
+    img = Image.new("RGB", (400, 600), color=(255, 255, 255))
+    page_images = {3: img}
+    page_type_to_idx: dict[str, int] = {}
+    unused = [3]
+    with patch(
+        "app.services.pre_ocr_service._tesseract_form20_cover_back_probe",
+        return_value=HINDI_FORM20_COVER_BACK,
+    ):
+        updated = _rescue_form20_cover_back_slot(page_type_to_idx, unused, page_images)
+    assert page_type_to_idx[PAGE_TYPE_FORM_20_COVER_BACK] == 3
+    assert updated == []
+
+
+def test_form20_cover_back_not_promoted_without_probe_match() -> None:
+    img = Image.new("RGB", (400, 600), color=(255, 255, 255))
+    page_images = {2: img}
+    page_type_to_idx: dict[str, int] = {}
+    unused = [2]
+    with patch(
+        "app.services.pre_ocr_service._tesseract_form20_cover_back_probe",
+        return_value="random unused noise",
+    ):
+        updated = _rescue_form20_cover_back_slot(page_type_to_idx, unused, page_images)
+    assert PAGE_TYPE_FORM_20_COVER_BACK not in page_type_to_idx
+    assert updated == [2]

@@ -657,6 +657,15 @@ export function AddSalesInProcessPanel({
     const raw = detailPayload?.insurance as Record<string, unknown> | undefined;
     return cpaPolicyFromInsuranceRaw(raw) || "—";
   }, [detailPayload]);
+  const cpaRequiredIsYes = useMemo(() => {
+    const raw =
+      detailEditDraft?.cpi_reqd ??
+      stagingCpiReqd ??
+      elig?.staging_cpi_reqd ??
+      elig?.effective_cpi_reqd ??
+      "N";
+    return normalizeCpaRequiredFlag(raw) === "Y";
+  }, [detailEditDraft?.cpi_reqd, stagingCpiReqd, elig?.staging_cpi_reqd, elig?.effective_cpi_reqd]);
 
   return (
     <div className="add-sales-in-process">
@@ -1140,10 +1149,6 @@ export function AddSalesInProcessPanel({
                     </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
-                    <dt>Hero CPA</dt>
-                    <dd className="add-sales-in-process-dd--readonly">{heroCpaSalesDisplay}</dd>
-                  </div>
-                  <div className="add-sales-v2-dl-row">
                     <dt>Policy#</dt>
                     <dd className="add-sales-in-process-dd--readonly">{ins?.policy_num?.trim() ? ins.policy_num : "—"}</dd>
                   </div>
@@ -1175,14 +1180,22 @@ export function AddSalesInProcessPanel({
                       )}
                     </dd>
                   </div>
-                  <div className="add-sales-v2-dl-row">
-                    <dt>CPA Provider</dt>
-                    <dd className="add-sales-in-process-dd--readonly">{cpaProviderSalesDisplay}</dd>
-                  </div>
-                  <div className="add-sales-v2-dl-row">
-                    <dt>CPA Policy#</dt>
-                    <dd className="add-sales-in-process-dd--readonly">{cpaPolicySalesDisplay}</dd>
-                  </div>
+                  {cpaRequiredIsYes && (
+                    <>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>Hero CPA</dt>
+                        <dd className="add-sales-in-process-dd--readonly">{heroCpaSalesDisplay}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>CPA Provider</dt>
+                        <dd className="add-sales-in-process-dd--readonly">{cpaProviderSalesDisplay}</dd>
+                      </div>
+                      <div className="add-sales-v2-dl-row">
+                        <dt>CPA Policy#</dt>
+                        <dd className="add-sales-in-process-dd--readonly">{cpaPolicySalesDisplay}</dd>
+                      </div>
+                    </>
+                  )}
                 </dl>
               </div>
             </div>

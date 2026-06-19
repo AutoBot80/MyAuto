@@ -73,6 +73,7 @@ from app.services.page_classifier import (
     extract_page_text_from_pre_ocr_blocks,
     form20_cover_detected,
     form20_cover_detected_in_top,
+    form20_cover_back_detected,
     form20_weak_hint_in_text,
     maybe_swap_aadhar_page_indices,
     page_credible_aadhaar_back,
@@ -83,10 +84,12 @@ from app.services.page_classifier import (
     PAGE_TYPE_AADHAR_COMBINED,
     PAGE_TYPE_DETAILS,
     PAGE_TYPE_FORM_20_COVER,
+    PAGE_TYPE_FORM_20_COVER_BACK,
     PAGE_TYPE_INSURANCE,
     PAGE_TYPE_UNUSED,
     FILENAME_AADHAR_FRONT,
     FILENAME_FORM_20_COVER,
+    FILENAME_FORM_20_COVER_BACK,
     FILENAME_SALES_DETAIL_SHEET_PDF,
 )
 
@@ -1071,6 +1074,20 @@ def _tesseract_form20_probe(img: Image.Image) -> str:
     return "\n---\n".join(parts)
 
 
+FORM20_COVER_BACK_PROBE_BOTTOM_FRACTION = 0.5
+
+
+def _tesseract_form20_cover_back_probe(img: Image.Image) -> str:
+    """Hindi-primary Tesseract on bottom half for Form 20 cover back (inspection certificate)."""
+    return _tesseract_ocr_vertical_band(
+        img,
+        from_top=False,
+        fraction=FORM20_COVER_BACK_PROBE_BOTTOM_FRACTION,
+        lang=FORM20_TESSERACT_LANG,
+        psm=FORM20_TESSERACT_PSM,
+    )
+
+
 def _page_text_enriched_for_form20(
     full_ocr_text: str,
     page_idx: int,
@@ -1818,7 +1835,13 @@ def _process_same_page_aadhar(page_bytes: bytes, out_dir: Path) -> bool:
 
 def orient_common_sale_jpegs(subdir: Path) -> None:
     """Run :func:`correct_image_orientation_upright` on Details (legacy JPEG) / Insurance / Financing / Form 20 cover."""
-    for name in ("Details.jpg", "Insurance.jpg", "Financing.jpg", "Form_20_Cover_Page.jpg"):
+    for name in (
+        "Details.jpg",
+        "Insurance.jpg",
+        "Financing.jpg",
+        "Form_20_Cover_Page.jpg",
+        "Form_20_Cover_Back_Page.jpg",
+    ):
         p = subdir / name
         if p.is_file():
             p.write_bytes(correct_image_orientation_upright(p.read_bytes()))
@@ -2047,6 +2070,50 @@ def _resolve_form20_cover_idx(
             if form20_cover_detected(text):
                 return idx
     return None
+
+
+def _resolve_form20_cover_back_idx(
+    unused_indices: list[int],
+    page_images: dict[int, Image.Image] | None,
+    *,
+    exclude_indices: set[int] | None = None,
+) -> int | None:
+    """Pick the first unused page whose bottom-half Hindi OCR matches Form 20 cover back."""
+    exclude = exclude_indices or set()
+    if not page_images:
+        return None
+    for idx in sorted(unused_indices):
+        if idx in exclude:
+            continue
+        if idx not in page_images:
+            continue
+        try:
+            probe_text = _tesseract_form20_cover_back_probe(page_images[idx])
+        except Exception as exc:
+            logger.warning("Form 20 cover back Hindi probe failed page %d: %s", idx + 1, exc)
+            probe_text = ""
+        if probe_text and form20_cover_back_detected(probe_text):
+            logger.info("Rescued UNUSED page %d -> Form_20_Cover_Back_Page", idx + 1)
+            return idx
+    return None
+
+
+def _rescue_form20_cover_back_slot(
+    page_type_to_idx: dict[str, int],
+    unused_indices: list[int],
+    page_images: dict[int, Image.Image] | None,
+) -> list[int]:
+    """Promote at most one unused page to Form 20 cover back; return updated unused list."""
+    if PAGE_TYPE_FORM_20_COVER_BACK in page_type_to_idx:
+        return unused_indices
+    exclude = set(page_type_to_idx.values())
+    back_idx = _resolve_form20_cover_back_idx(
+        unused_indices, page_images, exclude_indices=exclude
+    )
+    if back_idx is None:
+        return unused_indices
+    page_type_to_idx[PAGE_TYPE_FORM_20_COVER_BACK] = back_idx
+    return [u for u in unused_indices if u != back_idx]
 
 
 def _correct_aadhar_front_back_indices(
@@ -2290,6 +2357,16 @@ def _build_multi_customer_bundles(
     )
     if form20_idx is not None:
         bundles[0]["form20_cover_idx"] = form20_idx
+        bundle_used.add(form20_idx)
+
+    _, unused_indices = assign_classified_page_slots(
+        classifications, full_ocr_text, page_images
+    )
+    form20_back_idx = _resolve_form20_cover_back_idx(
+        unused_indices, page_images, exclude_indices=bundle_used
+    )
+    if form20_back_idx is not None:
+        bundles[0]["form20_cover_back_idx"] = form20_back_idx
 
     return bundles
 
@@ -2399,6 +2476,18 @@ def _split_pdf_multi_customer_to_sale_dirs(
                 FILENAME_FORM_20_COVER,
             )
 
+        f20_back_idx = bundle.get("form20_cover_back_idx")
+        if f20_back_idx is not None and f20_back_idx in page_images:
+            page_images[f20_back_idx].save(
+                for_ocr_dir / FILENAME_FORM_20_COVER_BACK, "JPEG", quality=90
+            )
+            logger.info(
+                "Multi-customer: bundle %d page %d -> %s",
+                i + 1,
+                f20_back_idx + 1,
+                FILENAME_FORM_20_COVER_BACK,
+            )
+
         page_type_to_idx_m: dict[str, int] = {}
         if bundle.get("aadhar_front_idx") is not None:
             page_type_to_idx_m[PAGE_TYPE_AADHAR] = bundle["aadhar_front_idx"]
@@ -2410,6 +2499,8 @@ def _split_pdf_multi_customer_to_sale_dirs(
             page_type_to_idx_m[PAGE_TYPE_INSURANCE] = bundle["insurance_idx"]
         if f20_idx is not None:
             page_type_to_idx_m[PAGE_TYPE_FORM_20_COVER] = f20_idx
+        if f20_back_idx is not None:
+            page_type_to_idx_m[PAGE_TYPE_FORM_20_COVER_BACK] = f20_back_idx
         combined_m: set[int] = set()
         if fi is not None and bi is not None and fi == bi:
             combined_m.add(fi)
@@ -2693,6 +2784,10 @@ def _split_pdf_by_classification(
     else:
         pages, _osd, _timings = _pdf_to_page_images(pdf_path)
         page_images = {idx: im for idx, im in pages}
+
+    unused_indices = _rescue_form20_cover_back_slot(
+        page_type_to_idx, unused_indices, page_images
+    )
 
     # Same per-page rasters as pre-OCR ``--- Page N ---`` (Tesseract order) for operator review.
     ci_dir = for_ocr_dir / "classify_inputs"

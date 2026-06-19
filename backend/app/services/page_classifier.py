@@ -16,6 +16,7 @@ PAGE_TYPE_AADHAR_COMBINED = "Aadhar_combined"  # Single page with both front and
 PAGE_TYPE_DETAILS = "Details"
 PAGE_TYPE_INSURANCE = "Insurance"
 PAGE_TYPE_FORM_20_COVER = "Form_20_cover"
+PAGE_TYPE_FORM_20_COVER_BACK = "Form_20_cover_back"
 PAGE_TYPE_UNUSED = "unused"
 
 # Sale-folder output names after pre-OCR / classification (root of mobile_ddmmyy/)
@@ -24,6 +25,7 @@ FILENAME_AADHAR_BACK = "Aadhar_back.jpg"
 FILENAME_SALES_DETAIL_SHEET_PDF = "Sales_Detail_Sheet.pdf"
 FILENAME_INSURANCE = "Insurance.jpg"
 FILENAME_FORM_20_COVER = "Form_20_Cover_Page.jpg"
+FILENAME_FORM_20_COVER_BACK = "Form_20_Cover_Back_Page.jpg"
 # Legacy manual-upload names (still accepted downstream)
 LEGACY_AADHAR_FRONT_JPG = "Aadhar.jpg"
 LEGACY_DETAILS_JPG = "Details.jpg"
@@ -34,6 +36,7 @@ PAGE_TYPE_TO_FILENAME = {
     PAGE_TYPE_DETAILS: FILENAME_SALES_DETAIL_SHEET_PDF,
     PAGE_TYPE_INSURANCE: FILENAME_INSURANCE,
     PAGE_TYPE_FORM_20_COVER: FILENAME_FORM_20_COVER,
+    PAGE_TYPE_FORM_20_COVER_BACK: FILENAME_FORM_20_COVER_BACK,
 }
 
 # Form 20 cover (Hindi/English registration application).
@@ -118,6 +121,32 @@ def form20_weak_hint_in_text(text: str) -> bool:
     if not t.strip():
         return False
     return any(pat.search(t) for pat in _FORM20_WEAK_HINT_PATTERNS)
+
+
+# Form 20 cover **back** (Hindi inspection-certificate block on lower half).
+_FORM_20_COVER_BACK_STRONG_PATTERNS = [
+    re.compile(r"मोटर\s*यान.*निरीक्ष.*प्रमाण"),
+    re.compile(r"निरीक्षण.*प्रमाण\s*प"),
+    re.compile(r"(?i)certificate.*inspection.*motor"),
+]
+_FORM_20_COVER_BACK_TOKEN_PATTERNS = [
+    re.compile(r"निरीक्षण"),
+    re.compile(r"प्रमाण"),
+    re.compile(r"मोटर"),
+]
+
+
+def form20_cover_back_detected(text: str) -> bool:
+    """True when bottom-half Hindi OCR matches Form 20 cover back (inspection certificate)."""
+    t = (text or "").strip()
+    if len(t) < 8:
+        return False
+    if any(pat.search(t) for pat in _FORM_20_COVER_BACK_STRONG_PATTERNS):
+        return True
+    has_nirikshan = any(pat.search(t) for pat in (_FORM_20_COVER_BACK_TOKEN_PATTERNS[0],))
+    has_praman = any(pat.search(t) for pat in (_FORM_20_COVER_BACK_TOKEN_PATTERNS[1],))
+    has_motor = any(pat.search(t) for pat in (_FORM_20_COVER_BACK_TOKEN_PATTERNS[2],))
+    return has_nirikshan and has_praman and has_motor
 
 
 def page_credible_aadhaar_back(text: str) -> bool:

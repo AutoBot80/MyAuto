@@ -21,6 +21,7 @@ const ALLOWED_FIXED_DEST = new Set([
   "Insurance.jpg",
   "Financing.jpg",
   "Form_20_Cover_Page.jpg",
+  "Form_20_Cover_Back_Page.jpg",
 ]);
 
 function isWindowsReservedStem(stemUpper: string): boolean {

@@ -74,48 +74,76 @@ def find_form20_cover_page(sale_dir: Path) -> Path | None:
     return None
 
 
+def find_form20_cover_back_page(sale_dir: Path) -> Path | None:
+    """Scanned Form 20 cover back page promoted to sale root after pre-OCR."""
+    from app.services.page_classifier import FILENAME_FORM_20_COVER_BACK
+
+    if not sale_dir.is_dir():
+        return None
+    for name in (FILENAME_FORM_20_COVER_BACK, "Form_20_Cover_Back_Page.jpeg"):
+        p = sale_dir / name
+        if p.is_file():
+            return p
+    return None
+
+
+def _insert_raster_or_pdf_page(merged, source: Path) -> None:
+    """Append one raster image or PDF page to an open PyMuPDF document."""
+    import fitz
+
+    suffix = source.suffix.lower()
+    if suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"):
+        cover_pix = fitz.Pixmap(str(source))
+        try:
+            w, h = cover_pix.width, cover_pix.height
+            page = merged.new_page(width=float(w), height=float(h))
+            page.insert_image(page.rect, filename=str(source))
+        finally:
+            cover_pix = None
+        return
+
+    cover_doc = fitz.open(str(source))
+    try:
+        merged.insert_pdf(cover_doc, from_page=0, to_page=-1)
+    finally:
+        cover_doc.close()
+
+
 def build_form20_with_cover_pdf(sale_dir: Path, mobile_10: str) -> Path | None:
     """
-    Merge optional scanned cover (page 1) with DMS Form 20 pages for RTO upload.
+    Merge optional scanned cover pages with DMS Form 20 pages for RTO upload.
 
-    Returns ``{mobile}_Form_20_with_cover.pdf`` when cover exists; else signed DMS Form 20 only.
+    Order: front cover (if any) → back cover (if any) → DMS Form 20 pages.
+    Returns ``{mobile}_Form_20_with_cover.pdf`` when any scanned cover exists; else DMS Form 20 only.
     """
     import fitz
 
     dms = find_form20_pdf(sale_dir, mobile_10)
     cover = find_form20_cover_page(sale_dir)
+    cover_back = find_form20_cover_back_page(sale_dir)
     if dms is None:
         return None
-    if cover is None:
+    if cover is None and cover_back is None:
         return dms
 
     merged_name = f"{mobile_10}_Form_20_with_cover.pdf"
     out = sale_dir / merged_name
     try:
-        cover_mtime = cover.stat().st_mtime
-        dms_mtime = dms.stat().st_mtime
-        if out.is_file() and out.stat().st_mtime >= max(cover_mtime, dms_mtime):
+        source_mtimes = [dms.stat().st_mtime]
+        if cover is not None:
+            source_mtimes.append(cover.stat().st_mtime)
+        if cover_back is not None:
+            source_mtimes.append(cover_back.stat().st_mtime)
+        if out.is_file() and out.stat().st_mtime >= max(source_mtimes):
             return out
     except OSError:
         pass
 
     merged = fitz.open()
     try:
-        cover_suffix = cover.suffix.lower()
-        if cover_suffix in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"):
-            cover_pix = fitz.Pixmap(str(cover))
-            try:
-                w, h = cover_pix.width, cover_pix.height
-                page = merged.new_page(width=float(w), height=float(h))
-                page.insert_image(page.rect, filename=str(cover))
-            finally:
-                cover_pix = None
-        else:
-            cover_doc = fitz.open(str(cover))
-            try:
-                merged.insert_pdf(cover_doc, from_page=0, to_page=-1)
-            finally:
-                cover_doc.close()
+        for scanned in (cover, cover_back):
+            if scanned is not None:
+                _insert_raster_or_pdf_page(merged, scanned)
 
         dms_doc = fitz.open(str(dms))
         try:
