@@ -109,6 +109,6 @@ def test_patch_prefer_insurer_rejects_non_portal_label(admin_client: TestClient)
         mock_cur.fetchone.return_value = (1,)
         r = admin_client.patch(
             "/admin/dealers/100003",
-            json={"prefer_insurer": "National Insurance Co. Ltd", "hero_cpi": "N", "cpi_reqd": "N"},
+            json={"prefer_insurer": "National Insurance Co. Ltd", "hero_cpi": "N", "cpi_reqd": "N", "insurance_pay": "APD"},
         )
     assert r.status_code == 400

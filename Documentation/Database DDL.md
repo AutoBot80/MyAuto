@@ -189,18 +189,19 @@ This document lists the current database tables and their columns. **Executable 
 | `rto_name` | `varchar(128)` | YES |  | Dealer-mapped RTO office name (e.g. `RTO-Bharatpur`) |
 | `prefer_insurer` | `varchar(255)` | YES |  | Optional canonical MISP insurer label; when merged details-sheet insurer fuzzy-matches (≥20%) to this string, **`build_insurance_fill_values`** uses **`prefer_insurer`** for KYC (**`DDL/alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql`**) |
 | `hero_cpi` | `char(1)` | NO | `'N'` | **Y** or **N**: MISP proposal CPA add-on row (label varies — NIC/CPI/Hero CPI); automation checks when **Y**, unchecks when **N** (**`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**) |
+| `insurance_pay` | `varchar(8)` | NO | `'APD'` | **CC** or **APD**: MISP proposal **Payment Mode** dropdown; **100001** seeded **CC**, others **APD** — **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`** |
 | `cpi_reqd` | `char(1)` | NO | `'N'` | **Y** or **N**: whether dealer requires/participates in CPI (separate from **`hero_cpi`**); **Arya Agencies** seeded **Y**, others **N** (**`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**) |
 | `cpa_insurer` | `varchar(512)` | YES |  | Optional CPA third-party portal row (**`ref_type`** = **CPA** on **`master_ref`**); portal login URL stored in **`master_ref.comments`**; composite FK **`fk_dealer_ref_cpa_insurer`** — **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**, greenfield **`DDL/04b_dealer_ref.sql`** |
 
 **Primary key:** `dealer_ref_pkey` on (`dealer_id`)
 
-**Checks:** `chk_dealer_ref_auto_sms_reminders` — `auto_sms_reminders` IN ('Y', 'N'); `chk_dealer_ref_hero_cpi` — `hero_cpi` IN ('Y', 'N'); `chk_dealer_ref_cpi_reqd` — `cpi_reqd` IN ('Y', 'N')
+**Checks:** `chk_dealer_ref_auto_sms_reminders` — `auto_sms_reminders` IN ('Y', 'N'); `chk_dealer_ref_hero_cpi` — `hero_cpi` IN ('Y', 'N'); `chk_dealer_ref_insurance_pay` — `insurance_pay` IN ('CC', 'APD'); `chk_dealer_ref_cpi_reqd` — `cpi_reqd` IN ('Y', 'N')
 
 **Foreign keys:**
 - `fk_dealer_ref_oem`: (`oem_id`) → `oem_ref(oem_id)`
 - `fk_dealer_ref_cpa_insurer`: (`cpa_insurer_ref_type`, `cpa_insurer`) → `master_ref(ref_type, ref_value)` when **`cpa_insurer`** is set (**`DDL/alter/29a_*.sql`**)
 
-**Scripts:** `DDL/04b_dealer_ref.sql` (greenfield); add **`subdealer_type`**, reordered columns on new installs: same file; **upgrade** existing DB: **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**, **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**, **`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**, **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**
+**Scripts:** `DDL/04b_dealer_ref.sql` (greenfield); add **`subdealer_type`**, reordered columns on new installs: same file; **upgrade** existing DB: **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**, **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**, **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`**, **`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**, **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**
 
 ---
 
@@ -360,9 +361,9 @@ This document lists the current database tables and their columns. **Executable 
 
 **Purpose:** Read-only view for Hero/MISP automation: one row per sale (`sales_master`) with `customer_master`, `vehicle_master`, `dealer_ref` / `oem_ref`, and the **latest** `insurance_master` row per `(customer_id, vehicle_id)` (order: `policy_to`, `insurance_year`, `insurance_id`).
 
-**Scripts:** `DDL/alter/10j_form_insurance_view.sql` (initial); **`DDL/alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql`** adds **`prefer_insurer`**; **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`** adds **`hero_cpi`** from **`dealer_ref`** and recreates the view.
+**Scripts:** `DDL/alter/10j_form_insurance_view.sql` (initial); **`DDL/alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql`** adds **`prefer_insurer`**; **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`** adds **`hero_cpi`** from **`dealer_ref`** and recreates the view; **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`** adds **`insurance_pay`**.
 
-**Important columns:** Chassis/frame (`frame_no`, `full_chassis`), engine, model, proposer and address fields, `insurer`, **`prefer_insurer`** (dealer preferred portal label for KYC when details insurer fuzzy-matches), **`hero_cpi`** (**Y**/**N** — MISP CPA NIC/CPI-style add-on row), nominee columns, `financer_name`, `rto_name`, etc. Most proposal UI defaults (email, CPA tenure, payment mode, registration date) remain **hardcoded** in Playwright where not listed here.
+**Important columns:** Chassis/frame (`frame_no`, `full_chassis`), engine, model, proposer and address fields, `insurer`, **`prefer_insurer`** (dealer preferred portal label for KYC when details insurer fuzzy-matches), **`hero_cpi`** (**Y**/**N** — MISP CPA NIC/CPI-style add-on row), **`insurance_pay`** (**CC**/**APD** — MISP Payment Mode), nominee columns, `financer_name`, `rto_name`, etc. Most proposal UI defaults (email, CPA tenure when not hero_cpi-driven, registration date) remain **hardcoded** in Playwright where not listed here.
 
 **Operational notes:** `load_latest_insurance_values` uses `SELECT * FROM form_insurance_view WHERE customer_id = ? AND vehicle_id = ?`. **`build_insurance_fill_values`** (`insurance_form_values.py`) uses that row **together with** **`add_sales_staging.payload_json`** when Add Sales passes **`staging_id`**: the view reflects committed masters after Create Invoice; **`payload_json`** holds the full OCR/operator merge so the pair is the **complete** insurance input set (**BR-20**). Insurer may still fall back to **`OCR_To_be_Used.json`** when view and staging lack it; consent/SMS boilerplate misread as insurer is cleared (**`sanitize_details_sheet_insurer_value`**). After merge, if the merged insurer is empty and **`prefer_insurer`** is set, the fill dict’s **`insurer`** is set to **`prefer_insurer`**; else if **`prefer_insurer`** is set and the merged insurer string has **≥20%** **`SequenceMatcher`** similarity to it, the fill dict’s **`insurer`** is replaced with **`prefer_insurer`** for MISP/KYC. Repository: **`fetch_staging_payload`** accepts **draft** or **committed** staging rows.
 
@@ -877,6 +878,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 3.01 | Jun 2026 | **`rto_queue.in_queue`** (default true) for per-row Vahan batch opt-in; statuses **Forms Missing**, **Manually Completed** — **`DDL/alter/33b_rto_queue_in_queue.sql`**, RTO Queue subtabs UI |
 | 3.02 | Jun 2026 | **`dealer_ref.cpi_reqd`** (**Y**/**N**, default **N**; **Arya Agencies** **Y**); **`add_sales_staging.cpi_reqd`** (legacy backfill **Y**; OCR **CPA Required** + Section C on Submit Info; staging wins for CPA Insurance eligibility) — **`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**, **`DDL/alter/34b_add_sales_staging_cpi_reqd.sql`**, **`sales_ocr_service`**, **`add_sales.py`** |
 | 3.03 | Jun 2026 | **`admin_dealer_access_ref`** — Admin Saathi dealer scope per login; **`GET /admin/dealers`**, Usage matrix/logs/folders, Dealers tab filtered — **`DDL/alter/35a_admin_dealer_access_ref.sql`**, **`backend/app/repositories/admin_dealer_access.py`** |
+| 3.04 | Jun 2026 | **`dealer_ref.insurance_pay`** (**CC**/**APD**, default **APD**; **100001** **CC**); **`form_insurance_view.insurance_pay`**; MISP **Payment Mode** automation — **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`**, **`DDL/04b_dealer_ref.sql`**, **`fill_hero_insurance_service`**, Admin Saathi dealer view |
 
 
 ## `process_failure_log`

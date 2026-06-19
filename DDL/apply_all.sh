@@ -153,6 +153,7 @@ run alter/15b_vehicle_master_drop_horse_power.sql
 run alter/16a_dealer_ref_prefer_insurer_form_insurance_view.sql
 run alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql
 run alter/34a_dealer_ref_cpi_reqd.sql
+run alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql
 run alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql
 run alter/30a_form_cpa_insurance_view.sql
 

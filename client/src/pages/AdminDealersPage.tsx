@@ -91,6 +91,10 @@ function normalizeCpiReqd(raw: unknown): "Y" | "N" {
   return raw === "Y" ? "Y" : "N";
 }
 
+function normalizeInsurancePay(raw: unknown): "CC" | "APD" {
+  return raw === "CC" ? "CC" : "APD";
+}
+
 function normalizeLoginActive(raw: unknown): "Y" | "N" {
   return raw === "Y" ? "Y" : "N";
 }
@@ -121,6 +125,7 @@ export function AdminDealersPage() {
   const [portalInsurersError, setPortalInsurersError] = useState<string | null>(null);
   const [heroCpiEdit, setHeroCpiEdit] = useState<"Y" | "N">("N");
   const [cpiReqdEdit, setCpiReqdEdit] = useState<"Y" | "N">("N");
+  const [insurancePayEdit, setInsurancePayEdit] = useState<"CC" | "APD">("APD");
   const [saveDetailError, setSaveDetailError] = useState<string | null>(null);
   const [savingDetail, setSavingDetail] = useState(false);
   const [rolesCatalog, setRolesCatalog] = useState<{ role_id: number; role_name: string }[]>([]);
@@ -265,12 +270,14 @@ export function AdminDealersPage() {
       setPreferInsurerEdit("");
       setHeroCpiEdit("N");
       setCpiReqdEdit("N");
+      setInsurancePayEdit("APD");
       return;
     }
     const pi = detail.prefer_insurer;
     setPreferInsurerEdit(pi != null && pi !== "" ? String(pi) : "");
     setHeroCpiEdit(normalizeHeroCpi(detail.hero_cpi));
     setCpiReqdEdit(normalizeCpiReqd(detail.cpi_reqd));
+    setInsurancePayEdit(normalizeInsurancePay(detail.insurance_pay));
   }, [detail]);
 
   const detailRows = useMemo(() => {
@@ -290,6 +297,7 @@ export function AdminDealersPage() {
     rows.push(
       { key: "prefer_insurer", label: "Prefered Insurance" },
       { key: "hero_cpi", label: "Hero CPI" },
+      { key: "insurance_pay", label: "Insurance Pay" },
       { key: "cpi_reqd", label: "CPA Reqd" }
     );
     return rows.map(({ key, label }) => ({
@@ -304,12 +312,14 @@ export function AdminDealersPage() {
     const savedPi = detail.prefer_insurer != null && detail.prefer_insurer !== "" ? String(detail.prefer_insurer) : "";
     const savedHero = normalizeHeroCpi(detail.hero_cpi);
     const savedCpiReqd = normalizeCpiReqd(detail.cpi_reqd);
+    const savedInsurancePay = normalizeInsurancePay(detail.insurance_pay);
     return (
       preferInsurerEdit !== savedPi ||
       heroCpiEdit !== savedHero ||
-      cpiReqdEdit !== savedCpiReqd
+      cpiReqdEdit !== savedCpiReqd ||
+      insurancePayEdit !== savedInsurancePay
     );
-  }, [detail, selectedId, preferInsurerEdit, heroCpiEdit, cpiReqdEdit]);
+  }, [detail, selectedId, preferInsurerEdit, heroCpiEdit, cpiReqdEdit, insurancePayEdit]);
 
   function addLoginDraftRow() {
     setLoginDrafts((prev) => [...prev, newLoginDraft()]);
@@ -519,6 +529,7 @@ export function AdminDealersPage() {
         prefer_insurer: preferInsurerEdit.trim() || null,
         hero_cpi: heroCpiEdit,
         cpi_reqd: cpiReqdEdit,
+        insurance_pay: insurancePayEdit,
       });
       setDetail(updated);
     } catch (e) {
@@ -663,6 +674,19 @@ export function AdminDealersPage() {
                         >
                           <option value="N">N</option>
                           <option value="Y">Y</option>
+                        </select>
+                      ) : key === "insurance_pay" ? (
+                        <select
+                          className="view-vehicles-kv-select"
+                          value={insurancePayEdit}
+                          onChange={(e) =>
+                            setInsurancePayEdit(e.target.value === "CC" ? "CC" : "APD")
+                          }
+                          disabled={busy || savingDetail}
+                          aria-label="Insurance Pay"
+                        >
+                          <option value="APD">APD</option>
+                          <option value="CC">CC</option>
                         </select>
                       ) : key === "cpi_reqd" ? (
                         <select

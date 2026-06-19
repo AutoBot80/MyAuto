@@ -5,6 +5,7 @@ When ``dealer_ref.prefer_insurer`` is present on the view row and the merged det
 at ``INSURER_PREFER_FUZZY_MIN_RATIO`` (see ``app.config``), the fill dict uses ``prefer_insurer`` for
 KYC/proposal insurer typing. When the merged insurer is empty (including after rejecting consent-line OCR bleed), the fill dict uses ``prefer_insurer`` if set.
 ``dealer_ref.hero_cpi`` (exposed as ``form_insurance_view.hero_cpi``) is **Y**/**N** (default **N**): **Y** leaves CPA Tenure at the portal default and checks the bottom add-on; **N** sets CPA Tenure to **0** and unchecks that add-on if the row is still present (label varies by insurer: NIC/CPI/Hero CPI/…).
+``dealer_ref.insurance_pay`` (exposed as ``form_insurance_view.insurance_pay``) is **CC** or **APD** (default **APD**): drives MISP **Payment Mode**; HDFC CC radio only when **CC**.
 """
 from __future__ import annotations
 
@@ -27,6 +28,14 @@ def normalize_hero_cpi_flag(raw: object | None) -> str:
     if not t:
         return "N"
     return "Y" if t.strip().upper() == "Y" else "N"
+
+
+def normalize_insurance_pay(raw: object | None) -> str:
+    """Normalize ``dealer_ref.insurance_pay`` / ``form_insurance_view.insurance_pay`` to ``CC`` or ``APD``."""
+    t = clean_text(raw) if raw is not None else ""
+    if not t:
+        return "APD"
+    return "CC" if t.strip().upper() == "CC" else "APD"
 
 from app.config import INSURER_PREFER_FUZZY_MIN_RATIO
 from app.db import get_connection
@@ -169,8 +178,9 @@ def build_insurance_fill_values(
     (``INSURER_PREFER_FUZZY_MIN_RATIO`` in ``app.config``, default 0.80), ``insurer`` is set to ``prefer_insurer``.
     When merged insurer is empty after stripping consent-line OCR bleed, ``insurer`` is set from ``prefer_insurer`` if set (blank Details insurer field).
     **Hero CPI** (**``dealer_ref.hero_cpi``** via **``form_insurance_view``**) is normalized to **Y**/**N** and drives the MISP
-    CPA add-on row (label varies by insurer). Other proposal-only controls (email default, some add-ons, CPA tenure,
-    payment mode, registration date) may remain hardcoded in Playwright where noted.
+    CPA add-on row (label varies by insurer). **Insurance pay** (**``dealer_ref.insurance_pay``**) is **CC** or **APD** (default **APD**)
+    and drives MISP Payment Mode (**CC** → HDFC radio; **APD** skips HDFC). Other proposal-only controls (email default, some add-ons,
+    CPA tenure when not hero_cpi-driven, registration date) may remain hardcoded in Playwright where noted.
     """
     cid, vid = require_customer_vehicle_ids(customer_id, vehicle_id, "form_insurance_view")
     row = load_latest_insurance_values(cid, vid)
@@ -210,6 +220,7 @@ def build_insurance_fill_values(
         "nominee_gender": clean_text(row.get("nominee_gender")),
         "financer_name": clean_text(row.get("financer_name")),
         "hero_cpi": normalize_hero_cpi_flag(row.get("hero_cpi")),
+        "insurance_pay": normalize_insurance_pay(row.get("insurance_pay")),
     }
     _apply_staging_insurance_overlay(values, staging_payload)
     insurer_json = read_insurance_insurer_from_ocr_json(ocr_output_dir, subfolder)
@@ -304,6 +315,7 @@ def write_insurance_form_values(
         ("Nominee Gender", clean_text(values.get("nominee_gender"))),
         ("Financer Name", clean_text(values.get("financer_name"))),
         ("Hero CPI add-on (dealer_ref.hero_cpi)", clean_text(values.get("hero_cpi")) or "N"),
+        ("Payment Mode (dealer_ref.insurance_pay)", clean_text(values.get("insurance_pay")) or "APD"),
     ]
     lines = ["Insurance Form Values", "", "--- Values sent to Insurance labels ---"]
     for label, value in label_values:

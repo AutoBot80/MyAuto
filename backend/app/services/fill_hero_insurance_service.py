@@ -2,7 +2,7 @@
 Hero Insurance (MISP) Playwright flow: **pre_process** (``run_fill_insurance_only`` on real MISP) runs through KYC,
 then fills **VIN** from DB (**``full_chassis``**) and clicks the VIN page **Submit**. **main_process** continues with
 **I agree** (if shown), then the proposal form. Proposer/vehicle/nominee fields come from the view;
-email, most add-ons, HDFC, and registration date use **hardcoded** defaults. **``dealer_ref.hero_cpi``** (**``form_insurance_view.hero_cpi``**): **Y** leaves **CPA Tenure** at the portal default (1) and **checks** the bottom NIC/CPI (name varies) add-on; **N** (default) sets **CPA Tenure** to **0** (hides that add-on row) and **unchecks** the add-on if still present. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review** → preview scrape (log only) → consent checkboxes. In production (**``ENVIRONMENT_IS_PRODUCTION``**): proposal **Submit** → **PrintPolicy.aspx** (optional policy # parse + frame dump) → **run_hero_insure_reports** (**PrintPolicyDetails** search, grid scrape, **one** ``insurance_master`` INSERT, PDF). Non-production skips Submit commit, INSERT, and print.
+email, most add-ons, and registration date use **hardcoded** defaults. **``dealer_ref.insurance_pay``** (**``form_insurance_view.insurance_pay``**, default **APD**): **CC** selects Payment Mode CC and **HDFC** radio; **APD** selects APD and skips HDFC. **``dealer_ref.hero_cpi``** (**``form_insurance_view.hero_cpi``**): **Y** leaves **CPA Tenure** at the portal default (1) and **checks** the bottom NIC/CPI (name varies) add-on; **N** (default) sets **CPA Tenure** to **0** (hides that add-on row) and **unchecks** the add-on if still present. Proposal fields resolve **ContentPlaceHolder1** ids (**``HERO_MISP_CPH1``**) where applicable, then labels. **Proposal Preview** / **Review** → preview scrape (log only) → consent checkboxes. In production (**``ENVIRONMENT_IS_PRODUCTION``**): proposal **Submit** → **PrintPolicy.aspx** (optional policy # parse + frame dump) → **run_hero_insure_reports** (**PrintPolicyDetails** search, grid scrape, **one** ``insurance_master`` INSERT, PDF). Non-production skips Submit commit, INSERT, and print.
 Browser reuse uses ``handle_browser_opening.get_or_open_site_page`` with ``match_base`` from **pre_process**.
 """
 import difflib
@@ -65,6 +65,7 @@ from app.services.insurance_form_values import (
     append_playwright_insurance_line_or_dealer_fallback,
     build_insurance_fill_values,
     normalize_hero_cpi_flag,
+    normalize_insurance_pay,
     reset_playwright_insurance_log,
     write_insurance_form_values,
 )
@@ -7700,12 +7701,21 @@ def _proposal_step_date_of_registration_today(
     return f"{step_id}: Date of registration control not found"
 
 
-def _proposal_step_payment_mode_cc_if_present(
+def _proposal_step_payment_mode_select(
     page,
+    mode: str,
+    step_id: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
     *,
     timeout_ms: int,
-) -> None:
-    """``ddlPaymentMode`` must often be **CC** before **HDFC** radio is enabled (MispPolicy scrape). Best-effort."""
+) -> str | None:
+    """``ddlPaymentMode``: select **CC** or **APD** per ``dealer_ref.insurance_pay``."""
+    pay = normalize_insurance_pay(mode)
+    if pay == "CC":
+        patterns = (r"^CC\b", r"^\s*CC\s*$", r"Credit\s*Card", r"C\.?\s*C\.?")
+    else:
+        patterns = (r"^APD\b", r"^\s*APD\s*$")
     for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
             loc = _proposal_cph1_locator(root, "ddlPaymentMode")
@@ -7719,15 +7729,33 @@ def _proposal_step_payment_mode_cc_if_present(
                 _proposal_scroll_visible(el, timeout_ms=timeout_ms)
             if not el.is_visible(timeout=1_500):
                 continue
-            for pat in (r"^CC\b", r"^\s*CC\s*$", r"Credit\s*Card", r"C\.?\s*C\.?"):
+            for pat in patterns:
                 try:
                     el.select_option(label=re.compile(pat, re.I), timeout=timeout_ms)
-                    return
+                    _proposal_log(
+                        ocr_output_dir,
+                        subfolder,
+                        step_id,
+                        f"ddlPaymentMode selected {pay!r} via label pattern {pat!r}",
+                    )
+                    return None
                 except Exception:
                     continue
-            return
-        except Exception:
-            continue
+            try:
+                el.select_option(value=pay, timeout=timeout_ms)
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    step_id,
+                    f"ddlPaymentMode selected {pay!r} via value",
+                )
+                return None
+            except Exception:
+                pass
+            return f"{step_id}: could not select Payment Mode {pay!r} on ddlPaymentMode"
+        except Exception as exc:
+            return f"{step_id}: ddlPaymentMode error: {exc!s}"
+    return f"{step_id}: ddlPaymentMode not found"
 
 
 def _proposal_step_hdfc_payment(
@@ -7738,7 +7766,6 @@ def _proposal_step_hdfc_payment(
     *,
     timeout_ms: int,
 ) -> str | None:
-    _proposal_step_payment_mode_cc_if_present(page, timeout_ms=timeout_ms)
     _t(page, 200)
     hdfc_rid = f"{HERO_MISP_CPH1}_rdoHdfcCCType"
     # Prefer **label[for=…]** (matches MispPolicy scrape: radio id + labelText **HDFC**); then direct radio.
@@ -10759,11 +10786,30 @@ def _hero_misp_fill_proposal_and_review(
         )
 
     _t(page, 400)
-    err = _proposal_step_hdfc_payment(
-        page, "payment_hdfc", ocr_output_dir, subfolder, timeout_ms=pt
+    pay = normalize_insurance_pay(values.get("insurance_pay"))
+    err = _proposal_step_payment_mode_select(
+        page,
+        pay,
+        "payment_mode",
+        ocr_output_dir,
+        subfolder,
+        timeout_ms=pt,
     )
     if err:
         return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+    if pay == "CC":
+        err = _proposal_step_hdfc_payment(
+            page, "payment_hdfc", ocr_output_dir, subfolder, timeout_ms=pt
+        )
+        if err:
+            return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
+    else:
+        _proposal_log(
+            ocr_output_dir,
+            subfolder,
+            "payment_hdfc",
+            "insurance_pay=APD; skipped HDFC CC radio",
+        )
 
     for _r in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
         _proposal_scroll_root_to_bottom(_r)
