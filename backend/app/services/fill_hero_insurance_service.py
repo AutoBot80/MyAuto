@@ -11135,6 +11135,8 @@ def main_process(
             subfolder,
             ocr_output_dir=ocr_output_dir,
             staging_payload=staging_payload,
+            staging_id=staging_id,
+            dealer_id=dealer_id,
         )
     except Exception as exc:
         out["error"] = str(exc)
@@ -11613,6 +11615,8 @@ def run_fill_insurance_only(
             subfolder,
             ocr_output_dir=ocr_output_dir,
             staging_payload=staging_payload,
+            staging_id=staging_id,
+            dealer_id=dealer_id,
         )
         kyc_scan_paths = _kyc_local_scan_paths_from_uploaded_scans(dealer_id, subfolder)
         if kyc_scan_paths:

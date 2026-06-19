@@ -405,6 +405,22 @@ def fetch_staging_cpi_reqd_on_cursor(cur, *, staging_id: str, dealer_id: int) ->
     return _normalize_cpi_reqd_flag(raw)
 
 
+def fetch_effective_cpi_reqd(*, staging_id: str | None, dealer_id: int) -> str:
+    """Staging ``cpi_reqd`` when row exists; else ``dealer_ref.cpi_reqd``; default **N**."""
+    did = int(dealer_id)
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            dealer_cpi = fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=did)
+            sid = (staging_id or "").strip()
+            if not sid:
+                return dealer_cpi
+            staging_cpi = fetch_staging_cpi_reqd_on_cursor(cur, staging_id=sid, dealer_id=did)
+            return staging_cpi if staging_cpi is not None else dealer_cpi
+    finally:
+        conn.close()
+
+
 def fetch_staging_payload(staging_id: str, dealer_id: int) -> dict[str, Any] | None:
     """
     Return ``payload_json`` when ``staging_id`` and ``dealer_id`` match and ``status`` is **draft** or **committed**.

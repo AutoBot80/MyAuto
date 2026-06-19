@@ -583,6 +583,8 @@ async def insurance_resolve(
             cid, vid, subfolder,
             ocr_output_dir=Path(ocr_dir),
             staging_payload=staging_payload,
+            staging_id=sid or None,
+            dealer_id=did,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
