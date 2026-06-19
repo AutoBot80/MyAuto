@@ -132,10 +132,28 @@ def test_enquiry_dealer_address_defaults_empty_when_missing() -> None:
     }
 
 
-@patch("app.repositories.form_dms.lookup_dealer_enquiry_address")
-def test_build_dms_fill_values_embeds_dealer_enquiry_address(mock_lookup: MagicMock) -> None:
+@patch("app.services.fill_hero_dms_service.form_dms_repo.lookup_dealer_enquiry_address")
+@patch("app.services.fill_hero_dms_service.form_dms_repo.build_dms_fill_row_from_staging_payload")
+def test_build_dms_fill_values_embeds_dealer_enquiry_address(
+    mock_build_row: MagicMock,
+    mock_lookup: MagicMock,
+) -> None:
     from app.services.fill_hero_dms_service import _build_dms_fill_values
 
+    mock_build_row.return_value = {
+        "dealer_id": 100003,
+        "Contact First Name": "Test",
+        "Contact Last Name": "User",
+        "Mobile Phone #": "9414687819",
+        "State": "RAJASTHAN",
+        "Address Line 1": "Kanjoli, Bharatpur",
+        "Pin Code": "321026",
+        "Key num (partial)": "13601234",
+        "Frame / Chassis num (partial)": "MBLHAW488T5B",
+        "Engine num (partial)": "HA11F7T5B514",
+        "DMS Contact Path": "new_enquiry",
+        "Finance Required": "N",
+    }
     mock_lookup.return_value = {"city": "KAMAN", "state": "RAJASTHAN", "district": "Bharatpur"}
     staging = {
         "dealer_id": 100003,
