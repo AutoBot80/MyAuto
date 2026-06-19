@@ -107,12 +107,62 @@ def test_lookup_dealer_enquiry_address_parses_rto_district(mock_get_conn: MagicM
     }
 
 
+def test_enquiry_dealer_address_defaults_reads_embedded_payload() -> None:
+    dms = {
+        "dealer_enquiry_address": {
+            "city": "KAMAN",
+            "state": "RAJASTHAN",
+            "district": "Bharatpur",
+        },
+    }
+    out = _enquiry_dealer_address_defaults(dms)
+    assert out == {"city": "KAMAN", "state": "RAJASTHAN", "district": "Bharatpur"}
+
+
+def test_enquiry_dealer_address_defaults_empty_when_missing() -> None:
+    assert _enquiry_dealer_address_defaults({}) == {
+        "city": "",
+        "state": "",
+        "district": "",
+    }
+    assert _enquiry_dealer_address_defaults({"dealer_enquiry_address": "bad"}) == {
+        "city": "",
+        "state": "",
+        "district": "",
+    }
+
+
 @patch("app.repositories.form_dms.lookup_dealer_enquiry_address")
-def test_enquiry_dealer_address_defaults_uses_row_dealer_id(mock_lookup: MagicMock) -> None:
+def test_build_dms_fill_values_embeds_dealer_enquiry_address(mock_lookup: MagicMock) -> None:
+    from app.services.fill_hero_dms_service import _build_dms_fill_values
+
     mock_lookup.return_value = {"city": "KAMAN", "state": "RAJASTHAN", "district": "Bharatpur"}
-    out = _enquiry_dealer_address_defaults({"row": {"dealer_id": 100003}})
+    staging = {
+        "dealer_id": 100003,
+        "customer": {
+            "name": "Test User",
+            "mobile_number": "9414687819",
+            "state": "RAJASTHAN",
+            "address": "Kanjoli, Bharatpur",
+            "city": "Bharatpur",
+            "pin": "321026",
+            "aadhar_id": "1234",
+            "gender": "Male",
+            "dms_contact_path": "new_enquiry",
+        },
+        "vehicle": {
+            "key_no": "13601234",
+            "frame_no": "MBLHAW488T5B83631",
+            "engine_no": "HA11F7T5B51406",
+        },
+    }
+    values = _build_dms_fill_values(None, None, staging_payload=staging)
     mock_lookup.assert_called_once_with(100003)
-    assert out["city"] == "KAMAN"
+    assert values["dealer_enquiry_address"] == {
+        "city": "KAMAN",
+        "state": "RAJASTHAN",
+        "district": "Bharatpur",
+    }
 
 
 def test_add_enquiry_landline_skip_blank_alternate() -> None:

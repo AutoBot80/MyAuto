@@ -103,6 +103,11 @@ def _build_dms_values() -> dict:
     fn = (out.get("financier_name") or "").strip()
     if fn.upper() in ("NULL", "NONE", "NIL"):
         out["financier_name"] = ""
+    out["dealer_enquiry_address"] = {
+        "city": "Bharatpur",
+        "state": "RAJASTHAN",
+        "district": "Bharatpur",
+    }
     return out
 
 

@@ -24,7 +24,6 @@ from app.config import (
     DMS_SIEBEL_INTER_ACTION_DELAY_MS,
     DMS_SIEBEL_POST_GOTO_WAIT_MS,
 )
-from app.repositories import form_dms as form_dms_repo
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
     _MOBILE_DOM_EVAL_JS,
@@ -8377,10 +8376,15 @@ def _resolve_add_enquiry_address_fields(
 
 
 def _enquiry_dealer_address_defaults(dms_values: dict) -> dict[str, str]:
-    did = _dms_values_dealer_id(dms_values)
-    if did is None:
-        did = int(DEALER_ID)
-    return form_dms_repo.lookup_dealer_enquiry_address(did)
+    empty = {"city": "", "state": "", "district": ""}
+    embedded = dms_values.get("dealer_enquiry_address")
+    if not isinstance(embedded, dict):
+        return empty
+    return {
+        "city": (embedded.get("city") or "").strip(),
+        "state": (embedded.get("state") or "").strip(),
+        "district": (embedded.get("district") or "").strip(),
+    }
 
 
 def _normalize_phone_last10(raw: str) -> str:

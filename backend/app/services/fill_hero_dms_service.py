@@ -1034,6 +1034,14 @@ def _build_dms_fill_values(
             "financier_name": _clean_text(row.get("Financier Name")),
         },
     }
+    try:
+        did_raw = row.get("dealer_id")
+        if did_raw is None and staging_payload is not None:
+            did_raw = staging_payload.get("dealer_id")
+        did_enq = int(did_raw) if did_raw is not None else None
+    except (TypeError, ValueError):
+        did_enq = None
+    values["dealer_enquiry_address"] = form_dms_repo.lookup_dealer_enquiry_address(did_enq)
     required_keys = [
         ("DMS fill.Contact First Name", values["first_name"]),
         ("DMS fill.Mobile Phone #", values["mobile_phone"]),
