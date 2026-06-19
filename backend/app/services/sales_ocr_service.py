@@ -2048,7 +2048,11 @@ def details_fragment_to_api_payload(frag_d: dict[str, Any]) -> dict[str, Any]:
         sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
         insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
     if "cpa_reqd" in insurance_merged:
-        insurance_merged["cpa_reqd"] = _normalize_cpa_required_value(insurance_merged.get("cpa_reqd"))
+        parsed_cpa = _parse_cpa_required_from_ocr(insurance_merged.get("cpa_reqd"))
+        if parsed_cpa:
+            insurance_merged["cpa_reqd"] = parsed_cpa
+        else:
+            del insurance_merged["cpa_reqd"]
 
     _apply_nominee_relationship_gender_to_mapping(insurance_merged)
     customer = enrich_customer_address_from_freeform(customer)
@@ -2764,11 +2768,8 @@ def _sanitize_details_profession_value(val: str | None) -> str | None:
     return None
 
 
-def _normalize_cpa_required_value(val: str | None) -> str:
-    """Map Sales Detail Sheet CPA Required to **Y** or **N** (default **N** when blank)."""
-    if val is None or not str(val).strip():
-        return "N"
-    raw = str(val).strip()
+def _strip_cpa_required_label_prefix(raw: str) -> str:
+    """Remove printed CPA Required label text from OCR capture."""
     raw = re.sub(
         r"(?i)^[\s\-–—:._]*cpa\s+required\s*\(\s*yes\s*/\s*no\s*\)\s*\?\s*",
         "",
@@ -2780,8 +2781,16 @@ def _normalize_cpa_required_value(val: str | None) -> str:
         "",
         s,
     ).strip()
+    return s
+
+
+def _parse_cpa_required_from_ocr(val: str | None) -> str | None:
+    """Return **Y**/**N** only when the sheet value is explicit; ``None`` when blank/unparseable."""
+    if val is None or not str(val).strip():
+        return None
+    s = _strip_cpa_required_label_prefix(str(val).strip())
     if not s:
-        return "N"
+        return None
     if s in ("y", "yes"):
         return "Y"
     if s in ("n", "no"):
@@ -2790,6 +2799,14 @@ def _normalize_cpa_required_value(val: str | None) -> str:
         return "Y"
     if s.startswith("n"):
         return "N"
+    return None
+
+
+def _normalize_cpa_required_value(val: str | None) -> str:
+    """Map Sales Detail Sheet CPA Required to **Y** or **N** (default **N** when blank)."""
+    parsed = _parse_cpa_required_from_ocr(val)
+    if parsed:
+        return parsed
     return "N"
 
 
@@ -3098,7 +3115,11 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
         else:
             out.pop("payment_mode", None)
     if "cpa_reqd" in out:
-        out["cpa_reqd"] = _normalize_cpa_required_value(out.get("cpa_reqd"))
+        parsed_cpa = _parse_cpa_required_from_ocr(out.get("cpa_reqd"))
+        if parsed_cpa:
+            out["cpa_reqd"] = parsed_cpa
+        else:
+            out.pop("cpa_reqd", None)
     if "insurer" in out:
         ins = sanitize_details_sheet_insurer_value(out.get("insurer"))
         if ins:
@@ -3219,7 +3240,7 @@ def _checkbox_field_fully_resolved(field: str, val: str | None) -> bool:
     if field == "payment_mode":
         return bool(_normalize_payment_mode_sheet_value(v))
     if field == "cpa_reqd":
-        return _normalize_cpa_required_value(v) in ("Y", "N")
+        return _parse_cpa_required_from_ocr(v) is not None
     return bool(v)
 
 
@@ -3258,7 +3279,7 @@ def _parse_sales_detail_checkbox_regions(full_text: str) -> dict[str, str]:
             if not cb and field == "marital_status" and tail_line:
                 cb = _normalize_details_marital_status_value(tail_line)
             if not cb and field == "cpa_reqd" and tail_line:
-                cb = _normalize_cpa_required_value(tail_line)
+                cb = _parse_cpa_required_from_ocr(tail_line)
             if cb:
                 out[field] = cb
                 break
@@ -3305,7 +3326,7 @@ def _parse_sales_detail_checkbox_from_tables(tables: list[list[list[str]]]) -> d
                 if not cb:
                     m_v4 = _V4_CPA_REQUIRED_YES_NO_REGION_RE.search(joined)
                     if m_v4:
-                        cb = _normalize_cpa_required_value(joined[m_v4.end() :].strip())
+                        cb = _parse_cpa_required_from_ocr(joined[m_v4.end() :].strip())
                 if cb:
                     out["cpa_reqd"] = cb
     return out
@@ -3331,7 +3352,8 @@ def _normalize_scanned_checkbox_candidate(field: str, cand: str) -> str:
         pm = _normalize_payment_mode_sheet_value(v)
         return pm if pm else ""
     if field == "cpa_reqd":
-        return _normalize_cpa_required_value(v)
+        parsed = _parse_cpa_required_from_ocr(v)
+        return parsed if parsed else ""
     return v.strip()
 
 
@@ -3491,7 +3513,7 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                 cb = _extract_checkbox_selection_value(val, "cpa_reqd")
                 if cb:
                     val = cb
-                val = _normalize_cpa_required_value(val)
+                val = _parse_cpa_required_from_ocr(val)
                 if not val:
                     continue
             elif key == "payment_mode":
@@ -3598,7 +3620,7 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                 if cand:
                     out[key] = cand
             elif field == "cpa_reqd":
-                cand = _extract_checkbox_selection_value(rest, field) or _normalize_cpa_required_value(rest)
+                cand = _extract_checkbox_selection_value(rest, field) or _parse_cpa_required_from_ocr(rest)
                 if cand:
                     out[key] = cand
             elif field == "nominee_gender":
@@ -3927,7 +3949,11 @@ class OcrService:
                 sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
                 insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
             if "cpa_reqd" in insurance_merged:
-                insurance_merged["cpa_reqd"] = _normalize_cpa_required_value(insurance_merged.get("cpa_reqd"))
+                parsed_cpa = _parse_cpa_required_from_ocr(insurance_merged.get("cpa_reqd"))
+                if parsed_cpa:
+                    insurance_merged["cpa_reqd"] = parsed_cpa
+                else:
+                    del insurance_merged["cpa_reqd"]
 
             _apply_nominee_relationship_gender_to_mapping(insurance_merged)
 

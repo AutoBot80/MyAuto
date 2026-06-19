@@ -465,6 +465,7 @@ export function AddSalesPage({
   const [heroCpi, setHeroCpi] = useState<string | null>(null);
   const [dealerCpiReqd, setDealerCpiReqd] = useState<"Y" | "N">("N");
   const [cpaRequired, setCpaRequired] = useState<"Y" | "N">("N");
+  const cpaFromSheetRef = useRef(false);
   const [isFillCpaInsuranceLoading, setIsFillCpaInsuranceLoading] = useState(false);
   /** DMS-scraped vehicle; shown in Fill Forms > DMS. Only populated when user presses Fill Forms. */
   const [dmsScrapedVehicle, setDmsScrapedVehicle] = useState<ExtractedVehicleDetails | null>(null);
@@ -559,7 +560,11 @@ export function AddSalesPage({
     setCpaAlliancePortalEnabled(cpa.enabled);
     setCpaInsurers(cpa.insurers);
     setDealerCpaInsurer(cpa.dealerCpa);
-    setDealerCpiReqd(normalizeCpaRequiredFlag(res.dealer_cpi_reqd ?? "N"));
+    const dealerCpi = normalizeCpaRequiredFlag(res.dealer_cpi_reqd ?? "N");
+    setDealerCpiReqd(dealerCpi);
+    if (!cpaFromSheetRef.current) {
+      setCpaRequired(dealerCpi);
+    }
     const pi = res.portal_insurers;
     setPortalInsurers(Array.isArray(pi) ? pi.map((x) => String(x).trim()).filter(Boolean) : []);
     const fin = res.financiers;
@@ -646,6 +651,12 @@ export function AddSalesPage({
     [dmsUrl, siteUrlsLoading, siteUrlsError, formatWarmBrowserFailure]
   );
 
+  useEffect(() => {
+    if (!cpaFromSheetRef.current) {
+      setCpaRequired(dealerCpiReqd);
+    }
+  }, [dealerCpiReqd]);
+
   const applyExtractedDetails = useCallback(
     (
       details: { vehicle?: unknown; customer?: unknown; insurance?: unknown },
@@ -677,7 +688,11 @@ export function AddSalesPage({
           })
         );
         if (Object.prototype.hasOwnProperty.call(r, "cpa_reqd")) {
+          cpaFromSheetRef.current = true;
           setCpaRequired(normalizeCpaRequiredFlag(r.cpa_reqd));
+        } else {
+          cpaFromSheetRef.current = false;
+          setCpaRequired(dealerCpiReqd);
         }
       }
       const sf = (opts?.savedToForWarm ?? "").trim();
@@ -685,7 +700,7 @@ export function AddSalesPage({
         triggerWarmBrowsers(sf);
       }
     },
-    [triggerWarmBrowsers, portalInsurers, preferInsurer, masterRefFinanciers]
+    [triggerWarmBrowsers, portalInsurers, preferInsurer, masterRefFinanciers, dealerCpiReqd]
   );
 
   const { uploadConsolidatedV2, isUploading, isMobileValid, clearUploaded } = useUploadScans("", mobile, {
@@ -913,6 +928,7 @@ export function AddSalesPage({
     setCpaAlliancePortalEnabled(false);
     setCpaInsurers([]);
     setDealerCpaInsurer(null);
+    cpaFromSheetRef.current = false;
     setCpaRequired(dealerCpiReqd);
     setHeroCpi(null);
     setIsFillCpaInsuranceLoading(false);

@@ -303,6 +303,7 @@ export function cancelAdminStagingInvoice(
     `/admin/staging/${encodeURIComponent(stagingId)}/cancel-invoice?${q.toString()}`,
     {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirmation }),
     }
   );
@@ -326,6 +327,7 @@ export function markAdminInsuranceManuallyFilled(
     `/admin/staging/${encodeURIComponent(stagingId)}/insurance-manually-filled?${q.toString()}`,
     {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ insurer }),
     }
   );
