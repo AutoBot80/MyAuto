@@ -42,6 +42,9 @@ def test_insert_from_grid_skips_duplicate_and_still_marks_state_3() -> None:
     with patch(
         "app.services.add_sales_staging_state_service.persist_staging_insurance_main_fields"
     ), patch(
+        "app.repositories.add_sales_staging.fetch_staging_payload",
+        return_value={"insurance": {"policy_num": "POL123"}},
+    ), patch(
         "app.services.add_sales_commit_service.insert_insurance_master_after_gi",
         side_effect=ValueError("Hero insurance (Main) already recorded for this customer"),
     ), patch(
