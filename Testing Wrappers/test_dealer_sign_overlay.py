@@ -1,6 +1,6 @@
 """
 Local test: headless dealer signature overlay on Form 20 / GST / Sale Certificate PDFs
-in a sale folder (same logic as Electron ``dealerSign:overlaySalePdfs``).
+in a sale folder (same logic as sidecar ``dealer_sign_overlay`` job).
 
 Default folder (override with ``--folder``)::
     D:\\Saath\\Dealer Saathi\\Uploaded scans\\100001\\7296967153_290426

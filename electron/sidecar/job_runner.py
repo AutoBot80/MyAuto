@@ -1988,6 +1988,65 @@ def _dispatch_pull_aadhar_scan_jpegs_impl(params: dict) -> dict:
     }
 
 
+def _dispatch_dealer_sign_overlay_impl(params: dict) -> dict:
+    """Stamp dealer signature on Form 20 / GST / Sale Certificate PDFs in the local sale folder."""
+    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    subfolder = (params.get("subfolder") or "").strip()
+    if not subfolder:
+        return {"success": False, "error": "subfolder is required"}
+    from app.config import get_ocr_output_dir, get_uploads_dir
+    from app.services.dealer_sign_overlay import apply_dealer_signatures_to_sale_folder
+    from app.services.fill_hero_dms_service import _safe_subfolder_name
+    from app.services.print_rto_queue_log import append_print_rto_queue_block, append_print_rto_queue_line
+
+    saathi_base = (os.getenv("SAATHI_BASE_DIR") or "").strip()
+    candidate_dirs: list[Path] = []
+    if saathi_base:
+        candidate_dirs.append(Path(saathi_base))
+
+    uploads_dir = get_uploads_dir(dealer_id)
+    ocr_dir = get_ocr_output_dir(dealer_id)
+    safe = _safe_subfolder_name(subfolder)
+    sale_dir = uploads_dir / safe
+
+    append_print_rto_queue_line(
+        ocr_dir,
+        safe,
+        "SIGN",
+        f"dealer_sign_overlay start sale_dir={sale_dir}",
+    )
+
+    try:
+        result = apply_dealer_signatures_to_sale_folder(
+            sale_dir,
+            dealer_id,
+            None,
+            candidate_dirs_for_signature=candidate_dirs or None,
+        )
+    except Exception as exc:
+        logging.exception("dealer_sign_overlay job failed")
+        append_print_rto_queue_line(ocr_dir, safe, "SIGN", f"FAIL: {exc}")
+        return {"success": False, "error": str(exc), "subfolder": safe}
+
+    stamped = result.get("stamped") or []
+    skipped = result.get("skipped")
+    lines = [
+        f"dealer_sign_overlay sale_dir={sale_dir}",
+        f"stamped={stamped!r}",
+    ]
+    if skipped:
+        lines.append(f"skipped={skipped!r}")
+    append_print_rto_queue_block(ocr_dir, safe, "OVERLAY", lines)
+
+    return {
+        "success": True,
+        "subfolder": safe,
+        "stamped": stamped,
+        "skipped": skipped,
+        "overlay": result,
+    }
+
+
 def _dispatch_push_sale_artifacts_impl(params: dict) -> dict:
     """Push Print/Queue RTO documents to EC2 (Form 20/22, Sale Certificate, GST, Insurance, optional CPA)."""
     api_url, jwt = _require_api_credentials(params)
@@ -3898,6 +3957,13 @@ def dispatch(payload: dict) -> dict:
         }
     if job_type == "pull_aadhar_scan_jpegs":
         data = _dispatch_pull_aadhar_scan_jpegs_impl(params)
+        return {
+            "success": bool(data.get("success")),
+            "data": data,
+            "error": data.get("error"),
+        }
+    if job_type == "dealer_sign_overlay":
+        data = _dispatch_dealer_sign_overlay_impl(params)
         return {
             "success": bool(data.get("success")),
             "data": data,

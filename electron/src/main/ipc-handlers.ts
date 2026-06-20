@@ -5,7 +5,6 @@ import { copyChallanScanArtifacts } from "./challan-scan-copies";
 import { logError, logInfo } from "./logger";
 import { getSiteUrlsFromEnv } from "./paths";
 import * as printer from "./printer";
-import { runDealerSignOverlayHeadless } from "./dealer-sign-overlay";
 import { releaseBrowsersHardReset, runSidecarJob, type SidecarJobPayload } from "./sidecar";
 import { checkForUpdatesManual, quitAndInstall, setupAutoUpdater } from "./updater";
 
@@ -72,21 +71,6 @@ export function registerIpc(mainWindow: BrowserWindow): void {
         logError(`print:pdfsFromUrls background failed: ${msg}`);
       });
       return { ok: true, printed: 0, queued: items.length };
-    }
-  );
-
-  ipcMain.handle(
-    "dealerSign:overlaySalePdfs",
-    async (
-      _evt: IpcMainInvokeEvent,
-      payload: { dealerId: number; subfolder: string }
-    ) => {
-      const did = payload?.dealerId;
-      const sub = payload?.subfolder;
-      if (typeof did !== "number" || did <= 0 || typeof sub !== "string" || !sub.trim()) {
-        return { ok: false as const, message: "invalid_payload" };
-      }
-      return runDealerSignOverlayHeadless(did, sub.trim());
     }
   );
 

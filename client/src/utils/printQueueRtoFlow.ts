@@ -5,7 +5,6 @@
 import {
   dispatchPrintJobsFromApi,
   finalizePrintRtoQueueLog,
-  overlayDealerSignaturesLocal,
   printRtoQueueLogHint,
   type FillDmsCustomer,
   type PrintForm20Response,
@@ -15,6 +14,7 @@ import { insertRtoPayment } from "../api/rtoPaymentDetails";
 import { recordPrintQueueRtoFailure } from "../api/processFailureLog";
 import { isElectron } from "../electron";
 import {
+  overlayDealerSignaturesLocal,
   printGatePassLocal,
   pullSaleScanAssetsFromServer,
   pushSaleFolderToServer,
@@ -102,7 +102,7 @@ export async function runPrintQueueRtoFlow(
   });
 
   try {
-    await overlayDealerSignaturesLocal({ dealerId, subfolder });
+    await overlayDealerSignaturesLocal({ dealer_id: dealerId, subfolder });
     traceLines.push({ prefix: "UI", message: "dealer signature overlay finished (best-effort)" });
   } catch (overlayErr) {
     traceLines.push({

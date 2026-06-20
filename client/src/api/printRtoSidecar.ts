@@ -11,6 +11,7 @@ import {
 
 const SYNC_TIMEOUT_MS = 600_000;
 const GATE_PASS_LOCAL_TIMEOUT_MS = 300_000;
+const DEALER_SIGN_OVERLAY_TIMEOUT_MS = 120_000;
 
 async function runSidecarJob(
   type: string,
@@ -66,6 +67,27 @@ export async function pullAadharScanJpegsFromServer(
     files_failed: Number(d.files_failed ?? 0),
     subfolder: String(d.subfolder ?? subfolder),
   };
+}
+
+/**
+ * Electron only: dealer signature overlay on Form 20 / GST / Sale Certificate PDFs
+ * in the local sale folder — must run after pull and before gate pass. Non-fatal on failure.
+ */
+export async function overlayDealerSignaturesLocal(req: {
+  dealer_id: number;
+  subfolder: string;
+}): Promise<void> {
+  const subfolder = (req.subfolder || "").trim();
+  if (!subfolder || req.dealer_id <= 0) return;
+  try {
+    await runSidecarJob(
+      "dealer_sign_overlay",
+      { dealer_id: req.dealer_id, subfolder },
+      DEALER_SIGN_OVERLAY_TIMEOUT_MS
+    );
+  } catch {
+    /* best-effort */
+  }
 }
 
 export async function pullSaleScanAssetsFromServer(

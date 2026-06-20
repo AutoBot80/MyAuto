@@ -2,12 +2,9 @@
  * View Customer **Print File**: pull sale PDFs, overlay signatures, merge Form 20 + Form 22 + GST, print.
  * Uses the same Electron print path as Print / Queue RTO (silent print preference, dialog assist).
  */
+import { dispatchPrintJobsFromApi, type FillDmsCustomer } from "../api/fillForms";
 import {
-  dispatchPrintJobsFromApi,
   overlayDealerSignaturesLocal,
-  type FillDmsCustomer,
-} from "../api/fillForms";
-import {
   printViewCustomerSaleFilesLocal,
   pullSaleScanAssetsFromServer,
 } from "../api/printRtoSidecar";
@@ -49,7 +46,7 @@ export async function runViewCustomerPrintFilesFlow(
   }
 
   try {
-    await overlayDealerSignaturesLocal({ dealerId, subfolder });
+    await overlayDealerSignaturesLocal({ dealer_id: dealerId, subfolder });
   } catch {
     /* best-effort, same as Print / Queue RTO */
   }

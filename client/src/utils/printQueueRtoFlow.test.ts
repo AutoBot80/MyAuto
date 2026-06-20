@@ -5,6 +5,7 @@ const insertRtoPayment = vi.fn();
 const printGatePassLocal = vi.fn();
 const pullSaleScanAssetsFromServer = vi.fn();
 const pushSaleFolderToServer = vi.fn();
+const overlayDealerSignaturesLocal = vi.fn();
 
 vi.mock("../electron", () => ({
   isElectron: vi.fn(() => false),
@@ -22,13 +23,13 @@ vi.mock("../api/printRtoSidecar", () => ({
   printGatePassLocal: (...args: unknown[]) => printGatePassLocal(...args),
   pullSaleScanAssetsFromServer: (...args: unknown[]) => pullSaleScanAssetsFromServer(...args),
   pushSaleFolderToServer: (...args: unknown[]) => pushSaleFolderToServer(...args),
+  overlayDealerSignaturesLocal: (...args: unknown[]) => overlayDealerSignaturesLocal(...args),
 }));
 
 vi.mock("../api/fillForms", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/fillForms")>();
   return {
     ...actual,
-    overlayDealerSignaturesLocal: vi.fn(() => Promise.resolve()),
     finalizePrintRtoQueueLog: vi.fn(() => Promise.resolve()),
     dispatchPrintJobsFromApi: vi.fn(() => Promise.resolve({ ok: true, printed: 0 })),
   };

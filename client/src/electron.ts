@@ -16,12 +16,6 @@ export interface ElectronAPI {
     /** Kill wedged sidecar work, unblock the job queue, teardown Playwright (Electron). */
     releaseBrowsers: () => Promise<SidecarJobResult>;
   };
-  dealerSign?: {
-    overlaySalePdfs: (payload: {
-      dealerId: number;
-      subfolder: string;
-    }) => Promise<{ ok: boolean; message?: string }>;
-  };
   print: {
     getPrinters: () => Promise<Array<{ name: string; displayName?: string; description?: string }>>;
     printHtml: (opts: { html: string; deviceName?: string; silent?: boolean; copies?: number }) => Promise<{
