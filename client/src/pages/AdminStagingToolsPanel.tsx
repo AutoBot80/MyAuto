@@ -38,6 +38,7 @@ export function AdminStagingToolsPanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AdminStagingDetailResponse | null>(null);
   const [insurer, setInsurer] = useState("");
+  const [policyNum, setPolicyNum] = useState("");
   const [searchBusy, setSearchBusy] = useState(false);
   const [detailBusy, setDetailBusy] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
@@ -87,6 +88,11 @@ export function AdminStagingToolsPanel() {
           : "";
       const resolved = resolvePortalInsurer(insName, null, d.portal_insurers) ?? insName;
       setInsurer(resolved || d.portal_insurers[0] || "");
+      const pn =
+        insBlock && typeof insBlock === "object"
+          ? String((insBlock as Record<string, unknown>).policy_num ?? "").trim()
+          : "";
+      setPolicyNum(pn);
     } catch (e) {
       setDetail(null);
       setActionMsg({
@@ -186,18 +192,23 @@ export function AdminStagingToolsPanel() {
   }
 
   async function handleInsuranceManuallyFilled() {
-    if (!selectedId || typeof dealerId !== "number" || !insurer.trim()) return;
+    if (!selectedId || typeof dealerId !== "number" || !insurer.trim() || !policyNum.trim()) return;
     const ok = window.confirm(
-      `Mark insurance as manually filled on portal?\n\nInsurer: ${insurer}\n\n` +
-        `This sets insurance_state=2 so operators can run Gen. Insurance from Add Sales In-process (print/download resume).`
+      `Record portal-only manual issue?\n\nInsurer: ${insurer}\nPolicy #: ${policyNum.trim()}\n\n` +
+        `Requires insurance_state=0. Sets insurance_state=2 so operators can run Gen. Insurance from Add Sales In-process (Print Policy / PDF only).`
     );
     if (!ok) return;
     setActionBusy(true);
     setActionMsg(null);
     try {
-      await markAdminInsuranceManuallyFilled(dealerId, selectedId, insurer.trim());
+      await markAdminInsuranceManuallyFilled(
+        dealerId,
+        selectedId,
+        insurer.trim(),
+        policyNum.trim()
+      );
       setActionMsg({
-        text: "Insurance marked manually filled (insurance_state=2). Operator can re-run Gen. Insurance from In-process.",
+        text: "Portal manual issue recorded (insurance_state=2). Operator can run Gen. Insurance from In-process for Print Policy / PDF.",
         success: true,
       });
       await runSearch({ keepSelection: true });
@@ -228,7 +239,8 @@ export function AdminStagingToolsPanel() {
     !detail ||
     !hasSalesId ||
     !insurer.trim() ||
-    detail.insurance_state === 2;
+    !policyNum.trim() ||
+    detail.insurance_state !== 0;
 
   return (
     <div className="admin-staging-tools">
@@ -405,6 +417,20 @@ export function AdminStagingToolsPanel() {
                     )}
                   </dd>
                 </div>
+                <div className="add-sales-v2-dl-row">
+                  <dt>Policy #</dt>
+                  <dd>
+                    <input
+                      type="text"
+                      className="add-sales-v2-dl-input add-sales-v2-dl-input--insurance-provider-wide"
+                      value={policyNum}
+                      onChange={(e) => setPolicyNum(e.target.value)}
+                      placeholder="Issued policy number from portal"
+                      disabled={actionBusy || detail.insurance_state !== 0}
+                      maxLength={24}
+                    />
+                  </dd>
+                </div>
               </dl>
 
               <div className="admin-staging-tools-actions">
@@ -424,14 +450,20 @@ export function AdminStagingToolsPanel() {
                   title={
                     !hasSalesId
                       ? "Requires committed sales_id (Create Invoice complete)"
-                      : detail.insurance_state === 2
-                        ? "Already marked manually filled"
-                        : undefined
+                      : detail.insurance_state !== 0
+                        ? "Portal manual issue requires insurance_state=0 (use Gen. Insurance from In-process after automation submit)"
+                        : !policyNum.trim()
+                          ? "Enter the issued policy number from the portal"
+                          : undefined
                   }
                 >
-                  Ins. Manually Filled
+                  Portal manual issue
                 </button>
               </div>
+              <p className="admin-staging-tools-portal-manual-note">
+                This button allows admin to mark Insurance done on this app, when dealers have
+                manually completed the insurance policy creation.
+              </p>
             </>
           ) : null}
         </div>

@@ -77,6 +77,14 @@
   margin-top: 1rem;
 }
 
+.admin-staging-tools-portal-manual-note {
+  margin: 0.35rem 0 0;
+  max-width: 36rem;
+  font-size: 0.8125rem;
+  color: #667085;
+  line-height: 1.45;
+}
+
 .add-sales-v2-dl--compact {
   margin-top: 0.5rem;
 }

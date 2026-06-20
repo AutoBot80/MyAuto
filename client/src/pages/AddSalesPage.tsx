@@ -58,10 +58,12 @@ import {
   buildSection2FullAddress,
   composeCareOf,
   formatDobDigitsInput,
+  initCapWords,
   normalizeDobToDdMmYyyy,
   normalizeOperatorFreeformAddress,
   parseAddressLine2,
   parseCareOfFromCombined,
+  titleCaseAddressLocality,
 } from "../utils/section2CustomerFormat";
 import {
   getSection2ValidationErrors,
@@ -193,6 +195,11 @@ function getInitialForm() {
   return d;
 }
 
+function initCapLine1Field(raw: unknown): string | undefined {
+  const v = sanitizeOptionalFormField(String(raw ?? "").trim());
+  return v ? initCapWords(v) : undefined;
+}
+
 function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCustomerDetails {
   const r = cust;
   const pinVal = sanitizeOptionalFormField(String(r.pin ?? r.pin_code ?? "").trim());
@@ -208,6 +215,7 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
       : aadharDigits.length > 0
         ? aadharDigits
         : undefined;
+  const addressRaw = sanitizeOptionalFormField(String(r.address ?? "").trim());
   return {
     aadhar_id: sanitizeOptionalFormField(aadharLast4 ?? ""),
     name: sanitizeOptionalFormField(String(r.name ?? "").trim()),
@@ -218,16 +226,16 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
     care_of: careComposed || undefined,
     care_of_relation: careParts.relation,
     care_of_name: careParts.name || undefined,
-    house: sanitizeOptionalFormField(String(r.house ?? "").trim()),
-    street: sanitizeOptionalFormField(String(r.street ?? "").trim()),
-    location: sanitizeOptionalFormField(String(r.location ?? "").trim()),
+    house: initCapLine1Field(r.house),
+    street: initCapLine1Field(r.street),
+    location: initCapLine1Field(r.location),
     city: sanitizeOptionalFormField(String(r.city ?? "").trim()),
-    post_office: sanitizeOptionalFormField(String(r.post_office ?? "").trim()),
-    district: sanitizeOptionalFormField(String(r.district ?? "").trim()),
-    sub_district: sanitizeOptionalFormField(String(r.sub_district ?? "").trim()),
+    post_office: initCapLine1Field(r.post_office),
+    district: initCapLine1Field(r.district),
+    sub_district: initCapLine1Field(r.sub_district),
     state: sanitizeOptionalFormField(String(r.state ?? "").trim()),
     pin_code: pinVal,
-    address: sanitizeOptionalFormField(String(r.address ?? "").trim()),
+    address: addressRaw ? titleCaseAddressLocality(addressRaw) : undefined,
   };
 }
 
@@ -1509,6 +1517,12 @@ export function AddSalesPage({
       );
       if (!insuranceRes.success) {
         setFillInsuranceStatus(insuranceRes.error ?? "Generate Insurance (Hero) failed.");
+      } else if (insuranceRes.hero_insure_reports?.ok === false) {
+        setFillInsuranceStatus(
+          insuranceRes.hero_insure_reports.error ??
+            insuranceRes.error ??
+            "Print Policy / PDF download failed."
+        );
       } else {
         const successMsg =
           "Hero Insurance run completed (pre + main + post). Browser may remain open for operator.";
@@ -2015,8 +2029,17 @@ export function AddSalesPage({
                       }
                       setAddressLine2Input(normedLine2.address);
                       addressLine2DirtyRef.current = false;
+                      const line1Raw = buildAddressLine1(c) || c?.address || "";
+                      const line1Initcap = line1Raw.trim() ? titleCaseAddressLocality(line1Raw.trim()) : undefined;
                       const customerForSubmit: ExtractedCustomerDetails = {
                         ...c,
+                        address: line1Initcap,
+                        house: undefined,
+                        street: undefined,
+                        location: undefined,
+                        post_office: undefined,
+                        district: undefined,
+                        sub_district: undefined,
                         city: normedLine2.city,
                         state: normedLine2.state,
                         pin_code: normedLine2.pin_code,

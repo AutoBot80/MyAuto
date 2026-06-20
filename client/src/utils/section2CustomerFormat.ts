@@ -222,6 +222,17 @@ function titleCaseWord(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 }
 
+/** Init-cap each word in a single locality field (house, street, location, etc.). */
+export function initCapWords(raw: string): string {
+  return raw
+    .trim()
+    .replace(/\s+/g, " ")
+    .split(/\s+/)
+    .map(titleCaseWord)
+    .filter(Boolean)
+    .join(" ");
+}
+
 /** Init-cap each comma-separated locality/city clause (``bharatpur`` → ``Bharatpur``). */
 export function titleCaseAddressLocality(raw: string): string {
   return raw

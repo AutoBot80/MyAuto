@@ -1313,6 +1313,7 @@ class AdminStagingCancelInvoiceRequest(BaseModel):
 
 class AdminInsuranceManuallyFilledRequest(BaseModel):
     insurer: str = Field(..., min_length=1, max_length=255)
+    policy_num: str = Field(..., min_length=1, max_length=24)
 
 
 def _staging_cancel_confirmation_from_payload(payload: dict) -> str:
@@ -1417,7 +1418,7 @@ def post_admin_insurance_manually_filled(
     dealer_id: int = Query(..., ge=1),
     principal: Principal = Depends(get_principal),
 ) -> dict:
-    """Set staging insurer and insurance_state=2 for manual portal fill resume."""
+    """Portal-only manual issue: staging insurer + policy_num, insurance_state=2 for print resume."""
     _require_admin_dealer_scope(principal, dealer_id)
     from app.services.admin_staging_insurance_manual_service import (
         InsuranceManuallyFilledError,
@@ -1429,6 +1430,7 @@ def post_admin_insurance_manually_filled(
             staging_id=staging_id.strip(),
             dealer_id=dealer_id,
             insurer=body.insurer.strip(),
+            policy_num=body.policy_num.strip(),
         )
     except InsuranceManuallyFilledError as exc:
         msg = str(exc).strip() or "Insurance manually filled failed"

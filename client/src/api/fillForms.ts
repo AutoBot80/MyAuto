@@ -326,6 +326,12 @@ export interface FillHeroInsuranceResponse {
   login_url?: string | null;
   match_base?: string | null;
   print_jobs?: ApiPrintJob[];
+  hero_insure_reports?: {
+    ok?: boolean;
+    error?: string | null;
+    pdf_path?: string | null;
+    grid_scrape?: Record<string, unknown> | null;
+  };
 }
 
 /** Run only DMS section (login, enquiry, vehicle search, scrape, PDFs). Independent process. */

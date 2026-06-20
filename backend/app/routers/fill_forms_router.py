@@ -1009,7 +1009,7 @@ async def print_gate_pass(
         ordered = [
             (sale_pdf.resolve(), "sale_certificate"),
             (ins_pdf.resolve(), "insurance"),
-            (pdf_path.resolve(), "gate_pass"),
+            # (pdf_path.resolve(), "gate_pass"),  # TEMP: skip gate pass print; PDF still generated above
         ]
 
         print_jobs: list[dict] = []
@@ -1024,8 +1024,9 @@ async def print_gate_pass(
                     print_jobs.append({"filename": path_obj.name, "presigned_url": url, "kind": kind})
                 else:
                     logger.warning("print_gate_pass: no presigned URL for %s", rel)
-            if len(print_jobs) != 3:
-                err = "Could not build presigned URLs for all three PDFs (check S3 sync)."
+            # if len(print_jobs) != 3:
+            if len(print_jobs) != 2:  # was 3 when gate pass was in print_jobs
+                err = "Could not build presigned URLs for all print PDFs (check S3 sync)."
                 append_print_rto_queue_line(ocr_dir, safe_sub, "GATE_PASS", f"FAIL: {err}")
                 return PrintForm20Response(
                     success=False,

@@ -981,7 +981,7 @@ def build_local_rto_print_jobs(
     ]
     if cpa_pdf is not None and cpa_pdf.is_file():
         ordered_paths.append(cpa_pdf.resolve())
-    ordered_paths.append(gate_pass_pdf.resolve())
+    # ordered_paths.append(gate_pass_pdf.resolve())  # TEMP: skip gate pass print; PDF still generated on disk
 
     merged_path = _merge_pdfs_to_temp(ordered_paths, subfolder=subfolder)
     jobs = [

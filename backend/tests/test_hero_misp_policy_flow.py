@@ -139,6 +139,66 @@ def test_final_policy_commit_marks_state_on_cert_page_fallback(mock_page):
     )
 
 
+def test_post_submit_wait_early_exit_on_cert_page(mock_page):
+    mock_page.url = "https://misp.example/Policy/PrintPolicy.aspx?PID=123"
+    with patch.object(fhi, "_t") as t_mock:
+        with patch.object(mock_page, "wait_for_url") as url_wait:
+            fhi._hero_misp_wait_post_submit_print_policy_page(mock_page, timeout_ms=5_000)
+    t_mock.assert_called_once()
+    url_wait.assert_not_called()
+
+
+def test_post_submit_wait_waits_for_url_when_not_on_print_policy(mock_page):
+    mock_page.url = "https://misp.example/Policy/MispProposalPreview.aspx"
+    with patch.object(fhi, "_t"):
+        with patch.object(mock_page, "wait_for_url") as url_wait:
+            fhi._hero_misp_wait_post_submit_print_policy_page(mock_page, timeout_ms=5_000)
+    url_wait.assert_called_once()
+    assert url_wait.call_args.kwargs.get("timeout") == min(
+        max(2_000, int(fhi.HERO_MISP_POST_SUBMIT_WAIT_MS)), 5_000
+    )
+
+
+def test_final_policy_commit_skips_frame_dump_when_policy_num_scraped(mock_page):
+    with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", True):
+        with patch.object(fhi, "_hero_misp_click_issue_policy", return_value=None):
+            with patch.object(fhi, "_hero_misp_wait_post_submit_print_policy_page"):
+                with patch.object(
+                    fhi,
+                    "_hero_misp_parse_policy_num_from_print_policy_cert_page",
+                    return_value="90000031260970224155",
+                ):
+                    with patch.object(fhi, "_append_hero_misp_frame_dump") as dump:
+                        fhi._hero_misp_final_policy_details_commit(
+                            mock_page,
+                            {"insurer": "HDFC ERGO"},
+                            timeout_ms=5_000,
+                            customer_id=1,
+                            vehicle_id=2,
+                        )
+    dump.assert_not_called()
+
+
+def test_final_policy_commit_frame_dump_when_policy_num_missing(mock_page):
+    with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", True):
+        with patch.object(fhi, "_hero_misp_click_issue_policy", return_value=None):
+            with patch.object(fhi, "_hero_misp_wait_post_submit_print_policy_page"):
+                with patch.object(
+                    fhi,
+                    "_hero_misp_parse_policy_num_from_print_policy_cert_page",
+                    return_value=None,
+                ):
+                    with patch.object(fhi, "_append_hero_misp_frame_dump") as dump:
+                        fhi._hero_misp_final_policy_details_commit(
+                            mock_page,
+                            {"insurer": "HDFC ERGO"},
+                            timeout_ms=5_000,
+                            customer_id=1,
+                            vehicle_id=2,
+                        )
+    dump.assert_called_once()
+
+
 def test_final_policy_commit_skips_state_without_staging_id(mock_page):
     with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", True):
         with patch.object(fhi, "_hero_misp_click_issue_policy", return_value=None):
@@ -405,4 +465,122 @@ def test_main_process_resume_skips_proposal_and_runs_reports(mock_page):
     prop.assert_not_called()
     reports.assert_called_once()
     assert reports.call_args.kwargs.get("policy_num_hint") == ""
+
+
+def test_main_process_pdf_failure_sets_success_false(mock_page):
+    pre = {
+        "success": True,
+        "match_base": "https://misp.example",
+        "login_url": "https://misp.example/login",
+        "_insurance_playwright_page": mock_page,
+    }
+    with patch.object(fhi, "build_insurance_fill_values", return_value={"insurer": "HDFC ERGO"}):
+        with patch.object(fhi, "_hero_misp_i_agree_after_vin_submit", return_value=None):
+            with patch.object(
+                fhi,
+                "_hero_misp_fill_proposal_and_review",
+                return_value=(None, {}),
+            ):
+                with patch.object(
+                    fhi,
+                    "_hero_misp_final_policy_details_commit",
+                    return_value=(None, {"policy_num": "P1"}),
+                ):
+                    with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", True):
+                        with patch.object(
+                            fhi,
+                            "run_hero_insure_reports",
+                            return_value={"ok": False, "error": "PDF download failed"},
+                        ):
+                            out = fhi.main_process(
+                                pre_result=pre,
+                                customer_id=1,
+                                vehicle_id=2,
+                                subfolder="sale1",
+                            )
+    assert out["success"] is False
+    assert out["hero_insure_reports"]["ok"] is False
+    assert "PDF" in (out.get("error") or "")
+
+
+def test_main_process_resume_uses_staging_policy_hint(mock_page):
+    pre = {
+        "success": True,
+        "hero_resume_at_print_policy": True,
+        "match_base": "https://misp.example",
+        "login_url": "https://misp.example/login",
+        "_insurance_playwright_page": mock_page,
+    }
+    staging_payload = {"insurance": {"policy_num": "  POL-999  "}}
+    with patch.object(fhi, "build_insurance_fill_values", return_value={"insurer": "HDFC ERGO", "frame_no": "VIN1"}):
+        with patch.object(fhi, "_hero_misp_fill_proposal_and_review") as prop:
+            with patch.object(fhi, "_main_process_run_print_policy_reports", return_value={"ok": True}) as reports:
+                with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", True):
+                    out = fhi.main_process(
+                        pre_result=pre,
+                        customer_id=1,
+                        vehicle_id=2,
+                        subfolder="sale1",
+                        staging_payload=staging_payload,
+                    )
+    assert out["success"] is True
+    prop.assert_not_called()
+    reports.assert_called_once()
+    assert reports.call_args.kwargs.get("policy_num_hint") == "POL-999"
+
+
+def test_staging_policy_num_hint_from_payload() -> None:
+    assert fhi._staging_policy_num_hint_from_payload(None) == ""
+    assert fhi._staging_policy_num_hint_from_payload({"insurance": {"policy_num": " ABC123 "}}) == "ABC123"
+
+
+def test_main_process_print_reports_outcome_production() -> None:
+    with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", True):
+        ok, err = fhi._main_process_print_reports_outcome({"ok": True})
+        assert ok is True
+        assert err is None
+        ok, err = fhi._main_process_print_reports_outcome({"ok": False, "error": "boom"})
+        assert ok is False
+        assert err == "boom"
+        ok, err = fhi._main_process_print_reports_outcome({})
+        assert ok is False
+        assert err == "Print Policy / PDF download failed"
+
+
+def test_main_process_print_reports_outcome_dev_empty_hrep_succeeds() -> None:
+    with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", False):
+        ok, err = fhi._main_process_print_reports_outcome({})
+        assert ok is True
+        assert err is None
+
+
+def test_main_process_print_reports_outcome_dev_failed_hrep_fails() -> None:
+    with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", False):
+        ok, err = fhi._main_process_print_reports_outcome({"ok": False, "error": "boom"})
+        assert ok is False
+        assert err == "boom"
+
+
+def test_main_process_resume_runs_print_in_dev(mock_page):
+    pre = {
+        "success": True,
+        "hero_resume_at_print_policy": True,
+        "match_base": "https://misp.example",
+        "login_url": "https://misp.example/login",
+        "_insurance_playwright_page": mock_page,
+    }
+    with patch.object(fhi, "build_insurance_fill_values", return_value={"insurer": "HDFC ERGO", "frame_no": "VIN1"}):
+        with patch.object(fhi, "_hero_misp_fill_proposal_and_review") as prop:
+            with patch.object(fhi, "ENVIRONMENT_IS_PRODUCTION", False):
+                with patch.object(fhi, "run_hero_insure_reports", return_value={"ok": True}) as print_rep:
+                    out = fhi.main_process(
+                        pre_result=pre,
+                        customer_id=1,
+                        vehicle_id=2,
+                        subfolder="sale1",
+                    )
+    assert out["success"] is True
+    prop.assert_not_called()
+    print_rep.assert_called_once()
+    assert out["hero_insure_reports"]["ok"] is True
 

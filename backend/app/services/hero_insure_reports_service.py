@@ -601,23 +601,15 @@ def _misp_navigate_to_print_policy_search(
         )
 
 
-def _misp_insurance_master_commit_from_grid(
+def _misp_scrape_print_policy_grid(
     page: Page,
     *,
-    insurer: str,
     policy_num_hint: str,
-    customer_id: int,
-    vehicle_id: int,
-    fill_values: dict | None,
-    staging_payload: dict | None,
-    staging_id: str | None,
-    dealer_id: int | None,
     ocr_output_dir: Path | None,
     subfolder: str | None,
     tmo: int,
-) -> tuple[str | None, dict[str, Any]]:
-    """After **Go** on **PrintPolicyDetails**: scrape grid → ``insurance_master`` INSERT."""
-    from app.services.add_sales_commit_service import insert_insurance_master_after_gi
+) -> dict[str, Any]:
+    """After **Go** on **PrintPolicyDetails**: scrape grid only (no ``insurance_master`` INSERT)."""
     from app.services.fill_hero_insurance_service import (
         scrape_insurance_print_policy_details_grid,
     )
@@ -637,8 +629,48 @@ def _misp_insurance_master_commit_from_grid(
         "print_policy_details grid scrape: "
         f"policy_num={grid_scrape.get('policy_num')!r} premium={grid_scrape.get('premium')!r}",
     )
+    return grid_scrape
+
+
+def _misp_insert_insurance_master_from_grid_scrape(
+    *,
+    grid_scrape: dict[str, Any],
+    customer_id: int,
+    vehicle_id: int,
+    fill_values: dict | None,
+    staging_payload: dict | None,
+    staging_id: str | None,
+    dealer_id: int | None,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+) -> tuple[str | None, dict[str, Any]]:
+    """``insurance_master`` INSERT after successful PDF using prior grid scrape."""
+    from app.repositories.add_sales_staging import fetch_staging_payload
+    from app.services.add_sales_commit_service import insert_insurance_master_after_gi
+    from app.services.add_sales_staging_state_service import (
+        mark_staging_insurance_state,
+        persist_staging_insurance_main_fields,
+    )
+
     if not grid_scrape.get("policy_num"):
         return "print_policy_details: policy_num missing after grid scrape", grid_scrape
+
+    sid = (staging_id or "").strip()
+    did = int(dealer_id) if dealer_id is not None else None
+    if sid and did is not None:
+        persist_staging_insurance_main_fields(
+            sid,
+            did,
+            policy_num=str(grid_scrape.get("policy_num") or "").strip() or None,
+            policy_from=str(grid_scrape.get("policy_from") or "").strip() or None,
+            policy_to=str(grid_scrape.get("policy_to") or "").strip() or None,
+            premium=grid_scrape.get("premium"),
+            idv=grid_scrape.get("idv"),
+        )
+        fresh = fetch_staging_payload(sid, did)
+        if fresh is not None:
+            staging_payload = fresh
+
     try:
         insert_insurance_master_after_gi(
             int(customer_id),
@@ -652,13 +684,22 @@ def _misp_insurance_master_commit_from_grid(
             dealer_id=dealer_id,
         )
     except ValueError as exc:
-        _ins_log(
-            ocr_output_dir,
-            subfolder,
-            "ERROR",
-            f"insurance_master insert failed: {exc!s}",
-        )
-        return str(exc), grid_scrape
+        msg = str(exc).strip()
+        if "already recorded" in msg.lower():
+            _ins_log(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                f"insurance_master INSERT skipped (existing Main row): {msg}",
+            )
+        else:
+            _ins_log(
+                ocr_output_dir,
+                subfolder,
+                "ERROR",
+                f"insurance_master insert failed: {msg}",
+            )
+            return msg, grid_scrape
     except Exception as exc:
         _ins_log(
             ocr_output_dir,
@@ -667,8 +708,55 @@ def _misp_insurance_master_commit_from_grid(
             f"insurance_master insert failed: {exc!s}",
         )
         return f"insurance_master insert failed: {exc!s}", grid_scrape
-    _ins_log(ocr_output_dir, subfolder, "NOTE", "insurance_master INSERT ok (print_policy_details grid)")
+    else:
+        _ins_log(ocr_output_dir, subfolder, "NOTE", "insurance_master INSERT ok (after PDF)")
+
+    if sid and did is not None:
+        mark_staging_insurance_state(sid, did, 3)
+        _ins_log(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "staging: insurance_state=3 (GI complete — PDF + insurance_master)",
+        )
     return None, grid_scrape
+
+
+def _misp_insurance_master_commit_from_grid(
+    page: Page,
+    *,
+    insurer: str,
+    policy_num_hint: str,
+    customer_id: int,
+    vehicle_id: int,
+    fill_values: dict | None,
+    staging_payload: dict | None,
+    staging_id: str | None,
+    dealer_id: int | None,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    tmo: int,
+) -> tuple[str | None, dict[str, Any]]:
+    """After **Go** on **PrintPolicyDetails**: scrape grid → ``insurance_master`` INSERT (legacy one-step)."""
+    _ = insurer
+    grid_scrape = _misp_scrape_print_policy_grid(
+        page,
+        policy_num_hint=policy_num_hint,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+        tmo=tmo,
+    )
+    return _misp_insert_insurance_master_from_grid_scrape(
+        grid_scrape=grid_scrape,
+        customer_id=customer_id,
+        vehicle_id=vehicle_id,
+        fill_values=fill_values,
+        staging_payload=staging_payload,
+        staging_id=staging_id,
+        dealer_id=dealer_id,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
 
 
 def _misp_open_all_print_policy(
@@ -1087,7 +1175,7 @@ def run_hero_insure_reports(
     ``policy_num_hint`` is optional and only used as a fallback until a grid-scraped policy number is available.
 
     When ``commit_insurance_master`` is set (Generate Insurance production path), scrape **Total Premium**
-    from the grid and **INSERT** ``insurance_master`` before printing.
+    from the grid and **INSERT** ``insurance_master`` **after** PDF capture succeeds.
 
     Then: first grid **Print** (opens **Print Policy Certificates**), second **Print** in that window,
     save PDF (never ``page.pdf`` the search grid alone). **Preferred:** :meth:`Page.pdf` (Edge/Chrome).
@@ -1215,29 +1303,43 @@ def run_hero_insure_reports(
             pass
         page.wait_for_timeout(1500)
 
+        grid_scrape: dict[str, Any] | None = None
         if commit_insurance_master:
             if customer_id is None or vehicle_id is None:
                 return {
                     **out,
                     "error": "commit_insurance_master requires customer_id and vehicle_id",
                 }
-            commit_err, grid_scrape = _misp_insurance_master_commit_from_grid(
+            grid_scrape = _misp_scrape_print_policy_grid(
                 page,
-                insurer=insurer,
                 policy_num_hint=pn,
-                customer_id=int(customer_id),
-                vehicle_id=int(vehicle_id),
-                fill_values=fill_values,
-                staging_payload=staging_payload,
-                staging_id=staging_id,
-                dealer_id=dealer_id,
                 ocr_output_dir=ocr_output_dir,
                 subfolder=subfolder,
                 tmo=tmo,
             )
             out["grid_scrape"] = grid_scrape
-            if commit_err:
-                return {**out, "error": commit_err}
+            _sid = (staging_id or "").strip()
+            _did = int(dealer_id) if dealer_id is not None else None
+            if _sid and _did is not None and grid_scrape:
+                from app.services.add_sales_staging_state_service import (
+                    persist_staging_insurance_main_fields,
+                )
+
+                persist_staging_insurance_main_fields(
+                    _sid,
+                    _did,
+                    policy_num=str(grid_scrape.get("policy_num") or "").strip() or None,
+                    policy_from=str(grid_scrape.get("policy_from") or "").strip() or None,
+                    policy_to=str(grid_scrape.get("policy_to") or "").strip() or None,
+                    premium=grid_scrape.get("premium"),
+                    idv=grid_scrape.get("idv"),
+                )
+            if not grid_scrape.get("policy_num"):
+                return {
+                    **out,
+                    "error": "print_policy_details: policy_num missing after grid scrape",
+                    "grid_scrape": grid_scrape,
+                }
             scraped_pn = (grid_scrape or {}).get("policy_num")
             if scraped_pn:
                 pn = str(scraped_pn).strip()
@@ -1309,7 +1411,22 @@ def run_hero_insure_reports(
             tmo=tmo,
         )
         if direct_result.get("ok"):
-            return {**out, **direct_result}
+            if commit_insurance_master and grid_scrape is not None:
+                commit_err, grid_scrape = _misp_insert_insurance_master_from_grid_scrape(
+                    grid_scrape=grid_scrape,
+                    customer_id=int(customer_id),
+                    vehicle_id=int(vehicle_id),
+                    fill_values=fill_values,
+                    staging_payload=staging_payload,
+                    staging_id=staging_id,
+                    dealer_id=dealer_id,
+                    ocr_output_dir=ocr_output_dir,
+                    subfolder=subfolder,
+                )
+                out["grid_scrape"] = grid_scrape
+                if commit_err:
+                    return {**out, **direct_result, "ok": False, "error": commit_err}
+            return {**out, **direct_result, "grid_scrape": grid_scrape or out.get("grid_scrape")}
 
         raise RuntimeError(f"Direct URL PDF capture failed: {direct_result.get('error')}")
     except Exception as exc:

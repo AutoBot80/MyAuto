@@ -47,7 +47,8 @@ def test_build_local_rto_print_jobs_merged_bundle_with_cpa(tmp_path: Path) -> No
     assert merged.name.startswith("saathi-rto-print-")
     doc = fitz.open(str(merged))
     try:
-        assert doc.page_count == 5
+        # Gate Pass.pdf required for job build but excluded from print bundle (4 = sale+ins+cpa).
+        assert doc.page_count == 4
     finally:
         doc.close()
         merged.unlink(missing_ok=True)
@@ -71,7 +72,8 @@ def test_build_local_rto_print_jobs_merged_bundle_without_cpa(tmp_path: Path) ->
     merged = Path(jobs[0]["presigned_url"])
     doc = fitz.open(str(merged))
     try:
-        assert doc.page_count == 3
+        # Gate Pass.pdf required for job build but excluded from print bundle (2 = sale+ins).
+        assert doc.page_count == 2
     finally:
         doc.close()
         merged.unlink(missing_ok=True)

@@ -10,7 +10,10 @@ from typing import Any
 from app.config import DEALER_ID
 from app.db import get_connection
 from app.repositories.add_sales_staging import persist_staging_for_submit, _normalize_cpi_reqd_flag
-from app.services.customer_address_infer import enrich_customer_address_from_freeform
+from app.services.customer_address_infer import (
+    enrich_customer_address_from_freeform,
+    initcap_customer_address_fields,
+)
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
 from app.services.sales_ocr_service import _sanitize_details_profession_value
 from app.services.utility_functions import (
@@ -74,6 +77,7 @@ def submit_info(
         cust_in["pin"] = pin_digits[:6]
         cust_in["pin_code"] = pin_digits[:6]
     customer = enrich_customer_address_from_freeform(cust_in)
+    initcap_customer_address_fields(customer)
 
     loc = _str_or_none(file_location) or _str_or_none(customer.get("file_location"))
     if loc:

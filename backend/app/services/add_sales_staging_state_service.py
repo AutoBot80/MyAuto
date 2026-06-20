@@ -4,9 +4,72 @@ from __future__ import annotations
 
 import logging
 
-from app.repositories.add_sales_staging import update_staging_processing_state
+from app.db import get_connection
+from app.repositories.add_sales_staging import (
+    merge_staging_payload_on_cursor,
+    update_staging_processing_state,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def persist_staging_insurance_main_fields(
+    staging_id: str,
+    dealer_id: int,
+    *,
+    policy_num: str | None = None,
+    policy_from: str | None = None,
+    policy_to: str | None = None,
+    premium: object | None = None,
+    idv: object | None = None,
+) -> bool:
+    """
+    Merge non-empty Main insurance fields into ``payload_json.insurance`` (pre-INSERT / re-run cache).
+    """
+    from app.services.add_sales_commit_service import _build_staging_insurance_patch_main
+
+    sid = (staging_id or "").strip()
+    if not sid:
+        return False
+    patch = _build_staging_insurance_patch_main(
+        policy_num=policy_num,
+        policy_from=policy_from,
+        policy_to=policy_to,
+        premium=premium,
+        idv=idv,
+    )
+    if not patch:
+        return False
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                n = merge_staging_payload_on_cursor(cur, sid, int(dealer_id), patch)
+            conn.commit()
+        return n > 0
+    except Exception as exc:
+        logger.warning(
+            "persist_staging_insurance_main_fields failed staging_id=%s dealer_id=%s: %s",
+            sid,
+            dealer_id,
+            exc,
+        )
+        return False
+
+
+def persist_staging_issued_policy_num(
+    staging_id: str,
+    dealer_id: int,
+    policy_num: str,
+) -> bool:
+    """
+    Merge issued **Main** policy number into ``payload_json.insurance`` (pre-``insurance_master`` INSERT).
+    Used after post-Submit cert scrape and admin portal-only manual issue.
+    """
+    return persist_staging_insurance_main_fields(
+        staging_id,
+        dealer_id,
+        policy_num=policy_num,
+    )
 
 
 def mark_staging_insurance_state(staging_id: str, dealer_id: int, state: int) -> None:

@@ -162,8 +162,9 @@ export async function runPrintQueueRtoFlow(
     const jobNames = (gatePassRes.print_jobs ?? []).map((j) => j.filename).join(", ");
     if (gatePassRes.print_jobs?.length) {
       void dispatchPrintJobsFromApi(gatePassRes.print_jobs, { failureLog });
+      // `Printing … (Sale Certificate, Insurance, Gate Pass).` — gate pass print temporarily skipped
       statusLines.push(
-        `Printing ${gatePassRes.print_jobs.length} document(s) in the background (Sale Certificate, Insurance, Gate Pass).`
+        `Printing ${gatePassRes.print_jobs.length} document(s) in the background (Sale Certificate, Insurance).`
       );
       traceLines.push({
         prefix: "UI",

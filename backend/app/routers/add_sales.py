@@ -305,14 +305,17 @@ def _apply_staging_insurance_resume_eligibility(
     staging_id: str | None,
     dealer_id: int | None,
 ) -> dict:
-    """When staging insurance_state=2 and invoice exists, enable Generate Insurance resume."""
+    """When staging ``insurance_state=2`` and invoice exists, enable Generate Insurance print resume."""
     sid = (staging_id or "").strip()
     if not sid or dealer_id is None:
+        return result
+    if not result.get("invoice_recorded"):
         return result
     ins_state = fetch_staging_insurance_state(sid, int(dealer_id))
     if ins_state != 2:
         return result
-    if not result.get("invoice_recorded"):
+    reason = (result.get("generate_insurance_reason") or "").lower()
+    if "already stored" in reason:
         return result
     patched = dict(result)
     patched["generate_insurance_enabled"] = True

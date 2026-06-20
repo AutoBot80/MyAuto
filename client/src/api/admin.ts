@@ -313,6 +313,7 @@ export interface AdminInsuranceManuallyFilledResponse {
   staging_id: string;
   dealer_id: number;
   insurer: string;
+  policy_num: string;
   insurance_state: number;
   insurance_master_deleted: number;
 }
@@ -320,7 +321,8 @@ export interface AdminInsuranceManuallyFilledResponse {
 export function markAdminInsuranceManuallyFilled(
   dealerId: number,
   stagingId: string,
-  insurer: string
+  insurer: string,
+  policyNum: string
 ) {
   const q = new URLSearchParams({ dealer_id: String(dealerId) });
   return apiFetch<AdminInsuranceManuallyFilledResponse>(
@@ -328,7 +330,7 @@ export function markAdminInsuranceManuallyFilled(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ insurer }),
+      body: JSON.stringify({ insurer, policy_num: policyNum }),
     }
   );
 }

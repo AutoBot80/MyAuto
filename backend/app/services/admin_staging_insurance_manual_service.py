@@ -1,4 +1,4 @@
-"""Admin Ins. Manually Filled: update insurer and set insurance_state=2 for resume flow."""
+"""Admin portal-only manual issue: insurer + policy number → staging resume for Print Policy / PDF."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from app.repositories.add_sales_staging import (
     sales_id_from_staging_payload,
 )
 from app.repositories.master_ref import list_portal_insurers
+from app.services.fill_hero_insurance_service import _normalize_policy_num_for_db
 
 
 class InsuranceManuallyFilledError(ValueError):
@@ -37,16 +38,23 @@ def mark_insurance_manually_filled(
     staging_id: str,
     dealer_id: int,
     insurer: str,
+    policy_num: str,
 ) -> dict[str, Any]:
     """
-    Patch staging insurer, set insurance_state=2, and clear orphan Main insurance row
-    without policy_num when present.
+    Portal-only manual issue: operator filled policy on MISP without Generate Insurance.
+
+    Requires ``insurance_state=0``, invoice recorded, and issued **policy_num**. Sets
+    ``insurance_state=2`` and persists ``payload_json.insurance.policy_num`` for print resume.
+    Does not INSERT ``insurance_master`` (that runs after PDF in GI flow).
     """
     sid = (staging_id or "").strip()
     did = int(dealer_id)
     ins = (insurer or "").strip()
+    pn = _normalize_policy_num_for_db((policy_num or "").strip())
     if not ins:
         raise InsuranceManuallyFilledError("insurer is required")
+    if not pn:
+        raise InsuranceManuallyFilledError("policy_num is required")
 
     conn = get_connection()
     try:
@@ -64,12 +72,38 @@ def mark_insurance_manually_filled(
         "staging_id": sid,
         "dealer_id": did,
         "insurer": ins,
+        "policy_num": pn,
         "insurance_state": 2,
         "insurance_master_deleted": 0,
     }
     try:
         with conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT insurance_state
+                    FROM add_sales_staging
+                    WHERE staging_id = %s::uuid AND dealer_id = %s
+                    FOR UPDATE
+                    """,
+                    (sid, did),
+                )
+                st_row = cur.fetchone()
+                if st_row is None:
+                    raise InsuranceManuallyFilledError("Staging row not found")
+                ins_state_raw = (
+                    st_row["insurance_state"] if isinstance(st_row, dict) else st_row[0]
+                )
+                try:
+                    ins_state = int(ins_state_raw or 0)
+                except (TypeError, ValueError):
+                    ins_state = 0
+                if ins_state != 0:
+                    raise InsuranceManuallyFilledError(
+                        "Portal manual issue requires insurance_state=0 "
+                        "(automation already submitted — use Gen. Insurance from In-process)"
+                    )
+
                 existing = _load_payload_json_for_update_on_cursor(
                     cur, staging_id=sid, dealer_id=did
                 )
@@ -100,7 +134,7 @@ def mark_insurance_manually_filled(
                     inv_s = str(inv or "").strip()
                     if not inv_s:
                         raise InsuranceManuallyFilledError(
-                            "Invoice must be recorded before marking insurance manually filled"
+                            "Invoice must be recorded before portal manual issue"
                         )
                 else:
                     raise InsuranceManuallyFilledError(
@@ -120,14 +154,15 @@ def mark_insurance_manually_filled(
                 )
                 ins_row = cur.fetchone()
                 if ins_row:
-                    policy_num = (
+                    im_policy = (
                         ins_row["policy_num"]
                         if isinstance(ins_row, dict)
                         else ins_row[1]
                     )
-                    if str(policy_num or "").strip():
+                    if str(im_policy or "").strip():
                         raise InsuranceManuallyFilledError(
-                            "A policy number is already stored; use Cancel Invoice or manual SQL to revert"
+                            "A policy number is already stored in insurance_master; "
+                            "use Gen. Insurance resume or Cancel Invoice"
                         )
                     ins_id = (
                         ins_row["insurance_id"]
@@ -140,7 +175,10 @@ def mark_insurance_manually_filled(
                     )
                     result["insurance_master_deleted"] = int(cur.rowcount or 0)
 
-                merged = deep_merge_staging_payload(existing, {"insurance": {"insurer": ins}})
+                merged = deep_merge_staging_payload(
+                    existing,
+                    {"insurance": {"insurer": ins, "policy_num": pn}},
+                )
                 merged.pop("insurance_id", None)
                 frag = json.dumps(merged, default=str)
                 cur.execute(

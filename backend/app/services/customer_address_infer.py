@@ -789,9 +789,28 @@ def validate_operator_freeform_address(
     return None
 
 
-def _title_case_address_locality(raw: str) -> str:
+def title_case_address_locality(raw: str) -> str:
+    """Init-cap each comma-separated locality clause (``ward 5, near post office``)."""
     parts = [p.strip() for p in (raw or "").split(",") if p.strip()]
     return ", ".join(_squish_spaces(p).title() for p in parts)
+
+
+_title_case_address_locality = title_case_address_locality
+
+
+def initcap_customer_address_fields(customer: dict) -> None:
+    """
+    InitCap address line-1 locality fields in place.
+
+    ``city`` and ``state`` are left unchanged (may remain ALL CAPS from OCR).
+    """
+    for key in ("house", "street", "location", "district", "sub_district", "post_office"):
+        val = customer.get(key)
+        if val and str(val).strip():
+            customer[key] = _squish_spaces(str(val)).title()
+    addr = customer.get("address")
+    if addr and str(addr).strip():
+        customer["address"] = title_case_address_locality(str(addr))
 
 
 def _primary_city_from_locality(locality: str) -> str:

@@ -574,7 +574,11 @@ export function AddSalesInProcessPanel({
   );
 
   const createInvoiceCompleted = Boolean(elig && !elig.create_invoice_enabled && elig.invoice_recorded);
-  const generateInsuranceCompleted = Boolean(elig && !elig.generate_insurance_enabled && elig.invoice_recorded);
+  const giResumeActive = stagingInsuranceState === 2;
+  const generateInsuranceCompleted = Boolean(
+    stagingInsuranceState === 3 ||
+      (elig?.invoice_recorded && !(elig?.generate_insurance_enabled ?? false) && !giResumeActive)
+  );
   const hasSuppliedInsuranceDoc = false;
   const hasCommittedSaleIds =
     detailPayload != null &&
@@ -779,6 +783,13 @@ export function AddSalesInProcessPanel({
                               }
                               const res = await fillHeroInsuranceLocal({ staging_id: r.staging_id });
                               if (!res.success) throw new Error(res.error ?? "Generate Insurance failed.");
+                              if (res.hero_insure_reports?.ok === false) {
+                                throw new Error(
+                                  res.hero_insure_reports.error ??
+                                    res.error ??
+                                    "Print Policy / PDF download failed."
+                                );
+                              }
                               dispatchPrintJobsFromApi(res.print_jobs);
                             });
                           }}

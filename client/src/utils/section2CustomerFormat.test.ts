@@ -3,7 +3,21 @@ import type { ExtractedCustomerDetails } from "../types";
 import {
   buildAddressLine2,
   inProcessAddressFromStaging,
+  initCapWords,
+  titleCaseAddressLocality,
 } from "./section2CustomerFormat";
+
+describe("titleCaseAddressLocality", () => {
+  it("init-caps lowercase locality clauses", () => {
+    expect(titleCaseAddressLocality("ward 5, near post office")).toBe("Ward 5, Near Post Office");
+  });
+});
+
+describe("initCapWords", () => {
+  it("init-caps a single locality field", () => {
+    expect(initCapWords("main road")).toBe("Main Road");
+  });
+});
 
 describe("inProcessAddressFromStaging", () => {
   it("combines New Sales line 1 address with city/state/pin columns", () => {

@@ -508,6 +508,8 @@ HERO_MISP_UI_SETTLE_MS = _int_env("HERO_MISP_UI_SETTLE_MS", 200)
 INSURANCE_KYC_POST_MOBILE_DOM_MS = _int_env("INSURANCE_KYC_POST_MOBILE_DOM_MS", 2000)
 # Max wait for #navbarVerticalNav / New Policy / KYC hints after **2W** or **New Policy** click (was 5000).
 HERO_MISP_LANDING_WAIT_MS = _int_env("HERO_MISP_LANDING_WAIT_MS", 2500)
+# After proposal **Submit** / Issue Policy: max wait for **PrintPolicy.aspx** (or search page) navigation.
+HERO_MISP_POST_SUBMIT_WAIT_MS = _int_env("HERO_MISP_POST_SUBMIT_WAIT_MS", 8000)
 # When 1: after insurer commit (non-light KYC nav), open a temporary ``about:blank`` tab so the KYC document
 # gets a real visibility transition. Default **off** — DOM insurer + light keyboard nav usually do not need it.
 _HERO_KYC_TAB_AWAY_RAW = (os.getenv("HERO_MISP_KYC_TAB_AWAY_SIMULATION") or "0").strip().lower()

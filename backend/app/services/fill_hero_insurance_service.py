@@ -23,6 +23,7 @@ from app.config import (
     ENVIRONMENT_IS_PRODUCTION,
     HERO_MISP_KYC_TAB_AWAY_SIMULATION,
     HERO_MISP_LANDING_WAIT_MS,
+    HERO_MISP_POST_SUBMIT_WAIT_MS,
     HERO_MISP_UI_SETTLE_MS,
     INSURANCE_ACTION_TIMEOUT_MS,
     INSURANCE_BASE_URL,
@@ -52,7 +53,11 @@ from app.config import (
     MISP_KYC_PLEASE_WAIT_EXTRA_URL_MS,
     get_uploads_dir,
 )
-from app.services.add_sales_staging_state_service import mark_staging_insurance_state
+from app.services.add_sales_staging_state_service import (
+    mark_staging_insurance_state,
+    persist_staging_issued_policy_num,
+    persist_staging_insurance_main_fields,
+)
 from app.services.hero_insure_reports_service import run_hero_insure_reports
 from app.services.handle_browser_opening import (
     _playwright_page_url_matches_site_base,
@@ -9656,22 +9661,31 @@ def _hero_misp_on_final_policy_cert_page(page) -> bool:
     return "printpolicy.aspx" in u
 
 
+_POST_SUBMIT_PRINT_POLICY_URL_RX = re.compile(
+    r"PrintPolicy\.aspx|PrintPolicyDetails\.aspx|AllPrintPolicy\.aspx", re.I
+)
+
+
+def _hero_misp_on_post_submit_print_policy_page(page) -> bool:
+    """True when URL is the post-issue cert page or Print Policy search grid."""
+    try:
+        u = (page.url or "").strip()
+    except Exception:
+        return False
+    return bool(_POST_SUBMIT_PRINT_POLICY_URL_RX.search(u))
+
+
 def _hero_misp_wait_post_submit_print_policy_page(page, *, timeout_ms: int) -> None:
     """After proposal **Submit**, MISP lands on **PrintPolicy.aspx** (certificates) or **PrintPolicyDetails.aspx**."""
-    to = max(2_000, int(timeout_ms))
-    _t(page, 600)
-    _wait_load_optional(page, min(25_000, to * 4))
+    cap = min(
+        max(2_000, int(HERO_MISP_POST_SUBMIT_WAIT_MS)),
+        max(2_000, int(timeout_ms)),
+    )
+    _t(page, 200)
+    if _hero_misp_on_post_submit_print_policy_page(page):
+        return
     try:
-        page.wait_for_url(
-            re.compile(r"PrintPolicy\.aspx|PrintPolicyDetails\.aspx|AllPrintPolicy\.aspx", re.I),
-            timeout=min(35_000, to * 5),
-        )
-    except Exception:
-        pass
-    try:
-        page.get_by_text(
-            re.compile(r"Print\s*Policy|Policy\s*Certificate|Total\s*Premium", re.I)
-        ).first.wait_for(state="visible", timeout=min(15_000, to * 3))
+        page.wait_for_url(_POST_SUBMIT_PRINT_POLICY_URL_RX, timeout=cap)
     except Exception:
         pass
 
@@ -9940,6 +9954,29 @@ def _hero_misp_print_policy_details_run_search(
     _t(page, 800)
 
 
+def _staging_policy_num_hint_from_payload(staging_payload: dict | None) -> str:
+    """Issued policy # from ``payload_json.insurance.policy_num`` (cert scrape or admin portal manual)."""
+    if not staging_payload or not isinstance(staging_payload, dict):
+        return ""
+    ins = staging_payload.get("insurance")
+    if not isinstance(ins, dict):
+        return ""
+    return _normalize_policy_num_for_db(str(ins.get("policy_num") or "").strip()) or ""
+
+
+def _main_process_print_reports_outcome(hrep: dict | None) -> tuple[bool, str | None]:
+    """GI success requires Print Policy PDF step ``ok`` when print was attempted (non-empty ``hrep``)."""
+    rep = hrep or {}
+    if not rep:
+        if ENVIRONMENT_IS_PRODUCTION:
+            return False, "Print Policy / PDF download failed"
+        return True, None
+    if rep.get("ok"):
+        return True, None
+    err = str(rep.get("error") or "").strip() or "Print Policy / PDF download failed"
+    return False, err
+
+
 def _hero_misp_final_policy_details_commit(
     page,
     values: dict,
@@ -10029,21 +10066,37 @@ def _hero_misp_final_policy_details_commit(
             "NOTE",
             f"post_submit_print_policy: scraped policy_num={policy_hint!r}",
         )
-
-    try:
-        _append_hero_misp_frame_dump(
-            page,
-            reason="post_submit_print_policy",
-            ocr_output_dir=ocr_output_dir,
-            subfolder=subfolder,
-        )
-    except Exception as dump_exc:
-        append_playwright_insurance_line(
-            ocr_output_dir,
-            subfolder,
-            "NOTE",
-            f"post_submit_print_policy: frame dump skipped ({dump_exc!s}) — continuing",
-        )
+        sid_clean = (staging_id or "").strip()
+        if sid_clean and dealer_id is not None:
+            if persist_staging_issued_policy_num(sid_clean, int(dealer_id), policy_hint):
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "NOTE",
+                    f"staging: persisted issued policy_num={policy_hint!r} (pre-PDF, not insurance_master yet)",
+                )
+            else:
+                append_playwright_insurance_line(
+                    ocr_output_dir,
+                    subfolder,
+                    "NOTE",
+                    "staging: could not persist issued policy_num to add_sales_staging",
+                )
+    else:
+        try:
+            _append_hero_misp_frame_dump(
+                page,
+                reason="post_submit_print_policy",
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+            )
+        except Exception as dump_exc:
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                f"post_submit_print_policy: frame dump skipped ({dump_exc!s}) — continuing",
+            )
 
     hint_scrape: dict[str, Any] = {}
     if policy_hint:
@@ -10892,6 +10945,23 @@ def _hero_misp_fill_proposal_and_review(
     _hero_misp_note_proposal_review_scrape_for_insurance_master(
         ocr_output_dir, subfolder, preview
     )
+    sid_clean = (staging_id or "").strip()
+    if sid_clean and dealer_id is not None and preview:
+        if persist_staging_insurance_main_fields(
+            sid_clean,
+            int(dealer_id),
+            policy_num=str(preview.get("policy_num") or "").strip() or None,
+            policy_from=str(preview.get("policy_from") or "").strip() or None,
+            policy_to=str(preview.get("policy_to") or "").strip() or None,
+            premium=preview.get("premium"),
+            idv=preview.get("idv"),
+        ):
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "staging: persisted proposal preview idv/premium (pre-INSERT cache)",
+            )
 
     err_pr = _hero_misp_proposal_review_consent_checkboxes(
         page,
@@ -10944,7 +11014,7 @@ def _pre_result_hero_resume_at_print_policy(
         ocr_output_dir,
         subfolder,
         "NOTE",
-        "resume: insurance_state=2 — skip New Policy/KYC/VIN; main_process will run Print Policy only",
+        "resume: insurance_state in (2, 3) — skip New Policy/KYC/VIN; main_process will run Print Policy only",
     )
     try:
         mb, lu = _insurance_match_base_from_config(insurance_base_url)
@@ -10983,15 +11053,16 @@ def _main_process_run_print_policy_reports(
     staging_payload: dict | None,
     staging_id: str | None,
     dealer_id: int | None,
+    allow_non_production: bool = False,
 ) -> dict:
     hrep: dict = {}
     if not (
-        ENVIRONMENT_IS_PRODUCTION
+        (ENVIRONMENT_IS_PRODUCTION or allow_non_production)
         and subfolder
         and page
         and not page.is_closed()
     ):
-        if not ENVIRONMENT_IS_PRODUCTION:
+        if not ENVIRONMENT_IS_PRODUCTION and not allow_non_production:
             append_playwright_insurance_line(
                 ocr_output_dir,
                 subfolder,
@@ -11190,12 +11261,13 @@ def main_process(
                 ocr_output_dir,
                 subfolder,
                 "NOTE",
-                "main_process: resume insurance_state=2 → run_hero_insure_reports only",
+                "main_process: resume insurance_state in (2, 3) → run_hero_insure_reports only",
             )
+            resume_hint = _staging_policy_num_hint_from_payload(staging_payload)
             hrep = _main_process_run_print_policy_reports(
                 page,
                 values,
-                policy_num_hint="",
+                policy_num_hint=resume_hint,
                 subfolder=subfolder,
                 ocr_output_dir=ocr_output_dir,
                 customer_id=int(customer_id),
@@ -11203,16 +11275,18 @@ def main_process(
                 staging_payload=staging_payload,
                 staging_id=staging_id,
                 dealer_id=dealer_id,
+                allow_non_production=True,
             )
             out["hero_insure_reports"] = hrep
-            out["success"] = True
-            out["error"] = None
+            ok_print, print_err = _main_process_print_reports_outcome(hrep)
+            out["success"] = ok_print
+            out["error"] = None if ok_print else print_err
             append_playwright_insurance_line(
                 ocr_output_dir,
                 subfolder,
                 "NOTE",
                 "main_process: completed — resume Print Policy/scrape/INSERT="
-                f"{'yes' if ENVIRONMENT_IS_PRODUCTION and hrep.get('ok') else 'skipped or n/a'}",
+                f"{'yes' if hrep.get('ok') else 'skipped or failed'}",
             )
             try:
                 out["page_url"] = (page.url or "").strip() or None
@@ -11283,8 +11357,9 @@ def main_process(
             dealer_id=dealer_id,
         )
         out["hero_insure_reports"] = hrep
-        out["success"] = True
-        out["error"] = None
+        ok_print, print_err = _main_process_print_reports_outcome(hrep)
+        out["success"] = ok_print
+        out["error"] = None if ok_print else print_err
         append_playwright_insurance_line(
             ocr_output_dir,
             subfolder,
@@ -11702,7 +11777,7 @@ def run_fill_insurance_only(
             dealer_id=dealer_id,
             insurance_state_hint=insurance_state_hint,
         )
-        if ins_state == 2:
+        if ins_state in (2, 3):
             return _pre_result_hero_resume_at_print_policy(
                 page,
                 insurance_base_url=insurance_base_url.strip(),

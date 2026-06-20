@@ -139,7 +139,7 @@ FunctionEnd
     FileWrite $9 "# Production DMS gates (Create Invoice auto-click, etc.); see backend app.config ENVIRONMENT_IS_PRODUCTION.$\r$\n"
     FileWrite $9 "ENVIRONMENT=PROD$\r$\n"
     FileWrite $9 "DMS_MODE=real$\r$\n"
-    FileWrite $9 "DMS_BASE_URL=https://connect.heromotocorp.biz/edealerHMCL_enu?SWECmd=Start$\r$\n"
+    FileWrite $9 "DMS_BASE_URL=https://connect.heromotocorp.biz/edealerasc_enu$\r$\n"
     FileWrite $9 "INSURANCE_BASE_URL=https://heroinsurance.com/misp-partner-login$\r$\n"
     FileWrite $9 "VAHAN_BASE_URL=https://vahan.parivahan.gov.in/vahan/vahan/ui/login/login.xhtml$\r$\n"
     FileClose $9

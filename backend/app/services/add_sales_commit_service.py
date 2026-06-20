@@ -36,11 +36,12 @@ ALLIANCE_CPA_PLAN_PREMIUM_DEFAULT = 348.0
 
 
 def _build_staging_insurance_patch_main(
-  *,
-  policy_num: str | None = None,
-  policy_from: str | None = None,
-  policy_to: str | None = None,
-  premium: Any = None,
+    *,
+    policy_num: str | None = None,
+    policy_from: str | None = None,
+    policy_to: str | None = None,
+    premium: Any = None,
+    idv: Any = None,
 ) -> dict[str, Any]:
     """Merge Hero GI policy fields into ``payload_json.insurance`` for Add Sales UI display."""
     ins: dict[str, Any] = {}
@@ -56,6 +57,9 @@ def _build_staging_insurance_patch_main(
     pr = _float_or_none(premium)
     if pr is not None:
         ins["premium"] = pr
+    idv_f = _float_or_none(idv)
+    if idv_f is not None:
+        ins["idv"] = idv_f
     if not ins:
         return {}
     return {"insurance": ins}
@@ -67,6 +71,7 @@ def _staging_insurance_patch_main_from_insert_row(ir: dict[str, Any]) -> dict[st
         policy_from=ir.get("policy_from"),
         policy_to=ir.get("policy_to"),
         premium=ir.get("premium"),
+        idv=ir.get("idv"),
     )
 
 
@@ -76,6 +81,7 @@ def _staging_insurance_patch_main_from_scrape(scrape: dict[str, Any]) -> dict[st
         policy_from=scrape.get("policy_from"),
         policy_to=scrape.get("policy_to"),
         premium=scrape.get("premium"),
+        idv=scrape.get("idv"),
     )
 
 

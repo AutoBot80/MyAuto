@@ -735,7 +735,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `payload_json` | `jsonb` | NO |  | Merged payload (same logical shape as **`POST /submit-info`**); after **Create Invoice** commit merged with **`customer_id`**, **`vehicle_id`**, **`sales_id`**; after **Generate Insurance** merged with **`insurance_id`** when **`staging_id`** was passed to Hero insurance |
 | `status` | `varchar(32)` | NO | `'draft'` | `draft` / `committed` / `abandoned` |
 | `dms_state` | `integer` | NO | `0` | DMS processing state (**`0`** = not started; **`1`** = vehicle prep complete + **`vehicle_master`** upserted; **`2`** = customer prep complete + **`customer_master`** upserted) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`**, **`fill_hero_dms_service`**, **`hero_dms_db_service`** |
-| `insurance_state` | `integer` | NO | `0` | Insurance processing state (**`0`** = not started; **`2`** = policy preview Submit clicked on MISP) — **`DDL/alter/31b_add_sales_staging_processing_state.sql`** |
+| `insurance_state` | `integer` | NO | `0` | Insurance processing state (**`0`** = not started; **`2`** = policy preview Submit or portal manual issue — print resume; **`3`** = GI complete — PDF + `insurance_master` INSERT) — **`DDL/alter/31b_…`**, comment **`DDL/alter/31c_add_sales_staging_insurance_state_3_comment.sql`** |
 | `cpi_reqd` | `char(1)` | NO |  | **Y** or **N**: CPA required for this staging snapshot; legacy rows backfilled **Y**; set from Sales Detail Sheet OCR (**`insurance.cpa_reqd`**) and Section C on **Submit Info** (staging wins over **`dealer_ref.cpi_reqd`** for CPA Insurance eligibility) — **`DDL/alter/34b_add_sales_staging_cpi_reqd.sql`**, **`persist_staging_for_submit`** |
 | `created_at` | `timestamptz` | NO | `now()` | |
 | `updated_at` | `timestamptz` | NO | `now()` | |
@@ -879,6 +879,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 3.02 | Jun 2026 | **`dealer_ref.cpi_reqd`** (**Y**/**N**, default **N**; **Arya Agencies** **Y**); **`add_sales_staging.cpi_reqd`** (legacy backfill **Y**; OCR **CPA Required** + Section C on Submit Info; staging wins for CPA Insurance eligibility) — **`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**, **`DDL/alter/34b_add_sales_staging_cpi_reqd.sql`**, **`sales_ocr_service`**, **`add_sales.py`** |
 | 3.03 | Jun 2026 | **`admin_dealer_access_ref`** — Admin Saathi dealer scope per login; **`GET /admin/dealers`**, Usage matrix/logs/folders, Dealers tab filtered — **`DDL/alter/35a_admin_dealer_access_ref.sql`**, **`backend/app/repositories/admin_dealer_access.py`** |
 | 3.04 | Jun 2026 | **`dealer_ref.insurance_pay`** (**CC**/**APD**, default **APD**; **100001** **CC**); **`form_insurance_view.insurance_pay`**; MISP **Payment Mode** automation — **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`**, **`DDL/04b_dealer_ref.sql`**, **`fill_hero_insurance_service`**, Admin Saathi dealer view |
+| 3.05 | Jun 2026 | **`add_sales_staging.insurance_state`**: document **`3`** (GI complete — PDF + **`insurance_master`** INSERT); set by hero insure reports after INSERT — **`DDL/alter/31c_add_sales_staging_insurance_state_3_comment.sql`**, **`hero_insure_reports_service`**, **`add_sales_staging_state_service`** |
 
 
 ## `process_failure_log`
