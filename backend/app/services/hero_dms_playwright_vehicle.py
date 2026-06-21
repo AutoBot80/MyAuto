@@ -90,6 +90,56 @@ def _pv_networkidle(note, page: Page, timeout_ms: int, label: str) -> bool:
     return ok
 
 
+def _wait_siebel_ui_idle(
+    page: Page,
+    *,
+    timeout_ms: int,
+    note: Callable[..., None] | None,
+    log_prefix: str,
+    label: str,
+) -> bool:
+    """Poll all frames until no busy cursor / jqGrid load overlay is reported (stable streak)."""
+    cap_ms = max(500, int(timeout_ms))
+    poll_ms = max(100, int(_DMS_SIEBEL_UI_IDLE_POLL_MS))
+    deadline = time.monotonic() + cap_ms / 1000.0
+    t0 = time.monotonic()
+    streak = 0
+    need = max(1, int(_DMS_SUBTAB_PLUS_STABLE_STREAK))
+    last_busy_via = ""
+    while time.monotonic() < deadline:
+        any_busy = False
+        busy_via = ""
+        for fr in _ordered_frames(page):
+            try:
+                res = fr.evaluate(_SIEBEL_UI_BUSY_PROBE_JS)
+            except Exception:
+                continue
+            if isinstance(res, dict) and res.get("busy"):
+                any_busy = True
+                busy_via = str(res.get("via") or "busy")
+                break
+        if any_busy:
+            last_busy_via = busy_via
+            streak = 0
+        else:
+            streak += 1
+            if streak >= need:
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+                if callable(note):
+                    note(f"{log_prefix}: Siebel UI idle ({label}) after {elapsed_ms}ms")
+                return True
+        try:
+            page.wait_for_timeout(poll_ms)
+        except Exception:
+            time.sleep(poll_ms / 1000.0)
+    if callable(note):
+        suffix = f" last_busy={last_busy_via!r}" if last_busy_via else ""
+        note(
+            f"{log_prefix}: Siebel UI idle wait ({label}) timed out after {cap_ms}ms — continuing.{suffix}"
+        )
+    return False
+
+
 @contextmanager
 def _prepare_vehicle_timing_scope(note):
     """Context manager wrapping ``prepare_vehicle`` body (timing traces removed)."""
@@ -150,10 +200,13 @@ _PDI_PLUS_VISIBLE_IN_DOC_JS = """() => {
 
 # After Serial Number drilldown, Siebel may still be on **Features** while the Third Level View Bar repaints.
 _DMS_FEATURES_BEFORE_PRECHECK_SETTLE_MS = 10_000
-# After Pre-check tab click: wait until Pre-check **List:New** / **Service Request List:New** ``+`` is
-# visible and stable (consecutive polls); no transient-URL gating.
-_DMS_PRECHECK_POST_TAB_SETTLE_MS = 3_000
+# After Pre-check tab click: wait until third-level tab strip and Pre-check **List:New** ``+`` are
+# both visible and stable (consecutive polls); no transient-URL gating.
+_DMS_PRECHECK_POST_TAB_DOM_READY_MS = 5_000
 _DMS_SUBTAB_PLUS_STABLE_STREAK = 2
+# Poll until CSS busy cursor / jqGrid load overlays clear (Pre-check tab timing).
+_DMS_SIEBEL_UI_IDLE_WAIT_MS = 8_000
+_DMS_SIEBEL_UI_IDLE_POLL_MS = 350
 _FEATURES_BAR_STABLE_BEFORE_PRECHECK_JS = """() => {
     const vis = (el) => {
         if (!el) return false;
@@ -222,6 +275,65 @@ _PRECHECK_PLUS_VISIBLE_IN_DOC_JS = """() => {
         if (vis(b) && isPrecheckListNew(b)) return true;
     }
     return false;
+}"""
+
+# Third-level tab strip probe (Pre-check / PDI labels in ``#s_vctrl_div``).
+_PRECHECK_THIRD_LEVEL_TABS_POLL_JS = """() => {
+    const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    };
+    const bar = document.getElementById('s_vctrl_div');
+    if (!bar || !vis(bar)) return { loaded: false, tabs: [] };
+    const compact = (s) => s.replace(/[-\\s]+/g, '').toLowerCase();
+    const tabs = Array.from(bar.querySelectorAll('a, button, [role="tab"], span, li'))
+        .filter(t => vis(t))
+        .map(t => (t.innerText || t.textContent || '').trim())
+        .filter(t => t.length > 0 && t.length < 40);
+    const hasTabs = tabs.some(t => {
+        const c = compact(t);
+        return c === 'precheck' || c === 'pre-check' || c === 'pdi';
+    });
+    return { loaded: hasTabs, tabs };
+}"""
+
+# Siebel busy probe: CSS wait/progress cursor and jqGrid ``#lui_*`` / ``#load_*`` overlays.
+_SIEBEL_UI_BUSY_PROBE_JS = """() => {
+    const busyCursor = (el) => {
+        if (!el) return false;
+        const c = (window.getComputedStyle(el).cursor || '').toLowerCase();
+        if (!c) return false;
+        if (c === 'wait' || c === 'progress') return true;
+        return c.includes('wait') || c.includes('progress');
+    };
+    if (busyCursor(document.body)) return { busy: true, via: 'cursor:body' };
+    if (busyCursor(document.documentElement)) return { busy: true, via: 'cursor:html' };
+    const overlayBlocking = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return false;
+        const s = window.getComputedStyle(el);
+        if (s.display === 'none' || s.visibility === 'hidden') return false;
+        if (parseFloat(s.opacity || '1') <= 0.01) return false;
+        if ((s.pointerEvents || '').toLowerCase() === 'none') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 2 && r.height > 2;
+    };
+    for (const id of ['lui_s_1_l', 'lui_s_2_l', 'lui_s_3_l', 'lui_s_4_l']) {
+        if (overlayBlocking(id)) return { busy: true, via: id };
+    }
+    for (const id of ['load_s_1_l', 'load_s_2_l', 'load_s_3_l', 'load_s_4_l']) {
+        const load = document.getElementById(id);
+        if (!load) continue;
+        const s = window.getComputedStyle(load);
+        if (s.display === 'none') continue;
+        if (/loading/i.test((load.textContent || '').trim())) {
+            return { busy: true, via: id };
+        }
+    }
+    return { busy: false, via: '' };
 }"""
 
 # Boolean predicate for ``wait_for_function`` (third-level strip before Pre-check / PDI clicks).
@@ -1710,21 +1822,31 @@ def _wait_precheck_subtab_plus_ready(
     content_frame_selector: str | None,
     timeout_ms: int,
 ) -> bool:
-    """Poll until Pre-check **List:New** / **Service Request List:New** ``+`` is visible in some frame,
-    for ``_DMS_SUBTAB_PLUS_STABLE_STREAK`` consecutive polls (stability)."""
+    """Poll until Pre-check third-level tab strip and **List:New** / **Service Request List:New** ``+``
+    are both visible, for ``_DMS_SUBTAB_PLUS_STABLE_STREAK`` consecutive polls (stability)."""
     deadline = time.monotonic() + max(1.0, timeout_ms / 1000.0)
     poll_ms = 350
     streak = 0
     need = max(1, int(_DMS_SUBTAB_PLUS_STABLE_STREAK))
     while time.monotonic() < deadline:
-        hit = False
-        for fr in _iter_subtab_plus_eval_roots(page, content_frame_selector):
+        third_loaded = False
+        for fr in _third_level_bar_frame_roots(page):
             try:
-                if bool(fr.evaluate(_PRECHECK_PLUS_VISIBLE_IN_DOC_JS)):
-                    hit = True
+                st = fr.evaluate(_PRECHECK_THIRD_LEVEL_TABS_POLL_JS)
+                if isinstance(st, dict) and st.get("loaded"):
+                    third_loaded = True
                     break
             except Exception:
                 continue
+        plus_visible = False
+        for fr in _iter_subtab_plus_eval_roots(page, content_frame_selector):
+            try:
+                if bool(fr.evaluate(_PRECHECK_PLUS_VISIBLE_IN_DOC_JS)):
+                    plus_visible = True
+                    break
+            except Exception:
+                continue
+        hit = third_loaded and plus_visible
         if hit:
             streak += 1
             if streak >= need:
@@ -2117,6 +2239,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     except Exception as _feat_exc:
         note(f"{log_prefix}: Features settle before Pre-check skipped — {_feat_exc!r}")
 
+    _wait_siebel_ui_idle(
+        page,
+        timeout_ms=_DMS_SIEBEL_UI_IDLE_WAIT_MS,
+        note=note,
+        log_prefix=log_prefix,
+        label="before_precheck_tab_click",
+    )
+
     _precheck_tab_ok = _click_third_level_view_bar_tab(
         page, "Pre-check", wait_ms=1500,
         content_frame_selector=content_frame_selector, note=note, log_prefix=log_prefix,
@@ -2136,6 +2266,14 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if not _precheck_tab_ok:
         return False, "Could not find Pre-check tab."
 
+    _wait_siebel_ui_idle(
+        page,
+        timeout_ms=_DMS_SIEBEL_UI_IDLE_WAIT_MS,
+        note=note,
+        log_prefix=log_prefix,
+        label="after_precheck_tab_click",
+    )
+
     try:
         _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab")
     except Exception as e:
@@ -2145,16 +2283,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     if _wait_precheck_subtab_plus_ready(
         page,
         content_frame_selector=content_frame_selector,
-        timeout_ms=int(_DMS_PRECHECK_POST_TAB_SETTLE_MS),
+        timeout_ms=int(_DMS_PRECHECK_POST_TAB_DOM_READY_MS),
     ):
         note(
-            f"{log_prefix}: Pre-check post-tab ready — Service Request / Pre-check List:New (+) visible "
-            f"and stable ({_DMS_SUBTAB_PLUS_STABLE_STREAK} consecutive polls)."
+            f"{log_prefix}: Pre-check post-tab ready — third-level tabs + Service Request / "
+            f"Pre-check List:New (+) visible and stable ({_DMS_SUBTAB_PLUS_STABLE_STREAK} consecutive polls)."
         )
     else:
         note(
-            f"{log_prefix}: Pre-check post-tab + ready-wait timed out after {_DMS_PRECHECK_POST_TAB_SETTLE_MS}ms "
-            "— continuing."
+            f"{log_prefix}: Pre-check post-tab DOM ready-wait timed out after "
+            f"{_DMS_PRECHECK_POST_TAB_DOM_READY_MS}ms (third-level tabs and/or + missing) — continuing."
         )
     _safe_page_wait(page, 750, log_label="precheck_post_tab_stability_tail")
 
@@ -2543,6 +2681,13 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     wait_ms=1500,
                 )
             if _precheck_tab_ok:
+                _wait_siebel_ui_idle(
+                    page,
+                    timeout_ms=_DMS_SIEBEL_UI_IDLE_WAIT_MS,
+                    note=note,
+                    log_prefix=log_prefix,
+                    label="after_precheck_tab_click_chassis_recovery",
+                )
                 try:
                     _pv_networkidle(note, page, 8_000, f"{log_prefix}_after_precheck_tab_chassis_recovery")
                 except Exception as _e:
@@ -2551,15 +2696,16 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 if _wait_precheck_subtab_plus_ready(
                     page,
                     content_frame_selector=content_frame_selector,
-                    timeout_ms=int(_DMS_PRECHECK_POST_TAB_SETTLE_MS),
+                    timeout_ms=int(_DMS_PRECHECK_POST_TAB_DOM_READY_MS),
                 ):
                     note(
-                        f"{log_prefix}: Pre-check after chassis recovery — post-tab ready (+ and third-level bar)."
+                        f"{log_prefix}: Pre-check after chassis recovery — third-level tabs + "
+                        f"post-tab ready (+) visible and stable."
                     )
                 else:
                     note(
-                        f"{log_prefix}: Pre-check after chassis recovery — post-tab ready-wait timed out "
-                        f"({_DMS_PRECHECK_POST_TAB_SETTLE_MS}ms)."
+                        f"{log_prefix}: Pre-check after chassis recovery — post-tab DOM ready-wait timed out "
+                        f"({_DMS_PRECHECK_POST_TAB_DOM_READY_MS}ms)."
                     )
                 _safe_page_wait(page, 450, log_label="precheck_post_chassis_recovery_stability_tail")
                 note(f"{log_prefix}: Pre-check tab loaded after chassis recovery (networkidle + ready-wait).")
