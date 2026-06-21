@@ -113,7 +113,7 @@ _DMS_THIRD_LEVEL_BAR_TOTAL_WAIT_SEC = 10.0
 _DMS_THIRD_LEVEL_BAR_STABILITY_MS = 280
 
 # After PDI tab click: wait until the PDI tab **List:New** ``+`` is visible and stable (no URL heuristics).
-_DMS_PDI_POST_TAB_SETTLE_MS = 10_000
+_DMS_PDI_POST_TAB_SETTLE_MS = 3_000
 _PDI_PLUS_VISIBLE_IN_DOC_JS = """() => {
     const vis = (el) => {
         if (!el) return false;
@@ -152,7 +152,7 @@ _PDI_PLUS_VISIBLE_IN_DOC_JS = """() => {
 _DMS_FEATURES_BEFORE_PRECHECK_SETTLE_MS = 10_000
 # After Pre-check tab click: wait until Pre-check **List:New** / **Service Request List:New** ``+`` is
 # visible and stable (consecutive polls); no transient-URL gating.
-_DMS_PRECHECK_POST_TAB_SETTLE_MS = 10_000
+_DMS_PRECHECK_POST_TAB_SETTLE_MS = 3_000
 _DMS_SUBTAB_PLUS_STABLE_STREAK = 2
 _FEATURES_BAR_STABLE_BEFORE_PRECHECK_JS = """() => {
     const vis = (el) => {
@@ -176,6 +176,23 @@ _FEATURES_BAR_STABLE_BEFORE_PRECHECK_JS = """() => {
     const hasPdi = tabs.some(t => t === 'pdi');
     return hasPrecheck && hasPdi;
 }"""
+
+_PRECHECK_PDIPRE_DEEPLINK_MARKERS = (
+    "SWEApplet0=",
+    "SWEApplet1=",
+    "SWERowId0=",
+    "SWERowId1=",
+)
+
+
+def _siebel_is_precheck_wrong_deeplink_url(url: str) -> bool:
+    """True when Pre-check tab navigated to PDIPre with applet/row deep-link params."""
+    u = (url or "").replace(" ", "+")
+    if "PDIPre+Assessment" not in u:
+        return False
+    return any(marker in u for marker in _PRECHECK_PDIPRE_DEEPLINK_MARKERS)
+
+
 _PRECHECK_PLUS_VISIBLE_IN_DOC_JS = """() => {
     const vis = (el) => {
         if (!el) return false;
@@ -2156,7 +2173,7 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     _on_wrong_precheck_view = False
     try:
         _post_precheck_url = (page.url or "").replace(" ", "+")
-        _on_wrong_precheck_view = "PDIPre+Assessment" in _post_precheck_url or "Precheck+List+Applet" in _post_precheck_url
+        _on_wrong_precheck_view = _siebel_is_precheck_wrong_deeplink_url(_post_precheck_url)
         if _on_wrong_precheck_view:
             note(
                 f"{log_prefix}: Pre-check tab click may be on PDIPre / Precheck-only view "
@@ -2556,12 +2573,9 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 _safe_page_wait(page, 650, log_label="precheck_tab_post_chassis_recovery_settle")
                 try:
                     _post_chassis = (page.url or "").replace(" ", "+")
-                    if (
-                        "PDIPre+Assessment" in _post_chassis
-                        or "Precheck+List+Applet" in _post_chassis
-                    ):
+                    if _siebel_is_precheck_wrong_deeplink_url(_post_chassis):
                         note(
-                            f"{log_prefix}: Pre-check after chassis recovery still on PDIPre view "
+                            f"{log_prefix}: Pre-check after chassis recovery still on parameterized PDIPre deeplink "
                             f"URL={_post_chassis[:300]!r}."
                         )
                 except Exception:
@@ -3107,6 +3121,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                     "(Pre-check tab may not have reached serial detail). "
                     "s_3_1_12_0_Ctrl button often absent; s_3_1_12_0 may exist as empty SPAN only."
                 )
+            if _on_wrong_precheck_view:
+                return False, "Wrong PDIPre deeplink — Could not find + button in Pre-check tab."
             return False, "Could not find + button in Pre-check tab."
         note(f"{log_prefix}: clicked Pre-check list New (+).")
         _safe_page_wait(page, 300, log_label="after_precheck_list_new")
@@ -3473,16 +3489,15 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
         )
     _safe_page_wait(page, 750, log_label="pdi_post_tab_stability_tail")
 
+    _on_wrong_pdi_view = False
     try:
-        _post_pdi_url = page.url or ""
-        _post_pdi_url_norm = _post_pdi_url.replace(" ", "+")
-        note(f"{log_prefix}: post-PDI-tab-click url={_post_pdi_url_norm[:400]!r}")
-        if "PDIPre+Assessment" in _post_pdi_url_norm or "Precheck+List+Applet" in _post_pdi_url_norm:
+        _post_pdi_url = (page.url or "").replace(" ", "+")
+        note(f"{log_prefix}: post-PDI-tab-click url={_post_pdi_url[:400]!r}")
+        _on_wrong_pdi_view = _siebel_is_precheck_wrong_deeplink_url(_post_pdi_url)
+        if _on_wrong_pdi_view:
             note(
-                f"{log_prefix}: WARNING — PDI tab click navigated to PDIPre Assessment / "
-                f"Precheck view ({_post_pdi_url_norm[:200]}). "
-                "This usually means the fallback matched a form label instead of a tab. "
-                "The Service Request grid will not render on this view."
+                f"{log_prefix}: PDI tab click may be on PDIPre / Precheck-only view "
+                f"URL={_post_pdi_url[:300]!r}. Third-level tabs may be missing."
             )
     except Exception:
         pass
@@ -3586,22 +3601,25 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
     _ready_any = False
     _poll_diag = None
     _roots_pg = list(_roots())
-    _grid_deadline = time.monotonic() + 12.0
-    for _proot in _roots_pg:
-        _per_grid = int(max(300, (_grid_deadline - time.monotonic()) * 1000))
-        if _per_grid < 350:
-            break
-        try:
-            _proot.wait_for_function(_pdi_grid_ready_any_js, timeout=_per_grid)
-            _pd = _proot.evaluate(_pdi_grid_ready_poll_js)
-            if isinstance(_pd, dict) and _pd.get("ready"):
-                _ready_any = True
-                _poll_diag = _pd
+    if not _on_wrong_pdi_view:
+        _grid_deadline = time.monotonic() + 12.0
+        for _proot in _roots_pg:
+            _per_grid = int(max(300, (_grid_deadline - time.monotonic()) * 1000))
+            if _per_grid < 350:
                 break
-        except PlaywrightTimeout:
-            continue
-        except Exception:
-            continue
+            try:
+                _proot.wait_for_function(_pdi_grid_ready_any_js, timeout=_per_grid)
+                _pd = _proot.evaluate(_pdi_grid_ready_poll_js)
+                if isinstance(_pd, dict) and _pd.get("ready"):
+                    _ready_any = True
+                    _poll_diag = _pd
+                    break
+            except PlaywrightTimeout:
+                continue
+            except Exception:
+                continue
+    else:
+        note(f"{log_prefix}: pdi_grid_ready_poll skipped — wrong PDIPre deeplink view.")
     if _ready_any:
         if _poll_diag and note:
             note(
@@ -4990,6 +5008,8 @@ def _siebel_run_vehicle_serial_detail_precheck_pdi(
                 output_dir=_debug_dump_dir, label="pdi_plus_not_found",
                 note=note, log_prefix=log_prefix,
             )
+            if _on_wrong_pdi_view:
+                return False, "Wrong PDIPre deeplink — Could not find + button in PDI tab."
             return False, "Could not find + button in PDI tab."
         _safe_page_wait(page, 1500, log_label="after_sr_list_new_settle")
 

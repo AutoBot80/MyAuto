@@ -13,7 +13,7 @@ alwaysApply: true
 
 | Document | Purpose | When to update |
 |----------|---------|----------------|
-| **`business-requirements-document.md`** (BRD) | Business rules, functional requirements, §6.1a Siebel SOP | Any user-visible or business-meaningful flow/rule change; changelog rows for notable updates |
+| **`Documentation/brd/README.md`** (and `brd/brd-*.md`) | Business rules, functional requirements, Siebel SOP (**brd-dms.md**) | Any user-visible or business-meaningful flow/rule change; changelog on the affected domain BRD |
 | **`high-level-design.md`** (HLD) | Backend modules, client pages, architecture changelog | New/changed modules, pages, or major flow; add **changelog** row when behavior contract shifts |
 | **`low-level-design.md`** (LLD) | APIs, module layout, Playwright/Siebel parity (**§2.4d**), **changelog** (e.g. **6.x**) | Endpoint/service changes; automation sequence or helper semantics; **always** add/update **LLD changelog** for non-trivial Siebel/DMS behavior |
 | **`Database DDL.md`** | Tables, columns, relationships | Any **`DDL/`** script or **column/table/schema** change only — update table definitions and changelog; **do not** add changelog rows for automation-only or API-only work with no database change |

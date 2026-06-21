@@ -1,7 +1,22 @@
 # Database DDL
 ## auto_ai (PostgreSQL)
 
-This document lists the current database tables and their columns. **Executable DDL scripts** are in the **`DDL/`** folder (e.g. `DDL/01_ai_reader_queue.sql`). Keep both this doc and the `DDL/` scripts updated when adding, removing, or altering tables.
+**Version:** 3.0 (domain-indexed, codebase sync) · **Last Updated:** June 2026 · **BRD:** [brd/README.md](brd/README.md)
+
+This document lists the current database tables and their columns, grouped by product domain. **Executable DDL scripts** are in the **`DDL/`** folder (e.g. `DDL/01_ai_reader_queue.sql`). Keep both this doc and the `DDL/` scripts updated when adding, removing, or altering tables.
+
+### Domain index
+
+| Domain | Tables / views (section nos.) |
+|--------|-------------------------------|
+| **Shared reference** | `oem_ref`, `oem_service_schedule`, `dealer_ref`, **`master_ref`**, `roles_ref`, `login_ref`, `login_roles_ref`, `subdealer_discount_master_ref`, `admin_dealer_access_ref` |
+| **Dealer Saathi** | `ai_reader_queue`, `customer_master`, `vehicle_master`, `sales_master`, `add_sales_staging`, `bulk_loads` |
+| **DMS** | Same masters + staging; DMS fill via `form_dms.py` (§9b) — no `form_dms_view` |
+| **Insurance and CPA** | `insurance_master` (**`insurance_type`** Main/CPA), `form_insurance_view` (§9c), **`form_cpa_insurance_view`** (§9d) |
+| **Print / Queue RTO** | `rto_queue`, `service_reminders_queue`, `rc_status_sms_queue` |
+| **Vahan** | `form_vahan_view` (§9a); scrape columns on `sales_master`, `rto_queue` |
+| **Subdealer Challans** | `vehicle_inventory_master`, `challan_*` staging and committed |
+| **Admin Saathi** | `admin_dealer_access_ref`, `process_failure_log`, `ocr_run_log` |
 
 **Date format:** The default date format for the application and database is **dd/mm/yyyy** (e.g. 30/05/1980). Use this format for all date fields (e.g. `date_of_birth`) in the app and in the DB.
 
@@ -14,7 +29,9 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 1) `ai_reader_queue`
+## Dealer Saathi
+
+### 1) `ai_reader_queue`
 
 **Purpose:** Queue for OCR/AI reader processing of uploaded scans.
 
@@ -132,7 +149,9 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 5) `oem_ref`
+## Shared reference data
+
+### 5) `oem_ref`
 
 **Purpose:** OEM / brand reference (e.g. Hero Motors).
 
@@ -166,6 +185,22 @@ This document lists the current database tables and their columns. **Executable 
 **Checks:**
 - `chk_oem_service_schedule_service_type` — `service_type` IN ('Free', 'Paid')
 - `chk_oem_service_schedule_active_flag` — `active_flag` IN ('Y', 'N')
+
+---
+
+### 5b) `master_ref`
+
+**Purpose:** Typed reference values (insurer names, CPA portal labels). **`dealer_ref.cpa_insurer`** FKs here when `ref_type = 'CPA'`.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `ref_type` | `varchar(64)` | NO |  | Category: e.g. **INSURER**, **CPA** |
+| `ref_value` | `varchar(512)` | NO |  | Display/canonical value |
+| `comments` | `text` | YES |  | For **CPA**: portal login URL (`https://…`); for **INSURER**: optional **`Y`** marks inclusion in Add Sales portal dropdown (app logic) |
+
+**Primary key:** (`ref_type`, `ref_value`)
+
+**Script:** `DDL/28_master_ref.sql`; **`comments`:** `DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`
 
 ---
 
@@ -205,9 +240,11 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 7) `insurance_master`
+## Insurance and CPA
 
-**Purpose:** Insurance policy records linked to customer and vehicle. Unique per (customer, vehicle, insurance_year).
+### 7) `insurance_master`
+
+**Purpose:** Insurance policy records. Unique per `(customer_id, vehicle_id, insurance_year, insurance_type)`.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
@@ -215,6 +252,7 @@ This document lists the current database tables and their columns. **Executable 
 | `customer_id` | `integer` | NO |  | FK → `customer_master(customer_id)` |
 | `vehicle_id` | `integer` | NO |  | FK → `vehicle_master(vehicle_id)` |
 | `insurance_year` | `integer` | YES |  | Policy year (yyyy) |
+| `insurance_type` | `varchar(16)` | NO | `'Main'` | **Main** = Hero/MISP GI; **CPA** = Alliance CPA certificate (**`DDL/alter/31a_insurance_master_insurance_type.sql`**) |
 | `idv` | `numeric(12,2)` | YES |  | Insured declared value |
 | `insurer` | `varchar(255)` | YES |  | Insurer name |
 | `policy_num` | `varchar(24)` | YES |  | Policy number |
@@ -229,7 +267,9 @@ This document lists the current database tables and their columns. **Executable 
 
 **Primary key:** `insurance_master_pkey` on (`insurance_id`)
 
-**Unique:** `uq_insurance_customer_vehicle_year` on (`customer_id`, `vehicle_id`, `insurance_year`)
+**Unique:** `uq_insurance_customer_vehicle_year_type` on (`customer_id`, `vehicle_id`, `insurance_year`, `insurance_type`)
+
+**Check:** `chk_insurance_master_type` — `insurance_type` IN ('Main', 'CPA')
 
 **Foreign keys:**
 - `fk_insurance_customer`: (`customer_id`) → `customer_master(customer_id)`
@@ -239,7 +279,9 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 8) `service_reminders_queue`
+## Print / Queue RTO
+
+### 8) `service_reminders_queue`
 
 **Purpose:** Queue of service reminders per customer/vehicle. Populated **only** by trigger `fn_sales_master_sync_service_reminders` when `sales_master` is inserted or updated and the dealer has `auto_sms_reminders = Y` (`DDL/09_trigger_sales_master_sync_service_reminders.sql`). **Application code must not** INSERT or UPDATE this table — use `sales_master` changes so the trigger remains the single source of reminder rows.
 
@@ -269,14 +311,16 @@ This document lists the current database tables and their columns. **Executable 
 
 ## 9) `rto_queue`
 
-**Purpose:** RTO work queue for a sale. Populated when Fill Forms completes DMS/Form 20 work; rows start in `Queued` and can later be claimed in dealer-scoped oldest-first batches. Batch processing delegates per-row site fill to `fill_rto_service.py` (stub for now; real Vahan automation TBD).
+**Purpose:** RTO work queue for a sale. Populated after Print/Queue RTO; batch processing via `fill_rto_service` (Vahan workbench) and sidecar `fill_vahan_batch`.
 
 | Column | Type | Null | Default | Notes |
 |---|---|---:|---|---|
 | `rto_queue_id` | `serial` | NO | auto | Primary key (system-generated) |
 | `sales_id` | `integer` | NO |  | FK → `sales_master(sales_id)`; UNIQUE |
+| `staging_id` | `uuid` | YES |  | FK → `add_sales_staging(staging_id)` when queued from Add Sales (**`DDL/alter/12f_rto_queue_add_staging_id.sql`**) |
 | `insurance_id` | `integer` | YES |  | FK → `insurance_master(insurance_id)` |
-| `customer_mobile` | `varchar(16)` | YES |  | Primary mobile at queue time; updated when operator chooses alternate Vahan OTP mobile |
+| `customer_mobile` | `varchar(16)` | YES |  | Primary or alternate Vahan OTP mobile |
+| `locked_by_login_id` | `varchar(128)` | YES |  | Operator who claimed row (**`DDL/alter/32a_rto_queue_locked_by_login_id.sql`**) |
 | `rto_application_id` | `varchar(128)` | YES |  | Vahan application number (filled by automation) |
 | `rto_application_date` | `date` | YES |  | Date row added / application filed |
 | `rto_payment_id` | `varchar(64)` | YES |  | Transaction ID when paid |
@@ -306,7 +350,9 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 9a) `form_vahan_view`
+## Vahan
+
+### 9a) `form_vahan_view`
 
 **Purpose:** Read-only view that projects one RTO queue row into clean column names for operator inspection, joining through `sales_master` to `customer_master`, `vehicle_master`, and `insurance_master`.
 
@@ -319,7 +365,7 @@ This document lists the current database tables and their columns. **Executable 
 | `dealer_id` | `sales_master` | Dealer reference |
 | `dealer_rto` | `dealer_ref` | `COALESCE(dealer_ref.rto_name, 'RTO' \|\| sales_master.dealer_id::text)` — human-readable office name (e.g. **RTO-Bharatpur**) when `dealer_ref.rto_name` is set |
 | `customer_id` | `sales_master` | Customer reference |
-| `mobile` | `customer_master.mobile_number` | Customer mobile |
+| `mobile` | `COALESCE(rto_queue.customer_mobile, customer_master.mobile_number::text)` | Vahan OTP mobile (**`DDL/alter/33a_form_vahan_view_queue_mobile.sql`**) |
 | `name` | `customer_master` | Customer name |
 | `care_of` | `customer_master` | S/O, W/O |
 | `address` | `customer_master` | Customer address |
@@ -344,7 +390,9 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 9b) DMS fill source (former `form_dms_view`)
+## DMS (fill source — no view)
+
+### 9b) DMS fill source (former `form_dms_view`)
 
 **Removed:** The PostgreSQL view **`form_dms_view`** is dropped by **`DDL/alter/13b_drop_form_dms_view.sql`**. Historical DDL that created it remains under **`DDL/alter/10f`–`10i_*.sql`** for reference only.
 
@@ -357,7 +405,7 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 9c) `form_insurance_view`
+### 9c) `form_insurance_view`
 
 **Purpose:** Read-only view for Hero/MISP automation: one row per sale (`sales_master`) with `customer_master`, `vehicle_master`, `dealer_ref` / `oem_ref`, and the **latest** `insurance_master` row per `(customer_id, vehicle_id)` (order: `policy_to`, `insurance_year`, `insurance_id`).
 
@@ -365,7 +413,17 @@ This document lists the current database tables and their columns. **Executable 
 
 **Important columns:** Chassis/frame (`frame_no`, `full_chassis`), engine, model, proposer and address fields, `insurer`, **`prefer_insurer`** (dealer preferred portal label for KYC when details insurer fuzzy-matches), **`hero_cpi`** (**Y**/**N** — MISP CPA NIC/CPI-style add-on row), **`insurance_pay`** (**CC**/**APD** — MISP Payment Mode), nominee columns, `financer_name`, `rto_name`, etc. Most proposal UI defaults (email, CPA tenure when not hero_cpi-driven, registration date) remain **hardcoded** in Playwright where not listed here.
 
-**Operational notes:** `load_latest_insurance_values` uses `SELECT * FROM form_insurance_view WHERE customer_id = ? AND vehicle_id = ?`. **`build_insurance_fill_values`** (`insurance_form_values.py`) uses that row **together with** **`add_sales_staging.payload_json`** when Add Sales passes **`staging_id`**: the view reflects committed masters after Create Invoice; **`payload_json`** holds the full OCR/operator merge so the pair is the **complete** insurance input set (**BR-20**). Insurer may still fall back to **`OCR_To_be_Used.json`** when view and staging lack it; consent/SMS boilerplate misread as insurer is cleared (**`sanitize_details_sheet_insurer_value`**). After merge, if the merged insurer is empty and **`prefer_insurer`** is set, the fill dict’s **`insurer`** is set to **`prefer_insurer`**; else if **`prefer_insurer`** is set and the merged insurer string has **≥20%** **`SequenceMatcher`** similarity to it, the fill dict’s **`insurer`** is replaced with **`prefer_insurer`** for MISP/KYC. Repository: **`fetch_staging_payload`** accepts **draft** or **committed** staging rows.
+**Operational notes:** `load_latest_insurance_values` uses `SELECT * FROM form_insurance_view WHERE customer_id = ? AND vehicle_id = ?`. View filters **`insurance_type = 'Main'`** only (**`DDL/alter/31a_…`**). **`build_insurance_fill_values`** merges with **`add_sales_staging.payload_json`** when **`staging_id`** is passed (**BR-20**).
+
+---
+
+### 9d) `form_cpa_insurance_view`
+
+**Purpose:** Read-only view for **CPA Alliance** automation: one row per sale with latest **`insurance_master`** row where **`insurance_type = 'CPA'`**.
+
+**Scripts:** `DDL/alter/30a_form_cpa_insurance_view.sql`; recreated in **`DDL/alter/31a_insurance_master_insurance_type.sql`**.
+
+**Important columns:** Customer/vehicle identity, nominee fields, **`cpa_policy_num`** (from CPA row's **`policy_num`**). Used by **`cpa_form_values`** / **`add_alliance_cpa_insurance`**.
 
 ---
 
@@ -441,7 +499,9 @@ This document lists the current database tables and their columns. **Executable 
 
 ---
 
-## 12) `vehicle_inventory_master`
+## Subdealer Challans
+
+### 12) `vehicle_inventory_master`
 
 **Purpose:** Stock / inventory lines (yard, chassis, engine, pricing) for subdealer challan and related flows.
 
@@ -495,12 +555,14 @@ This document lists the current database tables and their columns. **Executable 
 | `add_transport_cost` | `boolean` | NO | `FALSE` | When true (**Reduce Discount** in UI), apply percent + per-vehicle reduction before Siebel order attach |
 | `transport_cost_per_vehicle` | `numeric(12,2)` | YES |  | Per-vehicle amount (same currency as discount) deducted after percent reduction |
 | `reduce_discount_by_percent` | `numeric(5,2)` | YES |  | Percent of base discount subtracted per line (e.g. `10` = 10%); meaningful when `add_transport_cost` is true |
+| `dms_order_number` | `varchar(128)` | YES |  | Siebel order# after booking; My Orders retry (**`DDL/alter/20d_challan_master_staging_dms_resume.sql`**) |
+| `dms_attached_vin_count` | `integer` | YES |  | VIN attach progress checkpoint for order retry |
 | `created_at` | `timestamptz` | NO | `CURRENT_TIMESTAMP` | Processed tab / window filters |
 | `last_run_at` | `timestamptz` | YES |  | Set when a process/retry DMS run completes (**Latest run** in UI); nullable until first run |
 
 **Primary key:** `challan_batch_id`
 
-**Scripts:** `DDL/23_challan_master_staging.sql`; existing DBs: `DDL/alter/23a_challan_master_staging_last_run_at.sql`, `DDL/alter/20c_challan_master_transport_cost.sql`, `DDL/alter/20e_challan_reduce_discount_percent.sql`
+**Scripts:** `DDL/23_challan_master_staging.sql`; existing DBs: `DDL/alter/23a_…`, `DDL/alter/20c_…`, `DDL/alter/20d_…`, `DDL/alter/20e_…`
 
 ### `challan_details_staging`
 
@@ -669,7 +731,9 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 ---
 
-## 19a) `admin_dealer_access_ref`
+## Admin Saathi
+
+### 19a) `admin_dealer_access_ref`
 
 **Purpose:** Admin Saathi scope — which dealers each login may view in **Usage** (matrices, folders, logs) and **Dealers** tab. Managed via SQL (no Admin UI). Table name ends with **`ref`** → preserved on Admin **Delete All Data**.
 
@@ -699,10 +763,13 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `sales_master` | Submit Info, RTO, service reminders, insurance |
 | `oem_ref` | dealer_ref, Form 20 (oem_name via dealer) |
 | `oem_service_schedule` | Trigger for service_reminders_queue |
-| `dealer_ref` | Form 20, sales_master, service reminders, optional **`subdealer_type`** (see **§6**) |
-| `insurance_master` | Submit Info, View Customer |
+| `dealer_ref` | Form 20, sales_master, service reminders, optional **`subdealer_type`** (see **§6**); **`cpa_insurer`** → **`master_ref`** |
+| `master_ref` | Insurer/CPA reference; **`dealer_ref.cpa_insurer`** FK; Add Sales insurer dropdown |
+| `insurance_master` | Submit Info, View Customer; **`insurance_type`** Main vs CPA |
+| `form_insurance_view` | Hero/MISP automation (**Main** policies only) |
+| `form_cpa_insurance_view` | CPA Alliance automation |
 | `service_reminders_queue` | Trigger on sales_master |
-| `rto_queue` | RTO Queue page, rc_status_sms_queue |
+| `rto_queue` | RTO Queue page, batch claim, OTP mobile, **`locked_by_login_id`**, rc_status_sms_queue |
 | *(DMS fill row)* | **`form_dms.py`** (inline SQL) + future **`add_sales_staging.payload_json`**; `DMS_Form_Values.txt` under `ocr_output` |
 | `form_vahan_view` | Vahan field inspection and `Vahan_Form_Values.txt` generation |
 | `form_insurance_view` | Hero/MISP insurance fill and `Insurance_Form_Values.txt` generation |
@@ -721,6 +788,8 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `login_roles_ref` | Login ↔ role (+ optional `dealer_id`); **`DDL/27_login_roles_ref.sql`** |
 
 ---
+
+## Dealer Saathi (staging)
 
 ## `add_sales_staging`
 
@@ -753,6 +822,8 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.0 | Jun 2026 | Codebase sync: `master_ref`, `form_cpa_insurance_view`, `insurance_type`, `rto_queue.staging_id`/`locked_by_login_id`, challan DMS resume cols, updated queue purpose |
+| 2.0 | Jun 2026 | Domain index and section groupings |
 | 0.1 | Mar 2025 | Initial Database DDL |
 | 0.2 | Mar 2025 | vehicle_master: added model, colour, oem_name, vehicle_type, num_cylinders, horse_power, length_mm, fuel_type; sales_master: sales_id PK; RTO table schema (application_id PK, sales_id, rto_fees, pay_txn_id, etc.); service_reminders_queue: sales_id FK; added rc_status_sms_queue; insurance_master: insurance_year; Table Usage Summary |
 | 0.7 | Mar 2026 | Renamed active RTO table to `rto_queue`; Add Sales now queues RTO work instead of auto-running dummy Vahan |
@@ -880,7 +951,9 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 3.03 | Jun 2026 | **`admin_dealer_access_ref`** — Admin Saathi dealer scope per login; **`GET /admin/dealers`**, Usage matrix/logs/folders, Dealers tab filtered — **`DDL/alter/35a_admin_dealer_access_ref.sql`**, **`backend/app/repositories/admin_dealer_access.py`** |
 | 3.04 | Jun 2026 | **`dealer_ref.insurance_pay`** (**CC**/**APD**, default **APD**; **100001** **CC**); **`form_insurance_view.insurance_pay`**; MISP **Payment Mode** automation — **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`**, **`DDL/04b_dealer_ref.sql`**, **`fill_hero_insurance_service`**, Admin Saathi dealer view |
 | 3.05 | Jun 2026 | **`add_sales_staging.insurance_state`**: document **`3`** (GI complete — PDF + **`insurance_master`** INSERT); set by hero insure reports after INSERT — **`DDL/alter/31c_add_sales_staging_insurance_state_3_comment.sql`**, **`hero_insure_reports_service`**, **`add_sales_staging_state_service`** |
+---
 
+## Admin Saathi (logs)
 
 ## `process_failure_log`
 

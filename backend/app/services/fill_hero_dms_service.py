@@ -2178,7 +2178,7 @@ def collate_customer_master_from_dms_siebel_inputs(
     return {"fields": fields, "notes": notes, "mapping_unclear": unclear}
 
 
-_PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS = 3
+_PREPARE_VEHICLE_PRECHECK_PDI_MAX_ATTEMPTS = 5
 _PREPARE_VEHICLE_PRECHECK_PDI_RETRY_SETTLE_MS = 500
 
 
@@ -2187,10 +2187,13 @@ def _is_prepare_vehicle_precheck_pdi_transient(err: str | None) -> bool:
     True when ``prepare_vehicle`` failed on a flaky Pre-check/PDI UI state (List:New ``+`` or tab not ready).
 
     Closed allowlist — do not match bare ``Could not find`` (too broad).
+    Wrong PDIPre deeplink (parameterized GotoView) surfaces as missing ``+`` / tab; prefix makes retries explicit in logs.
     """
     s = (err or "").strip().casefold()
     if not s:
         return False
+    if "wrong pdipre deeplink" in s:
+        return True
     if "could not find + button" in s and ("pre-check tab" in s or "pdi tab" in s):
         return True
     if "could not find pre-check tab" in s:

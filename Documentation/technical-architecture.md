@@ -108,10 +108,11 @@ Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API val
 
 - **Code:** Monorepo or split (e.g. `client/`, `backend/`, `workers/`).
 - **Docs:** Kept under `Documentation/`:
-  - `business-requirements-document.md` — BRD, business rules, functional requirements
-  - `high-level-design.md` — HLD, code structure, data flows
-  - `low-level-design.md` — LLD, API endpoints, modules
-  - `Database DDL.md` — all tables, columns, constraints, usage
+  - `brd/README.md` — BRD index + cross-cutting rules; domain BRDs under `brd/` (DMS, Subdealer Challans, Insurance/CPA, Print/Queue RTO, Vahan, Admin Saathi, Dealer Saathi)
+  - `business-requirements-document.md` — redirect to `brd/README.md`
+  - `high-level-design.md` — HLD, domain sections, data flows
+  - `low-level-design.md` — LLD, APIs and modules by domain
+  - `Database DDL.md` — tables grouped by domain
   - `technical-architecture.md` (this file)
   - `docs_changelog.md` — **optional** staging backlog for upcoming BRD/HLD/LLD/DDL edits; truncate after canonical docs are updated (see file header)
   - `checkpoints.md` — **canonical registry** of named git checkpoints (serial no., tags, commits, IST dates, TODOs). Optional per-checkpoint narrative: `checkpoint-*.md`. Creating a checkpoint without updating this registry is disallowed—see §6 and **`.cursor/rules/checkpoints-registry.mdc`**. After recording a checkpoint, agents **playback** the full table (serial no., name, **commit** hash, date, TODOs) per that rule.
@@ -122,9 +123,9 @@ Configure **`backend/.env`** (copy from **`backend/.env.example`**). The API val
 
 Update as applicable:
 
-- **BRD** (`business-requirements-document.md`) — business rules, §6.1a Siebel target sequence, functional requirements; add **changelog** rows for notable behavior changes
-- **HLD** (`high-level-design.md`) — backend modules, client pages; add **changelog** row when the architecture or module contract changes
-- **LLD** (`low-level-design.md`) — API tables, §2.4d Playwright parity, module notes; add **LLD changelog** (e.g. **6.x**) for non-trivial automation or API changes
+- **BRD** (`Documentation/brd/` — index + domain files) — business rules, Siebel SOP (**brd-dms.md**), functional requirements; add **changelog** rows on the relevant domain BRD for notable behavior changes
+- **HLD** (`high-level-design.md`) — domain sections, backend modules, client pages; add **changelog** row when the architecture or module contract changes
+- **LLD** (`low-level-design.md`) — domain sections, API tables, Playwright parity; add **LLD changelog** for non-trivial automation or API changes (or append to archive if using consolidated changelog policy)
 - **Database DDL** (`Database DDL.md`) — only when **`DDL/`** scripts or **table/column/schema** definitions change; do **not** add changelog rows for automation-only or API-only work with no database change
 - **This file** (§6–§7) — optional changelog row when documentation policy or repo doc layout changes
 
@@ -161,4 +162,4 @@ Cursor rule: `.cursor/rules/documentation-maintenance.mdc` (always applied).
 | 0.9 | Apr 2026 | — | §6 Checkpoint workflow: **`.cursor/rules/checkpoints-registry.mdc`** expanded (triggers, step order, forbid narrative-only); **`checkpoints.md`** “Agent process”; mandatory **playback** of full checkpoint list after setting one |
 | 0.10 | Apr 2026 | — | §6 Checkpoint **playback** includes **git commit** (full hash) per row, not only name/date/TODOs |
 | 0.11 | Apr 2026 | — | §5 **Artifacts** — link **`playwright-insurance-trace-workflow.md`** for **`Playwright_insurance.txt`** read/fix workflow |
-| 0.12 | Apr 2026 | — | §6 **`docs_changelog.md`** — optional staging backlog for doc edits; truncate after sync with BRD/HLD/LLD/**Database DDL.md** |
+| 0.13 | Jun 2026 | — | §6 Docs layout — split BRD into `Documentation/brd/` domain files; HLD/LLD/DDL v2.0 domain sections |

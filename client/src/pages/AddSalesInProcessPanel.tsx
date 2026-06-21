@@ -65,11 +65,17 @@ function rowHasCommittedIds(r: AddSalesInProcessRow): boolean {
   return !Number.isNaN(c) && !Number.isNaN(v) && c > 0 && v > 0;
 }
 
+function normalizeHeroCpiFlag(raw: unknown): "Y" | "N" | null {
+  const v = String(raw ?? "").trim().slice(0, 1).toUpperCase();
+  if (v === "Y") return "Y";
+  if (v === "N") return "N";
+  return null;
+}
+
 function formatHeroCpiDisplay(raw: unknown): string {
-  const s = String(raw ?? "").trim();
-  const v = s.slice(0, 1).toUpperCase();
-  if (v === "Y") return "Yes";
-  if (v === "N") return "No";
+  const flag = normalizeHeroCpiFlag(raw);
+  if (flag === "Y") return "Yes";
+  if (flag === "N") return "No";
   return "—";
 }
 
@@ -649,6 +655,10 @@ export function AddSalesInProcessPanel({
     [detailPayload]
   );
   const mobileAlternateDisplay = useMemo(() => formatMobileAlternateSlash(custRaw ?? null), [custRaw]);
+  const heroCpiFlag = useMemo(
+    () => normalizeHeroCpiFlag(elig?.hero_cpi ?? dealerHeroCpi),
+    [elig?.hero_cpi, dealerHeroCpi]
+  );
   const heroCpaSalesDisplay = useMemo(
     () => formatHeroCpiDisplay(elig?.hero_cpi ?? dealerHeroCpi),
     [elig?.hero_cpi, dealerHeroCpi]
@@ -1193,14 +1203,18 @@ export function AddSalesInProcessPanel({
                   </div>
                   {cpaRequiredIsYes && (
                     <>
-                      <div className="add-sales-v2-dl-row">
-                        <dt>Hero CPA</dt>
-                        <dd className="add-sales-in-process-dd--readonly">{heroCpaSalesDisplay}</dd>
-                      </div>
-                      <div className="add-sales-v2-dl-row">
-                        <dt>CPA Provider</dt>
-                        <dd className="add-sales-in-process-dd--readonly">{cpaProviderSalesDisplay}</dd>
-                      </div>
+                      {heroCpiFlag === "Y" && (
+                        <div className="add-sales-v2-dl-row">
+                          <dt>Hero CPA</dt>
+                          <dd className="add-sales-in-process-dd--readonly">{heroCpaSalesDisplay}</dd>
+                        </div>
+                      )}
+                      {heroCpiFlag === "N" && (
+                        <div className="add-sales-v2-dl-row">
+                          <dt>CPA Provider</dt>
+                          <dd className="add-sales-in-process-dd--readonly">{cpaProviderSalesDisplay}</dd>
+                        </div>
+                      )}
                       <div className="add-sales-v2-dl-row">
                         <dt>CPA Policy#</dt>
                         <dd className="add-sales-in-process-dd--readonly">{cpaPolicySalesDisplay}</dd>
