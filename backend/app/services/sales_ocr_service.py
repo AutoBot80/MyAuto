@@ -31,12 +31,13 @@ from app.services.utility_functions import (
 )
 from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
-    initcap_customer_address_fields,
+    uppercase_customer_address_fields,
     normalize_address_freeform,
     strip_junk_between_last_indian_state_and_pin,
 )
 from app.services.ocr_extraction_log import append_ocr_extraction_log
 from app.placeholder_mobile import is_placeholder_indian_mobile
+from app.ocr_mobile_normalize import parse_indian_mobile_from_ocr
 from app.services.ocr_sale_artifacts import (
     LEGACY_PRE_OCR_TEXT_TXT,
     LEGACY_PRE_OCR_TESSERACT_TEXT_TXT,
@@ -2444,7 +2445,7 @@ def _apply_initcap_on_read(
         for k in ("name", "care_of"):
             if customer.get(k):
                 customer[k] = _initcap_words(customer.get(k))
-        initcap_customer_address_fields(customer)
+        uppercase_customer_address_fields(customer)
         data["customer"] = customer
 
     insurance = data.get("insurance") or {}
@@ -3166,11 +3167,9 @@ def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str
             out[_f] = _normalize_kv_value_for_checkbox_fields(_f, out[_f])
 
     if out.get("mobile_number"):
-        digits = "".join(ch for ch in out["mobile_number"] if ch.isdigit())
-        out["mobile_number"] = digits[-10:] if digits else ""
+        out["mobile_number"] = parse_indian_mobile_from_ocr(out["mobile_number"]) or ""
     if out.get("alt_phone_num"):
-        digits = "".join(ch for ch in out["alt_phone_num"] if ch.isdigit())
-        out["alt_phone_num"] = digits[-10:] if digits else ""
+        out["alt_phone_num"] = parse_indian_mobile_from_ocr(out["alt_phone_num"]) or ""
     if out.get("aadhar_id"):
         out["aadhar_id"] = _aadhar_last4(out.get("aadhar_id")) or ""
     if out.get("nominee_age"):

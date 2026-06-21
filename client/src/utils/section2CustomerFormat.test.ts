@@ -3,19 +3,32 @@ import type { ExtractedCustomerDetails } from "../types";
 import {
   buildAddressLine2,
   inProcessAddressFromStaging,
-  initCapWords,
-  titleCaseAddressLocality,
+  normalizeOperatorFreeformAddress,
+  uppercaseAddressField,
+  uppercaseAddressLocality,
 } from "./section2CustomerFormat";
 
-describe("titleCaseAddressLocality", () => {
-  it("init-caps lowercase locality clauses", () => {
-    expect(titleCaseAddressLocality("ward 5, near post office")).toBe("Ward 5, Near Post Office");
+describe("uppercaseAddressLocality", () => {
+  it("uppercases lowercase locality clauses", () => {
+    expect(uppercaseAddressLocality("ward 5, near post office")).toBe("WARD 5, NEAR POST OFFICE");
   });
 });
 
-describe("initCapWords", () => {
-  it("init-caps a single locality field", () => {
-    expect(initCapWords("main road")).toBe("Main Road");
+describe("uppercaseAddressField", () => {
+  it("uppercases a single address field", () => {
+    expect(uppercaseAddressField("main road")).toBe("MAIN ROAD");
+  });
+});
+
+describe("normalizeOperatorFreeformAddress", () => {
+  it("uppercases city/state tail on New tab line 2", () => {
+    const got = normalizeOperatorFreeformAddress("bharatpur, rajasthan, 321001", {
+      minCommaSegments: 2,
+    });
+    expect(got).not.toBeNull();
+    expect(got!.city).toBe("BHARATPUR");
+    expect(got!.state).toBe("RAJASTHAN");
+    expect(got!.address).toBe("BHARATPUR, RAJASTHAN, 321001");
   });
 });
 

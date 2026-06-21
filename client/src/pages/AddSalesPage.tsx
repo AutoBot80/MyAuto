@@ -58,12 +58,12 @@ import {
   buildSection2FullAddress,
   composeCareOf,
   formatDobDigitsInput,
-  initCapWords,
   normalizeDobToDdMmYyyy,
   normalizeOperatorFreeformAddress,
   parseAddressLine2,
   parseCareOfFromCombined,
-  titleCaseAddressLocality,
+  uppercaseAddressField,
+  uppercaseAddressLocality,
 } from "../utils/section2CustomerFormat";
 import {
   getSection2ValidationErrors,
@@ -195,9 +195,9 @@ function getInitialForm() {
   return d;
 }
 
-function initCapLine1Field(raw: unknown): string | undefined {
+function uppercaseLine1Field(raw: unknown): string | undefined {
   const v = sanitizeOptionalFormField(String(raw ?? "").trim());
-  return v ? initCapWords(v) : undefined;
+  return v ? uppercaseAddressField(v) : undefined;
 }
 
 function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCustomerDetails {
@@ -226,16 +226,22 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
     care_of: careComposed || undefined,
     care_of_relation: careParts.relation,
     care_of_name: careParts.name || undefined,
-    house: initCapLine1Field(r.house),
-    street: initCapLine1Field(r.street),
-    location: initCapLine1Field(r.location),
-    city: sanitizeOptionalFormField(String(r.city ?? "").trim()),
-    post_office: initCapLine1Field(r.post_office),
-    district: initCapLine1Field(r.district),
-    sub_district: initCapLine1Field(r.sub_district),
-    state: sanitizeOptionalFormField(String(r.state ?? "").trim()),
+    house: uppercaseLine1Field(r.house),
+    street: uppercaseLine1Field(r.street),
+    location: uppercaseLine1Field(r.location),
+    city: (() => {
+      const v = sanitizeOptionalFormField(String(r.city ?? "").trim());
+      return v ? uppercaseAddressField(v) : undefined;
+    })(),
+    post_office: uppercaseLine1Field(r.post_office),
+    district: uppercaseLine1Field(r.district),
+    sub_district: uppercaseLine1Field(r.sub_district),
+    state: (() => {
+      const v = sanitizeOptionalFormField(String(r.state ?? "").trim());
+      return v ? uppercaseAddressField(v) : undefined;
+    })(),
     pin_code: pinVal,
-    address: addressRaw ? titleCaseAddressLocality(addressRaw) : undefined,
+    address: addressRaw ? uppercaseAddressLocality(addressRaw) : undefined,
   };
 }
 
@@ -1501,13 +1507,14 @@ export function AddSalesPage({
           insurance: { insurer: selectedInsurer },
         });
       }
-      const pullWarn = await pullAadharScansForInsurance(dealerId, savedTo);
-      if (pullWarn) {
-        setFillInsuranceStatus(`Warning: ${pullWarn}`);
-      }
+      await pullAadharScansForInsurance(dealerId, savedTo);
       const insuranceRes = await fillHeroInsuranceLocal(
         lastStagingId
-          ? { staging_id: lastStagingId }
+          ? {
+              staging_id: lastStagingId,
+              dealer_id: dealerId,
+              subfolder: savedTo || undefined,
+            }
           : {
               subfolder: savedTo,
               dealer_id: dealerId,
@@ -1526,7 +1533,7 @@ export function AddSalesPage({
       } else {
         const successMsg =
           "Hero Insurance run completed (pre + main + post). Browser may remain open for operator.";
-        setFillInsuranceStatus(pullWarn ? `Warning: ${pullWarn} ${successMsg}` : successMsg);
+        setFillInsuranceStatus(successMsg);
         setGenerateInsuranceCompleted(true);
         dispatchPrintJobsFromApi(insuranceRes.print_jobs);
         await reloadInsuranceFromStaging();
@@ -2030,10 +2037,10 @@ export function AddSalesPage({
                       setAddressLine2Input(normedLine2.address);
                       addressLine2DirtyRef.current = false;
                       const line1Raw = buildAddressLine1(c) || c?.address || "";
-                      const line1Initcap = line1Raw.trim() ? titleCaseAddressLocality(line1Raw.trim()) : undefined;
+                      const line1Upper = line1Raw.trim() ? uppercaseAddressLocality(line1Raw.trim()) : undefined;
                       const customerForSubmit: ExtractedCustomerDetails = {
                         ...c,
-                        address: line1Initcap,
+                        address: line1Upper,
                         house: undefined,
                         street: undefined,
                         location: undefined,

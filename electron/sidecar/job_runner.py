@@ -2764,7 +2764,9 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
 
     # Use LOCAL paths, not server-returned Linux paths.
     from app.config import get_ocr_output_dir, get_uploads_dir
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = int(
+        ctx.get("dealer_id") or params.get("dealer_id") or os.getenv("DEALER_ID", "100001")
+    )
     ocr_dir = get_ocr_output_dir(dealer_id)
     uploads_dir = get_uploads_dir(dealer_id)
 
@@ -2835,7 +2837,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
                 ocr_output_dir=ocr_dir,
                 staging_payload=staging_payload,
                 staging_id=staging_id,
-                dealer_id=params.get("dealer_id"),
+                dealer_id=dealer_id,
                 insurance_state_hint=insurance_state_hint,
             )
             main = main_process(
@@ -2846,7 +2848,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
                 ocr_output_dir=ocr_dir,
                 staging_payload=staging_payload,
                 staging_id=staging_id,
-                dealer_id=params.get("dealer_id"),
+                dealer_id=dealer_id,
             )
             result = post_process(pre_result=pre, main_result=main)
         except Exception as exc:
@@ -2868,7 +2870,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
             "preview_scrape": _final_scrape,
             "post_issue_scrape": None,
             "staging_id": staging_id,
-            "dealer_id": params.get("dealer_id"),
+            "dealer_id": dealer_id,
             "subfolder": subfolder,
         }
         try:

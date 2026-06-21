@@ -140,6 +140,7 @@ class InsuranceResolveResponse(BaseModel):
     staging_payload: dict[str, Any] | None = None
     staging_id: str | None = None
     insurance_state: int = 0
+    dealer_id: int
     ocr_output_dir: str
     headed: bool
     remote_debug_port: int
@@ -598,6 +599,7 @@ async def insurance_resolve(
         staging_payload=staging_payload,
         staging_id=sid or None,
         insurance_state=insurance_state,
+        dealer_id=int(did),
         ocr_output_dir=ocr_dir,
         headed=bool(DMS_PLAYWRIGHT_HEADED),
         remote_debug_port=int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333),

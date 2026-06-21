@@ -787,11 +787,12 @@ export function AddSalesInProcessPanel({
                             setSelectedId(r.staging_id);
                             void wrapRowAction(r.staging_id, async () => {
                               const sf = (r.file_location ?? r.subfolder ?? subfolder).trim();
-                              const pullWarn = await pullAadharScansForInsurance(dealerId, sf);
-                              if (pullWarn) {
-                                setRowMsg({ text: `Warning: ${pullWarn}`, success: true });
-                              }
-                              const res = await fillHeroInsuranceLocal({ staging_id: r.staging_id });
+                              await pullAadharScansForInsurance(dealerId, sf);
+                              const res = await fillHeroInsuranceLocal({
+                                staging_id: r.staging_id,
+                                dealer_id: dealerId,
+                                subfolder: sf || undefined,
+                              });
                               if (!res.success) throw new Error(res.error ?? "Generate Insurance failed.");
                               if (res.hero_insure_reports?.ok === false) {
                                 throw new Error(

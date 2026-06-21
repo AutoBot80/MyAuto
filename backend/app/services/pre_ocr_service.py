@@ -38,6 +38,7 @@ from typing import Any
 
 from PIL import Image
 
+from app.ocr_mobile_normalize import parse_indian_mobile_from_ocr
 from app.placeholder_mobile import is_placeholder_indian_mobile
 from app.config import (
     BULK_UPLOAD_DIR,
@@ -132,6 +133,15 @@ DETAILS_SHEET_MOBILE_NUMBER_LABEL = re.compile(
 # "Alternate No.: …" and wrongly picks the alternate mobile before the primary.
 CUSTOMER_MOBILE_CONTEXT = re.compile(
     r"(?:Tel\.?\s*Name\s*No\.?|Mobile(?:\s+Number)?|Phone)\s*[:\s]*([6-9]\d{9})",
+    re.IGNORECASE,
+)
+# Loose captures for OCR-noisy handwritten mobiles (/ vs 1, O vs 0, etc.).
+_OCR_MOBILE_TOKEN = r"[0-9OolIQ/|\-\s\.SBZsb]{8,18}"
+DETAILS_SHEET_MOBILE_NUMBER_LABEL_LOOSE = re.compile(
+    rf"(?i)mobile\s*number\s*[:\s]*({_OCR_MOBILE_TOKEN})",
+)
+CUSTOMER_MOBILE_CONTEXT_LOOSE = re.compile(
+    rf"(?:Tel\.?\s*Name\s*No\.?|Mobile(?:\s+Number)?|Phone)\s*[:\s]*({_OCR_MOBILE_TOKEN})",
     re.IGNORECASE,
 )
 # Aadhar number: nnnn nnnn nnnn or 12 consecutive digits
@@ -1905,16 +1915,10 @@ def _pre_ocr_text_from_sales_detail_sheet_onward(full_text: str) -> str:
 
 
 def _normalize_indian_mobile_hint(raw: str | None) -> str | None:
-    """Return a valid 10-digit Indian mobile from user/form input (handles spaces, +91)."""
+    """Return a valid 10-digit Indian mobile from user/form input (handles spaces, +91, OCR noise)."""
     if not raw or not str(raw).strip():
         return None
-    digits = "".join(c for c in str(raw) if c.isdigit())
-    if len(digits) < 10:
-        return None
-    ten = digits[-10:]
-    if ten[0] in "6789" and not is_placeholder_indian_mobile(ten):
-        return ten
-    return None
+    return parse_indian_mobile_from_ocr(str(raw))
 
 
 def _extract_mobile_from_text(text: str) -> str | None:
@@ -1927,10 +1931,17 @@ def _extract_mobile_from_text(text: str) -> str | None:
     """
     if not text:
         return None
-    for pattern in (DETAILS_SHEET_MOBILE_NUMBER_LABEL, CUSTOMER_MOBILE_CONTEXT):
+    strict_patterns = (DETAILS_SHEET_MOBILE_NUMBER_LABEL, CUSTOMER_MOBILE_CONTEXT)
+    loose_patterns = (DETAILS_SHEET_MOBILE_NUMBER_LABEL_LOOSE, CUSTOMER_MOBILE_CONTEXT_LOOSE)
+    for pattern in strict_patterns:
         for match in pattern.finditer(text):
             ten = match.group(1)
             if ten and not is_placeholder_indian_mobile(ten):
+                return ten
+    for pattern in loose_patterns:
+        for match in pattern.finditer(text):
+            ten = parse_indian_mobile_from_ocr(match.group(1))
+            if ten:
                 return ten
     for match in MOBILE_PATTERN.finditer(text):
         ten = match.group(1)
@@ -1945,21 +1956,22 @@ def _extract_all_mobiles_from_text(text: str) -> list[str]:
         return []
     seen: set[str] = set()
     result: list[str] = []
+
+    def _add(ten: str | None) -> None:
+        if ten and ten not in seen and not is_placeholder_indian_mobile(ten):
+            seen.add(ten)
+            result.append(ten)
+
     for match in DETAILS_SHEET_MOBILE_NUMBER_LABEL.finditer(text):
-        m = match.group(1)
-        if m and m not in seen and not is_placeholder_indian_mobile(m):
-            seen.add(m)
-            result.append(m)
+        _add(match.group(1))
     for match in CUSTOMER_MOBILE_CONTEXT.finditer(text):
-        m = match.group(1)
-        if m and m not in seen and not is_placeholder_indian_mobile(m):
-            seen.add(m)
-            result.append(m)
+        _add(match.group(1))
+    for match in DETAILS_SHEET_MOBILE_NUMBER_LABEL_LOOSE.finditer(text):
+        _add(parse_indian_mobile_from_ocr(match.group(1)))
+    for match in CUSTOMER_MOBILE_CONTEXT_LOOSE.finditer(text):
+        _add(parse_indian_mobile_from_ocr(match.group(1)))
     for match in MOBILE_PATTERN.finditer(text):
-        m = match.group(1)
-        if m and m not in seen and not is_placeholder_indian_mobile(m):
-            seen.add(m)
-            result.append(m)
+        _add(match.group(1))
     return result
 
 

@@ -789,6 +789,12 @@ def validate_operator_freeform_address(
     return None
 
 
+def uppercase_address_locality(raw: str) -> str:
+    """Uppercase each comma-separated locality clause."""
+    parts = [p.strip() for p in (raw or "").split(",") if p.strip()]
+    return ", ".join(_squish_spaces(p).upper() for p in parts)
+
+
 def title_case_address_locality(raw: str) -> str:
     """Init-cap each comma-separated locality clause (``ward 5, near post office``)."""
     parts = [p.strip() for p in (raw or "").split(",") if p.strip()]
@@ -798,19 +804,24 @@ def title_case_address_locality(raw: str) -> str:
 _title_case_address_locality = title_case_address_locality
 
 
-def initcap_customer_address_fields(customer: dict) -> None:
-    """
-    InitCap address line-1 locality fields in place.
-
-    ``city`` and ``state`` are left unchanged (may remain ALL CAPS from OCR).
-    """
-    for key in ("house", "street", "location", "district", "sub_district", "post_office"):
+def uppercase_customer_address_fields(customer: dict) -> None:
+    """Uppercase all address fields in place (line 1 locality + line 2 city/state)."""
+    for key in (
+        "house",
+        "street",
+        "location",
+        "district",
+        "sub_district",
+        "post_office",
+        "city",
+        "state",
+    ):
         val = customer.get(key)
         if val and str(val).strip():
-            customer[key] = _squish_spaces(str(val)).title()
+            customer[key] = _squish_spaces(str(val)).upper()
     addr = customer.get("address")
     if addr and str(addr).strip():
-        customer["address"] = title_case_address_locality(str(addr))
+        customer["address"] = uppercase_address_locality(str(addr))
 
 
 def _primary_city_from_locality(locality: str) -> str:
@@ -826,7 +837,7 @@ def normalize_operator_freeform_address(
     """
     Validate, then return address + ``city`` / ``state`` / ``pin`` for staging.
 
-    Locality clauses are title-cased; state is canonical (``RJ`` → ``Rajasthan``).
+    Locality clauses are uppercased; state is canonical then uppercased (``RJ`` → ``RAJASTHAN``).
     """
     if validate_operator_freeform_address(address, min_comma_segments=min_comma_segments):
         return None
@@ -839,17 +850,18 @@ def normalize_operator_freeform_address(
     canon = resolve_indian_state_name(state_raw, allow_la_ladakh=True)
     if not canon:
         return None
-    city_locality = _title_case_address_locality(city_raw)
+    city_locality = uppercase_address_locality(city_raw)
     city = _primary_city_from_locality(city_locality)
+    canon_upper = canon.upper()
     last = segments[-1]
     if re.match(r"^(.+?)\s*(?:[-–—]\s*)+(\d{6})\s*$", last.strip()):
-        addr = f"{city_locality}, {canon} - {pin}"
+        addr = f"{city_locality}, {canon_upper} - {pin}"
     else:
-        addr = f"{city_locality}, {canon}, {pin}"
+        addr = f"{city_locality}, {canon_upper}, {pin}"
     return {
         "address": addr,
         "city": city,
-        "state": canon,
+        "state": canon_upper,
         "pin": pin,
         "pin_code": pin,
     }

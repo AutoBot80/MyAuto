@@ -222,6 +222,20 @@ function titleCaseWord(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 }
 
+/** Uppercase a single address field (house, street, city, state, etc.). */
+export function uppercaseAddressField(raw: string): string {
+  return raw.trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+/** Uppercase each comma-separated locality clause. */
+export function uppercaseAddressLocality(raw: string): string {
+  return raw
+    .split(",")
+    .map((part) => uppercaseAddressField(part))
+    .filter(Boolean)
+    .join(", ");
+}
+
 /** Init-cap each word in a single locality field (house, street, location, etc.). */
 export function initCapWords(raw: string): string {
   return raw
@@ -262,7 +276,7 @@ function operatorAddressUsedDashBeforePin(lastSegment: string): boolean {
   return STATE_PIN_DASH_TAIL_RE.test(lastSegment.trim());
 }
 
-/** Build stored address line with title-cased locality and canonical state spelling. */
+/** Build stored address line with uppercased locality and canonical state spelling. */
 export function normalizeOperatorFreeformAddress(
   raw: string | undefined | null,
   opts?: ValidateFreeformAddressOpts
@@ -279,13 +293,14 @@ export function normalizeOperatorFreeformAddress(
   if (!parsed) return null;
   const canon = resolveIndianStateName(parsed.stateRaw, { allowLaLadakh: true });
   if (!canon) return null;
-  const cityLocality = titleCaseAddressLocality(parsed.cityRaw);
+  const cityLocality = uppercaseAddressLocality(parsed.cityRaw);
   const city = primaryCityFromLocalityRaw(cityLocality);
+  const canonUpper = canon.toUpperCase();
   const last = segments[segments.length - 1] ?? "";
   const address = operatorAddressUsedDashBeforePin(last)
-    ? `${cityLocality}, ${canon} - ${parsed.pin}`
-    : `${cityLocality}, ${canon}, ${parsed.pin}`;
-  return { address, city, state: canon, pin_code: parsed.pin };
+    ? `${cityLocality}, ${canonUpper} - ${parsed.pin}`
+    : `${cityLocality}, ${canonUpper}, ${parsed.pin}`;
+  return { address, city, state: canonUpper, pin_code: parsed.pin };
 }
 
 /**

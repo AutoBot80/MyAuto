@@ -130,12 +130,12 @@ def test_validate_operator_freeform_address_accepts_dash_before_pin():
     )
 
 
-def test_normalize_operator_address_title_case_and_canonical_state():
+def test_normalize_operator_address_uppercase_and_canonical_state():
     got = normalize_operator_freeform_address("Locality, bharatpur, RJ - 321001")
     assert got is not None
-    assert got["address"] == "Locality, Bharatpur, Rajasthan - 321001"
-    assert got["city"] == "Bharatpur"
-    assert got["state"] == "Rajasthan"
+    assert got["address"] == "LOCALITY, BHARATPUR, RAJASTHAN - 321001"
+    assert got["city"] == "BHARATPUR"
+    assert got["state"] == "RAJASTHAN"
     assert got["pin"] == "321001"
 
 

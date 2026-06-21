@@ -74,7 +74,6 @@ from app.services.insurance_form_values import (
     reset_playwright_insurance_log,
     write_insurance_form_values,
 )
-from app.services.insurance_kyc_payloads import insurance_kyc_png_payloads
 from app.services.utility_functions import (
     clean_text,
     fuzzy_best_option_label,
@@ -5799,8 +5798,9 @@ def _kyc_proceed_or_upload(
     ``_kyc_shared_consent_joint_cta_then_settle_before_vin`` after this returns ``None``.
 
     - If legacy "already done" body text matches → return ``None`` (no uploads; caller runs shared tail).
-    - Else attach three files: prefer paths from **Uploaded scans** (``kyc_local_scan_paths``: front, rear,
-      front again for customer photo), else minimal placeholder PNGs; short post-attach stability sleep; return ``None``.
+    - Else attach three files from **Uploaded scans** (``kyc_local_scan_paths``: front, rear,
+      front again for customer photo); short post-attach stability sleep; return ``None``.
+    - When local scan paths are missing, return an error (no placeholder uploads).
 
     File inputs are resolved by scraping **id** / **name** / label text in the KYC frame after **AADHAAR EXTRACTION**
     (see ``_kyc_scrape_file_inputs_metadata`` / ``_kyc_resolve_upload_nth_order``); order is logged to
@@ -5816,7 +5816,6 @@ def _kyc_proceed_or_upload(
         logger.info("Hero Insurance: KYC already done (body text) — caller will run shared CTA tail.")
         return None
 
-    payloads = insurance_kyc_png_payloads()
     kyc_fr = _kyc_preferred_kyc_frame(page)
     files = _kyc_locator_file_inputs_best(page)
     n = files.count()
@@ -5852,15 +5851,19 @@ def _kyc_proceed_or_upload(
             )
         use_local = True
 
+    if not use_local:
+        return (
+            "KYC upload requires Aadhar_front.jpg (or Aadhar.jpg) and Aadhar_back.jpg under Uploaded scans for this subfolder."
+        )
+
     slot_names = ("front (Aadhaar)", "rear (Aadhaar)", "customer photo")
     for slot_i, nth_i in enumerate(nth_order[:3]):
-        path_str = kyc_local_scan_paths[slot_i] if use_local else None
-        payload = None if use_local else payloads[slot_i]
+        path_str = kyc_local_scan_paths[slot_i]
         ok, err_msg = _kyc_set_one_file_input_chooser_then_direct(
             page,
             files.nth(nth_i),
             path_str=path_str,
-            payload=payload,
+            payload=None,
             timeout_ms=timeout_ms,
         )
         if not ok:
@@ -5868,11 +5871,10 @@ def _kyc_proceed_or_upload(
                 f"KYC file upload failed ({slot_names[slot_i]}, nth={nth_i}): {err_msg}"
             )
         logger.info(
-            "Hero Insurance: KYC file slot %s (%s) attached via nth=%s (%s).",
+            "Hero Insurance: KYC file slot %s (%s) attached via nth=%s (Uploaded scans).",
             slot_i + 1,
             slot_names[slot_i],
             nth_i,
-            "Uploaded scans" if use_local else "placeholder PNG",
         )
 
     try:
@@ -11701,6 +11703,13 @@ def run_fill_insurance_only(
                 subfolder,
                 "NOTE",
                 "KYC uploads: using Uploaded scans (Aadhar_front.jpg / Aadhar.jpg, Aadhar_back.jpg; third slot reuses front).",
+            )
+        else:
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "KYC uploads: no Aadhar_front.jpg / Aadhar.jpg and Aadhar_back.jpg under Uploaded scans for this subfolder.",
             )
         page, open_error = get_or_open_site_page(
             insurance_base_url, "Insurance", require_login_on_open=False
