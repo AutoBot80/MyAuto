@@ -25,13 +25,13 @@ export type ParseSubdealerChallanResponse = {
   challan_ddmmyyyy: string | null;
   lines: SubdealerChallanLine[];
   artifact_dir: string | null;
-  /** Folder leaf under ``Challans/<leaf>/`` (``{challan_no}_{ddmmyyyy}``). */
+  /** Folder leaf under ``Challans/{dealer_id}/<leaf>/`` (``{challan_no}_{ddmmyyyy}``). */
   artifact_leaf?: string | null;
   raw_ocr_path: string | null;
   ocr_json_path: string | null;
   scan_path?: string | null;
   scan_filename?: string | null;
-  /** Present when ``?mirror_bodies=true`` (Electron): folder leaf under ``Challans/<leaf>/`` on dealer PC (same as ``CHALLANS_DIR`` on server). */
+  /** Present when ``?mirror_bodies=true`` (Electron): folder leaf under ``Challans/{dealer_id}/<leaf>/`` on dealer PC. */
   local_artifact_leaf?: string | null;
   raw_ocr_text?: string | null;
   ocr_json_text?: string | null;
@@ -44,7 +44,7 @@ function _pad2(n: number): string {
 }
 
 /**
- * Folder leaf under ``Challans/<leaf>/`` — matches backend ``challan_artifact_leaf_name`` / ``_challan_folder_name``.
+ * Folder leaf under ``Challans/{dealer_id}/<leaf>/`` — matches backend ``challan_artifact_leaf_name`` / ``_challan_folder_name``.
  */
 export function computeLocalChallanArtifactLeaf(r: ParseSubdealerChallanResponse): string {
   let ddmmyyyy = (r.challan_ddmmyyyy || "").trim();
@@ -130,7 +130,11 @@ async function uploadChallanScanToServer(
   });
 }
 
-async function mirrorChallanScansToLocalDisk(artifactLeaf: string, files: File[]): Promise<void> {
+async function mirrorChallanScansToLocalDisk(
+  dealerId: number,
+  artifactLeaf: string,
+  files: File[]
+): Promise<void> {
   if (!isElectron() || !window.electronAPI?.file?.copyChallanScanArtifacts) return;
   const items: { sourcePath: string; destFileName: string }[] = [];
   for (const f of files) {
@@ -141,7 +145,7 @@ async function mirrorChallanScansToLocalDisk(artifactLeaf: string, files: File[]
   }
   if (items.length === 0) return;
   try {
-    await window.electronAPI.file.copyChallanScanArtifacts({ artifactLeaf, items });
+    await window.electronAPI.file.copyChallanScanArtifacts({ dealerId, artifactLeaf, items });
   } catch {
     /* non-fatal */
   }
@@ -156,7 +160,7 @@ async function persistChallanScans(
   if (files.length === 0) return;
   const leaf = (merged.artifact_leaf || "").trim() || computeLocalChallanArtifactLeaf(merged);
   if (options.copyLocal) {
-    await mirrorChallanScansToLocalDisk(leaf, files);
+    await mirrorChallanScansToLocalDisk(dealerId, leaf, files);
   }
   if (!options.uploadToServer) return;
   for (const f of files) {
@@ -171,7 +175,8 @@ async function persistChallanScans(
 async function mirrorChallanParseArtifactsToDealerPc(
   merged: ParseSubdealerChallanResponse,
   pages: ParseSubdealerChallanResponse[],
-  pageNames: string[]
+  pageNames: string[],
+  dealerId: number
 ): Promise<void> {
   if (!isElectron() || !window.electronAPI?.sidecar?.runJob) return;
   const hasBodies = pages.some((p) => (p.raw_ocr_text || "").length > 0 || (p.ocr_json_text || "").length > 0);
@@ -203,7 +208,7 @@ async function mirrorChallanParseArtifactsToDealerPc(
       api_url: getBaseUrl(),
       jwt: getAccessToken() ?? "",
       params: {
-        dealer_id: DEALER_ID,
+        dealer_id: dealerId,
         artifact_leaf: leaf,
         raw_ocr_text: rawCombined,
         ocr_json_text: jsonText,
@@ -396,7 +401,7 @@ export async function parseSubdealerChallanScans(
     const single = await parseSubdealerChallanScan(files[0]);
     if (!(single.error || "").trim()) {
       if (isElectron()) {
-        await mirrorChallanParseArtifactsToDealerPc(single, [single], [files[0].name]);
+        await mirrorChallanParseArtifactsToDealerPc(single, [single], [files[0].name], dealerId);
         await persistChallanScans(files, single, dealerId, { uploadToServer: false, copyLocal: true });
       }
     }
@@ -423,7 +428,7 @@ export async function parseSubdealerChallanScans(
   );
   if (!(merged.error || "").trim()) {
     if (isElectron()) {
-      await mirrorChallanParseArtifactsToDealerPc(merged, results, names);
+      await mirrorChallanParseArtifactsToDealerPc(merged, results, names, dealerId);
     }
     await persistChallanScans(files, merged, dealerId, {
       uploadToServer: true,

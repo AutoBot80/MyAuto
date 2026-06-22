@@ -1006,7 +1006,7 @@ def run_subdealer_challan_batch(
         master_repo.touch_last_run_at(challan_batch_id)
         if leaf_for_ocr_sync:
             try:
-                sync_challans_subfolder_to_s3(leaf_for_ocr_sync)
+                sync_challans_subfolder_to_s3(from_dealer_id, leaf_for_ocr_sync)
             except Exception:
                 logger.exception(
                     "subdealer_challan: failed to sync challans session folder to S3 (batch=%s)",

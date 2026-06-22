@@ -101,7 +101,7 @@ export function registerIpc(mainWindow: BrowserWindow): void {
     "file:copyChallanScanArtifacts",
     async (
       _evt: IpcMainInvokeEvent,
-      payload: { artifactLeaf: string; items: { sourcePath: string; destFileName: string }[] }
+      payload: { dealerId: number; artifactLeaf: string; items: { sourcePath: string; destFileName: string }[] }
     ) => {
       try {
         return await copyChallanScanArtifacts(payload);

@@ -82,7 +82,7 @@ def test_list_admin_folder_s3_files_use_last_modified_and_sort_with_dirs() -> No
     assert names == ["sale_a", "latest.pdf", "readme.txt"]
 
 
-def test_list_admin_folder_s3_challans_root_uses_same_path() -> None:
+def test_list_admin_folder_s3_challans_root_uses_dealer_prefix() -> None:
     with (
         patch.object(dealer_storage.s3_storage, "list_one_level_prefix", return_value=(["batch_1"], [])) as mock_list,
         patch.object(dealer_storage.s3_storage, "aggregate_child_last_modified", return_value={}) as mock_agg,
@@ -91,5 +91,5 @@ def test_list_admin_folder_s3_challans_root_uses_same_path() -> None:
     ):
         dealer_storage.list_admin_folder_s3("challans", 100001, "")
 
-    mock_list.assert_called_once_with("challans/")
-    mock_agg.assert_called_once_with("challans/", ["batch_1"])
+    mock_list.assert_called_once_with("challans/100001/")
+    mock_agg.assert_called_once_with("challans/100001/", ["batch_1"])

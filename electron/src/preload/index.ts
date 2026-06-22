@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       items: { sourcePath: string; destFileName: string }[];
     }) => ipcRenderer.invoke("file:copyUploadScanArtifacts", payload),
     copyChallanScanArtifacts: (payload: {
+      dealerId: number;
       artifactLeaf: string;
       items: { sourcePath: string; destFileName: string }[];
     }) => ipcRenderer.invoke("file:copyChallanScanArtifacts", payload),

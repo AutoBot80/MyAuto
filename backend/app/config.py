@@ -208,8 +208,13 @@ def get_ocr_logs_dir(dealer_id: int) -> Path:
     return OCR_LOGS_DIR / str(dealer_id)
 
 
+def get_challans_dir(dealer_id: int) -> Path:
+    """Dealer-scoped challan artifacts: Challans/{dealer_id}/."""
+    return CHALLANS_DIR / str(int(dealer_id))
+
+
 def safe_challan_artifact_leaf_segment(leaf: str | None) -> str:
-    """Single folder name under ``CHALLANS_DIR`` (no traversal)."""
+    """Single folder name under ``get_challans_dir(dealer_id)`` (no traversal)."""
     t = (leaf or "").strip().replace("\\", "/").split("/")[-1]
     if not t or ".." in t:
         return "unknown_challan"
@@ -218,14 +223,12 @@ def safe_challan_artifact_leaf_segment(leaf: str | None) -> str:
 
 def get_challan_artifacts_dir(dealer_id: int, artifact_leaf: str | None) -> Path:
     """
-    Subdealer challan OCR + Playwright traces: ``CHALLANS_DIR/<safe_leaf>/``.
+    Subdealer challan OCR + Playwright traces: ``Challans/{dealer_id}/<safe_leaf>/``.
 
-    ``dealer_id`` is reserved for callers / symmetry with other helpers; the path is global per host
-    (same on dealer PC and EC2 when ``CHALLANS_DIR`` / ``SAATHI_BASE_DIR`` match layout).
+    Same layout on dealer PC and EC2 when ``SAATHI_BASE_DIR`` / ``CHALLANS_DIR`` match.
     """
-    int(dealer_id)  # reserved for future per-dealer subfolders under CHALLANS_DIR
     safe = safe_challan_artifact_leaf_segment(artifact_leaf)
-    return CHALLANS_DIR / safe
+    return get_challans_dir(dealer_id) / safe
 
 
 def get_bulk_upload_dir(dealer_id: int) -> Path:

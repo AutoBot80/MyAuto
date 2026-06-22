@@ -1,7 +1,7 @@
 """
 Parse subdealer Daily Delivery Report scans: challan no, date, engine/chassis lines.
 Writes Raw_OCR.txt and OCR_To_be_Used.json under ``challans_base/<challan>_<ddmmyyyy>/``
-(default: global CHALLANS_DIR; API parse-scan uses dealer ``ocr_output/.../subdealer_challan/``).
+(default: ``Challans/{dealer_id}/``; API parse-scan uses dealer ``ocr_output/.../subdealer_challan/``).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 _IST = ZoneInfo("Asia/Kolkata")
 
-from app.config import CHALLANS_DIR  # default artifact root when challans_base is omitted
+from app.config import CHALLANS_DIR, get_challans_dir  # default artifact root when challans_base is omitted
 from app.services.subdealer_challan_textract import extract_challan_textract
 
 logger = logging.getLogger(__name__)
@@ -770,7 +770,11 @@ def parse_subdealer_challan(
       When ``include_artifact_bodies`` is True: local_artifact_leaf, raw_ocr_text, ocr_json_text
       (for dealer PC mirror under ocr_output/{dealer_id}/…) if under size cap.
     """
-    base = Path(challans_base) if challans_base is not None else CHALLANS_DIR
+    base = (
+        Path(challans_base)
+        if challans_base is not None
+        else (get_challans_dir(int(dealer_id)) if dealer_id is not None else CHALLANS_DIR)
+    )
     out: dict[str, Any] = {
         "challan_no": None,
         "challan_date_raw": None,

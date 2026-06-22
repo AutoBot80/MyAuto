@@ -29,12 +29,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from pydantic import BaseModel
 
 from app.config import (
-    CHALLANS_DIR,
     DMS_BASE_URL,
     INSURANCE_BASE_URL,
     VAHAN_BASE_URL,
     DMS_PLAYWRIGHT_HEADED,
     PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT,
+    get_challans_dir,
     get_ocr_output_dir,
     get_uploads_dir,
 )
@@ -161,6 +161,7 @@ class CpaResolveResponse(BaseModel):
     customer_id: int
     vehicle_id: int
     staging_id: str | None = None
+    dealer_id: int
 
 
 class CpaCommitRequest(BaseModel):
@@ -214,6 +215,7 @@ class VahanClaimBatchResponse(BaseModel):
     rows: list[dict[str, Any]]
     session_id: str
     worker_id: str
+    dealer_id: int
     vahan_base_url: str
     headed: bool
     remote_debug_port: int
@@ -643,6 +645,7 @@ async def cpa_resolve(
         customer_id=cid,
         vehicle_id=vid,
         staging_id=sid,
+        dealer_id=int(did),
     )
 
 
@@ -798,6 +801,7 @@ async def vahan_claim_batch(
         rows=serialised,
         session_id=session_id,
         worker_id=worker_id,
+        dealer_id=int(did),
         vahan_base_url=(VAHAN_BASE_URL or "").strip(),
         headed=bool(DMS_PLAYWRIGHT_HEADED),
         remote_debug_port=int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333),
@@ -920,7 +924,7 @@ async def upload_artifacts(
     elif t == "ocr":
         root = get_ocr_output_dir(did)
     else:
-        root = CHALLANS_DIR
+        root = get_challans_dir(did)
     dest = root / safe_rel
     try:
         dest = dest.resolve()
@@ -942,7 +946,7 @@ async def upload_artifacts(
     elif t == "ocr":
         s3_synced, s3_error = sync_ocr_file_to_s3(did, dest)
     else:
-        sync_challans_file_to_s3(dest)
+        sync_challans_file_to_s3(did, dest)
     if not s3_synced and s3_error:
         logger.warning(
             "upload-artifacts: EC2 ok tree=%s rel=%s dealer_id=%s s3_error=%s",

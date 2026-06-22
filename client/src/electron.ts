@@ -49,6 +49,7 @@ export interface ElectronAPI {
       | { ok: false; message: string }
     >;
     copyChallanScanArtifacts: (payload: {
+      dealerId: number;
       artifactLeaf: string;
       items: { sourcePath: string; destFileName: string }[];
     }) => Promise<

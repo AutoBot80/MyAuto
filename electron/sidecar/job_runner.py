@@ -1731,6 +1731,21 @@ def _upload_sale_artifacts(
     }
 
 
+def _resolve_sidecar_local_dealer_id(
+    params: dict,
+    ctx: dict | None = None,
+    *,
+    ctx_keys: tuple[str, ...] = ("dealer_id",),
+) -> int:
+    """Local disk paths: prefer API resolve/claim context, then job params, then ``DEALER_ID`` env."""
+    if ctx:
+        for key in ctx_keys:
+            raw = ctx.get(key)
+            if raw is not None and str(raw).strip() != "":
+                return int(raw)
+    return int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+
+
 def _dispatch_upload_print_rto_queue_log_impl(params: dict) -> dict:
     """Append optional lines to local log and upload ``Print_RTO_queue.txt`` to EC2."""
     from app.config import get_ocr_output_dir
@@ -1742,7 +1757,7 @@ def _dispatch_upload_print_rto_queue_log_impl(params: dict) -> dict:
     )
 
     api_url, jwt = _require_api_credentials(params)
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     subfolder = (params.get("subfolder") or "").strip()
     if not subfolder:
         return {"success": False, "error": "subfolder is required"}
@@ -1897,7 +1912,7 @@ def _mobile_for_print_local(subfolder: str, customer: dict) -> str:
 def _dispatch_pull_sale_scan_assets_impl(params: dict) -> dict:
     """Pull full sale subfolder from server → local; reset ``Print_RTO_queue.txt``."""
     api_url, jwt = _require_api_credentials(params)
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     subfolder = (params.get("subfolder") or "").strip()
     if not subfolder:
         return {"success": False, "error": "subfolder is required"}
@@ -1952,7 +1967,7 @@ def _dispatch_pull_sale_scan_assets_impl(params: dict) -> dict:
 def _dispatch_pull_aadhar_scan_jpegs_impl(params: dict) -> dict:
     """Pull Aadhaar JPEGs from server → local sale root (Submit Info; no Print RTO log)."""
     api_url, jwt = _require_api_credentials(params)
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     subfolder = (params.get("subfolder") or "").strip()
     if not subfolder:
         return {"success": False, "error": "subfolder is required"}
@@ -1990,7 +2005,7 @@ def _dispatch_pull_aadhar_scan_jpegs_impl(params: dict) -> dict:
 
 def _dispatch_dealer_sign_overlay_impl(params: dict) -> dict:
     """Stamp dealer signature on Form 20 / GST / Sale Certificate PDFs in the local sale folder."""
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     subfolder = (params.get("subfolder") or "").strip()
     if not subfolder:
         return {"success": False, "error": "subfolder is required"}
@@ -2050,7 +2065,7 @@ def _dispatch_dealer_sign_overlay_impl(params: dict) -> dict:
 def _dispatch_push_sale_artifacts_impl(params: dict) -> dict:
     """Push Print/Queue RTO documents to EC2 (Form 20/22, Sale Certificate, GST, Insurance, optional CPA)."""
     api_url, jwt = _require_api_credentials(params)
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     subfolder = (params.get("subfolder") or "").strip()
     if not subfolder:
         return {"success": False, "error": "subfolder is required"}
@@ -2103,7 +2118,7 @@ def _dispatch_push_sale_artifacts_impl(params: dict) -> dict:
 def _dispatch_print_gate_pass_local_impl(params: dict) -> dict:
     """Generate Gate Pass locally and build print_jobs (sale, insurance, optional cpa, gate pass)."""
     api_url, jwt = _require_api_credentials(params)
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     subfolder = (params.get("subfolder") or "").strip()
     if not subfolder:
         return {"success": False, "error": "subfolder is required"}
@@ -2208,7 +2223,7 @@ def _dispatch_print_gate_pass_local_impl(params: dict) -> dict:
 def _dispatch_print_view_customer_sale_files_local_impl(params: dict) -> dict:
     """Resolve Form 20 + Form 22 + GST Retail Invoice in local sale folder; return merged print_jobs."""
     api_url, jwt = _require_api_credentials(params)
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     subfolder = (params.get("subfolder") or "").strip()
     if not subfolder:
         return {"success": False, "error": "subfolder is required"}
@@ -2255,7 +2270,7 @@ def _dispatch_upload_sale_artifacts_impl(params: dict) -> dict:
     2. Push all local ``Uploaded scans`` + ``ocr_output`` files → EC2 via ``/sidecar/upload-artifacts``.
     """
     api_url, jwt = _require_api_credentials(params)
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     subfolder = (params.get("subfolder") or "").strip()
     if not subfolder:
         return {"success": False, "error": "subfolder is required"}
@@ -2405,9 +2420,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
 
     # Use LOCAL paths (SAATHI_BASE_DIR on dealer PC), not server-returned Linux paths.
     from app.config import get_uploads_dir, get_ocr_output_dir
-    dealer_id = int(
-        ctx.get("dealer_id") or params.get("dealer_id") or os.getenv("DEALER_ID", "100001")
-    )
+    dealer_id = _resolve_sidecar_local_dealer_id(params, ctx)
     uploads_dir = get_uploads_dir(dealer_id)
     ocr_output_dir = get_ocr_output_dir(dealer_id)
 
@@ -2764,9 +2777,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
 
     # Use LOCAL paths, not server-returned Linux paths.
     from app.config import get_ocr_output_dir, get_uploads_dir
-    dealer_id = int(
-        ctx.get("dealer_id") or params.get("dealer_id") or os.getenv("DEALER_ID", "100001")
-    )
+    dealer_id = _resolve_sidecar_local_dealer_id(params, ctx)
     ocr_dir = get_ocr_output_dir(dealer_id)
     uploads_dir = get_uploads_dir(dealer_id)
 
@@ -2948,7 +2959,6 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
     from app.services.add_alliance_cpa_insurance import add_alliance_cpa_insurance
     from app.services.cpa_form_values import write_cpa_form_values_snapshot
 
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
     portal_url = (params.get("portal_url") or "").strip() or None
 
     resolve_body = {
@@ -2979,6 +2989,8 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
     if not str(subfolder or "").strip():
         return {"success": False, "error": "CPA resolve did not return a sale subfolder (file_location)."}
 
+    dealer_id = _resolve_sidecar_local_dealer_id(params, ctx)
+
     ocr_dir = Path(get_ocr_output_dir(dealer_id))
     try:
         write_cpa_form_values_snapshot(ocr_dir, subfolder, full_values)
@@ -3005,7 +3017,7 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
             "vehicle_id": ctx.get("vehicle_id"),
             "certificate_number": cert_num,
             "staging_id": params.get("staging_id"),
-            "dealer_id": params.get("dealer_id"),
+            "dealer_id": dealer_id,
             "cpa_insurer": (full_values.get("cpa_insurer") or alliance_kwargs.get("cpa_insurer") or "").strip()
             or None,
         }
@@ -3070,7 +3082,7 @@ def _dispatch_fill_cpa_alliance_insurance_impl(params: dict) -> dict:
 def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
     api_url, jwt = _require_api_credentials(params)
 
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    claim_dealer_hint = _resolve_sidecar_local_dealer_id(params)
     claim_body = {
         "dealer_id": params.get("dealer_id"),
         "limit": params.get("limit", 7),
@@ -3083,15 +3095,17 @@ def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
                 api_url,
                 jwt,
                 {
-                    "dealer_id": dealer_id,
+                    "dealer_id": claim_dealer_hint,
                     "process_label": "Fill Vahan (batch)",
-                    "entity_dedupe_key": f"vahan_batch:{dealer_id}",
+                    "entity_dedupe_key": f"vahan_batch:{claim_dealer_hint}",
                     "error_text": str(exc)[:4000],
                 },
             )
         except Exception:
             logging.exception("vahan batch claim failure-log")
         return {"success": False, "total": 0, "completed": 0, "failed": 0, "error": str(exc)}
+
+    dealer_id = _resolve_sidecar_local_dealer_id(params, claim_resp)
 
     rows = claim_resp.get("rows") or []
     session_id = claim_resp["session_id"]
@@ -3210,7 +3224,7 @@ def _dispatch_fill_vahan_batch_impl(params: dict) -> dict:
 def _dispatch_upload_rto_queue_forms_impl(params: dict) -> dict:
     """Save operator uploads locally, merge Form 20 cover, push to EC2/S3, mark row Queued when ready."""
     api_url, jwt = _require_api_credentials(params)
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     subfolder = (params.get("subfolder") or "").strip()
     rto_queue_id = int(params.get("rto_queue_id") or 0)
     raw_uploads = params.get("uploads") or []
@@ -3354,7 +3368,7 @@ def _mirror_challan_parse_artifacts_impl(params: dict) -> dict:
     if not raw_leaf:
         return {"ok": False, "error": "artifact_leaf required"}
     leaf = _safe_challan_artifact_leaf(raw_leaf)
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     raw_t = params.get("raw_ocr_text")
     js_t = params.get("ocr_json_text")
     if not (isinstance(raw_t, str) and raw_t.strip()) and not (isinstance(js_t, str) and js_t.strip()):
@@ -3420,7 +3434,7 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     if not challan_batch_id:
         return {"ok": False, "error": "challan_batch_id required"}
 
-    dealer_id = int(params.get("dealer_id") or os.getenv("DEALER_ID", "100001"))
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
     dms_base_url = (params.get("dms_base_url") or "").strip()
     phase_raw = (params.get("phase") or "full").strip().lower()
     phase_is_order_only = phase_raw == "order_only"
@@ -3460,6 +3474,10 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             }
         )
 
+    dealer_id = _resolve_sidecar_local_dealer_id(
+        params, ctx, ctx_keys=("from_dealer_id", "dealer_id")
+    )
+
     from app.services.subdealer_challan_ocr_service import challan_artifact_leaf_name
 
     initial_leaf = challan_artifact_leaf_name(ctx.get("challan_book_num"), ctx.get("challan_date"))
@@ -3472,7 +3490,6 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
         DMS_SIEBEL_ACTION_TIMEOUT_MS,
         DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
         DMS_SIEBEL_NAV_TIMEOUT_MS,
-        CHALLANS_DIR,
         get_challan_artifacts_dir,
     )
     from app.services.fill_hero_dms_service import (
@@ -3536,7 +3553,9 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
     _install_playwright_js_dialog_handler(page)
 
     challan_dirs_to_sync: list[Path] = []
-    challans_root = CHALLANS_DIR.resolve()
+    from app.config import get_challans_dir
+
+    challans_root = get_challans_dir(dealer_id).resolve()
 
     def _flush_challan_ocr_dirs_to_server() -> None:
         seen: set[Path] = set()

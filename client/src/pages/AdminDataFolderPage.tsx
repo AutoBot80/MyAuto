@@ -107,7 +107,7 @@ function fileKindIcon(name: string) {
 export function AdminDataFolderPage({ dealerId, kind, dealerPicker = "full" }: AdminDataFolderPageProps) {
   const root = kindToRoot(kind);
   const isChallans = kind === "challans";
-  const hideDealerPicker = isChallans || dealerPicker === "hidden";
+  const hideDealerPicker = dealerPicker === "hidden";
   const pageTitle = kind === "upload-scans" ? "Upload Scans" : kind === "run-logs" ? "Run Logs" : "Challans";
   const selectId =
     kind === "upload-scans" ? "admin-folder-dealer-uploads" : kind === "run-logs" ? "admin-folder-dealer-ocr" : "admin-folder-challans";
@@ -131,7 +131,6 @@ export function AdminDataFolderPage({ dealerId, kind, dealerPicker = "full" }: A
     if (hideDealerPicker) {
       setDealersLoading(false);
       setDealersError(null);
-      if (isChallans) setDealerRows([]);
       setSelectedDealerId(dealerId);
       return;
     }

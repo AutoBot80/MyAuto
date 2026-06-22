@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import Any
 
 from app.config import (
-    CHALLANS_DIR,
     S3_CHALLANS_PREFIX,
     S3_DATA_BUCKET,
     S3_OCR_LOGS_PREFIX,
     S3_OCR_PREFIX,
     S3_UPLOADS_PREFIX,
     STORAGE_USE_S3,
+    get_challans_dir,
     get_ocr_logs_dir,
     get_ocr_output_dir,
     get_uploads_dir,
@@ -61,10 +61,10 @@ def ocr_logs_s3_key(dealer_id: int, *relative_parts: str) -> str:
     return f"{S3_OCR_LOGS_PREFIX}/{int(dealer_id)}/" + "/".join(parts)
 
 
-def challans_s3_key(*relative_parts: str) -> str:
-    """Global challans prefix (no per-dealer segment)."""
+def challans_s3_key(dealer_id: int, *relative_parts: str) -> str:
+    """Dealer-scoped challans prefix: ``challans/{dealer_id}/...``."""
     parts = [p.replace("\\", "/").strip("/") for p in relative_parts if p and str(p).strip()]
-    return f"{S3_CHALLANS_PREFIX}/" + "/".join(parts)
+    return f"{S3_CHALLANS_PREFIX}/{int(dealer_id)}/" + "/".join(parts)
 
 
 def _relative_under(base: Path, file_path: Path) -> str | None:
@@ -205,33 +205,35 @@ def sync_ocr_logs_subfolder_to_s3(dealer_id: int, subfolder: str) -> None:
             sync_ocr_logs_file_to_s3(dealer_id, f)
 
 
-def sync_challans_file_to_s3(file_path: Path) -> None:
-    """Upload a single file under ``CHALLANS_DIR`` to S3 (``S3_CHALLANS_PREFIX``)."""
+def sync_challans_file_to_s3(dealer_id: int, file_path: Path) -> None:
+    """Upload a single file under ``Challans/{dealer_id}/`` to S3."""
     if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
         return
-    base = CHALLANS_DIR.resolve()
+    base = get_challans_dir(dealer_id).resolve()
     rel = _relative_under(base, file_path)
     if rel is None:
         return
     if not file_path.is_file():
         return
-    key = challans_s3_key(*rel.split("/"))
+    key = challans_s3_key(dealer_id, *rel.split("/"))
     try:
         s3_storage.upload_file(file_path, key)
     except Exception:
         logger.exception("dealer_storage: failed to sync challans file to S3: %s", file_path)
 
 
-def sync_challans_subfolder_to_s3(subfolder: str) -> None:
-    """Upload all files under ``CHALLANS_DIR/{subfolder}/`` recursively."""
+def sync_challans_subfolder_to_s3(dealer_id: int, artifact_leaf: str) -> None:
+    """Upload all files under ``Challans/{dealer_id}/{artifact_leaf}/`` recursively."""
     if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
         return
-    base = CHALLANS_DIR / subfolder.strip().replace("\\", "/")
+    from app.config import get_challan_artifacts_dir
+
+    base = get_challan_artifacts_dir(dealer_id, artifact_leaf)
     if not base.is_dir():
         return
     for f in base.rglob("*"):
         if f.is_file():
-            sync_challans_file_to_s3(f)
+            sync_challans_file_to_s3(dealer_id, f)
 
 
 def ensure_uploads_local_file(dealer_id: int, subfolder: str, filename: str) -> Path | None:
@@ -291,8 +293,8 @@ def presigned_uploads_get_by_rel_path(dealer_id: int, rel_path: str) -> str | No
     return s3_storage.generate_presigned_get_url(key)
 
 
-def presigned_challans_get_by_rel_path(rel_path: str) -> str | None:
-    """``rel_path`` relative to global challans root (no dealer segment)."""
+def presigned_challans_get_by_rel_path(dealer_id: int, rel_path: str) -> str | None:
+    """``rel_path`` relative to ``Challans/{dealer_id}/``."""
     if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
         return None
     rel = (rel_path or "").strip().replace("\\", "/").lstrip("/")
@@ -301,7 +303,7 @@ def presigned_challans_get_by_rel_path(rel_path: str) -> str | None:
     parts = [p for p in rel.split("/") if p and p != "."]
     if not parts:
         return None
-    key = f"{S3_CHALLANS_PREFIX}/" + "/".join(parts)
+    key = challans_s3_key(dealer_id, *parts)
     if not s3_storage.object_exists(key):
         return None
     return s3_storage.generate_presigned_get_url(key)
@@ -349,7 +351,7 @@ def list_admin_folder_s3(root: str, dealer_id: int, rel_path: str) -> tuple[str,
     elif root == "ocr_output":
         prefix_base = f"{S3_OCR_PREFIX}/{int(dealer_id)}/"
     elif root == "challans":
-        prefix_base = f"{S3_CHALLANS_PREFIX}/"
+        prefix_base = f"{S3_CHALLANS_PREFIX}/{int(dealer_id)}/"
     else:
         raise ValueError(f"Unknown admin S3 folder root: {root!r}")
     prefix = prefix_base + ("/".join(rel_parts) + "/" if rel_parts else "")
@@ -393,7 +395,7 @@ def _admin_s3_prefix(root: str, dealer_id: int, rel_parts: list[str]) -> str:
     elif root == "ocr_output":
         prefix_base = f"{S3_OCR_PREFIX}/{int(dealer_id)}/"
     elif root == "challans":
-        prefix_base = f"{S3_CHALLANS_PREFIX}/"
+        prefix_base = f"{S3_CHALLANS_PREFIX}/{int(dealer_id)}/"
     else:
         raise ValueError(f"Unknown admin S3 folder root: {root!r}")
     return prefix_base + ("/".join(rel_parts) + "/" if rel_parts else "")
@@ -405,7 +407,7 @@ def _admin_folder_base_local(root: str, dealer_id: int) -> Path:
     if root == "ocr_output":
         return get_ocr_output_dir(dealer_id)
     if root == "challans":
-        return CHALLANS_DIR.resolve()
+        return get_challans_dir(dealer_id).resolve()
     raise ValueError(f"Unknown admin folder root: {root!r}")
 
 

@@ -36,12 +36,17 @@ export interface CopyChallanScanArtifactItem {
 }
 
 /**
- * Copy dealer-selected challan scan files into local **Challans/<leaf>/** alongside OCR artifacts.
+ * Copy dealer-selected challan scan files into local **Challans/{dealerId}/{leaf}/** alongside OCR artifacts.
  */
 export async function copyChallanScanArtifacts(args: {
+  dealerId: number;
   artifactLeaf: string;
   items: CopyChallanScanArtifactItem[];
 }): Promise<{ ok: true; copied: string[]; destDir: string } | { ok: false; message: string }> {
+  const dealerId = Math.trunc(Number(args.dealerId));
+  if (!Number.isFinite(dealerId) || dealerId <= 0) {
+    return { ok: false, message: "invalid_dealer_id" };
+  }
   const safeLeaf = safeChallanArtifactLeaf(args.artifactLeaf);
   if (!safeLeaf) {
     return { ok: false, message: "invalid_artifact_leaf" };
@@ -51,7 +56,7 @@ export async function copyChallanScanArtifacts(args: {
     return { ok: false, message: "no_items" };
   }
 
-  const destDir = path.join(getSaathiBaseDir(), "Challans", safeLeaf);
+  const destDir = path.join(getSaathiBaseDir(), "Challans", String(dealerId), safeLeaf);
   let destResolved: string;
   try {
     fs.mkdirSync(destDir, { recursive: true });

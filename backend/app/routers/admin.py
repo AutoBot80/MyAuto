@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.config import (
-    CHALLANS_DIR,
     ENVIRONMENT_IS_PRODUCTION,
     STORAGE_USE_S3,
+    get_challans_dir,
     get_ocr_output_dir,
     get_uploads_dir,
 )
@@ -113,7 +113,7 @@ def get_data_folders(
             storage_backend="s3",
             upload_scans_path=f"s3://{S3_DATA_BUCKET}/{S3_UPLOADS_PREFIX}/{did}/",
             ocr_output_path=f"s3://{S3_DATA_BUCKET}/{S3_OCR_PREFIX}/{did}/",
-            challans_path=f"s3://{S3_DATA_BUCKET}/{S3_CHALLANS_PREFIX}/",
+            challans_path=f"s3://{S3_DATA_BUCKET}/{S3_CHALLANS_PREFIX}/{did}/",
         )
     uploads = get_uploads_dir(did).resolve()
     ocr = get_ocr_output_dir(did).resolve()
@@ -122,7 +122,7 @@ def get_data_folders(
         storage_backend="local",
         upload_scans_path=str(uploads),
         ocr_output_path=str(ocr),
-        challans_path=str(CHALLANS_DIR.resolve()),
+        challans_path=str(get_challans_dir(did).resolve()),
     )
 
 
@@ -492,7 +492,7 @@ def _admin_folder_base(root: AdminFolderRoot, did: int) -> Path:
         return get_uploads_dir(did)
     if root == "ocr_output":
         return get_ocr_output_dir(did)
-    return CHALLANS_DIR.resolve()
+    return get_challans_dir(did)
 
 
 def _resolve_under_dealer_root(base: Path, rel: str) -> Path:
@@ -536,7 +536,7 @@ def list_admin_folder_contents(
     rel_path: str = Query("", description="Path under the dealer folder, / separators"),
     dealer_id: int | None = Query(None, description="Defaults to token dealer when omitted."),
 ) -> FolderListResponse:
-    """List files and subfolders under Upload Scans, ocr_output (dealer-scoped), or challans (global tree)."""
+    """List files and subfolders under Upload Scans, ocr_output, or Challans (all dealer-scoped)."""
     did = resolve_dealer_id(principal, dealer_id)
     rel_norm = rel_path.strip().replace("\\", "/")
     if STORAGE_USE_S3:
@@ -613,7 +613,7 @@ def get_admin_folder_file(
         elif root == "ocr_output":
             url = presigned_ocr_get_by_rel_path(did, rel)
         elif root == "challans":
-            url = presigned_challans_get_by_rel_path(rel)
+            url = presigned_challans_get_by_rel_path(did, rel)
         else:
             raise HTTPException(status_code=400, detail="Invalid folder root")
         if not url:
