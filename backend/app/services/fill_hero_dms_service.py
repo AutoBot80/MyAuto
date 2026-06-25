@@ -35,6 +35,7 @@ from app.config import (
     HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER,
     DMS_PLAYWRIGHT_HEADED,
     DMS_REAL_URL_CONTACT,
+    DMS_REAL_URL_PDI,
     DMS_REAL_URL_VEHICLE,
     DMS_SIEBEL_ACTION_TIMEOUT_MS,
     DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
@@ -2220,13 +2221,25 @@ def _resolve_fill_dms_siebel_urls(
     dealer_id: int | None,
     *,
     override: SiebelDmsUrls | None = None,
+    dms_base_url: str | None = None,
 ) -> SiebelDmsUrls:
-    if override is not None:
+    if override is not None and (override.contact or "").strip():
         return override
-    if dealer_id is not None:
+    from app.config import DATABASE_URL
+
+    if dealer_id is not None and DATABASE_URL:
         from app.services.hero_dms_portal_service import hero_dms_siebel_urls_for_dealer
 
         return hero_dms_siebel_urls_for_dealer(dealer_id)
+    from app.config import DMS_BASE_URL
+    from app.hero_dms_defaults import hero_dms_urls_for_portal, portal_from_dms_base_url
+
+    for candidate in (dms_base_url, DMS_BASE_URL):
+        portal = portal_from_dms_base_url(candidate)
+        if portal:
+            _, urls = hero_dms_urls_for_portal(portal)
+            if (urls.contact or "").strip():
+                return urls
     return _fill_dms_siebel_urls_from_env()
 
 
@@ -2247,6 +2260,7 @@ def _run_fill_dms_real_siebel_playwright(
     dms_state_hint: int | None = None,
     staging_payload: dict[str, Any] | None = None,
     siebel_urls: SiebelDmsUrls | None = None,
+    dms_base_url: str | None = None,
 ) -> None:
     """
     Hero Connect / Siebel Open UI: ``Playwright_Hero_DMS_fill`` — **Find Contact Enquiry** path
@@ -2258,7 +2272,11 @@ def _run_fill_dms_real_siebel_playwright(
 
     Writes ``DMS_Form_Values`` trace for operators.
     """
-    urls = _resolve_fill_dms_siebel_urls(dealer_id, override=siebel_urls)
+    urls = _resolve_fill_dms_siebel_urls(
+        dealer_id,
+        override=siebel_urls,
+        dms_base_url=dms_base_url or getattr(page, "url", None),
+    )
     if not (urls.contact or "").strip():
         result["error"] = (
             "DMS_MODE is real/siebel but DMS_REAL_URL_CONTACT is not set. "

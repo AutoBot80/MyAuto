@@ -80,6 +80,47 @@ def hero_dms_short_entry_url_for_portal(portal: str | None) -> str:
     return "https://connect.heromotocorp.biz/edealerHMCL_enu"
 
 
+def portal_from_dms_base_url(dms_base_url: str | None) -> str | None:
+    """Infer ``ASC`` / ``HMCL`` from a Hero Connect login or GotoView URL."""
+    b = (dms_base_url or "").casefold()
+    if ASC_SIEBEL_APP.casefold() in b:
+        return "ASC"
+    if HMCL_SIEBEL_APP.casefold() in b:
+        return "HMCL"
+    return None
+
+
+def siebel_urls_from_resolve_payload(ctx: dict | None) -> "SiebelDmsUrls | None":
+    """
+    Build ``SiebelDmsUrls`` from ``/sidecar/dms/resolve`` (or challan resolve).
+
+    Prefer explicit ``dms_real_url_*`` fields; else derive portal from ``dms_base_url``.
+    Used by the Electron sidecar (no local ``DATABASE_URL``).
+    """
+    from app.services.hero_dms_shared_utilities import SiebelDmsUrls
+
+    if not ctx:
+        return None
+    contact = (ctx.get("dms_real_url_contact") or "").strip()
+    if contact:
+        return SiebelDmsUrls(
+            contact=contact,
+            vehicles="",
+            precheck="",
+            pdi=(ctx.get("dms_real_url_pdi") or "").strip(),
+            vehicle=(ctx.get("dms_real_url_vehicle") or "").strip(),
+            enquiry="",
+            line_items="",
+            reports="",
+        )
+    base = (ctx.get("dms_base_url") or "").strip()
+    if base:
+        _, urls = hero_dms_urls_for_portal(portal_from_dms_base_url(base))
+        if (urls.contact or "").strip():
+            return urls
+    return None
+
+
 def hero_dms_urls_for_portal(portal: str | None) -> tuple[str, "SiebelDmsUrls"]:
     """
   Build DMS base URL and GotoView URLs for a dealer portal (``dealer_ref.dms_siebel_portal``).

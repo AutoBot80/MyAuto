@@ -2354,22 +2354,10 @@ def _require_api_credentials(params: dict) -> tuple[str, str]:
 
 
 def _siebel_urls_from_resolve_ctx(ctx: dict):
-    """Build ``SiebelDmsUrls`` from ``/sidecar/dms/resolve`` (dealer HMCL vs ASC portal)."""
-    from app.services.hero_dms_shared_utilities import SiebelDmsUrls
+    """Build ``SiebelDmsUrls`` from resolve API payload (dealer HMCL vs ASC portal)."""
+    from app.hero_dms_defaults import siebel_urls_from_resolve_payload
 
-    contact = (ctx.get("dms_real_url_contact") or "").strip()
-    if not contact:
-        return None
-    return SiebelDmsUrls(
-        contact=contact,
-        vehicles="",
-        precheck="",
-        pdi=(ctx.get("dms_real_url_pdi") or "").strip(),
-        vehicle=(ctx.get("dms_real_url_vehicle") or "").strip(),
-        enquiry="",
-        line_items="",
-        reports="",
-    )
+    return siebel_urls_from_resolve_payload(ctx)
 
 
 def _dispatch_warm_browser(params: dict) -> dict:
@@ -2630,6 +2618,12 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
             result["error"] = open_error
         else:
             _install_playwright_js_dialog_handler(page)
+            siebel_urls = _siebel_urls_from_resolve_ctx(ctx)
+            if siebel_urls is None:
+                logging.warning(
+                    "fill_dms sidecar: resolve missing Siebel GotoView URLs (dms_base_url=%r)",
+                    ((ctx.get("dms_base_url") or "").strip())[:120],
+                )
             _run_fill_dms_real_siebel_playwright(
                 page,
                 dms_values,
@@ -2645,7 +2639,8 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
                 dealer_id=dealer_id,
                 dms_state_hint=int(dms_state_hint) if dms_state_hint is not None else None,
                 staging_payload=staging_payload,
-                siebel_urls=_siebel_urls_from_resolve_ctx(ctx),
+                siebel_urls=siebel_urls,
+                dms_base_url=dms_base_url,
             )
     except Exception as e:
         result["error"] = str(e)
