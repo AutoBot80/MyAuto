@@ -2353,6 +2353,25 @@ def _require_api_credentials(params: dict) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def _siebel_urls_from_resolve_ctx(ctx: dict):
+    """Build ``SiebelDmsUrls`` from ``/sidecar/dms/resolve`` (dealer HMCL vs ASC portal)."""
+    from app.services.hero_dms_shared_utilities import SiebelDmsUrls
+
+    contact = (ctx.get("dms_real_url_contact") or "").strip()
+    if not contact:
+        return None
+    return SiebelDmsUrls(
+        contact=contact,
+        vehicles="",
+        precheck="",
+        pdi=(ctx.get("dms_real_url_pdi") or "").strip(),
+        vehicle=(ctx.get("dms_real_url_vehicle") or "").strip(),
+        enquiry="",
+        line_items="",
+        reports="",
+    )
+
+
 def _dispatch_warm_browser(params: dict) -> dict:
     from app.config import DMS_BASE_URL
     from app.services.fill_hero_dms_service import warm_dms_browser_session
@@ -2626,6 +2645,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
                 dealer_id=dealer_id,
                 dms_state_hint=int(dms_state_hint) if dms_state_hint is not None else None,
                 staging_payload=staging_payload,
+                siebel_urls=_siebel_urls_from_resolve_ctx(ctx),
             )
     except Exception as e:
         result["error"] = str(e)
@@ -3515,22 +3535,18 @@ def _fill_subdealer_challan_impl(params: dict) -> dict:
             }
         )
 
-    urls_prepare = SiebelDmsUrls(
-        contact=DMS_REAL_URL_CONTACT,
-        # vehicles=DMS_REAL_URL_VEHICLES,
-        vehicles="",
-        # precheck=DMS_REAL_URL_PRECHECK,
-        precheck="",
-        # pdi=DMS_REAL_URL_PDI,
-        pdi="",
-        vehicle=DMS_REAL_URL_VEHICLE,
-        # enquiry=DMS_REAL_URL_ENQUIRY,
-        enquiry="",
-        # line_items=DMS_REAL_URL_LINE_ITEMS,
-        line_items="",
-        # reports=DMS_REAL_URL_REPORTS,
-        reports="",
-    )
+    urls_prepare = _siebel_urls_from_resolve_ctx(ctx)
+    if urls_prepare is None:
+        urls_prepare = SiebelDmsUrls(
+            contact=DMS_REAL_URL_CONTACT,
+            vehicles="",
+            precheck="",
+            pdi="",
+            vehicle=DMS_REAL_URL_VEHICLE,
+            enquiry="",
+            line_items="",
+            reports="",
+        )
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
 
     prep_leaf = _safe_challan_artifact_leaf(initial_leaf)

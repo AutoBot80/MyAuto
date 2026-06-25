@@ -2203,6 +2203,33 @@ def _is_prepare_vehicle_precheck_pdi_transient(err: str | None) -> bool:
     return False
 
 
+def _fill_dms_siebel_urls_from_env() -> SiebelDmsUrls:
+    return SiebelDmsUrls(
+        contact=DMS_REAL_URL_CONTACT,
+        vehicles="",
+        precheck="",
+        pdi=DMS_REAL_URL_PDI,
+        vehicle=DMS_REAL_URL_VEHICLE,
+        enquiry="",
+        line_items="",
+        reports="",
+    )
+
+
+def _resolve_fill_dms_siebel_urls(
+    dealer_id: int | None,
+    *,
+    override: SiebelDmsUrls | None = None,
+) -> SiebelDmsUrls:
+    if override is not None:
+        return override
+    if dealer_id is not None:
+        from app.services.hero_dms_portal_service import hero_dms_siebel_urls_for_dealer
+
+        return hero_dms_siebel_urls_for_dealer(dealer_id)
+    return _fill_dms_siebel_urls_from_env()
+
+
 def _run_fill_dms_real_siebel_playwright(
     page,
     dms_values: dict,
@@ -2219,6 +2246,7 @@ def _run_fill_dms_real_siebel_playwright(
     dealer_id: int | None = None,
     dms_state_hint: int | None = None,
     staging_payload: dict[str, Any] | None = None,
+    siebel_urls: SiebelDmsUrls | None = None,
 ) -> None:
     """
     Hero Connect / Siebel Open UI: ``Playwright_Hero_DMS_fill`` — **Find Contact Enquiry** path
@@ -2230,7 +2258,8 @@ def _run_fill_dms_real_siebel_playwright(
 
     Writes ``DMS_Form_Values`` trace for operators.
     """
-    if not (DMS_REAL_URL_CONTACT or "").strip():
+    urls = _resolve_fill_dms_siebel_urls(dealer_id, override=siebel_urls)
+    if not (urls.contact or "").strip():
         result["error"] = (
             "DMS_MODE is real/siebel but DMS_REAL_URL_CONTACT is not set. "
             "Set the full GotoView URL (e.g. Buyer/CoBuyer) in backend/.env."
@@ -2271,22 +2300,6 @@ def _run_fill_dms_real_siebel_playwright(
 
     result["playwright_dms_execution_log_path"] = str(playwright_dms_log)
 
-    urls = SiebelDmsUrls(
-        contact=DMS_REAL_URL_CONTACT,
-        # vehicles=DMS_REAL_URL_VEHICLES,
-        vehicles="",
-        # precheck=DMS_REAL_URL_PRECHECK,
-        precheck="",
-        # pdi=DMS_REAL_URL_PDI,
-        pdi="",
-        vehicle=DMS_REAL_URL_VEHICLE,
-        # enquiry=DMS_REAL_URL_ENQUIRY,
-        enquiry="",
-        # line_items=DMS_REAL_URL_LINE_ITEMS,
-        line_items="",
-        # reports=DMS_REAL_URL_REPORTS,
-        reports="",
-    )
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
     frag = Playwright_Hero_DMS_fill(
         page,

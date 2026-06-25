@@ -227,16 +227,17 @@ This document lists the current database tables and their columns, grouped by pr
 | `insurance_pay` | `varchar(8)` | NO | `'APD'` | **CC** or **APD**: MISP proposal **Payment Mode** dropdown; **100001** seeded **CC**, others **APD** — **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`** |
 | `cpi_reqd` | `char(1)` | NO | `'N'` | **Y** or **N**: whether dealer requires/participates in CPI (separate from **`hero_cpi`**); **Arya Agencies** seeded **Y**, others **N** (**`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**) |
 | `cpa_insurer` | `varchar(512)` | YES |  | Optional CPA third-party portal row (**`ref_type`** = **CPA** on **`master_ref`**); portal login URL stored in **`master_ref.comments`**; composite FK **`fk_dealer_ref_cpa_insurer`** — **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**, greenfield **`DDL/04b_dealer_ref.sql`** |
+| `dms_siebel_portal` | `varchar(8)` | YES |  | Hero Connect Siebel app: **`ASC`** = **`edealerasc`** (subdealers); **`HMCL`** or NULL = **`edealerHMCL`** (main dealers); drives DMS base + GotoView URLs — **`DDL/alter/36a_dealer_ref_dms_siebel_portal.sql`** |
 
 **Primary key:** `dealer_ref_pkey` on (`dealer_id`)
 
-**Checks:** `chk_dealer_ref_auto_sms_reminders` — `auto_sms_reminders` IN ('Y', 'N'); `chk_dealer_ref_hero_cpi` — `hero_cpi` IN ('Y', 'N'); `chk_dealer_ref_insurance_pay` — `insurance_pay` IN ('CC', 'APD'); `chk_dealer_ref_cpi_reqd` — `cpi_reqd` IN ('Y', 'N')
+**Checks:** `chk_dealer_ref_auto_sms_reminders` — `auto_sms_reminders` IN ('Y', 'N'); `chk_dealer_ref_hero_cpi` — `hero_cpi` IN ('Y', 'N'); `chk_dealer_ref_insurance_pay` — `insurance_pay` IN ('CC', 'APD'); `chk_dealer_ref_cpi_reqd` — `cpi_reqd` IN ('Y', 'N'); `chk_dealer_ref_dms_siebel_portal` — `dms_siebel_portal` IS NULL OR IN ('ASC', 'HMCL')
 
 **Foreign keys:**
 - `fk_dealer_ref_oem`: (`oem_id`) → `oem_ref(oem_id)`
 - `fk_dealer_ref_cpa_insurer`: (`cpa_insurer_ref_type`, `cpa_insurer`) → `master_ref(ref_type, ref_value)` when **`cpa_insurer`** is set (**`DDL/alter/29a_*.sql`**)
 
-**Scripts:** `DDL/04b_dealer_ref.sql` (greenfield); add **`subdealer_type`**, reordered columns on new installs: same file; **upgrade** existing DB: **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**, **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**, **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`**, **`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**, **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**
+**Scripts:** `DDL/04b_dealer_ref.sql` (greenfield); add **`subdealer_type`**, reordered columns on new installs: same file; **upgrade** existing DB: **`DDL/alter/04i_dealer_ref_add_subdealer_type.sql`**, **`DDL/alter/17a_dealer_ref_hero_cpi_form_insurance_view.sql`**, **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`**, **`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**, **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**, **`DDL/alter/36a_dealer_ref_dms_siebel_portal.sql`**
 
 ---
 
@@ -951,6 +952,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 3.03 | Jun 2026 | **`admin_dealer_access_ref`** — Admin Saathi dealer scope per login; **`GET /admin/dealers`**, Usage matrix/logs/folders, Dealers tab filtered — **`DDL/alter/35a_admin_dealer_access_ref.sql`**, **`backend/app/repositories/admin_dealer_access.py`** |
 | 3.04 | Jun 2026 | **`dealer_ref.insurance_pay`** (**CC**/**APD**, default **APD**; **100001** **CC**); **`form_insurance_view.insurance_pay`**; MISP **Payment Mode** automation — **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`**, **`DDL/04b_dealer_ref.sql`**, **`fill_hero_insurance_service`**, Admin Saathi dealer view |
 | 3.05 | Jun 2026 | **`add_sales_staging.insurance_state`**: document **`3`** (GI complete — PDF + **`insurance_master`** INSERT); set by hero insure reports after INSERT — **`DDL/alter/31c_add_sales_staging_insurance_state_3_comment.sql`**, **`hero_insure_reports_service`**, **`add_sales_staging_state_service`** |
+| 3.06 | Jun 2026 | **`dealer_ref.dms_siebel_portal`** (**ASC**/**HMCL**/NULL; **100003** seeded **ASC**); per-dealer Hero Connect Siebel app (**`edealerasc`** vs **`edealerHMCL`**) for DMS automation — **`DDL/alter/36a_dealer_ref_dms_siebel_portal.sql`**, **`hero_dms_portal_service`**, **`/settings/site-urls`**, **`/sidecar/dms/resolve`** |
 ---
 
 ## Admin Saathi (logs)

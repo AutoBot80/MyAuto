@@ -75,6 +75,9 @@ class DmsResolveResponse(BaseModel):
     dealer_id: int
     dms_state: int = 0
     dms_base_url: str
+    dms_real_url_contact: str = ""
+    dms_real_url_vehicle: str = ""
+    dms_real_url_pdi: str = ""
     headed: bool
     remote_debug_port: int
     uploads_dir: str
@@ -350,13 +353,21 @@ async def dms_resolve(
     if row and isinstance(row, dict):
         dms_values["row"] = {k: (str(v) if v is not None else None) for k, v in row.items()}
 
+    from app.services.hero_dms_portal_service import hero_dms_base_url_for_dealer, hero_dms_siebel_urls_for_dealer
+
+    _dms_base = hero_dms_base_url_for_dealer(did)
+    _siebel_urls = hero_dms_siebel_urls_for_dealer(did)
+
     return DmsResolveResponse(
         dms_values=dms_values,
         staging_payload=staging_payload,
         staging_id=sid_resolved,
         dealer_id=int(did),
         dms_state=dms_state,
-        dms_base_url=(DMS_BASE_URL or "").strip(),
+        dms_base_url=_dms_base,
+        dms_real_url_contact=(_siebel_urls.contact or "").strip(),
+        dms_real_url_vehicle=(_siebel_urls.vehicle or "").strip(),
+        dms_real_url_pdi=(_siebel_urls.pdi or "").strip(),
         headed=bool(DMS_PLAYWRIGHT_HEADED),
         remote_debug_port=int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333),
         uploads_dir=str(get_uploads_dir(did)),
@@ -1048,6 +1059,9 @@ class SubdealerChallanResolveResponse(BaseModel):
     challan_book_num: str | None
     detail_rows: list[dict[str, Any]]
     dms_base_url: str
+    dms_real_url_contact: str = ""
+    dms_real_url_vehicle: str = ""
+    dms_real_url_pdi: str = ""
     headed: bool
     remote_debug_port: int
 
@@ -1108,6 +1122,10 @@ async def subdealer_challan_resolve(
         for r in rows
     ]
 
+    from app.services.hero_dms_portal_service import hero_dms_base_url_for_dealer, hero_dms_siebel_urls_for_dealer
+
+    _challan_siebel_urls = hero_dms_siebel_urls_for_dealer(from_dealer_id)
+
     return SubdealerChallanResolveResponse(
         challan_batch_id=str(bid),
         from_dealer_id=from_dealer_id,
@@ -1115,7 +1133,10 @@ async def subdealer_challan_resolve(
         challan_date=str(challan_date).strip() if challan_date else None,
         challan_book_num=str(challan_book_num).strip() if challan_book_num else None,
         detail_rows=detail_rows,
-        dms_base_url=(DMS_BASE_URL or "").strip(),
+        dms_base_url=hero_dms_base_url_for_dealer(from_dealer_id),
+        dms_real_url_contact=(_challan_siebel_urls.contact or "").strip(),
+        dms_real_url_vehicle=(_challan_siebel_urls.vehicle or "").strip(),
+        dms_real_url_pdi=(_challan_siebel_urls.pdi or "").strip(),
         headed=bool(DMS_PLAYWRIGHT_HEADED),
         remote_debug_port=int(PLAYWRIGHT_MANAGED_REMOTE_DEBUG_PORT or 9333),
     )

@@ -16,12 +16,17 @@ export interface SiteUrls {
 
 /**
  * DMS / Vahan / Insurance bases from the API (`GET /settings/site-urls`, same as server `.env`).
+ * Pass *dealerId* so DMS uses ``dealer_ref.dms_siebel_portal`` (HMCL vs ASC).
  * Prefer the API; in Electron, fall back to main-process `D:\\Saathi\\.env` via IPC if fetch fails
  * (offline, misconfigured `VITE_API_URL`, CORS).
  */
-export async function getSiteUrls(): Promise<SiteUrls> {
+export async function getSiteUrls(dealerId?: number): Promise<SiteUrls> {
+  const q =
+    dealerId != null && Number.isFinite(dealerId) && dealerId > 0
+      ? `?dealer_id=${encodeURIComponent(String(dealerId))}`
+      : "";
   try {
-    return await apiFetch<SiteUrls>("/settings/site-urls");
+    return await apiFetch<SiteUrls>(`/settings/site-urls${q}`);
   } catch (err) {
     if (isElectron() && window.electronAPI?.config) {
       return window.electronAPI.config.getSiteUrls();

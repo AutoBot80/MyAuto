@@ -176,10 +176,11 @@ function App() {
   }, [authDisabled, sessionRetryNonce]);
 
   useEffect(() => {
-    getSiteUrls()
+    if (boot !== "ready" || dealerId <= 0) return;
+    getSiteUrls(dealerId)
       .then(setSiteUrls)
       .catch((e) => setSiteUrlsError(e instanceof Error ? e.message : "Could not load site URLs from server."));
-  }, []);
+  }, [boot, dealerId]);
 
   const canSeeBulkLoads = sessionLoginId === BULK_LOADS_VISIBLE_LOGIN_ID;
   const posPages = useMemo(() => {

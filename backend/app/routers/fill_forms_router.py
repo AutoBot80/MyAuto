@@ -684,11 +684,15 @@ async def fill_dms_only(
 ) -> FillDmsResponse:
     """Run only DMS (login, enquiry, vehicle search, scrape, PDFs). Independent process."""
     enforce_max_text_depth(req.model_dump())
-    base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
+    did = resolve_dealer_id(principal, req.dealer_id)
+    from app.services.hero_dms_portal_service import hero_dms_base_url_for_dealer
+
+    base_url = hero_dms_base_url_for_dealer(did)
+    if not base_url:
+        base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
     base_url = _require_absolute_http_url(base_url, "dms_base_url")
-    did = resolve_dealer_id(principal, req.dealer_id)
     uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
         raise HTTPException(status_code=500, detail="Uploads directory not found")
@@ -1300,12 +1304,16 @@ async def fill_dms(
 ) -> FillDmsResponse:
     enforce_max_text_depth(req.model_dump())
     logger.info("fill_dms: start staging_id=%s dms=%s", req.staging_id, bool(req.dms_base_url))
-    base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
+    did = resolve_dealer_id(principal, req.dealer_id)
+    from app.services.hero_dms_portal_service import hero_dms_base_url_for_dealer
+
+    base_url = hero_dms_base_url_for_dealer(did)
+    if not base_url:
+        base_url = (req.dms_base_url or DMS_BASE_URL or "").strip()
     if not base_url:
         logger.warning("fill_dms: dms_base_url missing")
         raise HTTPException(status_code=400, detail="dms_base_url required (or set DMS_BASE_URL)")
     base_url = _require_absolute_http_url(base_url, "dms_base_url")
-    did = resolve_dealer_id(principal, req.dealer_id)
     uploads_dir = Path(get_uploads_dir(did))
     if not uploads_dir.is_dir():
         raise HTTPException(status_code=500, detail="Uploads directory not found")

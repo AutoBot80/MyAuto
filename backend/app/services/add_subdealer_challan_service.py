@@ -13,12 +13,14 @@ from typing import Any, Literal
 from playwright.sync_api import Page
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
+from app.services.hero_dms_portal_service import (
+    hero_dms_base_url_for_dealer,
+    hero_dms_siebel_urls_for_dealer,
+)
 from app.config import (
     DMS_BASE_URL,
     DMS_LOGIN_PASSWORD,
     DMS_LOGIN_USER,
-    DMS_REAL_URL_CONTACT,
-    DMS_REAL_URL_VEHICLE,
     DMS_SIEBEL_ACTION_TIMEOUT_MS,
     DMS_SIEBEL_CONTENT_FRAME_SELECTOR,
     DMS_SIEBEL_NAV_TIMEOUT_MS,
@@ -868,7 +870,9 @@ def run_subdealer_challan_batch(
         )
         return out
 
-    base_url = (dms_base_url or DMS_BASE_URL or "").strip()
+    base_url = (dms_base_url or "").strip() or hero_dms_base_url_for_dealer(dealer_id)
+    if not base_url:
+        base_url = (DMS_BASE_URL or "").strip()
     if not base_url:
         logln("ERROR: dms_base_url required")
         out["error"] = "dms_base_url required"
@@ -884,22 +888,7 @@ def run_subdealer_challan_batch(
 
     logln(f"dms_base_url={base_url[:120]!r}")
 
-    urls = SiebelDmsUrls(
-        contact=DMS_REAL_URL_CONTACT,
-        # vehicles=DMS_REAL_URL_VEHICLES,
-        vehicles="",
-        # precheck=DMS_REAL_URL_PRECHECK,
-        precheck="",
-        # pdi=DMS_REAL_URL_PDI,
-        pdi="",
-        vehicle=DMS_REAL_URL_VEHICLE,
-        # enquiry=DMS_REAL_URL_ENQUIRY,
-        enquiry="",
-        # line_items=DMS_REAL_URL_LINE_ITEMS,
-        line_items="",
-        # reports=DMS_REAL_URL_REPORTS,
-        reports="",
-    )
+    urls = hero_dms_siebel_urls_for_dealer(dealer_id)
     frame_sel = (DMS_SIEBEL_CONTENT_FRAME_SELECTOR or "").strip() or None
 
     if int(from_dealer_id) != int(dealer_id):
