@@ -13,6 +13,8 @@ from app.repositories.add_sales_staging import persist_staging_for_submit, _norm
 from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
     uppercase_customer_address_fields,
+    uppercase_customer_care_of_field,
+    uppercase_customer_name_field,
 )
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
 from app.services.sales_ocr_service import _sanitize_details_profession_value
@@ -78,6 +80,8 @@ def submit_info(
         cust_in["pin_code"] = pin_digits[:6]
     customer = enrich_customer_address_from_freeform(cust_in)
     uppercase_customer_address_fields(customer)
+    uppercase_customer_care_of_field(customer)
+    uppercase_customer_name_field(customer)
 
     loc = _str_or_none(file_location) or _str_or_none(customer.get("file_location"))
     if loc:

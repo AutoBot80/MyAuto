@@ -50,12 +50,12 @@ from app.routers import (
     vehicle_search_router,
     documents_router,
     bulk_loads_router,
-    admin_router,
     add_sales_router,
     subdealer_challan_router,
     sidecar_proxy_router,
     system_router,
 )
+from app.routers.admin import router as admin_router
 from app.routers.auth import router as auth_router
 
 

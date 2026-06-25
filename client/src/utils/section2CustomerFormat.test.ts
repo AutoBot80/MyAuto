@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { ExtractedCustomerDetails } from "../types";
 import {
+  buildAddressLine1,
   buildAddressLine2,
   inProcessAddressFromStaging,
   normalizeOperatorFreeformAddress,
+  stripAddressLine2Suffix,
   uppercaseAddressField,
   uppercaseAddressLocality,
+  uppercaseCareOf,
 } from "./section2CustomerFormat";
+
+describe("uppercaseCareOf", () => {
+  it("uppercases relation prefix and name", () => {
+    expect(uppercaseCareOf("s/o ram singh")).toBe("S/O RAM SINGH");
+  });
+});
 
 describe("uppercaseAddressLocality", () => {
   it("uppercases lowercase locality clauses", () => {
@@ -29,6 +38,72 @@ describe("normalizeOperatorFreeformAddress", () => {
     expect(got!.city).toBe("BHARATPUR");
     expect(got!.state).toBe("RAJASTHAN");
     expect(got!.address).toBe("BHARATPUR, RAJASTHAN, 321001");
+  });
+});
+
+describe("stripAddressLine2Suffix", () => {
+  const tailCols: ExtractedCustomerDetails = {
+    city: "Bharatpur",
+    state: "Rajasthan",
+    pin_code: "321001",
+  };
+
+  it("removes matching city/state/pin tail from full address", () => {
+    expect(stripAddressLine2Suffix("Ward 5, Bharatpur, Rajasthan, 321001", tailCols)).toBe("Ward 5");
+  });
+
+  it("removes State - PIN dash tail variant", () => {
+    expect(stripAddressLine2Suffix("Ward 5, Bharatpur, Rajasthan - 321001", tailCols)).toBe(
+      "Ward 5"
+    );
+  });
+
+  it("leaves locality-only address unchanged", () => {
+    expect(stripAddressLine2Suffix("Ward 5, Main Road", tailCols)).toBe("Ward 5, Main Road");
+  });
+});
+
+describe("buildAddressLine1", () => {
+  it("strips duplicated city/state/pin tail when columns are separate", () => {
+    const c: ExtractedCustomerDetails = {
+      address: "Ward 5, Bharatpur, Rajasthan, 321001",
+      city: "Bharatpur",
+      state: "Rajasthan",
+      pin_code: "321001",
+    };
+    expect(buildAddressLine1(c)).toBe("Ward 5");
+  });
+
+  it("keeps locality-only address when columns are separate", () => {
+    const c: ExtractedCustomerDetails = {
+      address: "Ward 5, Main Road",
+      city: "Bharatpur",
+      state: "Rajasthan",
+      pin_code: "321001",
+    };
+    expect(buildAddressLine1(c)).toBe("Ward 5, Main Road");
+  });
+
+  it("prefers granular fields over address fallback", () => {
+    const c: ExtractedCustomerDetails = {
+      house: "12",
+      street: "Main Road",
+      address: "Ward 5, Bharatpur, Rajasthan, 321001",
+      city: "Bharatpur",
+      state: "Rajasthan",
+      pin_code: "321001",
+    };
+    expect(buildAddressLine1(c)).toBe("12, Main Road");
+  });
+
+  it("strips dash-before-PIN tail variant", () => {
+    const c: ExtractedCustomerDetails = {
+      address: "Ward 5, Bharatpur, Rajasthan - 321001",
+      city: "Bharatpur",
+      state: "Rajasthan",
+      pin_code: "321001",
+    };
+    expect(buildAddressLine1(c)).toBe("Ward 5");
   });
 });
 

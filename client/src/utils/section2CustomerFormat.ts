@@ -92,12 +92,100 @@ const ADDRESS_LINE1_PARTS = (c: ExtractedCustomerDetails) =>
     (s) => s != null && String(s).trim() !== ""
   );
 
+const STATE_PIN_DASH_TAIL_RE = /^(.+?)\s*(?:[-–—]\s*)+(\d{6})\s*$/u;
+
+function segmentNorm(s: string): string {
+  return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function addressSegmentsMatch(a: string, b: string): boolean {
+  if (segmentNorm(a) === segmentNorm(b)) return true;
+  const canonA = resolveIndianStateName(a, { allowLaLadakh: true });
+  const canonB = resolveIndianStateName(b, { allowLaLadakh: true });
+  if (canonA && canonB) return canonA.toLowerCase() === canonB.toLowerCase();
+  return false;
+}
+
+/**
+ * When ``city`` / ``state`` / ``pin_code`` are stored separately, remove a matching
+ * comma-separated tail from a full ``address`` string (New tab line 1 dedupe).
+ */
+export function stripAddressLine2Suffix(address: string, c: ExtractedCustomerDetails): string {
+  const raw = address.trim();
+  if (!raw) return "";
+
+  const colPin = (c.pin_code ?? "").replace(/\s/g, "");
+  const colState = (c.state ?? "").trim();
+  const colCity = (c.city ?? "").trim();
+  if (!colPin && !colState && !colCity) return raw;
+
+  const segments = raw.split(",").map((x) => x.trim()).filter(Boolean);
+  if (segments.length === 0) return raw;
+
+  let end = segments.length;
+  let stripped = false;
+  let stateConsumedWithPin = false;
+
+  if (colPin.length === 6 && end > 0) {
+    const last = segments[end - 1] ?? "";
+    const dash = last.match(STATE_PIN_DASH_TAIL_RE);
+    if (dash && dash[2] === colPin) {
+      if (colState && !addressSegmentsMatch(dash[1], colState)) return raw;
+      stateConsumedWithPin = Boolean(colState);
+      end -= 1;
+      stripped = true;
+    } else {
+      const pinDigits = last.replace(/\s/g, "");
+      if (/^\d{6}$/.test(pinDigits) && pinDigits === colPin) {
+        end -= 1;
+        stripped = true;
+      } else {
+        return raw;
+      }
+    }
+  }
+
+  if (colState && end > 0 && !stateConsumedWithPin) {
+    const stateSeg = segments[end - 1] ?? "";
+    if (addressSegmentsMatch(stateSeg, colState)) {
+      end -= 1;
+      stripped = true;
+    } else if (stripped) {
+      return raw;
+    }
+  }
+
+  if (colCity && end > 0) {
+    const cityParts = colCity.split(",").map((x) => x.trim()).filter(Boolean);
+    if (cityParts.length > 1 && end >= cityParts.length) {
+      const tail = segments.slice(end - cityParts.length, end);
+      if (tail.every((seg, i) => addressSegmentsMatch(seg, cityParts[i]!))) {
+        end -= cityParts.length;
+        stripped = true;
+      } else if (stripped) {
+        return raw;
+      }
+    } else if (addressSegmentsMatch(segments[end - 1] ?? "", colCity)) {
+      end -= 1;
+      stripped = true;
+    } else if (stripped) {
+      return raw;
+    }
+  }
+
+  if (!stripped) return raw;
+  return segments.slice(0, end).join(", ").trim();
+}
+
 /** Section 2 Address row 1: house / street / locality (not city, state, PIN). */
 export function buildAddressLine1(c: ExtractedCustomerDetails | null | undefined): string {
   if (!c) return "";
   const granular = ADDRESS_LINE1_PARTS(c).map((s) => String(s).trim());
   if (granular.length > 0) return granular.join(", ");
-  return (c.address ?? "").trim();
+  const raw = (c.address ?? "").trim();
+  if (!raw) return "";
+  if (buildAddressLine2(c)) return stripAddressLine2Suffix(raw, c) || raw;
+  return raw;
 }
 
 /** Section 2 Address row 2: city, state, PIN. */
@@ -168,8 +256,6 @@ export function parseAddressLine2(raw: string): Pick<ExtractedCustomerDetails, "
   };
 }
 
-const STATE_PIN_DASH_TAIL_RE = /^(.+?)\s*(?:[-–—]\s*)+(\d{6})\s*$/u;
-
 export type ParsedOperatorAddress = {
   cityRaw: string;
   stateRaw: string;
@@ -220,6 +306,11 @@ export type NormalizedOperatorAddress = {
 function titleCaseWord(word: string): string {
   if (!word) return "";
   return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+/** Uppercase combined C/O line (e.g. ``s/o ram singh`` → ``S/O RAM SINGH``). */
+export function uppercaseCareOf(raw: string): string {
+  return raw.trim().replace(/\s+/g, " ").toUpperCase();
 }
 
 /** Uppercase a single address field (house, street, city, state, etc.). */

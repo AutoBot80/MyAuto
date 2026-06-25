@@ -645,8 +645,11 @@ def _misp_insert_insurance_master_from_grid_scrape(
     subfolder: str | None,
 ) -> tuple[str | None, dict[str, Any]]:
     """``insurance_master`` INSERT after successful PDF using prior grid scrape."""
-    from app.repositories.add_sales_staging import fetch_staging_payload
-    from app.services.add_sales_commit_service import insert_insurance_master_after_gi
+    from app.repositories.add_sales_staging import deep_merge_staging_payload
+    from app.services.add_sales_commit_service import (
+        _staging_insurance_patch_main_from_scrape,
+        insert_insurance_master_after_gi,
+    )
     from app.services.add_sales_staging_state_service import (
         mark_staging_insurance_state,
         persist_staging_insurance_main_fields,
@@ -667,9 +670,9 @@ def _misp_insert_insurance_master_from_grid_scrape(
             premium=grid_scrape.get("premium"),
             idv=grid_scrape.get("idv"),
         )
-        fresh = fetch_staging_payload(sid, did)
-        if fresh is not None:
-            staging_payload = fresh
+    ins_patch = _staging_insurance_patch_main_from_scrape(grid_scrape)
+    if ins_patch:
+        staging_payload = deep_merge_staging_payload(staging_payload or {}, ins_patch)
 
     try:
         insert_insurance_master_after_gi(

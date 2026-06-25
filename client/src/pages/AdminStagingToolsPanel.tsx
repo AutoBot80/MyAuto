@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAdminDealerNames, type AdminDealerNameRow } from "../api/adminDealers";
 import {
   cancelAdminStagingInvoice,
@@ -30,6 +30,13 @@ function customerConfirmationLabel(detail: AdminStagingDetailResponse | null): s
   return "";
 }
 
+function confirmationMatchesTyped(expected: string, typed: string): boolean {
+  const e = expected.trim();
+  const t = typed.trim();
+  if (!e || !t) return false;
+  return e.toLowerCase() === t.toLowerCase();
+}
+
 export function AdminStagingToolsPanel() {
   const [dealers, setDealers] = useState<AdminDealerNameRow[]>([]);
   const [dealerId, setDealerId] = useState<number | "">("");
@@ -45,6 +52,9 @@ export function AdminStagingToolsPanel() {
   const [searchErr, setSearchErr] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<{ text: string; success: boolean } | null>(null);
   const [dealersErr, setDealersErr] = useState<string | null>(null);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [cancelTyped, setCancelTyped] = useState("");
+  const cancelConfirmInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,24 +165,43 @@ export function AdminStagingToolsPanel() {
 
   const cancelConfirmation = customerConfirmationLabel(detail);
 
-  async function handleCancelInvoice() {
+  const cancelTypedMatches = useMemo(
+    () => confirmationMatchesTyped(cancelConfirmation, cancelTyped),
+    [cancelConfirmation, cancelTyped]
+  );
+
+  useEffect(() => {
+    if (!cancelModalOpen) return;
+    const t = window.setTimeout(() => cancelConfirmInputRef.current?.focus(), 0);
+    return () => window.clearTimeout(t);
+  }, [cancelModalOpen]);
+
+  function openCancelInvoiceModal() {
     if (!selectedId || typeof dealerId !== "number" || !detail) return;
     if (!cancelConfirmation) {
       setActionMsg({ text: "No customer name or mobile on staging row for confirmation.", success: false });
       return;
     }
-    const ok = window.confirm(
-      `Cancel Invoice will DELETE Saathi database masters for this sale and reset the staging row.\n\n` +
-        `This does NOT cancel the invoice in Siebel/DMS. Operators may need to cancel there separately.\n\n` +
-        `Customer: ${cancelConfirmation}\n\nContinue?`
-    );
-    if (!ok) return;
-    const typed = window.prompt(
-      `Type exactly to confirm:\n${cancelConfirmation}`
-    );
-    if (typed == null) return;
+    setCancelTyped("");
+    setCancelModalOpen(true);
+  }
+
+  function closeCancelInvoiceModal(opts?: { aborted?: boolean }) {
+    setCancelModalOpen(false);
+    setCancelTyped("");
+    if (opts?.aborted) {
+      setActionMsg({ text: "Cancel Invoice aborted.", success: false });
+    }
+  }
+
+  async function submitCancelInvoice() {
+    if (!selectedId || typeof dealerId !== "number" || !detail || !cancelConfirmation) return;
+    if (!cancelTypedMatches) return;
+    setCancelModalOpen(false);
     setActionBusy(true);
     setActionMsg(null);
+    const typed = cancelTyped.trim();
+    setCancelTyped("");
     try {
       const res = await cancelAdminStagingInvoice(dealerId, selectedId, typed);
       setActionMsg({
@@ -437,7 +466,7 @@ export function AdminStagingToolsPanel() {
                 <button
                   type="button"
                   className="app-button app-button--small admin-danger-button"
-                  onClick={() => void handleCancelInvoice()}
+                  onClick={openCancelInvoiceModal}
                   disabled={actionBusy || detailBusy}
                 >
                   Cancel Invoice
@@ -468,6 +497,69 @@ export function AdminStagingToolsPanel() {
           ) : null}
         </div>
       </div>
+
+      {cancelModalOpen && cancelConfirmation ? (
+        <div
+          className="admin-staging-cancel-modal-backdrop"
+          role="presentation"
+          onClick={() => !actionBusy && closeCancelInvoiceModal({ aborted: true })}
+        >
+          <div
+            className="admin-staging-cancel-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="admin-staging-cancel-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="admin-staging-cancel-modal-title">Cancel Invoice</h3>
+            <p className="admin-staging-cancel-modal-warning">
+              This will <strong>delete</strong> Saathi database masters for this sale and reset the
+              staging row. It does <strong>not</strong> cancel the invoice in Siebel/DMS — operators
+              may need to cancel there separately.
+            </p>
+            <p className="admin-staging-cancel-modal-customer">
+              Customer: <strong>{cancelConfirmation}</strong>
+            </p>
+            <label className="admin-staging-cancel-modal-field">
+              Type exactly to confirm
+              <input
+                ref={cancelConfirmInputRef}
+                type="text"
+                className="add-sales-v2-dl-input"
+                value={cancelTyped}
+                onChange={(e) => setCancelTyped(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && cancelTypedMatches && !actionBusy) {
+                    e.preventDefault();
+                    void submitCancelInvoice();
+                  }
+                }}
+                disabled={actionBusy}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+            <div className="admin-staging-cancel-modal-actions">
+              <button
+                type="button"
+                className="app-button"
+                onClick={() => closeCancelInvoiceModal({ aborted: true })}
+                disabled={actionBusy}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                className="app-button admin-danger-button"
+                onClick={() => void submitCancelInvoice()}
+                disabled={actionBusy || !cancelTypedMatches}
+              >
+                {actionBusy ? "Cancelling…" : "Confirm cancel"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

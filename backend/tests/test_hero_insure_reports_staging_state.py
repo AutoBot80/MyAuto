@@ -1,4 +1,4 @@
-"""Hero insure reports: staging state=3 after INSERT."""
+"""Hero insure reports: staging state=3 after INSERT (no local DB reload)."""
 
 from unittest.mock import patch
 
@@ -10,9 +10,8 @@ def test_insert_from_grid_marks_insurance_state_3() -> None:
     with patch(
         "app.services.add_sales_staging_state_service.persist_staging_insurance_main_fields"
     ) as persist, patch(
-        "app.repositories.add_sales_staging.fetch_staging_payload",
-        return_value={"insurance": {"policy_num": "POL123", "premium": 5000.0, "idv": 60000.0}},
-    ), patch(
+        "app.repositories.add_sales_staging.fetch_staging_payload"
+    ) as fetch_payload, patch(
         "app.services.add_sales_commit_service.insert_insurance_master_after_gi"
     ) as insert, patch(
         "app.services.add_sales_staging_state_service.mark_staging_insurance_state"
@@ -31,7 +30,11 @@ def test_insert_from_grid_marks_insurance_state_3() -> None:
     assert err is None
     assert out["policy_num"] == "POL123"
     persist.assert_called_once()
+    fetch_payload.assert_not_called()
     insert.assert_called_once()
+    merged = insert.call_args.kwargs.get("staging_payload") or {}
+    assert merged.get("insurance", {}).get("policy_num") == "POL123"
+    assert merged.get("insurance", {}).get("premium") == 5000.0
     mark_state.assert_called_once_with(
         "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 100001, 3
     )
@@ -42,9 +45,8 @@ def test_insert_from_grid_skips_duplicate_and_still_marks_state_3() -> None:
     with patch(
         "app.services.add_sales_staging_state_service.persist_staging_insurance_main_fields"
     ), patch(
-        "app.repositories.add_sales_staging.fetch_staging_payload",
-        return_value={"insurance": {"policy_num": "POL123"}},
-    ), patch(
+        "app.repositories.add_sales_staging.fetch_staging_payload"
+    ) as fetch_payload, patch(
         "app.services.add_sales_commit_service.insert_insurance_master_after_gi",
         side_effect=ValueError("Hero insurance (Main) already recorded for this customer"),
     ), patch(
@@ -62,6 +64,7 @@ def test_insert_from_grid_skips_duplicate_and_still_marks_state_3() -> None:
             subfolder="sale1",
         )
     assert err is None
+    fetch_payload.assert_not_called()
     mark_state.assert_called_once_with(
         "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 100001, 3
     )

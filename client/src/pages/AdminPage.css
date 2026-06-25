@@ -89,3 +89,59 @@
   margin-top: 0.5rem;
 }
 
+.admin-staging-cancel-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 1rem;
+}
+
+.admin-staging-cancel-modal {
+  background: #fff;
+  border-radius: 8px;
+  padding: 1.25rem;
+  max-width: 26rem;
+  width: 100%;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  border: 1px solid #c5d9ed;
+}
+
+.admin-staging-cancel-modal h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #b42318;
+}
+
+.admin-staging-cancel-modal-warning {
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: #344054;
+}
+
+.admin-staging-cancel-modal-customer {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  color: #1e5a9e;
+}
+
+.admin-staging-cancel-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+  color: #344054;
+}
+
+.admin-staging-cancel-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+

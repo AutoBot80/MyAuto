@@ -85,6 +85,8 @@ import { sanitizeNomineeAgeInput, sanitizeOptionalFormField } from "./formFieldS
 import {
   composeCareOf,
   parseCareOfFromCombined,
+  uppercaseAddressField,
+  uppercaseCareOf,
 } from "./section2CustomerFormat";
 
 const CUSTOMER_KEYS: (keyof ExtractedCustomerDetails)[] = [
@@ -119,13 +121,16 @@ function normalizeExtractedCustomer(val: unknown): ExtractedCustomerDetails | nu
     const rel = (out.care_of_relation && String(out.care_of_relation).trim()) || parseCareOfFromCombined(out.care_of).relation;
     const name = (out.care_of_name && String(out.care_of_name).trim()) || parseCareOfFromCombined(out.care_of).name;
     out.care_of_relation = rel;
-    out.care_of_name = name;
+    out.care_of_name = name ? uppercaseCareOf(name) : name;
     const composed = composeCareOf(rel, name);
-    if (composed) out.care_of = composed;
+    if (composed) out.care_of = uppercaseCareOf(composed);
   }
   if (out.aadhar_id) {
     const digits = String(out.aadhar_id).replace(/\D/g, "");
     out.aadhar_id = digits.length >= 4 ? digits.slice(-4) : digits;
+  }
+  if (out.name) {
+    out.name = uppercaseAddressField(out.name);
   }
   return Object.keys(out).length > 0 ? out : null;
 }

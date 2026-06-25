@@ -804,6 +804,25 @@ def title_case_address_locality(raw: str) -> str:
 _title_case_address_locality = title_case_address_locality
 
 
+def uppercase_care_of_value(raw: str) -> str:
+    """Uppercase combined C/O line (e.g. ``s/o ram singh`` → ``S/O RAM SINGH``)."""
+    return _squish_spaces(str(raw or "")).upper()
+
+
+def uppercase_customer_care_of_field(customer: dict) -> None:
+    """Uppercase ``care_of`` in place when present."""
+    val = customer.get("care_of")
+    if val and str(val).strip():
+        customer["care_of"] = uppercase_care_of_value(str(val))
+
+
+def uppercase_customer_name_field(customer: dict) -> None:
+    """Uppercase ``name`` in place when present."""
+    val = customer.get("name")
+    if val and str(val).strip():
+        customer["name"] = _squish_spaces(str(val)).upper()
+
+
 def uppercase_customer_address_fields(customer: dict) -> None:
     """Uppercase all address fields in place (line 1 locality + line 2 city/state)."""
     for key in (

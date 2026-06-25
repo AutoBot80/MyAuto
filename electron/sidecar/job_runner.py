@@ -2873,11 +2873,12 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
 
     if result.get("success"):
         _final_scrape = _captured_insert_args.get("preview_scrape")
+        _commit_staging = _captured_insert_args.get("staging_payload") or staging_payload
         commit_body = {
             "customer_id": cid,
             "vehicle_id": vid,
             "fill_values": cached_values,
-            "staging_payload": staging_payload,
+            "staging_payload": _commit_staging,
             "preview_scrape": _final_scrape,
             "post_issue_scrape": None,
             "staging_id": staging_id,
@@ -2888,6 +2889,8 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
             commit_resp = _api_post(api_url, jwt, "/sidecar/insurance/commit", commit_body)
             if commit_resp.get("error"):
                 result["error"] = commit_resp["error"]
+            elif staging_id and dealer_id:
+                _mark_insurance_state_via_api(str(staging_id), int(dealer_id), 3)
         except Exception as exc:
             logging.warning("fill_insurance sidecar commit: %s", exc)
 

@@ -32,6 +32,8 @@ from app.services.utility_functions import (
 from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
     uppercase_customer_address_fields,
+    uppercase_customer_care_of_field,
+    uppercase_customer_name_field,
     normalize_address_freeform,
     strip_junk_between_last_indian_state_and_pin,
 )
@@ -2442,10 +2444,9 @@ def _apply_initcap_on_read(
                 customer["marital_status"] = _initcap_words(ms)
             else:
                 customer.pop("marital_status", None)
-        for k in ("name", "care_of"):
-            if customer.get(k):
-                customer[k] = _initcap_words(customer.get(k))
         uppercase_customer_address_fields(customer)
+        uppercase_customer_care_of_field(customer)
+        uppercase_customer_name_field(customer)
         data["customer"] = customer
 
     insurance = data.get("insurance") or {}

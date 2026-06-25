@@ -64,6 +64,7 @@ import {
   parseCareOfFromCombined,
   uppercaseAddressField,
   uppercaseAddressLocality,
+  uppercaseCareOf,
 } from "../utils/section2CustomerFormat";
 import {
   getSection2ValidationErrors,
@@ -208,6 +209,7 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
   const careRaw = sanitizeOptionalFormField(String(r.care_of ?? "").trim());
   const careParts = parseCareOfFromCombined(careRaw);
   const careComposed = composeCareOf(careParts.relation, careParts.name) || careRaw;
+  const careOfUpper = careComposed ? uppercaseCareOf(careComposed) : undefined;
   const aadharDigits = String(r.aadhar_id ?? "").replace(/\D/g, "");
   const aadharLast4 =
     aadharDigits.length >= 4
@@ -218,14 +220,17 @@ function mapApiCustomerToExtracted(cust: Record<string, unknown>): ExtractedCust
   const addressRaw = sanitizeOptionalFormField(String(r.address ?? "").trim());
   return {
     aadhar_id: sanitizeOptionalFormField(aadharLast4 ?? ""),
-    name: sanitizeOptionalFormField(String(r.name ?? "").trim()),
+    name: (() => {
+      const v = sanitizeOptionalFormField(String(r.name ?? "").trim());
+      return v ? uppercaseAddressField(v) : undefined;
+    })(),
     alt_phone_num: sanitizeOptionalFormField(String(r.alt_phone_num ?? r.alternate_mobile_number ?? "").trim()),
     gender: sanitizeOptionalFormField(String(r.gender ?? "").trim()),
     year_of_birth: sanitizeOptionalFormField(String(r.year_of_birth ?? "").trim()),
     date_of_birth: dobNorm || undefined,
-    care_of: careComposed || undefined,
+    care_of: careOfUpper,
     care_of_relation: careParts.relation,
-    care_of_name: careParts.name || undefined,
+    care_of_name: careParts.name ? uppercaseCareOf(careParts.name) : undefined,
     house: uppercaseLine1Field(r.house),
     street: uppercaseLine1Field(r.street),
     location: uppercaseLine1Field(r.location),
@@ -472,6 +477,8 @@ export function AddSalesPage({
   const [dealerCpaContextError, setDealerCpaContextError] = useState<string | null>(null);
   const [section2ValidationErrors, setSection2ValidationErrors] = useState<Section2FieldError[]>([]);
   const [section2SubmitAttempted, setSection2SubmitAttempted] = useState(false);
+  const [addressLine1Input, setAddressLine1Input] = useState("");
+  const addressLine1DirtyRef = useRef(false);
   const [addressLine2Input, setAddressLine2Input] = useState("");
   const addressLine2DirtyRef = useRef(false);
   const threeColRef = useRef<HTMLDivElement>(null);
@@ -683,6 +690,7 @@ export function AddSalesPage({
       if (cust && typeof cust === "object" && !Array.isArray(cust)) {
         const rec = cust as Record<string, unknown>;
         setExtractedCustomer(mapApiCustomerToExtracted(rec));
+        addressLine1DirtyRef.current = false;
         addressLine2DirtyRef.current = false;
         const mobRaw = rec.mobile_number ?? rec.mobile;
         if (mobRaw != null) {
@@ -949,6 +957,8 @@ export function AddSalesPage({
     void reloadDealerCpaContext();
     setSection2ValidationErrors([]);
     setSection2SubmitAttempted(false);
+    setAddressLine1Input("");
+    addressLine1DirtyRef.current = false;
     setAddressLine2Input("");
     addressLine2DirtyRef.current = false;
     setFormResetKey((k) => k + 1);
@@ -1037,6 +1047,12 @@ export function AddSalesPage({
   );
 
   const section2ErrorsToShow = section2SubmitAttempted ? section2ValidationErrors : [];
+
+  useEffect(() => {
+    if (!addressLine1DirtyRef.current) {
+      setAddressLine1Input(buildAddressLine1(extractedCustomer));
+    }
+  }, [extractedCustomer, formResetKey]);
 
   useEffect(() => {
     if (!addressLine2DirtyRef.current) {
@@ -2038,8 +2054,12 @@ export function AddSalesPage({
                       addressLine2DirtyRef.current = false;
                       const line1Raw = buildAddressLine1(c) || c?.address || "";
                       const line1Upper = line1Raw.trim() ? uppercaseAddressLocality(line1Raw.trim()) : undefined;
+                      setAddressLine1Input(line1Upper ?? "");
+                      addressLine1DirtyRef.current = false;
                       const customerForSubmit: ExtractedCustomerDetails = {
                         ...c,
+                        name: c?.name?.trim() ? uppercaseAddressField(c.name.trim()) : undefined,
+                        care_of: c?.care_of?.trim() ? uppercaseCareOf(c.care_of.trim()) : undefined,
                         address: line1Upper,
                         house: undefined,
                         street: undefined,
@@ -2200,10 +2220,12 @@ export function AddSalesPage({
                       <dd className="add-sales-v2-dd--address-rows">
                         <input
                           className="add-sales-v2-dl-input add-sales-v2-dl-input--address-line1"
-                          value={buildAddressLine1(c)}
+                          value={addressLine1Input}
                           onChange={(e) => {
                             clearSection2Validation();
+                            addressLine1DirtyRef.current = true;
                             const line1 = sanitizeFormFieldInputValue(e.target.value);
+                            setAddressLine1Input(line1);
                             setExtractedCustomer((prev) => ({
                               ...(prev ?? {}),
                               address: line1 || undefined,
@@ -2214,6 +2236,16 @@ export function AddSalesPage({
                               district: undefined,
                               sub_district: undefined,
                             }));
+                          }}
+                          onBlur={() => {
+                            const trimmed = addressLine1Input.trim();
+                            if (trimmed !== addressLine1Input) {
+                              setAddressLine1Input(trimmed);
+                              setExtractedCustomer((prev) => ({
+                                ...(prev ?? {}),
+                                address: trimmed || undefined,
+                              }));
+                            }
                           }}
                           placeholder="House, street, locality"
                           aria-invalid={section2FieldInvalid("address")}
