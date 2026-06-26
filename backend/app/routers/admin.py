@@ -737,6 +737,7 @@ class UpdateDealerRefInsurerRequest(BaseModel):
     hero_cpi: Literal["Y", "N"]
     cpi_reqd: Literal["Y", "N"]
     insurance_pay: Literal["CC", "APD"]
+    dms_siebel_portal: Literal["HMCL", "ASC"]
 
 
 class LoginActiveFlagRequest(BaseModel):
@@ -858,8 +859,9 @@ def get_dealer_ref_full(dealer_id: int, principal: Principal = Depends(get_princ
 def patch_dealer_ref_insurer_cpi(
     dealer_id: int, payload: UpdateDealerRefInsurerRequest, principal: Principal = Depends(get_principal)
 ) -> dict:
-    """Update ``prefer_insurer``, ``hero_cpi``, ``cpi_reqd``, and ``insurance_pay`` on ``dealer_ref``."""
+    """Update ``prefer_insurer``, ``hero_cpi``, ``cpi_reqd``, ``insurance_pay``, and ``dms_siebel_portal`` on ``dealer_ref``."""
     _require_admin_dealer_scope(principal, dealer_id)
+    dms_portal_db = None if payload.dms_siebel_portal == "HMCL" else payload.dms_siebel_portal
     pi = payload.prefer_insurer
     if pi is not None:
         pi = pi.strip() or None
@@ -883,10 +885,18 @@ def patch_dealer_ref_insurer_cpi(
             cur.execute(
                 """
                 UPDATE dealer_ref
-                SET prefer_insurer = %s, hero_cpi = %s, cpi_reqd = %s, insurance_pay = %s
+                SET prefer_insurer = %s, hero_cpi = %s, cpi_reqd = %s, insurance_pay = %s,
+                    dms_siebel_portal = %s
                 WHERE dealer_id = %s
                 """,
-                (pi, payload.hero_cpi, payload.cpi_reqd, payload.insurance_pay, dealer_id),
+                (
+                    pi,
+                    payload.hero_cpi,
+                    payload.cpi_reqd,
+                    payload.insurance_pay,
+                    dms_portal_db,
+                    dealer_id,
+                ),
             )
         conn.commit()
         with conn.cursor() as cur:

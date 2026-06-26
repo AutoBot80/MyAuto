@@ -90,6 +90,7 @@ export function patchAdminDealerInsurerCpi(
     hero_cpi: "Y" | "N";
     cpi_reqd: "Y" | "N";
     insurance_pay: "CC" | "APD";
+    dms_siebel_portal: "HMCL" | "ASC";
   }
 ) {
   return apiFetch<JsonRecord>(`/admin/dealers/${dealerId}`, {

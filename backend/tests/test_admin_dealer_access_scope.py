@@ -109,6 +109,88 @@ def test_patch_prefer_insurer_rejects_non_portal_label(admin_client: TestClient)
         mock_cur.fetchone.return_value = (1,)
         r = admin_client.patch(
             "/admin/dealers/100003",
-            json={"prefer_insurer": "National Insurance Co. Ltd", "hero_cpi": "N", "cpi_reqd": "N", "insurance_pay": "APD"},
+            json={
+                "prefer_insurer": "National Insurance Co. Ltd",
+                "hero_cpi": "N",
+                "cpi_reqd": "N",
+                "insurance_pay": "APD",
+                "dms_siebel_portal": "HMCL",
+            },
         )
     assert r.status_code == 400
+
+
+def test_patch_dms_siebel_portal_round_trip(admin_client: TestClient) -> None:
+    with patch(
+        "app.repositories.admin_dealer_access.list_dealer_ids_for_admin_login",
+        return_value=[100003],
+    ), patch("app.routers.admin.list_portal_insurers", return_value=[]), patch(
+        "app.routers.admin.get_connection"
+    ) as mock_conn:
+        mock_cur = mock_conn.return_value.cursor.return_value.__enter__.return_value
+        mock_cur.fetchone.side_effect = [
+            (1,),
+            {
+                "dealer_name": "Test Dealer 100003",
+                "parent_id": None,
+                "parent_name": None,
+                "oem_name": "Hero Motors",
+                "prefer_insurer": None,
+                "hero_cpi": "N",
+                "cpi_reqd": "N",
+                "insurance_pay": "APD",
+                "dms_siebel_portal": "ASC",
+            },
+        ]
+        r = admin_client.patch(
+            "/admin/dealers/100003",
+            json={
+                "prefer_insurer": None,
+                "hero_cpi": "N",
+                "cpi_reqd": "N",
+                "insurance_pay": "APD",
+                "dms_siebel_portal": "ASC",
+            },
+        )
+    assert r.status_code == 200
+    assert r.json()["dms_siebel_portal"] == "ASC"
+    update_call = mock_cur.execute.call_args_list[1]
+    assert "dms_siebel_portal" in update_call.args[0]
+    assert update_call.args[1][4] == "ASC"
+
+
+def test_patch_dms_siebel_portal_hmcl_stores_null(admin_client: TestClient) -> None:
+    with patch(
+        "app.repositories.admin_dealer_access.list_dealer_ids_for_admin_login",
+        return_value=[100003],
+    ), patch("app.routers.admin.list_portal_insurers", return_value=[]), patch(
+        "app.routers.admin.get_connection"
+    ) as mock_conn:
+        mock_cur = mock_conn.return_value.cursor.return_value.__enter__.return_value
+        mock_cur.fetchone.side_effect = [
+            (1,),
+            {
+                "dealer_name": "Test Dealer 100003",
+                "parent_id": None,
+                "parent_name": None,
+                "oem_name": "Hero Motors",
+                "prefer_insurer": None,
+                "hero_cpi": "N",
+                "cpi_reqd": "N",
+                "insurance_pay": "APD",
+                "dms_siebel_portal": None,
+            },
+        ]
+        r = admin_client.patch(
+            "/admin/dealers/100003",
+            json={
+                "prefer_insurer": None,
+                "hero_cpi": "N",
+                "cpi_reqd": "N",
+                "insurance_pay": "APD",
+                "dms_siebel_portal": "HMCL",
+            },
+        )
+    assert r.status_code == 200
+    update_call = mock_cur.execute.call_args_list[1]
+    assert update_call.args[1][4] is None
