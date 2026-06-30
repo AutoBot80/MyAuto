@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.services.add_sales_commit_service import upsert_customer_vehicle_sales
 
 
@@ -31,16 +29,11 @@ def _minimal_payload() -> dict:
     }
 
 
-@patch("app.services.fill_hero_dms_service._vehicle_master_update_from_scrape_on_cursor")
-def test_upsert_calls_vehicle_scrape_update_after_sales_insert(mock_vm_update):
+@patch("app.services.fill_hero_dms_service._upsert_vehicle_master_from_scrape_on_cursor", return_value=20)
+@patch("app.services.fill_hero_dms_service._upsert_customer_master_from_dms_on_cursor", return_value=10)
+def test_upsert_uses_shared_master_upserts_before_sales_insert(mock_cust_upsert, mock_veh_upsert):
     cur = MagicMock()
-    cur.fetchone.side_effect = [
-        None,  # customer SELECT — insert
-        {"customer_id": 10},
-        None,  # vehicle SELECT — insert
-        {"vehicle_id": 20},
-        {"sales_id": 30},
-    ]
+    cur.fetchone.return_value = {"sales_id": 30}
     scrape = {
         "full_chassis": "MBLHAW478THD09377",
         "full_engine": "HA11F6THD09898",
@@ -54,18 +47,17 @@ def test_upsert_calls_vehicle_scrape_update_after_sales_insert(mock_vm_update):
         cur, _minimal_payload(), scraped_vehicle=scrape
     )
     assert (cid, vid, sid) == (10, 20, 30)
-    mock_vm_update.assert_called_once()
-    assert mock_vm_update.call_args[0][1] == 20
-    assert mock_vm_update.call_args[0][2]["model"] == "SPLENDOR +"
+    mock_cust_upsert.assert_called_once()
+    mock_veh_upsert.assert_called_once()
+    veh_scrape = mock_veh_upsert.call_args[0][2]
+    assert veh_scrape["model"] == "SPLENDOR +"
+    assert cur.execute.call_count == 1
 
 
-@patch("app.services.fill_hero_dms_service._vehicle_master_update_from_scrape_on_cursor")
-def test_upsert_skips_scrape_update_when_scrape_empty(mock_vm_update):
+@patch("app.services.fill_hero_dms_service._upsert_vehicle_master_from_scrape_on_cursor", return_value=2)
+@patch("app.services.fill_hero_dms_service._upsert_customer_master_from_dms_on_cursor", return_value=1)
+def test_upsert_vehicle_upsert_runs_even_when_scrape_empty(mock_cust_upsert, mock_veh_upsert):
     cur = MagicMock()
-    cur.fetchone.side_effect = [
-        {"customer_id": 1},
-        {"vehicle_id": 2},
-        {"sales_id": 3},
-    ]
+    cur.fetchone.return_value = {"sales_id": 3}
     upsert_customer_vehicle_sales(cur, _minimal_payload(), scraped_vehicle={})
-    mock_vm_update.assert_not_called()
+    mock_veh_upsert.assert_called_once()

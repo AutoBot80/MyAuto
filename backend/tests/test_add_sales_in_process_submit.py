@@ -58,6 +58,30 @@ def test_persist_submit_updates_cpi_reqd_on_draft():
     assert "cpi_reqd = %s" in sql
 
 
+def test_persist_submit_defaults_cpi_reqd_to_dealer_when_omitted():
+    cur = MagicMock()
+    cur.fetchone.side_effect = [{"status": "draft"}, {"cpi_reqd": "Y"}]
+    cur.rowcount = 1
+    payload = {
+        "dealer_id": 100001,
+        "file_location": None,
+        "customer": {"mobile_number": 9876543210, "name": "X"},
+        "vehicle": {"frame_no": "CH1", "engine_no": "EN1"},
+        "insurance": {},
+    }
+    sid = repo.persist_staging_for_submit(
+        cur,
+        dealer_id=100001,
+        payload=payload,
+        staging_id_existing="11111111-1111-1111-1111-111111111111",
+        login_id=None,
+        cpi_reqd=None,
+    )
+    assert sid == "11111111-1111-1111-1111-111111111111"
+    update_call = cur.execute.call_args_list[-1]
+    assert update_call[0][1][3] == "Y"
+
+
 def test_persist_submit_raises_when_staging_id_is_committed():
     cur = MagicMock()
     cur.fetchone.return_value = {"status": "committed"}

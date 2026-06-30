@@ -1655,6 +1655,39 @@ def _write_playwright_contact_scrape_section(
         pass
 
 
+def append_playwright_dms_commit_log(
+    log_path: Path | str | None,
+    *,
+    staging_id: str | None,
+    inv_ready: bool,
+    scraped_invoice_number: str | None,
+    customer_id: int | None,
+    vehicle_id: int | None,
+    committed_customer_id: int | None,
+    committed_vehicle_id: int | None,
+    sales_id: int | None,
+    error: str | None,
+) -> None:
+    """Append sidecar ``/sidecar/dms/commit`` outcome to the per-run Playwright DMS log."""
+    if not log_path:
+        return
+    p = Path(str(log_path))
+    try:
+        with p.open("a", encoding="utf-8") as fp:
+            fp.write("\n--- dms_commit (sidecar POST /sidecar/dms/commit) ---\n")
+            fp.write(f"staging_id={staging_id!r}\n")
+            fp.write(f"inv_ready={inv_ready!r}\n")
+            fp.write(f"scraped_invoice_number={scraped_invoice_number!r}\n")
+            fp.write(f"request_customer_id={customer_id!r} request_vehicle_id={vehicle_id!r}\n")
+            fp.write(
+                f"committed_customer_id={committed_customer_id!r} "
+                f"committed_vehicle_id={committed_vehicle_id!r} sales_id={sales_id!r}\n"
+            )
+            fp.write(f"error={error!r}\n")
+    except OSError:
+        pass
+
+
 def _write_playwright_dms_masters_section(
     log_fp,
     *,

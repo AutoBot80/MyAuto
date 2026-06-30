@@ -76,6 +76,8 @@ export interface FillDmsResponse {
   application_id?: string | null;
   rto_fees?: number | null;
   error?: string | null;
+  /** When Siebel succeeded but DB commit failed (Electron sidecar). */
+  commit_error?: string | null;
   /** Completed DMS steps from last Fill DMS run (Add Sales top banner). */
   dms_milestones?: string[];
   /** Real Siebel: ordered narrative lines; UI prefers this over milestones when non-empty. */

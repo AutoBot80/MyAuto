@@ -2088,7 +2088,7 @@ export function AddSalesPage({
                           stagingId: lastStagingId,
                           preferInsurer,
                           portalInsurers,
-                          cpiReqd: cpaRequired,
+                          cpiReqd: cpaFromSheetRef.current ? cpaRequired : undefined,
                         });
                         setHasSubmittedInfo(true);
                         if (submitRes?.staging_id != null && String(submitRes.staging_id).trim())

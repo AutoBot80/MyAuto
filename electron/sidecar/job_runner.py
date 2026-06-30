@@ -2665,6 +2665,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
     if result.get("error") is None and not _has_scraped_vehicle(scraped) and not skip_nv:
         result["error"] = DMS_NO_VEHICLE_ERROR
 
+    siebel_error_before_commit = result.get("error")
     commit_body = {
         "staging_id": params.get("staging_id"),
         "staging_payload": staging_payload,
@@ -2675,17 +2676,46 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         "sales_id": result.get("sales_id"),
         "masters_committed_via_siebel": result.get("dms_master_persist_committed") is True,
     }
+    commit_resp: dict = {}
     try:
         commit_resp = _api_post(api_url, jwt, "/sidecar/dms/commit", commit_body)
         if commit_resp.get("committed_customer_id"):
             result["committed_customer_id"] = commit_resp["committed_customer_id"]
         if commit_resp.get("committed_vehicle_id"):
             result["committed_vehicle_id"] = commit_resp["committed_vehicle_id"]
-        if commit_resp.get("error"):
-            result["error"] = commit_resp["error"]
+        commit_err = (commit_resp.get("error") or "").strip() or None
+        if commit_err:
+            result["commit_error"] = commit_err
+            if not siebel_error_before_commit:
+                result["error"] = f"DB commit failed: {commit_err}"
+            else:
+                result["error"] = commit_err
+        else:
+            result["commit_error"] = None
     except Exception as exc:
         logging.warning("fill_dms sidecar commit: %s", exc)
-        result["error"] = (result.get("error") or "") + f"; Commit: {exc!s}"
+        commit_err = f"Commit: {exc!s}"
+        result["commit_error"] = commit_err
+        result["error"] = (result.get("error") or "") + f"; {commit_err}"
+
+    try:
+        from app.services.fill_hero_dms_service import invoice_number_ready_for_master_commit
+        from app.services.hero_dms_shared_utilities import append_playwright_dms_commit_log
+
+        append_playwright_dms_commit_log(
+            result.get("playwright_dms_execution_log_path"),
+            staging_id=(params.get("staging_id") or "").strip() or None,
+            inv_ready=invoice_number_ready_for_master_commit(scraped),
+            scraped_invoice_number=str((scraped.get("invoice_number") or "")).strip() or None,
+            customer_id=commit_body.get("customer_id"),
+            vehicle_id=commit_body.get("vehicle_id"),
+            committed_customer_id=commit_resp.get("committed_customer_id"),
+            committed_vehicle_id=commit_resp.get("committed_vehicle_id"),
+            sales_id=commit_resp.get("sales_id"),
+            error=(commit_resp.get("error") or result.get("commit_error")),
+        )
+    except Exception:
+        logging.exception("fill_dms sidecar: append dms commit log failed")
 
     warn, dms_mode = _dms_response_warning_and_mode(result)
     cc = result.get("committed_customer_id")
@@ -2708,6 +2738,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
 
     pdfs_list = _invoice_dispatch_pdf_paths(result)
     err_norm = _normalize_automation_error(result.get("error"))
+    commit_err_norm = _normalize_automation_error(result.get("commit_error"))
     if err_norm:
         try:
             from app.services.process_failure_log_service import digits_only_mobile, entity_key_fill_dms
@@ -2729,17 +2760,30 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
                 mobile_digits=md,
             )
             disp = md if md else (mob_raw[:32] if mob_raw else None)
-            _record_process_failure_via_api(
-                api_url,
-                jwt,
-                {
-                    "dealer_id": dealer_id,
-                    "process_label": "Create Invoice",
-                    "entity_dedupe_key": ek,
-                    "error_text": err_norm,
-                    "customer_mobile": disp,
-                },
-            )
+            if commit_err_norm and not _normalize_automation_error(siebel_error_before_commit):
+                _record_process_failure_via_api(
+                    api_url,
+                    jwt,
+                    {
+                        "dealer_id": dealer_id,
+                        "process_label": "Create Invoice / DB commit",
+                        "entity_dedupe_key": ek,
+                        "error_text": commit_err_norm,
+                        "customer_mobile": disp,
+                    },
+                )
+            else:
+                _record_process_failure_via_api(
+                    api_url,
+                    jwt,
+                    {
+                        "dealer_id": dealer_id,
+                        "process_label": "Create Invoice",
+                        "entity_dedupe_key": ek,
+                        "error_text": err_norm,
+                        "customer_mobile": disp,
+                    },
+                )
         except Exception:
             logging.exception("fill_dms sidecar failure-log")
 
@@ -2750,6 +2794,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         "application_id": result.get("application_id"),
         "rto_fees": result.get("rto_fees"),
         "error": err_norm,
+        "commit_error": result.get("commit_error"),
         "customer_id": int(cc) if cc is not None else None,
         "vehicle_id": int(vv) if vv is not None else None,
         "warning": warn,

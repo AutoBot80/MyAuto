@@ -144,6 +144,49 @@ def _last4(aadhar_id: str | None) -> str | None:
     return digits[-4:] if len(digits) >= 4 else digits or None
 
 
+def _vehicle_scrape_for_commit(vehicle: dict[str, Any], scraped_vehicle: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge post-invoice Siebel scrape with staging ``vehicle`` for ``_upsert_vehicle_master_from_scrape_on_cursor``."""
+    out = dict(scraped_vehicle or {})
+    v = dict(vehicle or {})
+    if not str(out.get("full_chassis") or out.get("frame_num") or out.get("chassis") or "").strip():
+        fn = str(v.get("frame_no") or "").strip()
+        if fn:
+            out["frame_no"] = fn
+    if not str(out.get("full_engine") or out.get("engine_num") or out.get("engine") or "").strip():
+        en = str(v.get("engine_no") or "").strip()
+        if en:
+            out["engine_num"] = en
+    if not str(out.get("key_num") or out.get("raw_key_num") or "").strip():
+        kn = str(v.get("key_no") or "").strip()
+        if kn:
+            out["key_num"] = kn
+    if not str(out.get("battery") or "").strip():
+        bn = str(v.get("battery_no") or "").strip()
+        if bn:
+            out["battery"] = bn
+    for k in ("order_number", "invoice_number", "enquiry_number"):
+        vv = str(v.get(k) or "").strip()
+        if vv and not str(out.get(k) or "").strip():
+            out[k] = vv
+    return out
+
+
+def _dms_values_vehicle_from_staging(vehicle: dict[str, Any], vehicle_scrape: dict[str, Any]) -> dict[str, Any]:
+    """Partial keys for raw_* alignment with prepare_vehicle checkpoint upsert."""
+    v = dict(vehicle or {})
+    vs = dict(vehicle_scrape or {})
+    frame = str(v.get("frame_no") or vs.get("full_chassis") or vs.get("frame_num") or "").strip()
+    engine = str(v.get("engine_no") or vs.get("full_engine") or vs.get("engine_num") or "").strip()
+    key = str(v.get("key_no") or vs.get("key_num") or vs.get("raw_key_num") or "").strip()
+    battery = str(v.get("battery_no") or vs.get("battery") or "").strip()
+    return {
+        "frame_partial": frame or None,
+        "engine_partial": engine or None,
+        "key_partial": key or None,
+        "battery_partial": battery or None,
+    }
+
+
 def upsert_customer_vehicle_sales(
     cur,
     payload: dict[str, Any],
@@ -151,16 +194,16 @@ def upsert_customer_vehicle_sales(
     scraped_vehicle: dict[str, Any] | None = None,
 ) -> tuple[int, int, int]:
     """
-    Customer by (aadhar last 4, mobile_number), vehicle by raw triple upsert; **sales** is a plain
-    ``INSERT``. If ``sales_master`` already has a row for the resulting ``(customer_id, vehicle_id)``,
-    raises ``ValueError`` (unique ``uq_sales_customer_vehicle``).
-
-    When ``scraped_vehicle`` is set (post–Create Invoice Siebel scrape), applies
-    ``_vehicle_master_update_from_scrape_on_cursor`` after ``sales_master`` insert so model/colour/year
-    etc. match the staging-only path used by ``/sidecar/dms/commit``.
+    Customer and vehicle via the same ON CONFLICT upserts as prepare_* checkpoints; then ``sales_master``
+    INSERT/upsert. Matches raw triple / (aadhar, mobile) keys so a second write after ``dms_state`` 1/2
+    does not hit naive INSERT unique violations.
 
     Returns ``(customer_id, vehicle_id, sales_id)``.
     """
+    from app.services.fill_hero_dms_service import (
+        _upsert_customer_master_from_dms_on_cursor,
+        _upsert_vehicle_master_from_scrape_on_cursor,
+    )
     customer = payload.get("customer") if isinstance(payload.get("customer"), dict) else {}
     vehicle = payload.get("vehicle") if isinstance(payload.get("vehicle"), dict) else {}
 
@@ -201,163 +244,61 @@ def upsert_customer_vehicle_sales(
         inv_n = HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER[:128]
     enq_n = _str_or_none(vehicle.get("enquiry_number"), 128)
 
-    raw_f = frame_no or None
-    raw_e = engine_no or None
-    raw_k = key_no or None
-
     sale_dealer_id = _int_or_none(payload.get("dealer_id"))
     if sale_dealer_id is None:
         sale_dealer_id = int(DEALER_ID)
 
-    pre_cid = _int_or_none(payload.get("customer_id"))
-    pre_vid = _int_or_none(payload.get("vehicle_id"))
+    collated_customer = {
+        "name": name,
+        "mobile_number": mobile,
+        "aadhar": aadhar_last4,
+        "address": address,
+        "pin": pin,
+        "city": city,
+        "state": state,
+        "alt_phone_num": alt_phone_num,
+        "gender": gender,
+        "date_of_birth": date_of_birth,
+        "profession": profession,
+        "financier": financier,
+        "marital_status": marital_status,
+        "care_of": care_of,
+        "dms_relation_prefix": dms_relation_prefix,
+        "dms_contact_path": dms_contact_path,
+    }
+    dms_values_customer = {
+        "mobile_phone": str(mobile),
+        "aadhar_id": customer.get("aadhar_id"),
+        "customer_name": name,
+        "address_line_1": address,
+        "pin_code": pin,
+        "city": city,
+        "state": state,
+        "care_of": care_of,
+        "gender": gender,
+        "date_of_birth": date_of_birth,
+        "landline": alt_phone_num,
+        "profession": profession,
+        "financier_name": financier,
+        "marital_status": marital_status,
+        "dms_contact_path": dms_contact_path,
+    }
+    customer_id = _upsert_customer_master_from_dms_on_cursor(
+        cur,
+        dms_values_customer,
+        collated_customer,
+        file_location=loc,
+        dealer_id=sale_dealer_id,
+    )
 
-    if pre_cid is not None and int(pre_cid) > 0:
-        customer_id = int(pre_cid)
-        cur.execute(
-            """
-            UPDATE customer_master SET
-                name = %s, address = %s, pin = %s, city = %s, state = %s,
-                alt_phone_num = %s,
-                gender = %s, date_of_birth = %s, profession = %s,
-                financier = %s, marital_status = %s,
-                dms_relation_prefix = %s, dms_contact_path = %s, care_of = %s,
-                file_location = %s
-            WHERE customer_id = %s
-            """,
-            (
-                name,
-                address,
-                pin,
-                city,
-                state,
-                alt_phone_num,
-                gender,
-                date_of_birth,
-                profession,
-                financier,
-                marital_status,
-                dms_relation_prefix,
-                dms_contact_path,
-                care_of,
-                loc,
-                customer_id,
-            ),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT customer_id FROM customer_master
-            WHERE aadhar = %s AND mobile_number = %s
-            """,
-            (aadhar_last4, mobile),
-        )
-        row = cur.fetchone()
-        if row:
-            customer_id = row["customer_id"]
-            cur.execute(
-                """
-                UPDATE customer_master SET
-                    name = %s, address = %s, pin = %s, city = %s, state = %s,
-                    alt_phone_num = %s,
-                    gender = %s, date_of_birth = %s, profession = %s,
-                    financier = %s, marital_status = %s,
-                    dms_relation_prefix = %s, dms_contact_path = %s, care_of = %s,
-                    file_location = %s
-                WHERE customer_id = %s
-                """,
-                (
-                    name,
-                    address,
-                    pin,
-                    city,
-                    state,
-                    alt_phone_num,
-                    gender,
-                    date_of_birth,
-                    profession,
-                    financier,
-                    marital_status,
-                    dms_relation_prefix,
-                    dms_contact_path,
-                    care_of,
-                    loc,
-                    customer_id,
-                ),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO customer_master (
-                    aadhar, name, address, pin, city, state, mobile_number,
-                    alt_phone_num,
-                    profession, financier, marital_status,
-                    dms_relation_prefix, dms_contact_path, care_of,
-                    file_location, gender, date_of_birth
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING customer_id
-                """,
-                (
-                    aadhar_last4,
-                    name,
-                    address,
-                    pin,
-                    city,
-                    state,
-                    mobile,
-                    alt_phone_num,
-                    profession,
-                    financier,
-                    marital_status,
-                    dms_relation_prefix,
-                    dms_contact_path,
-                    care_of,
-                    loc,
-                    gender,
-                    date_of_birth,
-                ),
-            )
-            customer_id = cur.fetchone()["customer_id"]
-
-    if pre_vid is not None and int(pre_vid) > 0:
-        vehicle_id = int(pre_vid)
-        if scraped_vehicle:
-            from app.services.fill_hero_dms_service import _vehicle_master_update_from_scrape_on_cursor
-
-            _vehicle_master_update_from_scrape_on_cursor(cur, vehicle_id, dict(scraped_vehicle))
-    else:
-        cur.execute(
-            """
-            SELECT vehicle_id FROM vehicle_master
-            WHERE (raw_frame_num IS NOT DISTINCT FROM %s)
-              AND (raw_engine_num IS NOT DISTINCT FROM %s)
-              AND (raw_key_num IS NOT DISTINCT FROM %s)
-            """,
-            (raw_f, raw_e, raw_k),
-        )
-        vrow = cur.fetchone()
-        if vrow:
-            vehicle_id = vrow["vehicle_id"]
-            cur.execute(
-                """
-                UPDATE vehicle_master SET
-                    chassis = %s, engine = %s, key_num = %s, battery = %s,
-                    raw_frame_num = %s, raw_engine_num = %s, raw_key_num = %s
-                WHERE vehicle_id = %s
-                """,
-                (frame_no, engine_no, raw_k, battery_no, raw_f, raw_e, raw_k, vehicle_id),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO vehicle_master (chassis, engine, key_num, battery, raw_frame_num, raw_engine_num, raw_key_num)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING vehicle_id
-                """,
-                (frame_no, engine_no, raw_k, battery_no, raw_f, raw_e, raw_k),
-            )
-            vehicle_id = cur.fetchone()["vehicle_id"]
+    vehicle_scrape = _vehicle_scrape_for_commit(vehicle, scraped_vehicle)
+    dms_values_vehicle = _dms_values_vehicle_from_staging(vehicle, vehicle_scrape)
+    vehicle_id = _upsert_vehicle_master_from_scrape_on_cursor(
+        cur,
+        dms_values_vehicle,
+        vehicle_scrape,
+        dealer_id=sale_dealer_id,
+    )
 
     try:
         cur.execute(
@@ -413,13 +354,6 @@ def upsert_customer_vehicle_sales(
 
     if sales_id is None:
         raise RuntimeError("sales_master INSERT did not return sales_id")
-
-    if scraped_vehicle and not (pre_vid is not None and int(pre_vid) > 0):
-        scrape = dict(scraped_vehicle)
-        if scrape:
-            from app.services.fill_hero_dms_service import _vehicle_master_update_from_scrape_on_cursor
-
-            _vehicle_master_update_from_scrape_on_cursor(cur, int(vehicle_id), scrape)
 
     return int(customer_id), int(vehicle_id), sales_id
 

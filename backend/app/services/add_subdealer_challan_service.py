@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
 from collections.abc import Callable
@@ -488,8 +489,26 @@ def sidecar_build_order_playwright_package(
     add_tc = bool(master_row.get("add_transport_cost"))
     raw_tcp = master_row.get("transport_cost_per_vehicle")
     raw_pct = master_row.get("reduce_discount_by_percent")
-    tcp = float(raw_tcp) if raw_tcp is not None else None
-    rdp = float(raw_pct) if raw_pct is not None else None
+    tcp: float | None = None
+    rdp: float | None = None
+    if add_tc and raw_tcp is not None:
+        try:
+            tcp = float(raw_tcp) if isinstance(raw_tcp, Decimal) else float(str(raw_tcp).replace(",", "").strip())
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "sidecar_build_order_playwright_package: invalid transport_cost_per_vehicle %r (%s)",
+                raw_tcp,
+                exc,
+            )
+    if add_tc and raw_pct is not None:
+        try:
+            rdp = float(raw_pct) if isinstance(raw_pct, Decimal) else float(str(raw_pct).replace(",", "").strip())
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "sidecar_build_order_playwright_package: invalid reduce_discount_by_percent %r (%s)",
+                raw_pct,
+                exc,
+            )
     for r in final_rows:
         iid = r.get("inventory_line_id")
         if not iid:
@@ -519,11 +538,15 @@ def sidecar_build_order_playwright_package(
         return out
 
     dms_values: dict = {}
-    prepare_customer_for_challan(
-        dms_values,
-        to_dealer_id=to_dealer_id,
-        from_dealer_id=from_dealer_id,
-    )
+    try:
+        prepare_customer_for_challan(
+            dms_values,
+            to_dealer_id=to_dealer_id,
+            from_dealer_id=from_dealer_id,
+        )
+    except ValueError as exc:
+        out["error"] = str(exc)[:2000]
+        return out
     dms_values["order_line_vehicles"] = order_lines
     dms_values["challan_full_order_line_vehicles"] = list(order_lines)
     dms_values["_challan_last_vehicle"] = dict(last_vehicle_scrape or {})
@@ -540,22 +563,8 @@ def sidecar_build_order_playwright_package(
     dms_values["challan_batch_id"] = str(challan_batch_id)
     dms_values["challan_from_dealer_id"] = int(from_dealer_id)
 
-    urls_dict = {
-        "contact": DMS_REAL_URL_CONTACT,
-        # "vehicles": DMS_REAL_URL_VEHICLES,
-        "vehicles": "",
-        # "precheck": DMS_REAL_URL_PRECHECK,
-        "precheck": "",
-        # "pdi": DMS_REAL_URL_PDI,
-        "pdi": "",
-        "vehicle": DMS_REAL_URL_VEHICLE,
-        # "enquiry": DMS_REAL_URL_ENQUIRY,
-        "enquiry": "",
-        # "line_items": DMS_REAL_URL_LINE_ITEMS,
-        "line_items": "",
-        # "reports": DMS_REAL_URL_REPORTS,
-        "reports": "",
-    }
+    _urls = hero_dms_siebel_urls_for_dealer(from_dealer_id)
+    urls_dict = {k: str(v or "") for k, v in asdict(_urls).items()}
     out["ok"] = True
     out["error"] = None
     out["dms_values"] = dms_values

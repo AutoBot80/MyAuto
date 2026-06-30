@@ -24,11 +24,11 @@ def entity_key_fill_dms(
     vehicle_id: int | None,
     mobile_digits: str | None,
 ) -> str:
-    if mobile_digits:
-        return f"m:{mobile_digits}"
     sid = (staging_id or "").strip()
     if sid:
         return f"staging:{sid}"
+    if mobile_digits:
+        return f"m:{mobile_digits}"
     if customer_id is not None and vehicle_id is not None:
         return f"cv:{int(customer_id)}_{int(vehicle_id)}"
     if customer_id is not None:

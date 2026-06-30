@@ -177,6 +177,10 @@ class FillDmsResponse(BaseModel):
     application_id: str | None = None
     rto_fees: float | None = None
     error: str | None = None
+    commit_error: str | None = Field(
+        default=None,
+        description="When Siebel succeeded but /sidecar/dms/commit failed, the DB commit error alone.",
+    )
     customer_id: int | None = Field(
         default=None,
         description="After staging-path DMS success: committed customer_master id.",
@@ -799,6 +803,7 @@ async def fill_dms_only(
         application_id=None,
         rto_fees=None,
         error=norm_err,
+        commit_error=result.get("commit_error"),
         customer_id=int(cc) if cc is not None else None,
         vehicle_id=int(vv) if vv is not None else None,
         warning=warn,
@@ -1424,6 +1429,7 @@ async def fill_dms(
         application_id=result.get("application_id"),
         rto_fees=result.get("rto_fees"),
         error=norm_err,
+        commit_error=result.get("commit_error"),
         customer_id=int(cc) if cc is not None else None,
         vehicle_id=int(vv) if vv is not None else None,
         warning=warn,

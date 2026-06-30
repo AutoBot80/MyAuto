@@ -26,7 +26,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import (
     DMS_BASE_URL,
@@ -124,6 +124,10 @@ class DmsCommitResponse(BaseModel):
     committed_vehicle_id: int | None = None
     sales_id: int | None = None
     error: str | None = None
+    commit_branch: str | None = Field(
+        default=None,
+        description="persist_staging_masters | finalize_only | id_patch_only | skipped | no_op",
+    )
 
 
 class InsuranceResolveRequest(BaseModel):
@@ -449,6 +453,7 @@ async def dms_commit(
     vid_out: int | None = None
     sid_out: int | None = None
     error: str | None = None
+    commit_branch = "no_op"
 
     inv_ready = invoice_number_ready_for_master_commit(scraped)
 
@@ -456,6 +461,7 @@ async def dms_commit(
     _have_ids = req.customer_id is not None and req.vehicle_id is not None
 
     if sp and sid and inv_ready and _siebel_done and _have_ids:
+        commit_branch = "finalize_only"
         try:
             merged = _merge_staging_payload_with_scrape_for_commit(sp, scraped)
             finalize_staging_row_with_master_ids(
@@ -471,8 +477,16 @@ async def dms_commit(
                 sid_out = int(req.sales_id)
         except Exception as exc:
             error = f"Database commit after DMS failed: {exc!s}"
-            logger.warning("sidecar_proxy dms/commit (finalize staging only): %s", error)
+            _cname = getattr(getattr(exc, "diag", None), "constraint_name", None) or ""
+            logger.warning(
+                "sidecar_proxy dms/commit branch=%s staging_id=%s constraint=%s: %s",
+                commit_branch,
+                sid,
+                _cname,
+                error,
+            )
     elif sp and sid and inv_ready:
+        commit_branch = "persist_staging_masters"
         try:
             cid_out, vid_out = persist_staging_masters_after_invoice(
                 staging_id=sid,
@@ -481,12 +495,34 @@ async def dms_commit(
             )
         except Exception as exc:
             error = f"Database commit after DMS failed: {exc!s}"
-            logger.warning("sidecar_proxy dms/commit: %s", error)
+            _cname = getattr(getattr(exc, "diag", None), "constraint_name", None) or ""
+            logger.warning(
+                "sidecar_proxy dms/commit branch=%s staging_id=%s constraint=%s: %s",
+                commit_branch,
+                sid,
+                _cname,
+                error,
+            )
+    elif sp and sid and not inv_ready:
+        commit_branch = "skipped"
+        _inv_scraped = str((scraped or {}).get("invoice_number") or "").strip()
+        if _inv_scraped:
+            error = (
+                "Database commit after DMS skipped: invoice_number not ready for master commit "
+                f"(scraped had {_inv_scraped!r})."
+            )
+            logger.warning(
+                "sidecar_proxy dms/commit branch=%s staging_id=%s inv_ready=false scraped_invoice=%r",
+                commit_branch,
+                sid,
+                _inv_scraped,
+            )
 
     if not error and sid and sp and cid_out is None and vid_out is None:
         cid_s = req.customer_id
         vid_s = req.vehicle_id
         if cid_s is not None and vid_s is not None:
+            commit_branch = "id_patch_only"
             try:
                 patch: dict[str, Any] = {"customer_id": int(cid_s), "vehicle_id": int(vid_s)}
                 with get_connection() as conn:
@@ -498,11 +534,25 @@ async def dms_commit(
             except Exception as exc:
                 logger.warning("sidecar_proxy dms/commit patch: %s", exc)
 
+    logger.info(
+        "sidecar_proxy dms/commit staging_id=%s dealer_id=%s inv_ready=%s branch=%s "
+        "committed_customer_id=%s committed_vehicle_id=%s sales_id=%s error=%s",
+        sid,
+        did,
+        inv_ready,
+        commit_branch,
+        cid_out,
+        vid_out,
+        sid_out,
+        error,
+    )
+
     return DmsCommitResponse(
         committed_customer_id=cid_out,
         committed_vehicle_id=vid_out,
         sales_id=sid_out,
         error=error,
+        commit_branch=commit_branch,
     )
 
 
@@ -1258,11 +1308,19 @@ async def subdealer_challan_order_context(
     except ValueError as e:
         raise HTTPException(status_code=400, detail="Invalid challan_batch_id") from e
 
-    out = sidecar_build_order_playwright_package(
-        challan_batch_id=bid,
-        dealer_id=int(did),
-        last_vehicle_scrape=req.last_vehicle_scrape,
-    )
+    try:
+        out = sidecar_build_order_playwright_package(
+            challan_batch_id=bid,
+            dealer_id=int(did),
+            last_vehicle_scrape=req.last_vehicle_scrape,
+        )
+    except Exception as exc:
+        logger.exception(
+            "subdealer_challan order-context batch=%s dealer=%s",
+            bid,
+            did,
+        )
+        raise HTTPException(status_code=500, detail=str(exc)[:500]) from exc
     if not out.get("ok"):
         raise HTTPException(status_code=400, detail=str(out.get("error") or "order context failed"))
     return out
