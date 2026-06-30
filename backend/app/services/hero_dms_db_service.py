@@ -283,7 +283,7 @@ def persist_staging_masters_after_invoice(
     staging_id: str,
     staging_payload: dict[str, Any],
     scraped_vehicle: dict[str, Any],
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """
     Merge staging payload with post-DMS scrape and commit masters + staging row (single transaction).
     """

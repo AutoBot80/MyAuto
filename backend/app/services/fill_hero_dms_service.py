@@ -49,7 +49,10 @@ from app.config import (
 )
 from app.services.hero_dms_shared_utilities import (
     SiebelDmsUrls,
+    _coerce_vehicle_chassis_for_db,
+    _coerce_vehicle_engine_for_db,
     _sort_milestone_labels,
+    _strip_invalid_vehicle_identity_from_scrape,
     _try_click_siebel_save,
     _ts_ist_iso,
     _write_playwright_vehicle_master_section,
@@ -365,10 +368,14 @@ def _merge_staging_payload_with_scrape_for_commit(staging_payload: dict, scraped
     veh = merged.setdefault("vehicle", {})
     fc = (s.get("full_chassis") or s.get("chassis") or s.get("frame_num") or "").strip()
     if fc:
-        veh["frame_no"] = fc[:64]
+        fc_db = _coerce_vehicle_chassis_for_db(fc)
+        if fc_db:
+            veh["frame_no"] = fc_db[:64]
     fe = (s.get("full_engine") or s.get("engine_num") or s.get("engine") or "").strip()
     if fe:
-        veh["engine_no"] = fe[:64]
+        fe_db = _coerce_vehicle_engine_for_db(fe)
+        if fe_db:
+            veh["engine_no"] = fe_db[:64]
     fk = (s.get("key_num") or s.get("raw_key_num") or "").strip()
     if fk:
         veh["key_no"] = fk[:32]
@@ -621,6 +628,22 @@ def _coalesce_vehicle_master_engine(engine: str, raw_engine_num: str) -> tuple[s
     if len(re_) > len(e):
         return re_, "raw_engine_num"
     return e, "engine"
+
+
+def _vehicle_chassis_engine_from_scrape_dict(vd: dict | None) -> tuple[str | None, str | None]:
+    """Resolve full chassis/engine for ``vehicle_master`` columns; reject datetimes and invoice-shaped tokens."""
+    cleaned = _strip_invalid_vehicle_identity_from_scrape(dict(vd or {}))
+
+    def _pick(*keys: str) -> str | None:
+        for k in keys:
+            v = (cleaned.get(k) or "").strip()
+            if v:
+                return v
+        return None
+
+    chassis = _coerce_vehicle_chassis_for_db(_pick("full_chassis", "frame_num", "chassis"))
+    engine = _coerce_vehicle_engine_for_db(_pick("full_engine", "engine_num", "engine"))
+    return chassis, engine
 
 
 def _vehicle_identity_from_ocr_vehicle(vehicle: dict) -> dict[str, str]:
@@ -1263,26 +1286,27 @@ def _parse_cubic_cc_numeric_for_db(raw: object) -> float | None:
 
 def _vehicle_master_update_from_scrape_on_cursor(cur, vehicle_id: int, scraped: dict) -> None:
     """Run ``vehicle_master`` COALESCE update on an open cursor (no commit)."""
+    vd = _strip_invalid_vehicle_identity_from_scrape(dict(scraped or {}))
+
     def _strip_or_none(k: str) -> str | None:
-        v = (scraped.get(k) or "").strip()
+        v = (vd.get(k) or "").strip()
         return v or None
 
-    chassis = _strip_or_none("full_chassis") or _strip_or_none("frame_num") or _strip_or_none("chassis")
-    engine = _strip_or_none("full_engine") or _strip_or_none("engine_num") or _strip_or_none("engine")
+    chassis, engine = _vehicle_chassis_engine_from_scrape_dict(vd)
     key_num = _strip_or_none("key_num") or _strip_or_none("raw_key_num")
     model = _strip_or_none("model")
     colour = _strip_or_none("color") or _strip_or_none("colour")
     variant_raw = _strip_or_none("variant")
     variant = (variant_raw[:64] if variant_raw else None)
-    cubic_capacity = scraped.get("cubic_capacity")
-    seating_capacity = scraped.get("seating_capacity")
-    body_type = (scraped.get("body_type") or "").strip() or None
-    vehicle_type = _normalize_vehicle_type_for_db(scraped.get("vehicle_type"))
-    num_cylinders = scraped.get("num_cylinders")
-    year_of_mfg = _parse_vehicle_year_int_for_db(scraped.get("year_of_mfg"))
+    cubic_capacity = vd.get("cubic_capacity")
+    seating_capacity = vd.get("seating_capacity")
+    body_type = (vd.get("body_type") or "").strip() or None
+    vehicle_type = _normalize_vehicle_type_for_db(vd.get("vehicle_type"))
+    num_cylinders = vd.get("num_cylinders")
+    year_of_mfg = _parse_vehicle_year_int_for_db(vd.get("year_of_mfg"))
     if year_of_mfg is None:
-        year_of_mfg = _parse_vehicle_year_int_for_db(scraped.get("dispatch_year"))
-    ex_showroom = scraped.get("vehicle_price")
+        year_of_mfg = _parse_vehicle_year_int_for_db(vd.get("dispatch_year"))
+    ex_showroom = vd.get("vehicle_price")
     if ex_showroom is None:
         ex_showroom = scraped.get("vehicle_ex_showroom_cost")
     if ex_showroom is None:
@@ -1699,11 +1723,13 @@ def _upsert_vehicle_master_from_scrape_on_cursor(
     preexisting_vehicle_id: int | None = None,
 ) -> int:
     if preexisting_vehicle_id is not None and int(preexisting_vehicle_id) > 0:
-        _vehicle_master_update_from_scrape_on_cursor(cur, int(preexisting_vehicle_id), dict(vehicle_dict or {}))
+        _vehicle_master_update_from_scrape_on_cursor(
+            cur, int(preexisting_vehicle_id), _strip_invalid_vehicle_identity_from_scrape(dict(vehicle_dict or {}))
+        )
         return int(preexisting_vehicle_id)
 
     dv = dict(dms_values or {})
-    vd = dict(vehicle_dict or {})
+    vd = _strip_invalid_vehicle_identity_from_scrape(dict(vehicle_dict or {}))
     sale_dealer_id = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
     place_reg, oem_n = _dealer_oem_place_on_cursor(cur, sale_dealer_id)
 
@@ -1711,8 +1737,7 @@ def _upsert_vehicle_master_from_scrape_on_cursor(
         v = (vd.get(k) or "").strip()
         return v or None
 
-    chassis = _strip_or_none("full_chassis") or _strip_or_none("frame_num") or _strip_or_none("chassis")
-    engine = _strip_or_none("full_engine") or _strip_or_none("engine_num") or _strip_or_none("engine")
+    chassis, engine = _vehicle_chassis_engine_from_scrape_dict(vd)
     key_num = _strip_or_none("key_num") or _strip_or_none("raw_key_num")
     model = _strip_or_none("model")
     colour = _strip_or_none("color") or _strip_or_none("colour")
@@ -2010,7 +2035,7 @@ def insert_dms_masters_from_siebel_scrape(
 
     dv = dict(dms_values or {})
     cf = dict(collated_customer_fields or {})
-    vd = dict(vehicle_dict or {})
+    vd = _strip_invalid_vehicle_identity_from_scrape(dict(vehicle_dict or {}))
     sale_dealer_id = int(dealer_id) if dealer_id is not None else int(DEALER_ID)
     loc_full, loc_sales = resolve_ocr_sale_folder_paths(
         sale_dealer_id,
@@ -2024,12 +2049,7 @@ def insert_dms_masters_from_siebel_scrape(
     if not inv_n and not HERO_DMS_ATTACH_AUTO_CLICK_CREATE_INVOICE:
         inv_n = HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER
 
-    def _strip_or_none(k: str) -> str | None:
-        v = (vd.get(k) or "").strip()
-        return v or None
-
-    chassis = _strip_or_none("full_chassis") or _strip_or_none("frame_num") or _strip_or_none("chassis")
-    engine = _strip_or_none("full_engine") or _strip_or_none("engine_num") or _strip_or_none("engine")
+    chassis, engine = _vehicle_chassis_engine_from_scrape_dict(vd)
 
     conn = get_connection()
     try:
@@ -2686,7 +2706,7 @@ def run_fill_dms_only(
                 cid_c = int(result["customer_id"])
                 vid_c = int(result["vehicle_id"])
             else:
-                cid_c, vid_c = persist_staging_masters_after_invoice(
+                cid_c, vid_c, _sid_c = persist_staging_masters_after_invoice(
                     staging_id=staging_id or "",
                     staging_payload=staging_payload,
                     scraped_vehicle=scraped_final,

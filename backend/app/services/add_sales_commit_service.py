@@ -24,6 +24,11 @@ from app.config import (
     HERO_DMS_NONPROD_DUMMY_INVOICE_NUMBER,
 )
 from app.services.dms_relation_prefix import compute_dms_relation_prefix
+from app.services.hero_dms_shared_utilities import (
+    _coerce_vehicle_chassis_for_db,
+    _coerce_vehicle_engine_for_db,
+    _strip_invalid_vehicle_identity_from_scrape,
+)
 from app.services.utility_functions import sanitize_details_sheet_insurer_value
 
 logger = logging.getLogger(__name__)
@@ -178,15 +183,15 @@ def _last4(aadhar_id: str | None) -> str | None:
 
 def _vehicle_scrape_for_commit(vehicle: dict[str, Any], scraped_vehicle: dict[str, Any] | None) -> dict[str, Any]:
     """Merge post-invoice Siebel scrape with staging ``vehicle`` for ``_upsert_vehicle_master_from_scrape_on_cursor``."""
-    out = dict(scraped_vehicle or {})
+    out = _strip_invalid_vehicle_identity_from_scrape(dict(scraped_vehicle or {}))
     v = dict(vehicle or {})
     if not str(out.get("full_chassis") or out.get("frame_num") or out.get("chassis") or "").strip():
         fn = str(v.get("frame_no") or "").strip()
-        if fn:
+        if fn and _coerce_vehicle_chassis_for_db(fn):
             out["frame_no"] = fn
     if not str(out.get("full_engine") or out.get("engine_num") or out.get("engine") or "").strip():
         en = str(v.get("engine_no") or "").strip()
-        if en:
+        if en and _coerce_vehicle_engine_for_db(en):
             out["engine_num"] = en
     if not str(out.get("key_num") or out.get("raw_key_num") or "").strip():
         kn = str(v.get("key_no") or "").strip()
@@ -435,7 +440,7 @@ def commit_staging_masters_and_finalize_row(
     staging_id: str,
     merged_payload: dict[str, Any],
     scraped_vehicle: dict[str, Any] | None = None,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """
     Single transaction: upsert masters, mark ``add_sales_staging`` committed, patch payload with ids,
     ``customer.financier``, and ``vehicle`` order/invoice/enquiry when present in ``merged_payload``.
@@ -468,7 +473,7 @@ def commit_staging_masters_and_finalize_row(
             )
             mark_staging_committed_on_cursor(cur, sid, dealer_id, patch=patch_obj)
         conn.commit()
-    return cid, vid
+    return int(cid), int(vid), int(sid_sale)
 
 
 def finalize_staging_row_with_master_ids(

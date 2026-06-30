@@ -2680,13 +2680,24 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         result["error"] = DMS_NO_VEHICLE_ERROR
 
     siebel_error_before_commit = result.get("error")
+    _stg_payload = staging_payload if isinstance(staging_payload, dict) else {}
+    _stg_cid = _stg_payload.get("customer_id")
+    _stg_vid = _stg_payload.get("vehicle_id")
+    try:
+        _stg_cid = int(_stg_cid) if _stg_cid is not None and int(_stg_cid) > 0 else None
+    except (TypeError, ValueError):
+        _stg_cid = None
+    try:
+        _stg_vid = int(_stg_vid) if _stg_vid is not None and int(_stg_vid) > 0 else None
+    except (TypeError, ValueError):
+        _stg_vid = None
     commit_body = {
         "staging_id": params.get("staging_id"),
         "staging_payload": staging_payload,
         "scraped_vehicle": scraped,
         "dealer_id": dealer_id,
-        "customer_id": result.get("customer_id") or params.get("customer_id"),
-        "vehicle_id": result.get("vehicle_id") or params.get("vehicle_id"),
+        "customer_id": result.get("customer_id") or params.get("customer_id") or _stg_cid,
+        "vehicle_id": result.get("vehicle_id") or params.get("vehicle_id") or _stg_vid,
         "sales_id": result.get("sales_id"),
         "masters_committed_via_siebel": result.get("dms_master_persist_committed") is True,
     }
@@ -2727,6 +2738,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
             committed_vehicle_id=commit_resp.get("committed_vehicle_id"),
             sales_id=commit_resp.get("sales_id"),
             error=(commit_resp.get("error") or result.get("commit_error")),
+            commit_branch=commit_resp.get("commit_branch"),
         )
     except Exception:
         logging.exception("fill_dms sidecar: append dms commit log failed")

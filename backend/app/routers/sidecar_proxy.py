@@ -506,7 +506,7 @@ async def dms_commit(
     elif sp and sid and inv_ready:
         commit_branch = "persist_staging_masters"
         try:
-            cid_out, vid_out = persist_staging_masters_after_invoice(
+            cid_out, vid_out, sid_out = persist_staging_masters_after_invoice(
                 staging_id=sid,
                 staging_payload=sp,
                 scraped_vehicle=scraped,

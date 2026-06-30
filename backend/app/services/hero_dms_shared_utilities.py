@@ -1655,6 +1655,66 @@ def _write_playwright_contact_scrape_section(
         pass
 
 
+def _looks_like_datetime_vehicle_field(value: str | None) -> bool:
+    """True when Siebel scraped a date/time into a vehicle identity field (invoice date column bleed)."""
+    t = (value or "").strip()
+    if not t:
+        return False
+    return bool(
+        re.search(r"\d{1,2}/\d{1,2}/\d{4}", t)
+        and re.search(r"\d{1,2}:\d{2}", t)
+    )
+
+
+def _looks_like_vehicle_engine_number(value: str | None) -> bool:
+    t = (value or "").strip()
+    if not t or _looks_like_datetime_vehicle_field(t):
+        return False
+    alnum = re.sub(r"[^A-Za-z0-9]", "", t)
+    if len(alnum) < 8:
+        return False
+    return any(c.isalpha() for c in alnum) and any(c.isdigit() for c in alnum)
+
+
+def _looks_like_vehicle_chassis_number(value: str | None) -> bool:
+    t = (value or "").strip()
+    if not t or _looks_like_datetime_vehicle_field(t):
+        return False
+    alnum = re.sub(r"[^A-Za-z0-9]", "", t)
+    if len(alnum) < 11:
+        return False
+    if not (any(c.isalpha() for c in alnum) and any(c.isdigit() for c in alnum)):
+        return False
+    # Invoice# masquerading as chassis (e.g. 11870BF26S584 on vehicle_master row 33).
+    if re.match(r"^\d{4,5}[A-Z]{2}\d{2}[A-Z]\d{3,}$", alnum, re.I):
+        return False
+    return True
+
+
+def _coerce_vehicle_engine_for_db(value: str | None) -> str | None:
+    t = (value or "").strip()
+    return t if t and _looks_like_vehicle_engine_number(t) else None
+
+
+def _coerce_vehicle_chassis_for_db(value: str | None) -> str | None:
+    t = (value or "").strip()
+    return t if t and _looks_like_vehicle_chassis_number(t) else None
+
+
+def _strip_invalid_vehicle_identity_from_scrape(scraped: dict | None) -> dict:
+    """Drop scrape keys that are not valid full chassis/engine numbers before DB write."""
+    out = dict(scraped or {})
+    for key in ("full_engine", "engine_num", "engine", "engine_no"):
+        val = str(out.get(key) or "").strip()
+        if val and not _looks_like_vehicle_engine_number(val):
+            out.pop(key, None)
+    for key in ("full_chassis", "frame_num", "chassis", "frame_no"):
+        val = str(out.get(key) or "").strip()
+        if val and not _looks_like_vehicle_chassis_number(val):
+            out.pop(key, None)
+    return out
+
+
 def append_playwright_dms_commit_log(
     log_path: Path | str | None,
     *,
@@ -1667,6 +1727,7 @@ def append_playwright_dms_commit_log(
     committed_vehicle_id: int | None,
     sales_id: int | None,
     error: str | None,
+    commit_branch: str | None = None,
 ) -> None:
     """Append sidecar ``/sidecar/dms/commit`` outcome to the per-run Playwright DMS log."""
     if not log_path:
@@ -1683,6 +1744,7 @@ def append_playwright_dms_commit_log(
                 f"committed_customer_id={committed_customer_id!r} "
                 f"committed_vehicle_id={committed_vehicle_id!r} sales_id={sales_id!r}\n"
             )
+            fp.write(f"commit_branch={commit_branch!r}\n")
             fp.write(f"error={error!r}\n")
     except OSError:
         pass
