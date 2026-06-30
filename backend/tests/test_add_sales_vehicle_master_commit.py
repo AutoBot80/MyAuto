@@ -2,7 +2,10 @@
 
 from unittest.mock import MagicMock, patch
 
-from app.services.add_sales_commit_service import upsert_customer_vehicle_sales
+from app.services.add_sales_commit_service import (
+    _dms_values_vehicle_from_staging,
+    upsert_customer_vehicle_sales,
+)
 
 
 def _minimal_payload() -> dict:
@@ -61,3 +64,49 @@ def test_upsert_vehicle_upsert_runs_even_when_scrape_empty(mock_cust_upsert, moc
     cur.fetchone.return_value = {"sales_id": 3}
     upsert_customer_vehicle_sales(cur, _minimal_payload(), scraped_vehicle={})
     mock_veh_upsert.assert_called_once()
+
+
+@patch("app.services.fill_hero_dms_service._upsert_vehicle_master_from_scrape_on_cursor", return_value=97)
+@patch("app.services.fill_hero_dms_service._upsert_customer_master_from_dms_on_cursor", return_value=72)
+def test_commit_honors_payload_vehicle_id(mock_cust_upsert, mock_veh_upsert):
+    cur = MagicMock()
+    cur.fetchone.return_value = {"sales_id": 50}
+    payload = _minimal_payload()
+    payload["vehicle_id"] = 97
+    upsert_customer_vehicle_sales(cur, payload, scraped_vehicle={"full_chassis": "MBLHAW473THE45433"})
+    mock_veh_upsert.assert_called_once()
+    assert mock_veh_upsert.call_args.kwargs["preexisting_vehicle_id"] == 97
+
+
+def test_dms_values_partial_after_full_merge_prefers_scrape_frame_num():
+    vehicle = {
+        "frame_no": "MBLHAW473THE45433",
+        "engine_no": "HA11F6THE45403",
+        "key_no": "2166",
+    }
+    scrape = {
+        "full_chassis": "MBLHAW473THE45433",
+        "full_engine": "HA11F6THE45403",
+        "frame_num": "45433",
+        "engine_num": "45403",
+        "key_num": "2166",
+    }
+    partials = _dms_values_vehicle_from_staging(vehicle, scrape)
+    assert partials["frame_partial"] == "45433"
+    assert partials["engine_partial"] == "45403"
+    assert partials["key_partial"] == "2166"
+
+
+def test_dms_values_partial_derives_suffix_when_only_full_scrape():
+    vehicle = {
+        "frame_no": "MBLHAW473THE45433",
+        "engine_no": "HA11F6THE45403",
+        "key_no": "2166",
+    }
+    scrape = {
+        "full_chassis": "MBLHAW473THE45433",
+        "full_engine": "HA11F6THE45403",
+    }
+    partials = _dms_values_vehicle_from_staging(vehicle, scrape)
+    assert partials["frame_partial"] == "45433"
+    assert partials["engine_partial"] == "45403"

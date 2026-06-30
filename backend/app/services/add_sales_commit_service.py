@@ -203,20 +203,58 @@ def _vehicle_scrape_for_commit(vehicle: dict[str, Any], scraped_vehicle: dict[st
     return out
 
 
-def _dms_values_vehicle_from_staging(vehicle: dict[str, Any], vehicle_scrape: dict[str, Any]) -> dict[str, Any]:
-    """Partial keys for raw_* alignment with prepare_vehicle checkpoint upsert."""
+_VEHICLE_RAW_PARTIAL_SUFFIX_LEN = 5
+
+
+def _derive_vehicle_raw_partial(staging_value: str, full_value: str) -> str:
+    """Map merged full VIN/engine back to Siebel grid partial for ``raw_*`` ON CONFLICT keys."""
+    sv = (staging_value or "").strip()
+    fv = (full_value or "").strip()
+    if not sv:
+        if fv and len(fv) >= _VEHICLE_RAW_PARTIAL_SUFFIX_LEN:
+            return fv[-_VEHICLE_RAW_PARTIAL_SUFFIX_LEN :]
+        return ""
+    if fv and sv == fv and len(fv) >= _VEHICLE_RAW_PARTIAL_SUFFIX_LEN:
+        return fv[-_VEHICLE_RAW_PARTIAL_SUFFIX_LEN :]
+    return sv
+
+
+def _vehicle_raw_partials_for_commit(
+    vehicle: dict[str, Any],
+    vehicle_scrape: dict[str, Any],
+) -> dict[str, str | None]:
+    """
+    Partial keys for ``raw_*`` alignment with prepare_vehicle checkpoint upsert.
+
+    Post-invoice merge may replace ``vehicle.frame_no`` / ``engine_no`` with full scrape values;
+    prefer grid partials from scrape and derive suffix when staging holds the full VIN/engine.
+    """
     v = dict(vehicle or {})
     vs = dict(vehicle_scrape or {})
-    frame = str(v.get("frame_no") or vs.get("full_chassis") or vs.get("frame_num") or "").strip()
-    engine = str(v.get("engine_no") or vs.get("full_engine") or vs.get("engine_num") or "").strip()
-    key = str(v.get("key_no") or vs.get("key_num") or vs.get("raw_key_num") or "").strip()
-    battery = str(v.get("battery_no") or vs.get("battery") or "").strip()
+    full_c = str(vs.get("full_chassis") or vs.get("chassis") or "").strip()
+    full_e = str(vs.get("full_engine") or vs.get("engine_num") or vs.get("engine") or "").strip()
+
+    frame = str(vs.get("frame_num") or "").strip()
+    if not frame:
+        frame = _derive_vehicle_raw_partial(str(v.get("frame_no") or "").strip(), full_c)
+
+    engine = str(vs.get("engine_num") or "").strip()
+    if not engine:
+        engine = _derive_vehicle_raw_partial(str(v.get("engine_no") or "").strip(), full_e)
+
+    key = str(vs.get("key_num") or vs.get("raw_key_num") or v.get("key_no") or "").strip()
+    battery = str(vs.get("battery") or v.get("battery_no") or "").strip()
     return {
         "frame_partial": frame or None,
         "engine_partial": engine or None,
         "key_partial": key or None,
         "battery_partial": battery or None,
     }
+
+
+def _dms_values_vehicle_from_staging(vehicle: dict[str, Any], vehicle_scrape: dict[str, Any]) -> dict[str, Any]:
+    """Partial keys for raw_* alignment with prepare_vehicle checkpoint upsert."""
+    return _vehicle_raw_partials_for_commit(vehicle, vehicle_scrape)
 
 
 def upsert_customer_vehicle_sales(
@@ -325,11 +363,13 @@ def upsert_customer_vehicle_sales(
 
     vehicle_scrape = _vehicle_scrape_for_commit(vehicle, scraped_vehicle)
     dms_values_vehicle = _dms_values_vehicle_from_staging(vehicle, vehicle_scrape)
+    preexisting_vehicle_id = _int_or_none(payload.get("vehicle_id"))
     vehicle_id = _upsert_vehicle_master_from_scrape_on_cursor(
         cur,
         dms_values_vehicle,
         vehicle_scrape,
         dealer_id=sale_dealer_id,
+        preexisting_vehicle_id=preexisting_vehicle_id,
     )
 
     try:
