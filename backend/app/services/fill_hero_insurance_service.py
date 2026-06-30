@@ -66,6 +66,7 @@ from app.services.handle_browser_opening import (
     launch_site_background_detached,
 )
 from app.services.insurance_form_values import (
+    InsuranceFlowTimer,
     append_playwright_insurance_line,
     append_playwright_insurance_line_or_dealer_fallback,
     build_insurance_fill_values,
@@ -510,24 +511,39 @@ def _collect_select_option_labels(sel, *, skip_select_prefix: bool = False, max_
     return labels
 
 
+def _resolve_insurance_timer(timer_or_t0: InsuranceFlowTimer | float | None) -> InsuranceFlowTimer | None:
+    if isinstance(timer_or_t0, InsuranceFlowTimer):
+        return timer_or_t0
+    return InsuranceFlowTimer.from_t0(timer_or_t0)
+
+
+def _insurance_timing_note(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    timer: InsuranceFlowTimer | None,
+    phase: str,
+    detail: str = "",
+) -> None:
+    if timer is None:
+        return
+    timer.note(ocr_output_dir, subfolder, phase, detail)
+
+
 def _insurance_pre_elapsed_note(
     ocr_output_dir: Path | None,
     subfolder: str | None,
-    t0: float | None,
+    timer_or_t0: InsuranceFlowTimer | float | None,
     phase: str,
 ) -> None:
     """Milestone elapsed time since ``run_fill_insurance_only`` start (``Playwright_insurance.txt``)."""
-    if t0 is None:
-        return
-    try:
-        ms = int((time.monotonic() - t0) * 1000)
-    except Exception:
+    timer = _resolve_insurance_timer(timer_or_t0)
+    if timer is None:
         return
     append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir,
         subfolder,
         "NOTE",
-        f"run_fill_insurance_only: phase={phase} elapsed_ms={ms}",
+        f"run_fill_insurance_only: {timer.format(phase)}",
     )
 
 
@@ -537,17 +553,22 @@ def _insurance_vin_phase_note(
     t0_vin: float | None,
     phase: str,
     detail: str = "",
+    *,
+    flow_timer: InsuranceFlowTimer | None = None,
 ) -> None:
     """Operator-visible milestones for KYC→VIN (``Playwright_insurance.txt``)."""
     extra = f" {detail}" if detail else ""
+    flow_part = ""
+    if flow_timer is not None:
+        flow_part = f" {flow_timer.format(f'vin_{phase}')}"
     if t0_vin is None:
-        msg = f"VIN step: {phase}{extra}"
+        msg = f"VIN step: {phase}{extra}{flow_part}"
     else:
         try:
             ms = int((time.monotonic() - t0_vin) * 1000)
         except Exception:
             ms = 0
-        msg = f"VIN step: {phase} elapsed_ms={ms}{extra}"
+        msg = f"VIN step: {phase} elapsed_ms={ms}{extra}{flow_part}"
     append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir, subfolder, "NOTE", msg
     )
@@ -556,45 +577,40 @@ def _insurance_vin_phase_note(
 def _insurance_kyc_flow_elapsed_note(
     ocr_output_dir: Path | None,
     subfolder: str | None,
-    t0_flow: float | None,
+    timer_or_t0: InsuranceFlowTimer | float | None,
     phase: str,
 ) -> None:
     """KYC sub-phase wall time since ``run_fill_insurance_only`` / Hero portal flow start."""
-    if t0_flow is None:
-        return
-    try:
-        ms = int((time.monotonic() - t0_flow) * 1000)
-    except Exception:
+    timer = _resolve_insurance_timer(timer_or_t0)
+    if timer is None:
         return
     append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir,
         subfolder,
         "NOTE",
-        f"run_fill_insurance_only: kyc_elapsed phase={phase} elapsed_ms={ms}",
+        f"run_fill_insurance_only: kyc_{timer.format(phase)}",
     )
 
 
 def _insurance_tab_resolve_note(
     ocr_output_dir: Path | None,
     subfolder: str | None,
-    t0_flow: float | None,
+    timer_or_t0: InsuranceFlowTimer | float | None,
     step_label: str,
     branch: str,
     *,
     resolver_ms: int | None = None,
 ) -> None:
-    if t0_flow is None:
-        return
-    try:
-        ms = int((time.monotonic() - t0_flow) * 1000)
-    except Exception:
+    timer = _resolve_insurance_timer(timer_or_t0)
+    if timer is None:
         return
     extra = f" resolver_ms={resolver_ms}" if resolver_ms is not None else ""
     append_playwright_insurance_line_or_dealer_fallback(
         ocr_output_dir,
         subfolder,
         "NOTE",
-        f"run_fill_insurance_only: tab_resolve step={step_label} branch={branch} elapsed_ms={ms}{extra}",
+        f"run_fill_insurance_only: tab_resolve step={step_label} branch={branch} "
+        f"{timer.format(step_label)}{extra}",
     )
 
 
@@ -5993,8 +6009,11 @@ def _proposal_log(
     subfolder: str | None,
     step_id: str,
     detail: str,
+    *,
+    timer: InsuranceFlowTimer | None = None,
 ) -> None:
-    msg = f"proposal step={step_id} {detail}"
+    timing = f" {timer.format(f'proposal_{step_id}')}" if timer is not None else ""
+    msg = f"proposal step={step_id} {detail}{timing}"
     logger.info("Hero Insurance: %s", msg)
     append_playwright_insurance_line(ocr_output_dir, subfolder, "NOTE", msg)
 
@@ -9991,6 +10010,7 @@ def _hero_misp_final_policy_details_commit(
     staging_payload: dict | None = None,
     staging_id: str | None = None,
     dealer_id: int | None = None,
+    timer: InsuranceFlowTimer | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
     """
     Production: proposal **Submit** → wait **PrintPolicy.aspx** (or search page) → optional policy # parse
@@ -10016,6 +10036,9 @@ def _hero_misp_final_policy_details_commit(
         "final_policy_details: Submit → PrintPolicy cert page → frame dump; "
         "PrintPolicyDetails scrape/INSERT/PDF in run_hero_insure_reports",
     )
+    _insurance_timing_note(
+        ocr_output_dir, subfolder, timer, "final_policy_submit_start"
+    )
     click_err = _hero_misp_click_issue_policy(
         page,
         timeout_ms=pt,
@@ -10036,6 +10059,14 @@ def _hero_misp_final_policy_details_commit(
         else:
             return click_err, {}
 
+    _insurance_timing_note(
+        ocr_output_dir,
+        subfolder,
+        timer,
+        "final_policy_submit_done",
+        detail=f"submit_ok={submit_ok}",
+    )
+
     if submit_ok:
         sid_clean = (staging_id or "").strip()
         if sid_clean and dealer_id is not None:
@@ -10047,7 +10078,13 @@ def _hero_misp_final_policy_details_commit(
                 "insurance_state=2 (policy preview Submit)",
             )
 
+    _insurance_timing_note(
+        ocr_output_dir, subfolder, timer, "post_submit_wait_start"
+    )
     _hero_misp_wait_post_submit_print_policy_page(page, timeout_ms=pt)
+    _insurance_timing_note(
+        ocr_output_dir, subfolder, timer, "post_submit_wait_done"
+    )
     try:
         append_playwright_insurance_line(
             ocr_output_dir,
@@ -10130,6 +10167,7 @@ def _hero_misp_fill_proposal_and_review(
     staging_payload: dict | None = None,
     staging_id: str | None = None,
     dealer_id: int | None = None,
+    timer: InsuranceFlowTimer | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
     """
     Proposal page after **I agree**: each fill is read back and logged (``Playwright_insurance.txt``);
@@ -10933,6 +10971,9 @@ def _hero_misp_fill_proposal_and_review(
             )
         _t(page, 400)
 
+    _insurance_timing_note(
+        ocr_output_dir, subfolder, timer, "proposal_review_load_start"
+    )
     _wait_load_optional(page, min(25_000, pt * 5))
     for _pr_root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
         try:
@@ -10943,6 +10984,9 @@ def _hero_misp_fill_proposal_and_review(
         except Exception:
             continue
     _t(page, 400)
+    _insurance_timing_note(
+        ocr_output_dir, subfolder, timer, "proposal_review_load_done"
+    )
     preview = scrape_insurance_policy_preview_before_issue(page, timeout_ms=pt)
     _hero_misp_note_proposal_review_scrape_for_insurance_master(
         ocr_output_dir, subfolder, preview
@@ -10965,6 +11009,7 @@ def _hero_misp_fill_proposal_and_review(
                 "staging: persisted proposal preview idv/premium (pre-INSERT cache)",
             )
 
+    _insurance_timing_note(ocr_output_dir, subfolder, timer, "consent_start")
     err_pr = _hero_misp_proposal_review_consent_checkboxes(
         page,
         ocr_output_dir=ocr_output_dir,
@@ -10973,6 +11018,7 @@ def _hero_misp_fill_proposal_and_review(
     )
     if err_pr:
         return _proposal_fail(ocr_output_dir, subfolder, err_pr, page=page)
+    _insurance_timing_note(ocr_output_dir, subfolder, timer, "consent_done")
     return None, preview
 
 
@@ -11056,6 +11102,7 @@ def _main_process_run_print_policy_reports(
     staging_id: str | None,
     dealer_id: int | None,
     allow_non_production: bool = False,
+    timer: InsuranceFlowTimer | None = None,
 ) -> dict:
     hrep: dict = {}
     if not (
@@ -11088,6 +11135,9 @@ def _main_process_run_print_policy_reports(
         "NOTE",
         "main_process: run_hero_insure_reports (PrintPolicyDetails → scrape/INSERT → PDF)",
     )
+    _insurance_timing_note(
+        ocr_output_dir, subfolder, timer, "print_policy_reports_start"
+    )
     try:
         hrep = run_hero_insure_reports(
             page,
@@ -11104,12 +11154,16 @@ def _main_process_run_print_policy_reports(
             staging_id=staging_id,
             dealer_id=dealer_id,
             commit_insurance_master=True,
+            timer=timer,
         )
     except Exception as hre:
         logger.warning("main_process: run_hero_insure_reports: %s", hre)
         append_playwright_insurance_line(
             ocr_output_dir, subfolder, "ERROR", f"main_process: run_hero_insure_reports: {hre!s}"
         )
+    _insurance_timing_note(
+        ocr_output_dir, subfolder, timer, "print_policy_reports_done"
+    )
     return hrep
 
 
@@ -11124,6 +11178,7 @@ def pre_process(
     staging_id: str | None = None,
     dealer_id: int | None = None,
     insurance_state_hint: int | None = None,
+    run_environment: dict[str, str] | None = None,
 ) -> dict:
     """
     Hero insurance **pre** stage: same behavior as ``run_fill_insurance_only`` (former standalone
@@ -11150,6 +11205,7 @@ def pre_process(
         staging_id=staging_id,
         dealer_id=dealer_id,
         insurance_state_hint=insurance_state_hint,
+        run_environment=run_environment,
     )
 
 
@@ -11258,6 +11314,7 @@ def main_process(
 
     try:
         page.set_default_timeout(to)
+        flow_timer = InsuranceFlowTimer.from_t0(pre_result.get("_insurance_timing_t0"))
         if pre_result.get("hero_resume_at_print_policy"):
             append_playwright_insurance_line(
                 ocr_output_dir,
@@ -11295,6 +11352,9 @@ def main_process(
             except Exception:
                 out["page_url"] = None
             return out
+        _insurance_timing_note(
+            ocr_output_dir, subfolder, flow_timer, "i_agree_start"
+        )
         err = _hero_misp_i_agree_after_vin_submit(
             page,
             timeout_ms=to,
@@ -11307,6 +11367,10 @@ def main_process(
                 ocr_output_dir, subfolder, "NOTE", f"main_process: I agree step failed: {err}"
             )
             return out
+        _insurance_timing_note(ocr_output_dir, subfolder, flow_timer, "i_agree_done")
+        _insurance_timing_note(
+            ocr_output_dir, subfolder, flow_timer, "proposal_fill_start"
+        )
         prop_err, preview = _hero_misp_fill_proposal_and_review(
             page,
             values,
@@ -11318,6 +11382,7 @@ def main_process(
             staging_payload=staging_payload,
             staging_id=staging_id,
             dealer_id=dealer_id,
+            timer=flow_timer,
         )
         if prop_err:
             out["error"] = prop_err
@@ -11325,6 +11390,10 @@ def main_process(
                 ocr_output_dir, subfolder, "NOTE", f"main_process: proposal form failed: {prop_err}"
             )
             return out
+        out["proposal_preview_scrape"] = dict(preview or {})
+        _insurance_timing_note(
+            ocr_output_dir, subfolder, flow_timer, "proposal_review_done"
+        )
         final_err, final_scrape = _hero_misp_final_policy_details_commit(
             page,
             values,
@@ -11336,6 +11405,7 @@ def main_process(
             staging_payload=staging_payload,
             staging_id=staging_id,
             dealer_id=dealer_id,
+            timer=flow_timer,
         )
         if final_err:
             out["error"] = final_err
@@ -11357,6 +11427,7 @@ def main_process(
             staging_payload=staging_payload,
             staging_id=staging_id,
             dealer_id=dealer_id,
+            timer=flow_timer,
         )
         out["hero_insure_reports"] = hrep
         ok_print, print_err = _main_process_print_reports_outcome(hrep)
@@ -11424,6 +11495,7 @@ def post_process(*, pre_result: dict, main_result: dict) -> dict:
         "login_url": pre_result.get("login_url"),
         "match_base": pre_result.get("match_base"),
         "hero_insure_reports": main_result.get("hero_insure_reports") or {},
+        "proposal_preview_scrape": main_result.get("proposal_preview_scrape") or {},
     }
 
 
@@ -11666,6 +11738,7 @@ def run_fill_insurance_only(
     staging_id: str | None = None,
     dealer_id: int | None = None,
     insurance_state_hint: int | None = None,
+    run_environment: dict[str, str] | None = None,
 ) -> dict:
     """
     Fill Insurance portal from DB-backed values (``INSURANCE_BASE_URL`` = production MISP or partner login).
@@ -11675,7 +11748,7 @@ def run_fill_insurance_only(
     Uses ``require_login_on_open=False`` so one Fill Insurance run can wait for manual login (see INSURANCE_LOGIN_WAIT_MS).
     """
     result: dict = {"success": False, "error": None}
-    reset_playwright_insurance_log(ocr_output_dir, subfolder)
+    reset_playwright_insurance_log(ocr_output_dir, subfolder, run_environment=run_environment)
     append_playwright_insurance_line(
         ocr_output_dir, subfolder, "NOTE", "run_fill_insurance_only: starting Fill Insurance flow"
     )
@@ -11722,8 +11795,9 @@ def run_fill_insurance_only(
             return result
 
         page.set_default_timeout(INSURANCE_ACTION_TIMEOUT_MS)
-        t0_flow = time.monotonic()
-        _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "page_open")
+        timer = InsuranceFlowTimer()
+        t0_flow = timer.t0
+        _insurance_pre_elapsed_note(ocr_output_dir, subfolder, timer, "page_open")
         # Real MISP (and similar): same automated Sign In as Hero ``pre_process`` — this endpoint
         # previously only waited for manual login (_wait_for_insurance_kyc_after_login).
         _insurance_click_settle(page)
@@ -11878,7 +11952,7 @@ def run_fill_insurance_only(
                     ocr_output_dir, subfolder, "ERROR", f"run_fill_insurance_only: {vin_err}"
                 )
                 return result
-            _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_vin_submit")
+            _insurance_pre_elapsed_note(ocr_output_dir, subfolder, timer, "after_vin_submit")
             result["success"] = True
             result["error"] = None
             try:
@@ -11890,6 +11964,7 @@ def run_fill_insurance_only(
                 result["success"] = False
                 return result
             result["_insurance_playwright_page"] = page
+            result["_insurance_timing_t0"] = timer.t0
             try:
                 result["page_url"] = (page.url or "").strip() or None
             except Exception:

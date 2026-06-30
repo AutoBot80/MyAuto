@@ -10,9 +10,16 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
+
+from app.services.playwright_run_environment import (
+    build_playwright_run_environment,
+    write_playwright_run_environment_header,
+)
 
 _IST_TZ = ZoneInfo("Asia/Kolkata")
 
@@ -379,17 +386,25 @@ def _find_latest_playwright_insurance_log(folder: Path) -> Path | None:
         return None
 
 
-def reset_playwright_insurance_log(ocr_output_dir: Path | None, subfolder: str | None) -> None:
+def reset_playwright_insurance_log(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    run_environment: dict[str, str] | None = None,
+    job_params: dict[str, Any] | None = None,
+) -> None:
     """Start a fresh timestamped ``Playwright_insurance_DDMMYYYY_HHMMSS.txt`` for this run."""
     if not ocr_output_dir or not subfolder or not str(subfolder).strip():
         return
     safe = safe_subfolder_name(subfolder)
     fname = _playwright_insurance_log_filename()
     path = Path(ocr_output_dir).resolve() / safe / fname
+    env = run_environment or build_playwright_run_environment(job_params=job_params)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as fp:
             fp.write("Playwright Insurance — execution log (IST / Asia/Kolkata timestamps)\n\n")
+            write_playwright_run_environment_header(fp, env)
             fp.write(f"started_ist={_insurance_log_ts_ist()}\n")
             fp.write(f"subfolder={safe!r}\n\n--- trace ---\n")
     except OSError as exc:
@@ -490,3 +505,41 @@ def append_playwright_insurance_line_or_dealer_fallback(
     append_playwright_insurance_line(ocr_output_dir, subfolder, prefix, message)
     if ocr_output_dir and (not subfolder or not str(subfolder).strip()):
         append_playwright_insurance_diag_dealer_fallback(ocr_output_dir, prefix, message)
+
+
+class InsuranceFlowTimer:
+    """Monotonic flow timer: cumulative ``elapsed_ms`` + ``delta_ms`` since last milestone."""
+
+    def __init__(self, t0: float | None = None) -> None:
+        self.t0 = float(t0 if t0 is not None else time.monotonic())
+        self.t_prev = self.t0
+
+    @classmethod
+    def from_t0(cls, t0: float | None) -> InsuranceFlowTimer | None:
+        if t0 is None:
+            return None
+        return cls(t0)
+
+    def format(self, phase: str, detail: str = "") -> str:
+        now = time.monotonic()
+        total_ms = int((now - self.t0) * 1000)
+        delta_ms = int((now - self.t_prev) * 1000)
+        self.t_prev = now
+        suffix = f" {detail}" if detail else ""
+        return f"timing phase={phase} elapsed_ms={total_ms} delta_ms={delta_ms}{suffix}"
+
+    def note(
+        self,
+        ocr_output_dir: Path | None,
+        subfolder: str | None,
+        phase: str,
+        detail: str = "",
+        *,
+        prefix: str = "NOTE",
+    ) -> None:
+        append_playwright_insurance_line_or_dealer_fallback(
+            ocr_output_dir,
+            subfolder,
+            prefix,
+            self.format(phase, detail),
+        )

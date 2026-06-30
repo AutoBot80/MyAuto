@@ -88,7 +88,27 @@ logger = logging.getLogger(__name__)
 _PLAYWRIGHT_DMS_LOG_TZ = ZoneInfo("Asia/Kolkata")
 
 
+from app.services.playwright_run_environment import (
+    build_playwright_run_environment,
+    write_playwright_run_environment_header,
+)
 from app.version import GIT_COMMIT_SHORT as _GIT_COMMIT_SHORT
+
+
+def _dms_log_run_environment(
+    *,
+    run_environment: dict[str, str] | None = None,
+    client_app_version: str | None = None,
+    client_api_base_url: str | None = None,
+) -> dict[str, str]:
+    if run_environment is not None:
+        return run_environment
+    return build_playwright_run_environment(
+        job_params={
+            "client_app_version": (client_app_version or "").strip(),
+            "client_api_base_url": (client_api_base_url or "").strip(),
+        }
+    )
 
 
 def playwright_dms_execution_log_filename() -> str:
@@ -106,6 +126,8 @@ def write_playwright_dms_execution_log_initial(
     *,
     execution_log_client_api_base_url: str | None = None,
     execution_log_http_request_base_url: str | None = None,
+    run_environment: dict[str, str] | None = None,
+    client_app_version: str | None = None,
 ) -> None:
     """
     Create ``Playwright_DMS_*.txt`` **before** Siebel login so :mod:`handle_browser_opening` can append
@@ -126,8 +148,14 @@ def write_playwright_dms_execution_log_initial(
     engine_p = (dms_values.get("engine_partial") or "").strip()
     aadhar_uin = (dms_values.get("aadhar_id") or "").strip()
     dms_path = (dms_values.get("dms_contact_path") or "found").strip().lower()
+    env = _dms_log_run_environment(
+        run_environment=run_environment,
+        client_app_version=client_app_version,
+        client_api_base_url=execution_log_client_api_base_url,
+    )
     with log_path.open("w", encoding="utf-8") as log_fp:
         log_fp.write("Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)\n\n")
+        write_playwright_run_environment_header(log_fp, env)
         log_fp.write(f"git_commit={_GIT_COMMIT_SHORT!r}\n")
         _capi = (execution_log_client_api_base_url or "").strip()
         _hreq = (execution_log_http_request_base_url or "").strip()
@@ -2261,6 +2289,7 @@ def _run_fill_dms_real_siebel_playwright(
     staging_payload: dict[str, Any] | None = None,
     siebel_urls: SiebelDmsUrls | None = None,
     dms_base_url: str | None = None,
+    run_environment: dict[str, str] | None = None,
 ) -> None:
     """
     Hero Connect / Siebel Open UI: ``Playwright_Hero_DMS_fill`` — **Find Contact Enquiry** path
@@ -2338,6 +2367,7 @@ def _run_fill_dms_real_siebel_playwright(
         dealer_id=dealer_id,
         dms_state_hint=dms_state_hint,
         staging_payload=staging_payload,
+        run_environment=run_environment,
     )
 
     result["vehicle"] = frag.get("vehicle") or {}
@@ -2455,6 +2485,8 @@ def run_fill_dms_only(
     *,
     execution_log_client_api_base_url: str | None = None,
     execution_log_http_request_base_url: str | None = None,
+    client_app_version: str | None = None,
+    run_environment: dict[str, str] | None = None,
 ) -> dict:
     """
     Run DMS steps via Hero Connect / Siebel Open UI (``DMS_MODE`` real/siebel/live/production/hero and
@@ -2547,11 +2579,18 @@ def run_fill_dms_only(
             / playwright_dms_execution_log_filename()
         )
         result["playwright_dms_execution_log_path"] = str(playwright_dms_log)
+        _run_env = _dms_log_run_environment(
+            run_environment=run_environment,
+            client_app_version=client_app_version,
+            client_api_base_url=execution_log_client_api_base_url,
+        )
         write_playwright_dms_execution_log_initial(
             playwright_dms_log,
             dms_values,
             execution_log_client_api_base_url=execution_log_client_api_base_url,
             execution_log_http_request_base_url=execution_log_http_request_base_url,
+            run_environment=_run_env,
+            client_app_version=client_app_version,
         )
         fill_dms_phase("playwright_log_written", path=str(playwright_dms_log))
         fill_dms_phase("get_or_open_begin")
@@ -2601,6 +2640,7 @@ def run_fill_dms_only(
             dealer_id=did_eff,
             dms_state_hint=dms_state_hint,
             staging_payload=staging_payload,
+            run_environment=_run_env,
         )
     except PlaywrightTimeout as e:
         result["error"] = f"Timeout: {e!s}"
@@ -2743,6 +2783,8 @@ def run_fill_dms(
     *,
     execution_log_client_api_base_url: str | None = None,
     execution_log_http_request_base_url: str | None = None,
+    client_app_version: str | None = None,
+    run_environment: dict[str, str] | None = None,
 ) -> dict:
     """
     Run Playwright: DMS flow (Siebel Create Invoice).
@@ -2767,6 +2809,8 @@ def run_fill_dms(
         staging_id=staging_id,
         execution_log_client_api_base_url=execution_log_client_api_base_url,
         execution_log_http_request_base_url=execution_log_http_request_base_url,
+        client_app_version=client_app_version,
+        run_environment=run_environment,
     )
     cid_eff = customer_id if customer_id is not None else result.get("committed_customer_id")
     vid_eff = vehicle_id if vehicle_id is not None else result.get("committed_vehicle_id")
@@ -2827,6 +2871,7 @@ def Playwright_Hero_DMS_fill(
     dealer_id: int | None = None,
     dms_state_hint: int | None = None,
     staging_payload: dict[str, Any] | None = None,
+    run_environment: dict[str, str] | None = None,
 ) -> dict:
     """
     Hero Connect / Siebel automation — **Find Contact Enquiry** path. Pipeline:
@@ -2894,7 +2939,13 @@ def Playwright_Hero_DMS_fill(
         _append_after_login = bool(execution_log_append_after_login) and lp.is_file() and lp.stat().st_size > 20
         log_fp = open(lp, "a" if _append_after_login else "w", encoding="utf-8")
         if not _append_after_login:
+            env = _dms_log_run_environment(
+                run_environment=run_environment,
+                client_app_version=None,
+                client_api_base_url=execution_log_client_api_base_url,
+            )
             log_fp.write("Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)\n\n")
+            write_playwright_run_environment_header(log_fp, env)
             log_fp.write(f"git_commit={_GIT_COMMIT_SHORT!r}\n")
             _capi = (execution_log_client_api_base_url or "").strip()
             _hreq = (execution_log_http_request_base_url or "").strip()
@@ -3472,6 +3523,7 @@ def run_hero_siebel_dms_flow(
     vehicle_id: int | None = None,
     execution_log_client_api_base_url: str | None = None,
     execution_log_http_request_base_url: str | None = None,
+    run_environment: dict[str, str] | None = None,
 ) -> dict:
     """
     Backward-compatible alias for older callers.
@@ -3492,4 +3544,5 @@ def run_hero_siebel_dms_flow(
         vehicle_id=vehicle_id,
         execution_log_client_api_base_url=execution_log_client_api_base_url,
         execution_log_http_request_base_url=execution_log_http_request_base_url,
+        run_environment=run_environment,
     )

@@ -2479,7 +2479,9 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         _write_data_from_dms,
         playwright_dms_execution_log_filename,
         _safe_subfolder_name,
+        write_playwright_dms_execution_log_initial,
     )
+    from app.services.playwright_run_environment import build_playwright_run_environment
 
     result: dict = {
         "vehicle": {},
@@ -2495,6 +2497,16 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
         / playwright_dms_execution_log_filename()
     )
     result["playwright_dms_execution_log_path"] = str(playwright_dms_log)
+
+    _run_env = build_playwright_run_environment(job_params=params)
+    write_playwright_dms_execution_log_initial(
+        playwright_dms_log,
+        dms_values,
+        execution_log_client_api_base_url=_client_api_log,
+        execution_log_http_request_base_url=_http_api_log,
+        run_environment=_run_env,
+        client_app_version=(params.get("client_app_version") or "").strip() or None,
+    )
 
     cid_eff = params.get("customer_id")
     vid_eff = params.get("vehicle_id")
@@ -2613,6 +2625,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
             require_login_on_open=True,
             login_user=DMS_LOGIN_USER,
             login_password=DMS_LOGIN_PASSWORD,
+            playwright_dms_execution_log_path=playwright_dms_log,
         )
         if page is None:
             result["error"] = open_error
@@ -2641,6 +2654,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
                 staging_payload=staging_payload,
                 siebel_urls=siebel_urls,
                 dms_base_url=dms_base_url,
+                run_environment=_run_env,
             )
     except Exception as e:
         result["error"] = str(e)
@@ -2813,6 +2827,7 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
 
 
 def _dispatch_fill_insurance_impl(params: dict) -> dict:
+    from app.services.playwright_run_environment import build_playwright_run_environment
     from app.services.upload_scans_invoice_print import collect_insurance_print_jobs_electron_local
 
     api_url, jwt = _require_api_credentials(params)
@@ -2842,8 +2857,8 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     uploads_dir = get_uploads_dir(dealer_id)
 
     # Monkey-patch DB-dependent functions so pre_process / main_process can run
-    # without DATABASE_URL. The sidecar delegates DB writes to /sidecar/insurance/commit
-    # and /sidecar/staging/processing-state.
+    # without DATABASE_URL. The sidecar delegates DB writes to /sidecar/insurance/commit,
+    # /sidecar/staging/processing-state, and /sidecar/staging/insurance-patch.
     import app.services.insurance_form_values as _ifv
     import app.services.fill_hero_insurance_service as _fhi
     import app.services.add_sales_commit_service as _cs
@@ -2852,6 +2867,11 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     _original_build_ifv = _ifv.build_insurance_fill_values
     _original_build_fhi = _fhi.build_insurance_fill_values
     _original_mark_ins_state = _stg.mark_staging_insurance_state
+    _original_persist_main = _stg.persist_staging_insurance_main_fields
+    _original_persist_pn = _stg.persist_staging_issued_policy_num
+    _original_mark_fhi = _fhi.mark_staging_insurance_state
+    _original_persist_fhi = _fhi.persist_staging_insurance_main_fields
+    _original_persist_pn_fhi = _fhi.persist_staging_issued_policy_num
 
     def _build_cached(*_a, **_kw):
         return dict(cached_values)
@@ -2863,7 +2883,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
         if not sid:
             return
         try:
-            _api_post(
+            resp = _api_post(
                 api_url,
                 jwt,
                 "/sidecar/staging/processing-state",
@@ -2873,6 +2893,13 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
                     "insurance_state": int(state),
                 },
             )
+            if not resp.get("ok"):
+                logging.warning(
+                    "fill_insurance sidecar insurance_state=%s staging_id=%s api_error=%s",
+                    state,
+                    sid,
+                    resp.get("error"),
+                )
         except Exception as exc:
             logging.warning(
                 "fill_insurance sidecar insurance_state=%s staging_id=%s: %s",
@@ -2881,17 +2908,75 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
                 exc,
             )
 
+    def _persist_staging_insurance_via_api(
+        staging_id: str,
+        dealer_id: int,
+        *,
+        policy_num: str | None = None,
+        policy_from: str | None = None,
+        policy_to: str | None = None,
+        premium: object | None = None,
+        idv: object | None = None,
+    ) -> bool:
+        sid = (staging_id or "").strip()
+        if not sid:
+            return False
+        body: dict = {"staging_id": sid, "dealer_id": int(dealer_id)}
+        if policy_num:
+            body["policy_num"] = str(policy_num).strip()
+        if policy_from:
+            body["policy_from"] = str(policy_from).strip()
+        if policy_to:
+            body["policy_to"] = str(policy_to).strip()
+        if premium is not None:
+            try:
+                body["premium"] = float(premium)
+            except (TypeError, ValueError):
+                pass
+        if idv is not None:
+            try:
+                body["idv"] = float(idv)
+            except (TypeError, ValueError):
+                pass
+        if len(body) <= 2:
+            return False
+        try:
+            resp = _api_post(api_url, jwt, "/sidecar/staging/insurance-patch", body)
+            return bool(resp.get("ok"))
+        except Exception as exc:
+            logging.warning(
+                "fill_insurance sidecar staging/insurance-patch staging_id=%s: %s",
+                sid,
+                exc,
+            )
+            return False
+
+    def _persist_issued_policy_num_via_api(staging_id: str, dealer_id: int, policy_num: str) -> bool:
+        return _persist_staging_insurance_via_api(
+            staging_id, dealer_id, policy_num=policy_num
+        )
+
     _stg.mark_staging_insurance_state = _mark_insurance_state_via_api
+    _stg.persist_staging_insurance_main_fields = _persist_staging_insurance_via_api
+    _stg.persist_staging_issued_policy_num = _persist_issued_policy_num_via_api
+    _fhi.mark_staging_insurance_state = _mark_insurance_state_via_api
+    _fhi.persist_staging_insurance_main_fields = _persist_staging_insurance_via_api
+    _fhi.persist_staging_issued_policy_num = _persist_issued_policy_num_via_api
 
     _original_insert_cs = _cs.insert_insurance_master_after_gi
+    _was_insert_deferred = _cs.insurance_insert_deferred_to_api()
     _captured_insert_args: dict = {}
 
     def _noop_insert(*_a, **kw):
         _captured_insert_args.update(kw)
 
     _cs.insert_insurance_master_after_gi = _noop_insert
+    _cs.set_insurance_insert_deferred_to_api(True)
+
+    _run_env = build_playwright_run_environment(job_params=params)
 
     result: dict = {}
+    main_result: dict = {}
     try:
         from app.services.fill_hero_insurance_service import (
             main_process,
@@ -2910,6 +2995,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
                 staging_id=staging_id,
                 dealer_id=dealer_id,
                 insurance_state_hint=insurance_state_hint,
+                run_environment=_run_env,
             )
             main = main_process(
                 pre_result=pre,
@@ -2921,6 +3007,7 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
                 staging_id=staging_id,
                 dealer_id=dealer_id,
             )
+            main_result = dict(main)
             result = post_process(pre_result=pre, main_result=main)
         except Exception as exc:
             logging.warning("fill_insurance sidecar playwright: %s", exc)
@@ -2929,17 +3016,28 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
         _ifv.build_insurance_fill_values = _original_build_ifv
         _fhi.build_insurance_fill_values = _original_build_fhi
         _stg.mark_staging_insurance_state = _original_mark_ins_state
+        _stg.persist_staging_insurance_main_fields = _original_persist_main
+        _stg.persist_staging_issued_policy_num = _original_persist_pn
+        _fhi.mark_staging_insurance_state = _original_mark_fhi
+        _fhi.persist_staging_insurance_main_fields = _original_persist_fhi
+        _fhi.persist_staging_issued_policy_num = _original_persist_pn_fhi
         _cs.insert_insurance_master_after_gi = _original_insert_cs
+        _cs.set_insurance_insert_deferred_to_api(_was_insert_deferred)
 
     if result.get("success"):
         _final_scrape = _captured_insert_args.get("preview_scrape")
-        _commit_staging = _captured_insert_args.get("staging_payload") or staging_payload
+        _proposal_preview = (
+            main_result.get("proposal_preview_scrape")
+            or result.get("proposal_preview_scrape")
+            or {}
+        )
         commit_body = {
             "customer_id": cid,
             "vehicle_id": vid,
             "fill_values": cached_values,
-            "staging_payload": _commit_staging,
+            "staging_payload": staging_payload,
             "preview_scrape": _final_scrape,
+            "proposal_preview_scrape": _proposal_preview,
             "post_issue_scrape": None,
             "staging_id": staging_id,
             "dealer_id": dealer_id,
@@ -2949,10 +3047,14 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
             commit_resp = _api_post(api_url, jwt, "/sidecar/insurance/commit", commit_body)
             if commit_resp.get("error"):
                 result["error"] = commit_resp["error"]
-            elif staging_id and dealer_id:
-                _mark_insurance_state_via_api(str(staging_id), int(dealer_id), 3)
+            elif not commit_resp.get("insurance_state_set") and staging_id and dealer_id:
+                logging.warning(
+                    "fill_insurance sidecar: commit ok but insurance_state=3 not set staging_id=%s",
+                    staging_id,
+                )
         except Exception as exc:
             logging.warning("fill_insurance sidecar commit: %s", exc)
+            result["error"] = str(exc)
 
     print_jobs: list = []
     if result.get("success"):

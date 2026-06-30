@@ -3,6 +3,14 @@ import { getAccessToken } from "../auth/token";
 import { isElectron } from "../electron";
 import { getSilentPrintEnabled } from "../settings/printPreferences";
 
+/** Logged at the top of Playwright DMS / insurance execution logs on the dealer PC. */
+function fillFormsClientLogContext(): { client_api_base_url: string; client_app_version: string } {
+  return {
+    client_api_base_url: getBaseUrl() ?? "",
+    client_app_version: __APP_VERSION__,
+  };
+}
+
 export interface FillDmsCustomer {
   name?: string | null;
   care_of?: string | null;
@@ -44,6 +52,8 @@ export interface FillDmsRequest {
    * logged at the top of ``Playwright_DMS_*.txt`` next to the server-reported request base URL.
    */
   client_api_base_url?: string | null;
+  /** Electron/client app semver (FE); logged in Playwright execution log header. */
+  client_app_version?: string | null;
 }
 
 export interface FillDmsResponse {
@@ -301,6 +311,8 @@ export interface FillHeroInsuranceRequest {
   dealer_id?: number | null;
   /** When set, server resolves subfolder and can resolve customer_id / vehicle_id from staging payload. */
   staging_id?: string | null;
+  client_api_base_url?: string | null;
+  client_app_version?: string | null;
 }
 
 export interface FillHeroInsuranceResponse {
@@ -326,7 +338,7 @@ export async function fillDmsOnly(req: FillDmsRequest): Promise<FillDmsResponse>
     const res = await apiFetch<FillDmsResponse>("/fill-forms/dms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...req, client_api_base_url: getBaseUrl() ?? "" }),
+      body: JSON.stringify({ ...req, ...fillFormsClientLogContext() }),
       signal: controller.signal,
     });
     return res;
@@ -346,7 +358,7 @@ export async function fillDmsLocal(req: FillDmsRequest): Promise<FillDmsResponse
       type: "fill_dms",
       api_url: getBaseUrl(),
       jwt: getAccessToken() ?? "",
-      params: { ...req, client_api_base_url: getBaseUrl() ?? "" },
+      params: { ...req, ...fillFormsClientLogContext() },
       timeoutMs: FILL_FORMS_TIMEOUT_MS,
     });
     if (result.timedOut) {
@@ -380,7 +392,7 @@ export async function fillDms(req: FillDmsRequest): Promise<FillDmsResponse> {
     const res = await apiFetch<FillDmsResponse>("/fill-forms", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...req, client_api_base_url: getBaseUrl() ?? "" }),
+      body: JSON.stringify({ ...req, ...fillFormsClientLogContext() }),
       signal: controller.signal,
     });
     return res;
@@ -400,7 +412,7 @@ export async function fillHeroInsurance(req: FillHeroInsuranceRequest): Promise<
     return await apiFetch<FillHeroInsuranceResponse>("/fill-forms/insurance/hero", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
+      body: JSON.stringify({ ...req, ...fillFormsClientLogContext() }),
       signal: controller.signal,
     });
   } finally {
@@ -584,7 +596,7 @@ export async function fillHeroInsuranceLocal(req: FillHeroInsuranceRequest): Pro
       type: "fill_insurance",
       api_url: getBaseUrl(),
       jwt: getAccessToken() ?? "",
-      params: { ...req },
+      params: { ...req, ...fillFormsClientLogContext() },
       timeoutMs: FILL_HERO_INSURANCE_TIMEOUT_MS,
     });
     if (result.timedOut) return { success: false, error: "Insurance sidecar timed out." };

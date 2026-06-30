@@ -131,6 +131,24 @@ def _ins_log(
         logger.info("%s: %s", _PREFIX, message)
 
 
+def _ins_timing(
+    timer: Any,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    phase: str,
+    detail: str = "",
+) -> None:
+    if timer is None:
+        return
+    try:
+        from app.services.insurance_form_values import InsuranceFlowTimer
+
+        if isinstance(timer, InsuranceFlowTimer):
+            timer.note(ocr_output_dir, subfolder, phase, detail)
+    except Exception:
+        pass
+
+
 def _longest_prefix_product_label(insurer: str, option_labels: list[str]) -> str | None:
     ins = _norm_ws(insurer)
     if not ins:
@@ -712,7 +730,17 @@ def _misp_insert_insurance_master_from_grid_scrape(
         )
         return f"insurance_master insert failed: {exc!s}", grid_scrape
     else:
-        _ins_log(ocr_output_dir, subfolder, "NOTE", "insurance_master INSERT ok (after PDF)")
+        from app.services.add_sales_commit_service import insurance_insert_deferred_to_api
+
+        if insurance_insert_deferred_to_api():
+            _ins_log(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "insurance_master INSERT deferred to API commit (sidecar)",
+            )
+        else:
+            _ins_log(ocr_output_dir, subfolder, "NOTE", "insurance_master INSERT ok (after PDF)")
 
     if sid and did is not None:
         mark_staging_insurance_state(sid, did, 3)
@@ -1169,6 +1197,7 @@ def run_hero_insure_reports(
     staging_id: str | None = None,
     dealer_id: int | None = None,
     commit_insurance_master: bool = False,
+    timer: Any | None = None,
 ) -> dict[str, Any]:
     """
     On the MISP **Insurance** tab: navigate to **Print Policy** search (**PrintPolicyDetails** /
@@ -1239,9 +1268,11 @@ def run_hero_insure_reports(
             page.on("dialog", _auto_dismiss_dialog)
         except Exception:
             pass
+        _ins_timing(timer, ocr_output_dir, subfolder, "print_policy_nav_start")
         _misp_navigate_to_print_policy_search(
             page, tmo=tmo, ocr_output_dir=ocr_output_dir, subfolder=subfolder
         )
+        _ins_timing(timer, ocr_output_dir, subfolder, "print_policy_nav_done")
         _ins_log(
             ocr_output_dir,
             subfolder,
@@ -1299,6 +1330,7 @@ def run_hero_insure_reports(
             raise RuntimeError("Go button not found (btnGO)")
         go_loc.click(timeout=tmo, force=True)
         _ins_log(ocr_output_dir, subfolder, "NOTE", "Go clicked")
+        _ins_timing(timer, ocr_output_dir, subfolder, "print_policy_go_clicked")
 
         try:
             page.wait_for_load_state("networkidle", timeout=20_000)
@@ -1321,6 +1353,13 @@ def run_hero_insure_reports(
                 tmo=tmo,
             )
             out["grid_scrape"] = grid_scrape
+            _ins_timing(
+                timer,
+                ocr_output_dir,
+                subfolder,
+                "print_policy_grid_scrape_done",
+                detail=f"premium={grid_scrape.get('premium')!r}",
+            )
             _sid = (staging_id or "").strip()
             _did = int(dealer_id) if dealer_id is not None else None
             if _sid and _did is not None and grid_scrape:

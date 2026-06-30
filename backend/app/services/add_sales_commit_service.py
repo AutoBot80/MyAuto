@@ -34,6 +34,38 @@ INSURANCE_MASTER_UNIQUE_CONSTRAINT = "uq_insurance_customer_vehicle_year_type"
 # PLAN348 RGI total amount on Alliance portal when plan preset is selected
 ALLIANCE_CPA_PLAN_PREMIUM_DEFAULT = 348.0
 
+_insert_deferred_to_api = False
+
+
+def set_insurance_insert_deferred_to_api(deferred: bool) -> None:
+    """Sidecar sets True while Playwright defers ``insert_insurance_master_after_gi`` to API commit."""
+    global _insert_deferred_to_api
+    _insert_deferred_to_api = deferred
+
+
+def insurance_insert_deferred_to_api() -> bool:
+    return _insert_deferred_to_api
+
+
+def merge_insurance_scrape_for_commit(
+    grid_scrape: dict[str, Any] | None,
+    proposal_preview_scrape: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    Merge PrintPolicyDetails grid scrape with proposal-review preview for API commit.
+    Grid/non-empty values win; proposal preview fills gaps (e.g. premium when grid parse fails).
+    """
+    out: dict[str, Any] = dict(grid_scrape or {})
+    prop = proposal_preview_scrape or {}
+    for key in ("policy_num", "policy_from", "policy_to", "premium", "idv"):
+        cur = out.get(key)
+        if cur is not None and str(cur).strip() != "":
+            continue
+        v = prop.get(key)
+        if v is not None and str(v).strip() != "":
+            out[key] = v
+    return out
+
 
 def _build_staging_insurance_patch_main(
     *,

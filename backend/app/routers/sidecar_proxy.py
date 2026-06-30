@@ -8,6 +8,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/insurance/resolve`` → load insurance fill values
   - ``/sidecar/insurance/commit``  → insert/update insurance_master
   - ``/sidecar/staging/processing-state`` → set ``dms_state`` / ``insurance_state`` on ``add_sales_staging``
+  - ``/sidecar/staging/insurance-patch`` → merge Main insurance fields into ``payload_json.insurance``
   - ``/sidecar/cpa/resolve`` → load CPA Alliance fill values (``form_cpa_insurance_view`` + staging)
   - ``/sidecar/cpa/commit``  → persist CPA certificate # (staging ``cpa_policy_num`` + ``insurance_master``)
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
@@ -190,6 +191,7 @@ class InsuranceCommitRequest(BaseModel):
     fill_values: dict[str, Any]
     staging_payload: dict[str, Any] | None = None
     preview_scrape: dict[str, Any] | None = None
+    proposal_preview_scrape: dict[str, Any] | None = None
     post_issue_scrape: dict[str, Any] | None = None
     staging_id: str | None = None
     dealer_id: int | None = None
@@ -198,6 +200,22 @@ class InsuranceCommitRequest(BaseModel):
 
 class InsuranceCommitResponse(BaseModel):
     insurance_id: int | None = None
+    error: str | None = None
+    insurance_state_set: bool = False
+
+
+class StagingInsurancePatchRequest(BaseModel):
+    staging_id: str
+    dealer_id: int | None = None
+    policy_num: str | None = None
+    policy_from: str | None = None
+    policy_to: str | None = None
+    premium: float | None = None
+    idv: float | None = None
+
+
+class StagingInsurancePatchResponse(BaseModel):
+    ok: bool = False
     error: str | None = None
 
 
@@ -750,26 +768,50 @@ async def insurance_commit(
 ) -> InsuranceCommitResponse:
     did = resolve_dealer_id(principal, req.dealer_id)
 
+    from app.repositories.add_sales_staging import fetch_staging_payload
     from app.services.add_sales_commit_service import (
         insert_insurance_master_after_gi,
+        merge_insurance_scrape_for_commit,
         update_insurance_master_policy_after_issue,
+    )
+    from app.services.add_sales_staging_state_service import mark_staging_insurance_state
+
+    sid = (req.staging_id or "").strip()
+    staging_payload = req.staging_payload
+    if sid:
+        try:
+            fresh = fetch_staging_payload(sid, did)
+            if fresh:
+                staging_payload = fresh
+        except Exception as exc:
+            logger.warning("sidecar_proxy insurance/commit: staging refetch failed: %s", exc)
+
+    merged_preview = merge_insurance_scrape_for_commit(
+        req.preview_scrape,
+        req.proposal_preview_scrape,
     )
 
     error: str | None = None
+    insurance_state_set = False
     try:
         insert_insurance_master_after_gi(
             req.customer_id,
             req.vehicle_id,
             fill_values=req.fill_values,
-            staging_payload=req.staging_payload,
-            preview_scrape=req.preview_scrape,
+            staging_payload=staging_payload,
+            preview_scrape=merged_preview,
             ocr_output_dir=req.subfolder,
             subfolder=req.subfolder,
             staging_id=req.staging_id,
             dealer_id=did,
         )
     except ValueError as exc:
-        error = str(exc)
+        msg = str(exc).strip()
+        if "already recorded" in msg.lower() and sid:
+            error = None
+            logger.info("sidecar_proxy insurance/commit: duplicate Main row — continuing state=3")
+        else:
+            error = msg
     except Exception as exc:
         error = f"Insurance master insert failed: {exc!s}"
         logger.warning("sidecar_proxy insurance/commit: %s", exc)
@@ -780,13 +822,65 @@ async def insurance_commit(
                 req.customer_id,
                 req.vehicle_id,
                 scrape=req.post_issue_scrape,
-                staging_id=(req.staging_id or "").strip() or None,
+                staging_id=sid or None,
                 dealer_id=did,
             )
         except Exception as exc:
             logger.warning("sidecar_proxy insurance/commit update: %s", exc)
 
-    return InsuranceCommitResponse(error=error)
+    if not error and sid:
+        try:
+            mark_staging_insurance_state(sid, int(did), 3)
+            insurance_state_set = True
+        except Exception as exc:
+            logger.warning(
+                "sidecar_proxy insurance/commit: insurance_state=3 failed staging_id=%s: %s",
+                sid,
+                exc,
+            )
+
+    return InsuranceCommitResponse(
+        error=error,
+        insurance_state_set=insurance_state_set,
+    )
+
+
+@router.post("/staging/insurance-patch", response_model=StagingInsurancePatchResponse)
+async def staging_insurance_patch(
+    req: StagingInsurancePatchRequest,
+    principal: Principal = Depends(get_principal),
+) -> StagingInsurancePatchResponse:
+    """Merge Main insurance policy fields into ``add_sales_staging.payload_json`` (sidecar Playwright)."""
+    did = resolve_dealer_id(principal, req.dealer_id)
+    sid = (req.staging_id or "").strip()
+    if not sid:
+        return StagingInsurancePatchResponse(ok=False, error="staging_id is required.")
+    try:
+        UUID(sid)
+    except ValueError:
+        return StagingInsurancePatchResponse(ok=False, error="staging_id must be a valid UUID.")
+
+    from app.services.add_sales_staging_state_service import persist_staging_insurance_main_fields
+
+    try:
+        ok = persist_staging_insurance_main_fields(
+            sid,
+            int(did),
+            policy_num=req.policy_num,
+            policy_from=req.policy_from,
+            policy_to=req.policy_to,
+            premium=req.premium,
+            idv=req.idv,
+        )
+    except Exception as exc:
+        logger.warning("sidecar_proxy staging/insurance-patch: %s", exc)
+        return StagingInsurancePatchResponse(ok=False, error=str(exc))
+    if not ok:
+        return StagingInsurancePatchResponse(
+            ok=False,
+            error="Staging row not found or patch empty.",
+        )
+    return StagingInsurancePatchResponse(ok=True)
 
 
 @router.post("/staging/processing-state", response_model=StagingProcessingStateResponse)

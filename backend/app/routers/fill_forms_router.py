@@ -168,6 +168,10 @@ class FillDmsRequest(BaseModel):
             "Logged at top of Playwright_DMS_*.txt; empty means relative / Vite proxy."
         ),
     )
+    client_app_version: str | None = Field(
+        None,
+        description="Optional. Electron/client app semver (FE) for Playwright execution log header.",
+    )
 
 
 class FillDmsResponse(BaseModel):
@@ -229,6 +233,14 @@ class FillHeroInsuranceRequest(BaseModel):
             "add_sales_staging UUID; merges OCR/Submit snapshot when form_insurance_view is sparse. "
             "If the row is missing or not draft/committed, pass customer_id and vehicle_id together."
         ),
+    )
+    client_api_base_url: str | None = Field(
+        None,
+        description="Optional client API base URL for Playwright insurance execution log header.",
+    )
+    client_app_version: str | None = Field(
+        None,
+        description="Optional Electron/client app semver (FE) for Playwright insurance execution log header.",
     )
 
 
@@ -728,6 +740,7 @@ async def fill_dms_only(
         )
     _http_base = _fill_forms_http_request_base(request)
     _client_api = (req.client_api_base_url or "").strip() or None
+    _client_ver = (req.client_app_version or "").strip() or None
     fill_dms_api_phase("playwright_executor_enqueue", subfolder=subfolder_resolved)
     result = await _run_playwright_work(
         partial(
@@ -747,6 +760,7 @@ async def fill_dms_only(
             staging_id=sid_for_commit,
             execution_log_client_api_base_url=_client_api,
             execution_log_http_request_base_url=_http_base or None,
+            client_app_version=_client_ver,
         )
     )
     scraped = result.get("vehicle") or {}
@@ -1185,6 +1199,14 @@ async def fill_hero_insurance(
         )
 
     def _hero_insurance_run() -> dict:
+        from app.services.playwright_run_environment import build_playwright_run_environment
+
+        _run_env = build_playwright_run_environment(
+            job_params={
+                "client_app_version": (req.client_app_version or "").strip(),
+                "client_api_base_url": (req.client_api_base_url or "").strip(),
+            }
+        )
         pre = pre_process(
             insurance_base_url=url if url else None,
             customer_id=cid,
@@ -1194,6 +1216,7 @@ async def fill_hero_insurance(
             staging_payload=staging_payload,
             staging_id=sid_for_process,
             dealer_id=did,
+            run_environment=_run_env,
         )
         main = main_process(
             pre_result=pre,
@@ -1348,6 +1371,7 @@ async def fill_dms(
         )
     _http_base = _fill_forms_http_request_base(request)
     _client_api = (req.client_api_base_url or "").strip() or None
+    _client_ver = (req.client_app_version or "").strip() or None
     result = await _run_playwright_work(
         partial(
             run_fill_dms,
@@ -1366,6 +1390,7 @@ async def fill_dms(
             staging_id=sid_for_commit,
             execution_log_client_api_base_url=_client_api,
             execution_log_http_request_base_url=_http_base or None,
+            client_app_version=_client_ver,
         )
     )
     scraped = result.get("vehicle") or {}
