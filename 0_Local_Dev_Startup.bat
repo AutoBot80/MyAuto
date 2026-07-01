@@ -14,6 +14,10 @@ timeout /t 1 /nobreak >nul
 echo Old windows closed.
 echo.
 
+echo === Freeing port 8000 (stale uvicorn / orphan workers) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\stop-api-on-port.ps1" -Port 8000
+echo.
+
 echo === Starting Backend (uvicorn) in new window ===
 start "MyAuto Backend" cmd /k "title MyAuto Backend && cd /d "%ROOT%backend" && call ..\venv\Scripts\activate.bat && python -m uvicorn app.main:app --reload --reload-dir app --port 8000"
 
@@ -21,7 +25,7 @@ echo === Starting Watcher in new window ===
 start "MyAuto Watcher" cmd /k "title MyAuto Watcher && cd /d "%ROOT%backend" && call ..\venv\Scripts\activate.bat && python run_watcher.py && pause"
 
 echo === Waiting for API on port 8000 (avoids Vite proxy ECONNREFUSED while uvicorn starts) ===
-powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\wait-for-api.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\wait-for-api.ps1" -RepoRoot "%ROOT%" -VerifyHealth
 
 echo === Starting Client (npm run dev) in new window ===
 start "MyAuto Client" cmd /k "title MyAuto Client && cd /d "%ROOT%client" && npm run dev"

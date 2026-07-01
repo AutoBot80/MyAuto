@@ -7,6 +7,71 @@ from typing import Any
 from app.db import get_connection
 
 
+def _list_active_by_insurer_exact(conn: Any, insurer: str) -> list[dict[str, Any]]:
+    ins = (insurer or "").strip()
+    if not ins:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT insurance_addon_id, insurer, display_label,
+                   nd_cover, rti, rim_safeguard, rsa, sort_order, active_flag
+            FROM insurance_addon_ref
+            WHERE insurer = %s AND active_flag = 'Y'
+            ORDER BY sort_order, insurance_addon_id
+            """,
+            (ins,),
+        )
+        rows = cur.fetchall() or []
+    return [_row_to_dict(r) for r in rows]
+
+
+def resolve_addon_catalog_insurer_key(conn: Any, insurer: str) -> str:
+    """
+    Map ``dealer_ref.prefer_insurer`` (or sale insurer) to the ``insurance_addon_ref.insurer``
+    label — exact match first, then fuzzy match to portal / preset insurer names.
+    """
+    ins = (insurer or "").strip()
+    if not ins:
+        return ""
+    if _list_active_by_insurer_exact(conn, ins):
+        return ins
+    from app.repositories.master_ref import list_portal_insurers
+    from app.services.utility_functions import fuzzy_best_master_ref_value
+
+    portal = list_portal_insurers(conn)
+    canon = fuzzy_best_master_ref_value(ins, portal, min_score=0.5)
+    if canon and _list_active_by_insurer_exact(conn, canon):
+        return str(canon).strip()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT insurer
+            FROM insurance_addon_ref
+            WHERE active_flag = 'Y'
+            ORDER BY insurer
+            """
+        )
+        preset_insurers = [
+            str(r["insurer"] if isinstance(r, dict) else r[0]).strip()
+            for r in (cur.fetchall() or [])
+            if r
+        ]
+    canon2 = fuzzy_best_master_ref_value(ins, preset_insurers, min_score=0.5)
+    if canon2 and _list_active_by_insurer_exact(conn, canon2):
+        return str(canon2).strip()
+    return ins
+
+
+def list_active_by_insurer(conn: Any, insurer: str) -> list[dict[str, Any]]:
+    """Active presets for one portal insurer label, ordered for dropdown display."""
+    key = resolve_addon_catalog_insurer_key(conn, insurer)
+    if not key:
+        return []
+    return _list_active_by_insurer_exact(conn, key)
+
+
 def _row_to_dict(row: Any) -> dict[str, Any]:
     if isinstance(row, dict):
         return dict(row)
@@ -24,26 +89,6 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
         "active_flag",
     )
     return {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
-
-
-def list_active_by_insurer(conn: Any, insurer: str) -> list[dict[str, Any]]:
-    """Active presets for one portal insurer label, ordered for dropdown display."""
-    ins = (insurer or "").strip()
-    if not ins:
-        return []
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT insurance_addon_id, insurer, display_label,
-                   nd_cover, rti, rim_safeguard, rsa, sort_order, active_flag
-            FROM insurance_addon_ref
-            WHERE insurer = %s AND active_flag = 'Y'
-            ORDER BY sort_order, insurance_addon_id
-            """,
-            (ins,),
-        )
-        rows = cur.fetchall() or []
-    return [_row_to_dict(r) for r in rows]
 
 
 def list_all_active(conn: Any) -> list[dict[str, Any]]:
@@ -150,11 +195,23 @@ def fetch_staging_insurance_addon_on_cursor(
 
 def resolve_dealer_insurance_addon_for_insert_on_cursor(cur, *, dealer_id: int) -> int | None:
     """Preset id for new staging row: dealer FK when valid for prefer_insurer, else first preset."""
-    prefer = fetch_dealer_prefer_insurer_on_cursor(cur, dealer_id=dealer_id)
-    if not prefer:
+    prefer_raw = fetch_dealer_prefer_insurer_on_cursor(cur, dealer_id=dealer_id)
+    if not prefer_raw:
         return None
+    conn = getattr(cur, "connection", None)
+    prefer = (
+        resolve_addon_catalog_insurer_key(conn, prefer_raw)
+        if conn is not None
+        else prefer_raw
+    )
     dealer_fk = fetch_dealer_insurance_addon_on_cursor(cur, dealer_id=dealer_id)
-    if dealer_fk is not None:
+    if dealer_fk is not None and conn is not None:
+        row = get_by_id(conn, int(dealer_fk))
+        if row and str(row.get("active_flag") or "").strip().upper() == "Y":
+            row_ins = str(row.get("insurer") or "").strip()
+            if row_ins == prefer or resolve_addon_catalog_insurer_key(conn, row_ins) == prefer:
+                return int(dealer_fk)
+    elif dealer_fk is not None:
         cur.execute(
             """
             SELECT insurance_addon_id
@@ -198,6 +255,63 @@ def build_addon_flags_from_preset(row: dict[str, Any] | None) -> dict[str, bool]
     }
 
 
+def validate_dealer_insurance_addon_config(
+    conn: Any,
+    dealer_id: int,
+    *,
+    staging_id: str | None = None,
+) -> list[str]:
+    """
+    Human-readable config issues for dealer/staging add-on FKs and ``insurance_addon_ref`` catalog.
+    Empty list means no blocking issues detected for ``prefer_insurer``.
+    """
+    issues: list[str] = []
+    did = int(dealer_id)
+    sid = (staging_id or "").strip() or None
+    with conn.cursor() as cur:
+        prefer = fetch_dealer_prefer_insurer_on_cursor(cur, dealer_id=did)
+        if not prefer:
+            return issues
+        presets = list_active_by_insurer(conn, prefer)
+        if not presets:
+            issues.append(
+                f"no active insurance add-on presets for prefer_insurer {prefer!r} "
+                "(apply DDL/seed_insurance_addon_ref.sql)"
+            )
+        dealer_fk = fetch_dealer_insurance_addon_on_cursor(cur, dealer_id=did)
+        if dealer_fk is not None:
+            row = get_by_id(conn, int(dealer_fk))
+            if not row or str(row.get("active_flag") or "").strip().upper() != "Y":
+                issues.append(f"dealer_ref.insurance_addon={dealer_fk} not found or inactive")
+            else:
+                row_ins = str(row.get("insurer") or "").strip()
+                canon_prefer = resolve_addon_catalog_insurer_key(conn, prefer)
+                canon_row = resolve_addon_catalog_insurer_key(conn, row_ins)
+                if canon_row != canon_prefer and row_ins != prefer:
+                    issues.append(
+                        f"dealer_ref.insurance_addon={dealer_fk} insurer mismatch "
+                        f"(preset {row_ins!r} vs prefer_insurer {prefer!r})"
+                    )
+        if sid:
+            staging_fk = fetch_staging_insurance_addon_on_cursor(
+                cur, staging_id=sid, dealer_id=did
+            )
+            if staging_fk is not None:
+                row = get_by_id(conn, int(staging_fk))
+                if not row or str(row.get("active_flag") or "").strip().upper() != "Y":
+                    issues.append(f"staging insurance_addon={staging_fk} not found or inactive")
+                elif str(row.get("insurer") or "").strip() != prefer:
+                    issues.append(
+                        f"staging insurance_addon={staging_fk} insurer mismatch "
+                        f"for prefer_insurer {prefer!r}"
+                    )
+        if presets and resolve_effective_insurance_addon_row(
+            staging_id=sid, dealer_id=did, conn=conn
+        ) is None:
+            issues.append(f"could not resolve effective add-on preset for dealer {did}")
+    return issues
+
+
 def resolve_effective_insurance_addon_row(
     *,
     staging_id: str | None,
@@ -214,9 +328,10 @@ def resolve_effective_insurance_addon_row(
         conn = get_connection()
     try:
         with conn.cursor() as cur:
-            prefer = fetch_dealer_prefer_insurer_on_cursor(cur, dealer_id=did)
-            if not prefer:
+            prefer_raw = fetch_dealer_prefer_insurer_on_cursor(cur, dealer_id=did)
+            if not prefer_raw:
                 return None
+            prefer = resolve_addon_catalog_insurer_key(conn, prefer_raw)
             sid = (staging_id or "").strip()
             candidates: list[int] = []
             if sid:
@@ -229,32 +344,16 @@ def resolve_effective_insurance_addon_row(
             if dealer_fk is not None and dealer_fk not in candidates:
                 candidates.append(dealer_fk)
             for fk in candidates:
-                cur.execute(
-                    """
-                    SELECT insurance_addon_id, insurer, display_label,
-                           nd_cover, rti, rim_safeguard, rsa, sort_order, active_flag
-                    FROM insurance_addon_ref
-                    WHERE insurance_addon_id = %s AND insurer = %s AND active_flag = 'Y'
-                    LIMIT 1
-                    """,
-                    (fk, prefer),
-                )
-                row = cur.fetchone()
-                if row:
-                    return _row_to_dict(row)
-            cur.execute(
-                """
-                SELECT insurance_addon_id, insurer, display_label,
-                       nd_cover, rti, rim_safeguard, rsa, sort_order, active_flag
-                FROM insurance_addon_ref
-                WHERE insurer = %s AND active_flag = 'Y'
-                ORDER BY sort_order, insurance_addon_id
-                LIMIT 1
-                """,
-                (prefer,),
-            )
-            row = cur.fetchone()
-            return _row_to_dict(row) if row else None
+                row = get_by_id(conn, int(fk))
+                if row and str(row.get("active_flag") or "").strip().upper() == "Y":
+                    row_insurer = str(row.get("insurer") or "").strip()
+                    if row_insurer == prefer or row_insurer == prefer_raw:
+                        return row
+                    canon = resolve_addon_catalog_insurer_key(conn, row_insurer)
+                    if canon == prefer:
+                        return row
+            first_rows = _list_active_by_insurer_exact(conn, prefer)
+            return first_rows[0] if first_rows else None
     finally:
         if own_conn and conn is not None:
             conn.close()

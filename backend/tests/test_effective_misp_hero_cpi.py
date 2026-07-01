@@ -51,6 +51,7 @@ def test_build_insurance_fill_values_applies_cpi_reqd_override(
     assert values_y["hero_cpi"] == "Y"
 
 
+@patch("app.services.insurance_form_values.resolve_effective_insurance_addon_row", return_value=None)
 @patch("app.services.insurance_form_values.fetch_effective_cpi_reqd", return_value="N")
 @patch("app.services.insurance_form_values.load_latest_insurance_values")
 @patch("app.services.insurance_form_values._apply_staging_insurance_overlay")
@@ -60,6 +61,7 @@ def test_build_insurance_fill_values_resolves_staging_cpi_reqd(
     _overlay,
     mock_load,
     mock_fetch,
+    _mock_resolve,
 ):
     mock_load.return_value = {
         "insurer": "HDFC ERGO",

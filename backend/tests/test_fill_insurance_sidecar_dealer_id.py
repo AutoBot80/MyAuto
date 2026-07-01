@@ -37,7 +37,18 @@ def test_fill_insurance_sidecar_uses_resolve_dealer_id_not_env_default(
     captured: dict = {}
 
     resolve_ctx = {
-        "insurance_fill_values": {"insurer": "Test"},
+        "insurance_fill_values": {
+            "insurer": "Test",
+            "insurance_addon_id": 1,
+            "insurance_addon_label": "ND Cover",
+            "insurance_addon_flags": {
+                "nd_cover": True,
+                "rti": False,
+                "rim_safeguard": False,
+                "rsa": False,
+            },
+            "hero_cpi": "N",
+        },
         "customer_id": 10,
         "vehicle_id": 20,
         "subfolder": subfolder,

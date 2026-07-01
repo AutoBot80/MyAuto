@@ -23,9 +23,11 @@ from app.repositories.add_sales_staging import (
 from app.repositories.insurance_addon_ref import (
     fetch_dealer_insurance_addon_on_cursor,
     fetch_dealer_prefer_insurer_on_cursor,
+    fetch_staging_insurance_addon_on_cursor,
     get_by_id,
     list_active_by_insurer,
     resolve_effective_insurance_addon_row,
+    validate_dealer_insurance_addon_config,
 )
 from app.repositories.master_ref import (
     REF_TYPE_FINANCER,
@@ -98,35 +100,70 @@ def _cpa_alliance_insurance_eligibility(
     }
 
 
+def _insurance_addon_option_dicts(rows: list[dict]) -> list[dict[str, object]]:
+    return [
+        {
+            "insurance_addon_id": r.get("insurance_addon_id"),
+            "display_label": r.get("display_label"),
+        }
+        for r in rows
+    ]
+
+
+def _merge_effective_addon_into_options(
+    options: list[dict[str, object]],
+    effective_row: dict | None,
+) -> list[dict[str, object]]:
+    if not effective_row:
+        return options
+    eff_id = effective_row.get("insurance_addon_id")
+    if eff_id is None:
+        return options
+    try:
+        eff_int = int(eff_id)
+    except (TypeError, ValueError):
+        return options
+    if eff_int <= 0:
+        return options
+    if any(int(o.get("insurance_addon_id") or 0) == eff_int for o in options):
+        return options
+    label = str(effective_row.get("display_label") or "").strip()
+    if not label:
+        return options
+    return [{"insurance_addon_id": eff_int, "display_label": label}, *options]
+
+
 def _resolve_insurance_addon_context(
     dealer_id: int,
     staging_id: str | None = None,
 ) -> dict[str, object]:
     """Staging ``insurance_addon`` wins when valid for ``dealer_ref.prefer_insurer``."""
+    sid = (staging_id or "").strip() or None
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             prefer = fetch_dealer_prefer_insurer_on_cursor(cur, dealer_id=int(dealer_id))
             dealer_addon = fetch_dealer_insurance_addon_on_cursor(cur, dealer_id=int(dealer_id))
             staging_addon: int | None = None
-            sid = (staging_id or "").strip()
             if sid:
                 staging_addon = fetch_staging_insurance_addon_on_cursor(
                     cur, staging_id=sid, dealer_id=int(dealer_id)
                 )
+        addons = list_active_by_insurer(conn, prefer) if prefer else []
+        effective_row = resolve_effective_insurance_addon_row(
+            staging_id=sid,
+            dealer_id=int(dealer_id),
+            conn=conn,
+        )
+        warnings = validate_dealer_insurance_addon_config(
+            conn, int(dealer_id), staging_id=sid
+        )
+        option_dicts = _merge_effective_addon_into_options(
+            _insurance_addon_option_dicts(addons),
+            effective_row,
+        )
     finally:
         conn.close()
-    addons = []
-    if prefer:
-        conn2 = get_connection()
-        try:
-            addons = list_active_by_insurer(conn2, prefer)
-        finally:
-            conn2.close()
-    effective_row = resolve_effective_insurance_addon_row(
-        staging_id=staging_id,
-        dealer_id=int(dealer_id),
-    )
     return {
         "prefer_insurer": prefer or None,
         "dealer_insurance_addon": dealer_addon,
@@ -136,13 +173,13 @@ def _resolve_insurance_addon_context(
             if effective_row and effective_row.get("insurance_addon_id") is not None
             else None
         ),
-        "insurance_addons": [
-            {
-                "insurance_addon_id": r.get("insurance_addon_id"),
-                "display_label": r.get("display_label"),
-            }
-            for r in addons
-        ],
+        "effective_insurance_addon_label": (
+            str(effective_row.get("display_label") or "").strip() or None
+            if effective_row
+            else None
+        ),
+        "addon_config_warnings": warnings,
+        "insurance_addons": option_dicts,
     }
 
 
@@ -345,6 +382,8 @@ def get_add_sales_staging_payload(
         "insurance_addon": addon_ctx.get("staging_insurance_addon")
         or addon_ctx.get("dealer_insurance_addon"),
         "effective_insurance_addon": addon_ctx.get("effective_insurance_addon"),
+        "effective_insurance_addon_label": addon_ctx.get("effective_insurance_addon_label"),
+        "addon_config_warnings": addon_ctx.get("addon_config_warnings") or [],
         "insurance_addons": addon_ctx.get("insurance_addons") or [],
         "insurance_state": fetch_staging_insurance_state(staging_id.strip(), did),
     }

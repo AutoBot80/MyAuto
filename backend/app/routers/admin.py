@@ -58,10 +58,12 @@ def _dealer_admin_detail_dict(cur, dealer_id: int) -> dict | None:
     """``dealer_ref`` joined to ``oem_name`` and parent row for name. Keeps ``parent_id`` for Admin UI (sub-dealer vs parent)."""
     cur.execute(
         """
-        SELECT d.*, o.oem_name AS oem_name, p.dealer_name AS parent_name
+        SELECT d.*, o.oem_name AS oem_name, p.dealer_name AS parent_name,
+               ar.display_label AS insurance_addon_label
         FROM dealer_ref d
         LEFT JOIN oem_ref o ON o.oem_id = d.oem_id
         LEFT JOIN dealer_ref p ON p.dealer_id = d.parent_id
+        LEFT JOIN insurance_addon_ref ar ON ar.insurance_addon_id = d.insurance_addon
         WHERE d.dealer_id = %s
         """,
         (dealer_id,),
@@ -75,6 +77,29 @@ def _dealer_admin_detail_dict(cur, dealer_id: int) -> dict | None:
     d.pop("state", None)
     d.pop("oem_id", None)
     return _jsonable_row(d)
+
+
+def _enrich_dealer_admin_addon_fields(conn, detail: dict) -> dict:
+    """Attach insurer-scoped add-on dropdown options for Admin UI."""
+    prefer = str(detail.get("prefer_insurer") or "").strip()
+    rows = list_active_by_insurer(conn, prefer) if prefer else []
+    detail["insurance_addon_options"] = [
+        {
+            "insurance_addon_id": r.get("insurance_addon_id"),
+            "display_label": r.get("display_label"),
+        }
+        for r in rows
+    ]
+    if not detail.get("insurance_addon_label"):
+        addon_raw = detail.get("insurance_addon")
+        if addon_raw is not None:
+            try:
+                row = get_by_id(conn, int(addon_raw))
+                if row and row.get("display_label"):
+                    detail["insurance_addon_label"] = row.get("display_label")
+            except (TypeError, ValueError):
+                pass
+    return detail
 
 # Truncate all public base tables except:
 # - names ending with "ref" (SQL LIKE '%ref'), e.g. dealer_ref, roles_ref, login_ref
@@ -881,6 +906,8 @@ def get_dealer_ref_full(dealer_id: int, principal: Principal = Depends(get_princ
     try:
         with conn.cursor() as cur:
             out = _dealer_admin_detail_dict(cur, dealer_id)
+        if out:
+            out = _enrich_dealer_admin_addon_fields(conn, out)
     finally:
         conn.close()
     if not out:
@@ -963,6 +990,8 @@ def patch_dealer_ref_insurer_cpi(
         conn.commit()
         with conn.cursor() as cur:
             out = _dealer_admin_detail_dict(cur, dealer_id)
+        if out:
+            out = _enrich_dealer_admin_addon_fields(conn, out)
     except HTTPException:
         conn.rollback()
         raise

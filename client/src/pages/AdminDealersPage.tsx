@@ -23,6 +23,7 @@ import {
   normalizeInsuranceAddonRows,
   type InsuranceAddonSelectRow,
 } from "../utils/insuranceAddonUi";
+import { fuzzyBestMasterRefValue } from "../utils/addSalesInsurerResolve";
 
 type SubTab = "logins" | "discounts";
 
@@ -135,7 +136,9 @@ export function AdminDealersPage() {
   const [portalInsurers, setPortalInsurers] = useState<string[]>([]);
   const [portalInsurersError, setPortalInsurersError] = useState<string | null>(null);
   const [insuranceAddonCatalog, setInsuranceAddonCatalog] = useState<AdminInsuranceAddonRow[]>([]);
-  const [insuranceAddonOptions, setInsuranceAddonOptions] = useState<AdminInsuranceAddonRow[]>([]);
+  const [insuranceAddonOptions, setInsuranceAddonOptions] = useState<InsuranceAddonSelectRow[]>([]);
+  const [insuranceAddonCatalogError, setInsuranceAddonCatalogError] = useState<string | null>(null);
+  const [insuranceAddonOptionsError, setInsuranceAddonOptionsError] = useState<string | null>(null);
   const [insuranceAddonEdit, setInsuranceAddonEdit] = useState<number | "">("");
   const [heroCpiEdit, setHeroCpiEdit] = useState<"Y" | "N">("N");
   const [cpiReqdEdit, setCpiReqdEdit] = useState<"Y" | "N">("N");
@@ -198,9 +201,13 @@ export function AdminDealersPage() {
         setInsuranceAddonCatalog(
           Array.isArray(res.insurance_addons) ? res.insurance_addons : []
         );
+        setInsuranceAddonCatalogError(null);
       })
-      .catch(() => {
+      .catch((e) => {
         setInsuranceAddonCatalog([]);
+        setInsuranceAddonCatalogError(
+          e instanceof Error ? e.message : "Could not load insurance add-ons."
+        );
       });
   }, []);
 
@@ -208,30 +215,63 @@ export function AdminDealersPage() {
     const pi = preferInsurerEdit.trim();
     if (!pi) {
       setInsuranceAddonOptions([]);
+      setInsuranceAddonOptionsError(null);
       return;
     }
+    const catalogInsurer =
+      (portalInsurers.length > 0
+        ? fuzzyBestMasterRefValue(pi, portalInsurers, 0.5)
+        : null) ?? pi;
     let cancelled = false;
-    getAdminInsuranceAddons(pi)
+    getAdminInsuranceAddons(catalogInsurer)
       .then((res) => {
         if (!cancelled) {
           setInsuranceAddonOptions(
             Array.isArray(res.insurance_addons) ? res.insurance_addons : []
           );
+          setInsuranceAddonOptionsError(null);
         }
       })
-      .catch(() => {
-        if (!cancelled) setInsuranceAddonOptions([]);
+      .catch((e) => {
+        if (!cancelled) {
+          setInsuranceAddonOptions([]);
+          setInsuranceAddonOptionsError(
+            e instanceof Error ? e.message : "Could not load insurance add-ons for insurer."
+          );
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [preferInsurerEdit]);
+  }, [preferInsurerEdit, portalInsurers]);
 
   const insuranceAddonSelectRows = useMemo((): InsuranceAddonSelectRow[] => {
     const scoped = normalizeInsuranceAddonRows(insuranceAddonOptions);
     const catalog = normalizeInsuranceAddonRows(insuranceAddonCatalog);
-    return mergeSelectedInsuranceAddonOption(scoped, insuranceAddonEdit, catalog);
-  }, [insuranceAddonOptions, insuranceAddonCatalog, insuranceAddonEdit]);
+    const savedFromDetail: InsuranceAddonSelectRow[] = [];
+    const addonRaw = detail?.insurance_addon;
+    const addonLabel = detail?.insurance_addon_label;
+    if (addonRaw != null && addonRaw !== "" && addonLabel) {
+      const n = Number(addonRaw);
+      if (Number.isFinite(n) && n > 0) {
+        savedFromDetail.push({
+          insurance_addon_id: n,
+          display_label: String(addonLabel).trim(),
+        });
+      }
+    }
+    const detailOpts = normalizeInsuranceAddonRows(detail?.insurance_addon_options);
+    return mergeSelectedInsuranceAddonOption(
+      scoped.length > 0 ? scoped : detailOpts,
+      insuranceAddonEdit,
+      [...catalog, ...savedFromDetail, ...detailOpts]
+    );
+  }, [
+    insuranceAddonOptions,
+    insuranceAddonCatalog,
+    insuranceAddonEdit,
+    detail,
+  ]);
 
   useEffect(() => {
     if (selectedId == null) {
@@ -343,6 +383,10 @@ export function AdminDealersPage() {
     } else {
       const n = Number(addonRaw);
       setInsuranceAddonEdit(Number.isFinite(n) && n > 0 ? n : "");
+    }
+    const detailOpts = detail.insurance_addon_options;
+    if (Array.isArray(detailOpts) && detailOpts.length > 0) {
+      setInsuranceAddonOptions(normalizeInsuranceAddonRows(detailOpts));
     }
   }, [detail]);
 
@@ -697,6 +741,11 @@ export function AdminDealersPage() {
           </h4>
           {saveDetailError ? <p className="view-vehicles-error">{saveDetailError}</p> : null}
           {portalInsurersError ? <p className="view-vehicles-error">{portalInsurersError}</p> : null}
+          {insuranceAddonCatalogError || insuranceAddonOptionsError ? (
+            <p className="view-vehicles-error">
+              {insuranceAddonOptionsError ?? insuranceAddonCatalogError}
+            </p>
+          ) : null}
           {detail ? (
             <>
               <div className="view-vehicles-kv-grid">

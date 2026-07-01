@@ -40,6 +40,7 @@ from app.config import (
     get_uploads_dir,
 )
 from app.db import get_connection
+from app.repositories.insurance_addon_ref import validate_dealer_insurance_addon_config
 from app.security.deps import get_principal, resolve_dealer_id
 from app.security.principal import Principal
 from app.services.dealer_storage import (
@@ -670,6 +671,22 @@ async def insurance_resolve(
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    conn = get_connection()
+    try:
+        addon_issues = validate_dealer_insurance_addon_config(
+            conn, int(did), staging_id=sid or None
+        )
+    finally:
+        conn.close()
+    if addon_issues:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Insurance add-on config invalid for dealer {did}: "
+                + "; ".join(addon_issues)
+            ),
+        )
 
     return InsuranceResolveResponse(
         insurance_fill_values=values,

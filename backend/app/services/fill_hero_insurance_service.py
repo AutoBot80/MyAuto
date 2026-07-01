@@ -8891,6 +8891,110 @@ def _hero_misp_page_and_frame_roots(page, *, purpose: str = "generic") -> list:
     return roots
 
 
+# Cached proposal-review frame root (index into ``_hero_misp_page_and_frame_roots``) after consent.
+_hero_misp_proposal_review_winning_root_index: int | None = None
+
+
+def _hero_misp_clear_proposal_review_root_cache() -> None:
+    global _hero_misp_proposal_review_winning_root_index
+    _hero_misp_proposal_review_winning_root_index = None
+
+
+def _hero_misp_get_proposal_review_root_index() -> int | None:
+    return _hero_misp_proposal_review_winning_root_index
+
+
+def _hero_misp_set_proposal_review_root_index(index: int) -> None:
+    global _hero_misp_proposal_review_winning_root_index
+    _hero_misp_proposal_review_winning_root_index = int(index)
+
+
+def _hero_misp_order_proposal_roots_by_preferred_index(
+    roots: list, preferred_index: int | None
+) -> list:
+    if preferred_index is None or preferred_index < 0 or preferred_index >= len(roots):
+        return roots
+    return [roots[preferred_index]] + [
+        r for i, r in enumerate(roots) if i != preferred_index
+    ]
+
+
+def _hero_misp_describe_root(root, index: int, page) -> tuple[str, str]:
+    """Return ``(kind, url)`` for proposal-review diagnostic logs."""
+    kind = "unknown"
+    url = ""
+    try:
+        if root is page:
+            kind = "page"
+            url = (page.url or "").strip()
+        elif hasattr(root, "url"):
+            kind = "frame"
+            url = (getattr(root, "url", None) or "").strip()
+        else:
+            kind = "frame_locator"
+            try:
+                url = (
+                    root.locator("body")
+                    .first.evaluate("() => (document.location && document.location.href) || ''")
+                    or ""
+                ).strip()
+            except Exception:
+                url = ""
+    except Exception:
+        pass
+    return kind, _hero_misp_safe_url_for_insurance_log(url)
+
+
+def _hero_misp_log_proposal_diag(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    message: str,
+) -> None:
+    append_playwright_insurance_line(ocr_output_dir, subfolder, "NOTE", message)
+    logger.info("Hero Insurance: %s", message)
+
+
+def _hero_misp_page_url_for_insurance_log(page) -> str:
+    try:
+        return _hero_misp_safe_url_for_insurance_log((page.url or "").strip())
+    except Exception:
+        return ""
+
+
+def _insurance_preview_fields_found_labels(snapshot: dict[str, Any]) -> str:
+    keys: list[str] = []
+    for key in ("policy_num", "policy_from", "policy_to", "premium", "idv"):
+        val = snapshot.get(key)
+        if val is not None and str(val).strip() != "":
+            keys.append(key)
+    return ",".join(keys) if keys else "none"
+
+
+def _hero_misp_submit_already_issued(
+    page,
+    *,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+    context: str = "submit",
+) -> bool:
+    """True when post-issue PrintPolicy / search page is already loaded."""
+    try:
+        on_page = _hero_misp_on_post_submit_print_policy_page(
+            page
+        ) or _hero_misp_on_final_policy_cert_page(page)
+    except Exception:
+        on_page = False
+    if not on_page:
+        return False
+    _hero_misp_log_proposal_diag(
+        ocr_output_dir,
+        subfolder,
+        f"submit_skip: already on PrintPolicy ({context}) "
+        f"url={_hero_misp_page_url_for_insurance_log(page)!r}",
+    )
+    return True
+
+
 def _hero_misp_safe_url_for_insurance_log(url: str, *, max_len: int = 280) -> str:
     """Host + path for logs; query string omitted — only ``?[query_len=N]`` (``enckycdata`` etc. stay private)."""
     s = (url or "").strip()
@@ -10163,7 +10267,13 @@ def _insurance_preview_apply_body_text_heuristics(body: str, out: dict[str, Any]
                     break
 
 
-def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> dict[str, Any]:
+def scrape_insurance_policy_preview_before_issue(
+    page,
+    *,
+    timeout_ms: int,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> dict[str, Any]:
     """
     Read **policy number** (Proposal No.), **Valid From** / **Valid To**, **premium**, and **Total IDV**
     from the proposal preview / **Proposal Review** page / post-**Issue Policy** screen — training
@@ -10182,14 +10292,52 @@ def scrape_insurance_policy_preview_before_issue(page, *, timeout_ms: int) -> di
     if not roots:
         roots = [page]
 
+    scrape_t0 = time.monotonic()
+    winning_root_index: int | None = None
     body_chunks: list[str] = []
-    for root in roots:
+    for root_index, root in enumerate(roots):
+        kind, root_url = _hero_misp_describe_root(root, root_index, page)
+        root_t0 = time.monotonic()
+        chars = 0
+        root_snapshot: dict[str, Any] = {
+            "policy_num": None,
+            "policy_from": None,
+            "policy_to": None,
+            "premium": None,
+            "idv": None,
+        }
+        btxt = ""
         try:
             btxt = (root.locator("body").first.inner_text(timeout=min(12_000, to)) or "").strip()
+            chars = len(btxt)
             if btxt:
                 body_chunks.append(btxt[:150_000])
+                _insurance_preview_apply_body_text_heuristics(btxt[:150_000], root_snapshot)
         except Exception:
             pass
+        elapsed_ms = int((time.monotonic() - root_t0) * 1000)
+        found = _insurance_preview_fields_found_labels(root_snapshot)
+        _hero_misp_log_proposal_diag(
+            ocr_output_dir,
+            subfolder,
+            "proposal_preview_scrape: "
+            f"root={root_index} kind={kind} url={root_url!r} "
+            f"elapsed_ms={elapsed_ms} chars={chars} found={found}",
+        )
+        if found != "none" and winning_root_index is None:
+            winning_root_index = root_index
+        for key, val in root_snapshot.items():
+            if out.get(key) is None and val is not None and str(val).strip() != "":
+                out[key] = val
+
+    total_ms = int((time.monotonic() - scrape_t0) * 1000)
+    _hero_misp_log_proposal_diag(
+        ocr_output_dir,
+        subfolder,
+        "proposal_preview_scrape: summary "
+        f"winning_root={winning_root_index if winning_root_index is not None else 'none'} "
+        f"total_ms={total_ms} roots_tried={len(roots)}",
+    )
 
     for root in roots:
         try:
@@ -10312,6 +10460,28 @@ def _proposal_scroll_root_to_bottom(root) -> None:
         pass
 
 
+def _proposal_consent_locator_for_root(root, cid: str):
+    """Return ``(locator, selector_tag)`` for proposal-review consent checkbox in *root*."""
+    loc = _proposal_cph1_locator(root, cid)
+    if loc.count() > 0:
+        return loc, "cph1"
+    loc = root.locator(f'input[type="checkbox"][id*="{cid}" i]')
+    if loc.count() > 0:
+        return loc, f"id*={cid}"
+    if cid == "chkAgree":
+        loc = root.locator('input[type="checkbox"][id*="chkAgree" i]')
+        if loc.count() > 0:
+            return loc, "id*=chkAgree"
+        loc = root.locator('input[type="checkbox"][name*="chkAgree" i]')
+        if loc.count() > 0:
+            return loc, "name*=chkAgree"
+    if cid == "chkconsentagree":
+        loc = root.locator('input[type="checkbox"][id*="consent" i]')
+        if loc.count() > 0:
+            return loc, "id*=consent"
+    return None, ""
+
+
 def _hero_misp_proposal_review_consent_checkboxes(
     page,
     *,
@@ -10327,27 +10497,41 @@ def _hero_misp_proposal_review_consent_checkboxes(
     if not roots:
         roots = [page]
 
-    for r in roots:
-        _proposal_scroll_root_to_bottom(r)
+    preferred_index = _hero_misp_get_proposal_review_root_index()
+    if preferred_index is not None and 0 <= preferred_index < len(roots):
+        root_indices = [preferred_index] + [
+            i for i in range(len(roots)) if i != preferred_index
+        ]
+    else:
+        root_indices = list(range(len(roots)))
+
+    for i in root_indices:
+        _proposal_scroll_root_to_bottom(roots[i])
     _t(page, 300)
 
     for cid in ("chkAgree", "chkconsentagree"):
+        preferred_index = _hero_misp_get_proposal_review_root_index()
+        if preferred_index is not None and 0 <= preferred_index < len(roots):
+            cid_root_indices = [preferred_index] + [
+                i for i in range(len(roots)) if i != preferred_index
+            ]
+        else:
+            cid_root_indices = list(range(len(roots)))
         checked_ok = False
         last_err = ""
-        for root in roots:
+        cid_t0 = time.monotonic()
+        roots_tried = 0
+        for root_index in cid_root_indices:
+            root = roots[root_index]
+            roots_tried += 1
+            kind, root_url = _hero_misp_describe_root(root, root_index, page)
+            selector_tag = ""
+            element_id = ""
             try:
                 _proposal_scroll_root_to_bottom(root)
                 _t(page, 150)
-                loc = _proposal_cph1_locator(root, cid)
-                if loc.count() == 0:
-                    loc = root.locator(f'input[type="checkbox"][id*="{cid}" i]')
-                if loc.count() == 0 and cid == "chkAgree":
-                    loc = root.locator('input[type="checkbox"][id*="chkAgree" i]')
-                if loc.count() == 0 and cid == "chkAgree":
-                    loc = root.locator('input[type="checkbox"][name*="chkAgree" i]')
-                if loc.count() == 0 and cid == "chkconsentagree":
-                    loc = root.locator('input[type="checkbox"][id*="consent" i]')
-                if loc.count() == 0:
+                loc, selector_tag = _proposal_consent_locator_for_root(root, cid)
+                if loc is None:
                     continue
                 cb = loc.first
                 if not cb.is_visible(timeout=min(2_000, to)):
@@ -10375,11 +10559,28 @@ def _hero_misp_proposal_review_consent_checkboxes(
                         pass
                 if cb.is_checked():
                     checked_ok = True
+                    try:
+                        element_id = (
+                            cb.evaluate("e => (e && e.id) ? String(e.id) : ''") or ""
+                        ).strip()
+                    except Exception:
+                        element_id = ""
+                    if cid == "chkAgree":
+                        _hero_misp_set_proposal_review_root_index(root_index)
+                    elapsed_ms = int((time.monotonic() - cid_t0) * 1000)
                     _proposal_log(
                         ocr_output_dir,
                         subfolder,
                         f"proposal_review_{cid}",
                         "checkbox checked ok",
+                    )
+                    _hero_misp_log_proposal_diag(
+                        ocr_output_dir,
+                        subfolder,
+                        f"proposal_review_{cid}: checked ok "
+                        f"root={root_index} kind={kind} url={root_url!r} "
+                        f"selector={selector_tag} id={element_id!r} "
+                        f"elapsed_ms={elapsed_ms} roots_tried={roots_tried}",
                     )
                     break
                 last_err = "is_checked() false after check"
@@ -10479,9 +10680,33 @@ def _hero_misp_click_issue_policy(
         )
         return None
 
-    for r in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+    cached_root_index = _hero_misp_get_proposal_review_root_index()
+    _hero_misp_log_proposal_diag(
+        ocr_output_dir,
+        subfolder,
+        "submit_attempt: "
+        f"url={_hero_misp_page_url_for_insurance_log(page)!r} "
+        f"cached_root_index={cached_root_index!r}",
+    )
+    if _hero_misp_submit_already_issued(
+        page,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+        context="before_root_sweep",
+    ):
+        return None
+
+    roots = _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]
+    if cached_root_index is not None and 0 <= cached_root_index < len(roots):
+        root_indices = [cached_root_index] + [
+            i for i in range(len(roots)) if i != cached_root_index
+        ]
+    else:
+        root_indices = list(range(len(roots)))
+
+    for i in root_indices:
         try:
-            _proposal_scroll_root_to_bottom(r)
+            _proposal_scroll_root_to_bottom(roots[i])
         except Exception as scroll_exc:
             if "detached" not in str(scroll_exc).lower():
                 logger.debug("Hero Insurance: scroll to bottom: %s", scroll_exc)
@@ -10489,20 +10714,68 @@ def _hero_misp_click_issue_policy(
 
     clicked = False
     click_tag = ""
-    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+    submit_t0 = time.monotonic()
+    for root_index in root_indices:
+        if _hero_misp_submit_already_issued(
+            page,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            context=f"root_{root_index}",
+        ):
+            return None
+        root = roots[root_index]
+        kind, root_url = _hero_misp_describe_root(root, root_index, page)
+        root_attempt_t0 = time.monotonic()
         try:
             tag = _hero_misp_click_proposal_preview_submit_in_root(root, timeout_ms=to)
+            root_elapsed_ms = int((time.monotonic() - root_attempt_t0) * 1000)
             if tag:
                 clicked = True
-                click_tag = f"{tag} (frame)"
+                click_tag = f"{tag} root={root_index} kind={kind}"
                 logger.info("Hero Insurance: clicked proposal preview Submit — %s.", click_tag)
+                _hero_misp_log_proposal_diag(
+                    ocr_output_dir,
+                    subfolder,
+                    "submit_root_attempt: "
+                    f"root={root_index} kind={kind} url={root_url!r} "
+                    f"selector={tag} elapsed_ms={root_elapsed_ms}",
+                )
                 break
+            _hero_misp_log_proposal_diag(
+                ocr_output_dir,
+                subfolder,
+                "submit_root_attempt: "
+                f"root={root_index} kind={kind} url={root_url!r} "
+                f"selector=none elapsed_ms={root_elapsed_ms}",
+            )
         except Exception as root_exc:
+            root_elapsed_ms = int((time.monotonic() - root_attempt_t0) * 1000)
             if "detached" in str(root_exc).lower():
+                _hero_misp_log_proposal_diag(
+                    ocr_output_dir,
+                    subfolder,
+                    "submit_root_attempt: "
+                    f"root={root_index} kind={kind} url={root_url!r} "
+                    f"selector=detached elapsed_ms={root_elapsed_ms}",
+                )
                 continue
             logger.debug("Hero Insurance: Submit in root: %s", root_exc)
+            _hero_misp_log_proposal_diag(
+                ocr_output_dir,
+                subfolder,
+                "submit_root_attempt: "
+                f"root={root_index} kind={kind} url={root_url!r} "
+                f"selector=error elapsed_ms={root_elapsed_ms} err={str(root_exc)[:120]!r}",
+            )
 
     if not clicked:
+        if _hero_misp_submit_already_issued(
+            page,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            context="before_fallback_selectors",
+        ):
+            return None
         try:
             loc = page.locator("#ins-issue-policy")
             if loc.count() > 0 and loc.first.is_visible(timeout=min(4_000, to)):
@@ -10523,16 +10796,33 @@ def _hero_misp_click_issue_policy(
         except Exception as exc:
             logger.debug("Hero Insurance: Issue Policy role=button: %s", exc)
     if not clicked:
-        for root in _hero_misp_page_and_frame_roots(page, purpose="proposal") or [page]:
+        for root_index in root_indices:
+            if _hero_misp_submit_already_issued(
+                page,
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+                context=f"fallback_text_root_{root_index}",
+            ):
+                return None
+            root = roots[root_index]
             try:
-                root.get_by_text(re.compile(r"^Issue\s*Policy", re.I)).first.click(timeout=min(8_000, to))
+                root.get_by_text(re.compile(r"^Issue\s*Policy", re.I)).first.click(
+                    timeout=min(8_000, to)
+                )
                 clicked = True
-                click_tag = "get_by_text Issue Policy (frame)"
+                click_tag = f"get_by_text Issue Policy root={root_index}"
                 logger.info("Hero Insurance: clicked Issue Policy (get_by_text in frame).")
                 break
             except Exception:
                 continue
     if not clicked:
+        if _hero_misp_submit_already_issued(
+            page,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+            context="after_root_sweep",
+        ):
+            return None
         _append_hero_misp_frame_dump(
             page,
             reason="submit_issue_policy_not_found",
@@ -10543,12 +10833,34 @@ def _hero_misp_click_issue_policy(
             "final_policy: proposal preview Submit (ctl00_ContentPlaceHolder1_btnSubmit) or "
             "Issue Policy control not found or not clickable (production ENVIRONMENT)."
         )
+    submit_elapsed_ms = int((time.monotonic() - submit_t0) * 1000)
     append_playwright_insurance_line(
         ocr_output_dir,
         subfolder,
         "NOTE",
-        f"clicked proposal preview Submit / issue ({click_tag}) (production ENVIRONMENT).",
+        f"clicked proposal preview Submit / issue ({click_tag}) "
+        f"(production ENVIRONMENT) submit_sweep_ms={submit_elapsed_ms}.",
     )
+    nav_t0 = time.monotonic()
+    if not _hero_misp_on_post_submit_print_policy_page(
+        page
+    ) and not _hero_misp_on_final_policy_cert_page(page):
+        nav_cap = min(3_000, max(500, int(to)))
+        try:
+            page.wait_for_url(_POST_SUBMIT_PRINT_POLICY_URL_RX, timeout=nav_cap)
+        except Exception:
+            pass
+    if _hero_misp_on_post_submit_print_policy_page(
+        page
+    ) or _hero_misp_on_final_policy_cert_page(page):
+        nav_elapsed_ms = int((time.monotonic() - nav_t0) * 1000)
+        _hero_misp_log_proposal_diag(
+            ocr_output_dir,
+            subfolder,
+            "submit_nav_detected: "
+            f"elapsed_ms={nav_elapsed_ms} "
+            f"url={_hero_misp_page_url_for_insurance_log(page)!r}",
+        )
     return None
 
 
@@ -10920,15 +11232,32 @@ def _hero_misp_final_policy_details_commit(
     _insurance_timing_note(
         ocr_output_dir, subfolder, timer, "final_policy_submit_start"
     )
-    click_err = _hero_misp_click_issue_policy(
+    _hero_misp_log_proposal_diag(
+        ocr_output_dir,
+        subfolder,
+        "final_policy_submit_start: "
+        f"url={_hero_misp_page_url_for_insurance_log(page)!r}",
+    )
+    if _hero_misp_submit_already_issued(
         page,
-        timeout_ms=pt,
         ocr_output_dir=ocr_output_dir,
         subfolder=subfolder,
-    )
-    submit_ok = not click_err
+        context="final_policy_commit_start",
+    ):
+        submit_ok = True
+        click_err = None
+    else:
+        click_err = _hero_misp_click_issue_policy(
+            page,
+            timeout_ms=pt,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+        submit_ok = not click_err
     if click_err:
-        if _hero_misp_on_final_policy_cert_page(page):
+        if _hero_misp_on_final_policy_cert_page(page) or _hero_misp_on_post_submit_print_policy_page(
+            page
+        ):
             append_playwright_insurance_line(
                 ocr_output_dir,
                 subfolder,
@@ -11901,7 +12230,13 @@ def _hero_misp_fill_proposal_and_review(
     _insurance_timing_note(
         ocr_output_dir, subfolder, timer, "proposal_review_load_done"
     )
-    preview = scrape_insurance_policy_preview_before_issue(page, timeout_ms=pt)
+    _hero_misp_clear_proposal_review_root_cache()
+    preview = scrape_insurance_policy_preview_before_issue(
+        page,
+        timeout_ms=pt,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
     _hero_misp_note_proposal_review_scrape_for_insurance_master(
         ocr_output_dir, subfolder, preview
     )
@@ -11933,6 +12268,13 @@ def _hero_misp_fill_proposal_and_review(
     if err_pr:
         return _proposal_fail(ocr_output_dir, subfolder, err_pr, page=page)
     _insurance_timing_note(ocr_output_dir, subfolder, timer, "consent_done")
+    _hero_misp_log_proposal_diag(
+        ocr_output_dir,
+        subfolder,
+        "consent_done: "
+        f"url={_hero_misp_page_url_for_insurance_log(page)!r} "
+        f"cached_root_index={_hero_misp_get_proposal_review_root_index()!r}",
+    )
     return None, preview
 
 

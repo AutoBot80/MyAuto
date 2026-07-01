@@ -172,6 +172,8 @@ export async function fetchAddSalesStagingPayload(
   insurance_state?: number | null;
   insurance_addon?: number | null;
   effective_insurance_addon?: number | null;
+  effective_insurance_addon_label?: string | null;
+  addon_config_warnings?: string[] | null;
   insurance_addons?: { insurance_addon_id: number; display_label: string }[];
 }> {
   const q = new URLSearchParams({ dealer_id: String(dealerId) });
@@ -182,6 +184,8 @@ export async function fetchAddSalesStagingPayload(
     insurance_state?: number | null;
     insurance_addon?: number | null;
     effective_insurance_addon?: number | null;
+    effective_insurance_addon_label?: string | null;
+    addon_config_warnings?: string[] | null;
     insurance_addons?: { insurance_addon_id: number; display_label: string }[];
   }>(`/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`);
 }

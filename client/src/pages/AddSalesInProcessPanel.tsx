@@ -408,9 +408,21 @@ export function AddSalesInProcessPanel({
           effAddon != null && Number(effAddon) > 0 ? Number(effAddon) : "";
         setInsuranceAddonEdit(addonNum);
         setInsuranceAddonBaseline(addonNum);
-        if (Array.isArray(r.insurance_addons) && r.insurance_addons.length > 0) {
-          setInsuranceAddons(normalizeInsuranceAddonRows(r.insurance_addons));
-        }
+        const effLabel =
+          typeof r.effective_insurance_addon_label === "string"
+            ? r.effective_insurance_addon_label.trim()
+            : "";
+        const labelLookup =
+          effLabel && addonNum !== ""
+            ? [{ insurance_addon_id: Number(addonNum), display_label: effLabel }]
+            : [];
+        setInsuranceAddons(
+          mergeSelectedInsuranceAddonOption(
+            normalizeInsuranceAddonRows(r.insurance_addons),
+            addonNum,
+            labelLookup
+          )
+        );
       } catch (e) {
         if (!c) setDetailErr(e instanceof Error ? e.message : "Could not load row details.");
       }

@@ -2838,6 +2838,28 @@ def _dispatch_fill_dms_impl(params: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _assert_insurance_resolve_addon_config(cached_values: dict) -> str | None:
+    """Fail fast when portal MISP fill lacks resolved add-on preset (API/DB seed issue)."""
+    if not isinstance(cached_values, dict):
+        return "Insurance resolve returned invalid fill values."
+    if str(cached_values.get("hero_cpi") or "").strip().upper() == "Y":
+        return None
+    flags = cached_values.get("insurance_addon_flags")
+    if not isinstance(flags, dict):
+        return (
+            "Insurance resolve missing insurance_addon_flags; verify API add-on seed "
+            "and dealer prefer_insurer."
+        )
+    addon_id = cached_values.get("insurance_addon_id")
+    label = str(cached_values.get("insurance_addon_label") or "").strip()
+    if addon_id is None and not label:
+        return (
+            "Insurance add-on preset not resolved; check dealer prefer_insurer and "
+            "insurance_addon_ref seed on the API database."
+        )
+    return None
+
+
 def _dispatch_fill_insurance_impl(params: dict) -> dict:
     from app.services.playwright_run_environment import build_playwright_run_environment
     from app.services.upload_scans_invoice_print import collect_insurance_print_jobs_electron_local
@@ -2854,6 +2876,10 @@ def _dispatch_fill_insurance_impl(params: dict) -> dict:
     ctx = _api_post(api_url, jwt, "/sidecar/insurance/resolve", resolve_body)
 
     cached_values = ctx["insurance_fill_values"]
+    addon_config_err = _assert_insurance_resolve_addon_config(cached_values)
+    if addon_config_err:
+        return {"success": False, "error": addon_config_err}
+
     cid = ctx["customer_id"]
     vid = ctx["vehicle_id"]
     subfolder = ctx["subfolder"]

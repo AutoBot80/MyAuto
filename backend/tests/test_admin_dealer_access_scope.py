@@ -115,6 +115,7 @@ def test_patch_prefer_insurer_rejects_non_portal_label(admin_client: TestClient)
                 "cpi_reqd": "N",
                 "insurance_pay": "APD",
                 "dms_siebel_portal": "HMCL",
+                "insurance_addon": None,
             },
         )
     assert r.status_code == 400
@@ -150,6 +151,7 @@ def test_patch_dms_siebel_portal_round_trip(admin_client: TestClient) -> None:
                 "cpi_reqd": "N",
                 "insurance_pay": "APD",
                 "dms_siebel_portal": "ASC",
+                "insurance_addon": None,
             },
         )
     assert r.status_code == 200
@@ -189,6 +191,7 @@ def test_patch_dms_siebel_portal_hmcl_stores_null(admin_client: TestClient) -> N
                 "cpi_reqd": "N",
                 "insurance_pay": "APD",
                 "dms_siebel_portal": "HMCL",
+                "insurance_addon": None,
             },
         )
     assert r.status_code == 200
