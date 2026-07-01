@@ -28,6 +28,7 @@ from app.services.dealer_storage import (
 )
 from app.db import get_connection
 from app.repositories.master_ref import list_portal_insurers
+from app.repositories.insurance_addon_ref import get_by_id, list_active_by_insurer, list_all_active
 from app.security.deps import get_principal, require_admin, resolve_dealer_id
 from app.security.passwords import hash_password
 from app.security.principal import Principal
@@ -738,6 +739,7 @@ class UpdateDealerRefInsurerRequest(BaseModel):
     cpi_reqd: Literal["Y", "N"]
     insurance_pay: Literal["CC", "APD"]
     dms_siebel_portal: Literal["HMCL", "ASC"]
+    insurance_addon: int | None
 
 
 class LoginActiveFlagRequest(BaseModel):
@@ -777,6 +779,37 @@ class LoginAssignmentUpsertItem(BaseModel):
 class LoginAssignmentsUpsertRequest(BaseModel):
     rows: list[LoginAssignmentUpsertItem]
     delete_login_roles_ref_ids: list[int] = Field(default_factory=list)
+
+
+@router.get("/insurance-addons")
+def list_insurance_addons_for_admin(
+    insurer: str | None = Query(None, max_length=255),
+) -> dict[str, list[dict]]:
+    """Active ``insurance_addon_ref`` rows; optional filter by portal insurer label."""
+    conn = get_connection()
+    try:
+        ins = (insurer or "").strip()
+        if ins:
+            rows = list_active_by_insurer(conn, ins)
+        else:
+            rows = list_all_active(conn)
+    finally:
+        conn.close()
+    return {
+        "insurance_addons": [
+            {
+                "insurance_addon_id": r.get("insurance_addon_id"),
+                "insurer": r.get("insurer"),
+                "display_label": r.get("display_label"),
+                "nd_cover": r.get("nd_cover"),
+                "rti": r.get("rti"),
+                "rim_safeguard": r.get("rim_safeguard"),
+                "rsa": r.get("rsa"),
+                "sort_order": r.get("sort_order"),
+            }
+            for r in rows
+        ]
+    }
 
 
 @router.get("/portal-insurers")
@@ -859,7 +892,7 @@ def get_dealer_ref_full(dealer_id: int, principal: Principal = Depends(get_princ
 def patch_dealer_ref_insurer_cpi(
     dealer_id: int, payload: UpdateDealerRefInsurerRequest, principal: Principal = Depends(get_principal)
 ) -> dict:
-    """Update ``prefer_insurer``, ``hero_cpi``, ``cpi_reqd``, ``insurance_pay``, and ``dms_siebel_portal`` on ``dealer_ref``."""
+    """Update ``prefer_insurer``, ``hero_cpi``, ``cpi_reqd``, ``insurance_pay``, ``dms_siebel_portal``, and ``insurance_addon`` on ``dealer_ref``."""
     _require_admin_dealer_scope(principal, dealer_id)
     dms_portal_db = None if payload.dms_siebel_portal == "HMCL" else payload.dms_siebel_portal
     pi = payload.prefer_insurer
@@ -878,15 +911,43 @@ def patch_dealer_ref_insurer_cpi(
                     status_code=400,
                     detail="prefer_insurer must be one of the portal insurers (master_ref INSURER with comments = Y)",
                 )
+        addon_id = payload.insurance_addon
+        if addon_id is not None:
+            addon_row = get_by_id(conn, int(addon_id))
+            if not addon_row:
+                raise HTTPException(status_code=400, detail="insurance_addon id not found")
+            if pi is not None and str(addon_row.get("insurer") or "") != pi:
+                raise HTTPException(
+                    status_code=400,
+                    detail="insurance_addon must belong to the same insurer as prefer_insurer",
+                )
         with conn.cursor() as cur:
             cur.execute("SELECT 1 FROM dealer_ref WHERE dealer_id = %s", (dealer_id,))
             if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="Dealer not found")
+            if addon_id is not None and pi is None:
+                cur.execute(
+                    "SELECT prefer_insurer FROM dealer_ref WHERE dealer_id = %s",
+                    (dealer_id,),
+                )
+                prow = cur.fetchone()
+                saved_pi = (
+                    prow.get("prefer_insurer")
+                    if isinstance(prow, dict)
+                    else (prow[0] if prow else None)
+                )
+                saved_pi = str(saved_pi or "").strip() or None
+                addon_row = get_by_id(conn, int(addon_id))
+                if saved_pi and addon_row and str(addon_row.get("insurer") or "") != saved_pi:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="insurance_addon must belong to the same insurer as prefer_insurer",
+                    )
             cur.execute(
                 """
                 UPDATE dealer_ref
                 SET prefer_insurer = %s, hero_cpi = %s, cpi_reqd = %s, insurance_pay = %s,
-                    dms_siebel_portal = %s
+                    dms_siebel_portal = %s, insurance_addon = %s
                 WHERE dealer_id = %s
                 """,
                 (
@@ -895,6 +956,7 @@ def patch_dealer_ref_insurer_cpi(
                     payload.cpi_reqd,
                     payload.insurance_pay,
                     dms_portal_db,
+                    addon_id,
                     dealer_id,
                 ),
             )

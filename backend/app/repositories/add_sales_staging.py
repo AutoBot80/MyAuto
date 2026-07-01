@@ -6,6 +6,7 @@ import uuid
 from typing import Any
 
 from app.db import get_connection
+from app.repositories.insurance_addon_ref import resolve_dealer_insurance_addon_for_insert_on_cursor
 
 _NESTED_STAGING_PAYLOAD_KEYS = frozenset({"customer", "vehicle", "insurance"})
 
@@ -147,6 +148,7 @@ def list_in_process_staging_rows(*, dealer_id: int, days: int = 7) -> list[dict[
                     s.updated_at,
                     s.status,
                     s.cpi_reqd,
+                    s.insurance_addon,
                     NULLIF(trim(s.payload_json->'customer'->>'name'), '') AS customer_name,
                     NULLIF(trim(s.payload_json->'customer'->>'mobile_number'), '') AS mobile,
                     NULLIF(trim(s.payload_json->'vehicle'->>'frame_no'), '') AS chassis,
@@ -203,6 +205,7 @@ def list_staging_rows_for_admin(
                     s.updated_at,
                     s.status,
                     s.cpi_reqd,
+                    s.insurance_addon,
                     s.dms_state,
                     s.insurance_state,
                     NULLIF(trim(s.payload_json->'customer'->>'name'), '') AS customer_name,
@@ -255,6 +258,7 @@ def fetch_staging_admin_detail(staging_id: str, dealer_id: int) -> dict[str, Any
                     s.dealer_id,
                     s.status,
                     s.cpi_reqd,
+                    s.insurance_addon,
                     s.dms_state,
                     s.insurance_state,
                     s.payload_json,
@@ -601,6 +605,7 @@ def persist_staging_for_submit(
             raise ValueError(SUBMIT_INFO_COMMITTED_SALE_MSG)
         if st == "draft":
             cpi_val = submitted_cpi if submitted_cpi is not None else fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=dealer_id)
+            addon_val = resolve_dealer_insurance_addon_for_insert_on_cursor(cur, dealer_id=dealer_id)
             cur.execute(
                 """
                 UPDATE add_sales_staging
@@ -608,10 +613,11 @@ def persist_staging_for_submit(
                     updated_at = now(),
                     login_id = COALESCE(%s, login_id),
                     subfolder = COALESCE(%s, subfolder),
-                    cpi_reqd = %s
+                    cpi_reqd = %s,
+                    insurance_addon = COALESCE(insurance_addon, %s)
                 WHERE staging_id = %s::uuid AND dealer_id = %s AND status = 'draft'
                 """,
-                (payload_str, lid, sf, cpi_val, sid_in, dealer_id),
+                (payload_str, lid, sf, cpi_val, addon_val, sid_in, dealer_id),
             )
             if cur.rowcount:
                 return sid_in
@@ -635,6 +641,7 @@ def persist_staging_for_submit(
                 raise ValueError(SUBMIT_INFO_COMMITTED_SALE_MSG)
             upd_id = str(hit["staging_id"]).strip()
             cpi_val = submitted_cpi if submitted_cpi is not None else fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=dealer_id)
+            addon_val = resolve_dealer_insurance_addon_for_insert_on_cursor(cur, dealer_id=dealer_id)
             cur.execute(
                 """
                 UPDATE add_sales_staging
@@ -642,22 +649,24 @@ def persist_staging_for_submit(
                     updated_at = now(),
                     login_id = COALESCE(%s, login_id),
                     subfolder = COALESCE(%s, subfolder),
-                    cpi_reqd = %s
+                    cpi_reqd = %s,
+                    insurance_addon = COALESCE(insurance_addon, %s)
                 WHERE staging_id = %s::uuid AND dealer_id = %s AND status = 'draft'
                 """,
-                (payload_str, lid, sf, cpi_val, upd_id, dealer_id),
+                (payload_str, lid, sf, cpi_val, addon_val, upd_id, dealer_id),
             )
             if cur.rowcount:
                 return upd_id
 
     new_id = str(uuid.uuid4())
     cpi_val = submitted_cpi if submitted_cpi is not None else fetch_dealer_cpi_reqd_on_cursor(cur, dealer_id=dealer_id)
+    addon_val = resolve_dealer_insurance_addon_for_insert_on_cursor(cur, dealer_id=dealer_id)
     cur.execute(
         """
-        INSERT INTO add_sales_staging (staging_id, dealer_id, payload_json, status, login_id, subfolder, cpi_reqd)
-        VALUES (%s::uuid, %s, %s::jsonb, 'draft', %s, %s, %s)
+        INSERT INTO add_sales_staging (staging_id, dealer_id, payload_json, status, login_id, subfolder, cpi_reqd, insurance_addon)
+        VALUES (%s::uuid, %s, %s::jsonb, 'draft', %s, %s, %s, %s)
         """,
-        (new_id, dealer_id, payload_str, lid, sf, cpi_val),
+        (new_id, dealer_id, payload_str, lid, sf, cpi_val, addon_val),
     )
     return new_id
 

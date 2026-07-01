@@ -102,7 +102,13 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `34a_dealer_ref_cpi_reqd.sql` — **`dealer_ref.cpi_reqd`** (**Y**/**N**, default **N**; **Arya Agencies** **Y**); separate from **`hero_cpi`**.
 - `35b_dealer_ref_insurance_pay_form_insurance_view.sql` — **`dealer_ref.insurance_pay`** (**CC**/**APD**, default **APD**; **100001** **CC**); recreates **`form_insurance_view`** with **`insurance_pay`**.
 - `34b_add_sales_staging_cpi_reqd.sql` — **`add_sales_staging.cpi_reqd`**; legacy rows **Y**; new inserts from **`dealer_ref.cpi_reqd`**.
-- `35a_admin_dealer_access_ref.sql` — **`admin_dealer_access_ref`**; Admin Saathi dealer scope per login (Usage + Dealers tab).
+- `36a_dealer_ref_dms_siebel_portal.sql` — **`dealer_ref.dms_siebel_portal`** (**ASC**/**HMCL**/NULL).
+- `37a_insurance_addon_ref.sql` — **`insurance_addon_ref`** (MISP add-on presets per portal insurer).
+- `seed_insurance_addon_ref.sql` — preset rows (Bajaj, NIC, default per portal INSURER).
+- `37b_dealer_ref_insurance_addon.sql` — **`dealer_ref.insurance_addon`** FK; backfill **100001** / **100003** / **100005–100009** (TNI Rim).
+- `37e_tni_dealer_insurance_addon_rim.sql` — prod patch: TNI **ND Cover, Rim Safeguard** preset + dealers **100005–100009** + staging sync.
+- `37c_add_sales_staging_insurance_addon.sql` — **`add_sales_staging.insurance_addon`** FK.
+- `37d_form_insurance_view_insurance_addon.sql` — **`form_insurance_view`** exposes **`insurance_addon`**.
 - `18a_challan_master_add_order_invoice_totals.sql` — **`challan_master`**: **`order_number`**, **`invoice_number`**, **`total_ex_showroom_price`**, **`total_discount`**.
 - `18b_vehicle_inventory_master_add_discount.sql` — **`vehicle_inventory_master`**: **`discount`**.
 - `19a_challan_staging_batch_status.sql` — legacy **`challan_staging`**: **`challan_batch_id`**, **`last_error`**, **`inventory_line_id`**.

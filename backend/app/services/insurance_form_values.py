@@ -56,6 +56,10 @@ from app.repositories.add_sales_staging import (
     _normalize_cpi_reqd_flag,
     fetch_effective_cpi_reqd,
 )
+from app.repositories.insurance_addon_ref import (
+    build_addon_flags_from_preset,
+    resolve_effective_insurance_addon_row,
+)
 from app.services.sales_ocr_service import _sanitize_details_profession_value
 from app.services.utility_functions import (
     clean_text,
@@ -305,6 +309,17 @@ def build_insurance_fill_values(
         effective_cpi_reqd=eff_cpi,
         dealer_hero_cpi=dealer_hero_cpi,
     )
+    addon_row = None
+    if dealer_id is not None:
+        addon_row = resolve_effective_insurance_addon_row(
+            staging_id=staging_id,
+            dealer_id=int(dealer_id),
+        )
+    values["insurance_addon_id"] = (
+        int(addon_row["insurance_addon_id"]) if addon_row and addon_row.get("insurance_addon_id") is not None else None
+    )
+    values["insurance_addon_label"] = clean_text(addon_row.get("display_label")) if addon_row else ""
+    values["insurance_addon_flags"] = build_addon_flags_from_preset(addon_row)
     return values
 
 
@@ -352,6 +367,11 @@ def write_insurance_form_values(
         ("Hero CPI dealer flag", clean_text(values.get("hero_cpi_dealer")) or "N"),
         ("MISP Hero CPI (effective)", clean_text(values.get("hero_cpi")) or "N"),
         ("Payment Mode (dealer_ref.insurance_pay)", clean_text(values.get("insurance_pay")) or "APD"),
+        ("Add-on preset (prefer_insurer)", clean_text(values.get("insurance_addon_label")) or "—"),
+        ("Add-on ND Cover", "Y" if (values.get("insurance_addon_flags") or {}).get("nd_cover") else "N"),
+        ("Add-on RTI", "Y" if (values.get("insurance_addon_flags") or {}).get("rti") else "N"),
+        ("Add-on Rim Safeguard", "Y" if (values.get("insurance_addon_flags") or {}).get("rim_safeguard") else "N"),
+        ("Add-on RSA", "Y" if (values.get("insurance_addon_flags") or {}).get("rsa") else "N"),
     ]
     lines = ["Insurance Form Values", "", "--- Values sent to Insurance labels ---"]
     for label, value in label_values:

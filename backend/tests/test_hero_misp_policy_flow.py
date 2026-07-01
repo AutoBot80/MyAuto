@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -583,4 +585,296 @@ def test_main_process_resume_runs_print_in_dev(mock_page):
     prop.assert_not_called()
     print_rep.assert_called_once()
     assert out["hero_insure_reports"]["ok"] is True
+
+
+def test_split_proposer_name_tokens() -> None:
+    assert fhi._split_proposer_name_tokens("") == ("", "", "")
+    assert fhi._split_proposer_name_tokens("Madonna") == ("Madonna", "", "Madonna")
+    assert fhi._split_proposer_name_tokens("ANOOP SINGH") == ("ANOOP", "", "SINGH")
+    assert fhi._split_proposer_name_tokens("ANOOP KUMAR SINGH") == (
+        "ANOOP",
+        "KUMAR",
+        "SINGH",
+    )
+
+
+def test_insurance_kyc_proposer_name_matches_anchor() -> None:
+    assert fhi._insurance_kyc_proposer_name_matches(
+        "ANOOP KUMAR SINGH",
+        "ANOOP",
+        "",
+        "SINGH",
+    )
+    assert fhi._insurance_kyc_proposer_name_matches(
+        "ANOOP KUMAR SINGH",
+        "ANOOP",
+        "KUMAR",
+        "SINGH",
+    )
+    assert not fhi._insurance_kyc_proposer_name_matches(
+        "ANOOP KUMAR SINGH",
+        "ANIL",
+        "",
+        "SINGH",
+    )
+    assert fhi._insurance_kyc_proposer_name_matches("Madonna", "Madonna", "", "")
+    assert not fhi._insurance_kyc_proposer_name_matches(
+        "ANOOP SINGH",
+        "ANOOP",
+        "",
+        "KUMAR",
+    )
+
+
+def test_hero_misp_verify_kyc_proposer_name_mismatch(mock_page) -> None:
+    with patch.object(
+        fhi,
+        "_proposal_read_proposer_name_triplet",
+        return_value=("ANIL", "", "SINGH", True, True),
+    ):
+        with patch.object(fhi, "_append_hero_misp_frame_dump") as dump:
+            with patch.object(fhi, "append_playwright_insurance_line") as log:
+                err = fhi._hero_misp_verify_kyc_proposer_name(
+                    mock_page,
+                    {"customer_name": "ANOOP SINGH"},
+                    ocr_output_dir=Path("/tmp/ocr"),
+                    subfolder="sale1",
+                )
+    assert err == fhi.KYC_PROPOSER_NAME_MISMATCH_ERR
+    dump.assert_called_once()
+    assert dump.call_args.kwargs.get("reason") == "kyc_proposer_name_mismatch"
+    error_lines = [str(c[0][3]) for c in log.call_args_list if c[0][2] == "ERROR"]
+    assert any(fhi.KYC_PROPOSER_NAME_MISMATCH_ERR in line for line in error_lines)
+
+
+def test_hero_misp_verify_kyc_proposer_name_fields_not_found(mock_page) -> None:
+    with patch.object(
+        fhi,
+        "_proposal_read_proposer_name_triplet",
+        return_value=("", "", "", False, False),
+    ):
+        with patch.object(fhi, "_append_hero_misp_frame_dump") as dump:
+            with patch.object(fhi, "append_playwright_insurance_line") as log:
+                err = fhi._hero_misp_verify_kyc_proposer_name(
+                    mock_page,
+                    {"customer_name": "ANOOP SINGH"},
+                    ocr_output_dir=Path("/tmp/ocr"),
+                    subfolder="sale1",
+                )
+    assert err == fhi.KYC_PROPOSER_NAME_FIELDS_NOT_FOUND_ERR
+    dump.assert_called_once()
+    assert dump.call_args.kwargs.get("reason") == "kyc_proposer_name_fields_not_found"
+    error_lines = [str(c[0][3]) for c in log.call_args_list if c[0][2] == "ERROR"]
+    assert any(fhi.KYC_PROPOSER_NAME_FIELDS_NOT_FOUND_ERR in line for line in error_lines)
+
+
+def test_hero_misp_verify_kyc_proposer_name_match_ok(mock_page) -> None:
+    with patch.object(
+        fhi,
+        "_proposal_read_proposer_name_triplet",
+        return_value=("ANOOP", "", "SINGH", True, True),
+    ):
+        with patch.object(fhi, "_append_hero_misp_frame_dump") as dump:
+            err = fhi._hero_misp_verify_kyc_proposer_name(
+                mock_page,
+                {"customer_name": "ANOOP SINGH"},
+            )
+    assert err is None
+    dump.assert_not_called()
+
+
+def test_fill_proposal_stops_on_kyc_name_mismatch(mock_page) -> None:
+    with patch.object(fhi, "_wait_load_optional"):
+        with patch.object(fhi, "_t"):
+            with patch.object(mock_page, "wait_for_timeout"):
+                with patch.object(fhi, "_hero_misp_dismiss_proposal_overlay_modals"):
+                    with patch.object(
+                        fhi,
+                        "_hero_misp_verify_kyc_proposer_name",
+                        return_value=fhi.KYC_PROPOSER_NAME_MISMATCH_ERR,
+                    ):
+                        with patch.object(fhi, "_proposal_step_select_fuzzy") as sel:
+                            err, preview = fhi._hero_misp_fill_proposal_and_review(
+                                mock_page,
+                                {"customer_name": "ANOOP SINGH"},
+                                timeout_ms=5_000,
+                            )
+    assert err == fhi.KYC_PROPOSER_NAME_MISMATCH_ERR
+    assert preview == {}
+    sel.assert_not_called()
+
+
+def test_misp_url_is_login_redirection() -> None:
+    assert fhi._misp_url_is_login_redirection(
+        "https://misp.heroinsurance.com/PROD/apps/v1/2w/Login_Redirection.html?username=x"
+    )
+    assert not fhi._misp_url_is_login_redirection(
+        "https://misp.heroinsurance.com/prod/apps/V1/2W/welcome/Default.aspx"
+    )
+
+
+def test_misp_url_is_2w_app() -> None:
+    assert fhi._misp_url_is_2w_app(
+        "https://misp.heroinsurance.com/prod/apps/V1/2W/welcome/Default.aspx"
+    )
+    assert not fhi._misp_url_is_2w_app(
+        "https://misp.heroinsurance.com/prod/apps/v1/2w/MainIndex.aspx"
+    )
+    assert not fhi._misp_url_is_2w_app(
+        "https://misp.heroinsurance.com/PROD/apps/v1/2w/Login_Redirection.html?username=x"
+    )
+    assert not fhi._misp_url_is_2w_app(
+        "https://misp.heroinsurance.com/prod/apps/v1/2w/ekycpage.aspx"
+    )
+
+
+def test_misp_page_is_2w_app_landed_false_on_mainindex(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/v1/2w/MainIndex.aspx"
+    nav_loc = MagicMock()
+    nav_loc.count.return_value = 0
+    mock_page.locator.return_value.first = nav_loc
+    assert fhi._misp_page_is_2w_app_landed(mock_page) is False
+
+
+def test_click_2w_icon_does_not_skip_on_mainindex(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/v1/2w/MainIndex.aspx"
+    nav_loc = MagicMock()
+    nav_loc.count.return_value = 0
+    mock_page.locator.return_value.first = nav_loc
+    mock_page.locator.return_value.count.return_value = 0
+    mock_page.frames = []
+    with patch.object(fhi, "_insurance_click_settle"):
+        with patch.object(fhi, "_wait_misp_post_login_landing", return_value=mock_page):
+            with patch.object(fhi, "_wait_misp_2w_hub_ready", return_value=True) as hub_wait:
+                with patch.object(fhi, "append_playwright_insurance_line") as log:
+                    with patch.object(fhi, "_append_hero_misp_frame_dump"):
+                        with pytest.raises(TimeoutError):
+                            fhi._click_2w_icon(mock_page, timeout_ms=100)
+    hub_wait.assert_called()
+    notes = [str(c[0][3]) for c in log.call_args_list if c[0][2] == "NOTE"]
+    assert not any("skip hub click" in n.lower() for n in notes)
+
+
+def test_click_2w_icon_skips_when_already_on_2w_welcome(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/V1/2W/welcome/Default.aspx"
+    with patch.object(fhi, "_insurance_click_settle"):
+        with patch.object(fhi, "_wait_misp_post_login_landing", return_value=mock_page):
+            with patch.object(fhi, "_wait_misp_2w_hub_ready") as hub_wait:
+                with patch.object(fhi, "append_playwright_insurance_line") as log:
+                    fhi._click_2w_icon(mock_page, timeout_ms=3_500, subfolder="sale1")
+    hub_wait.assert_not_called()
+    notes = [str(c[0][3]) for c in log.call_args_list if c[0][2] == "NOTE"]
+    assert any("skip hub click" in n.lower() for n in notes)
+
+
+def test_misp_post_login_loading_visible(mock_page) -> None:
+    mock_page.evaluate.return_value = True
+    assert fhi._misp_loading_interstitial_visible(mock_page) is True
+    assert fhi._misp_post_login_loading_visible(mock_page) is True
+
+
+def test_misp_policy_nav_shell_ready_on_welcome(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/V1/2W/welcome/Default.aspx"
+    with patch.object(fhi, "_misp_loading_interstitial_visible", return_value=False):
+        with patch.object(fhi, "_navbar_vertical_nav_visible", return_value=True):
+            assert fhi._misp_policy_nav_shell_ready(mock_page) is True
+
+
+def test_misp_policy_nav_shell_ready_false_on_mainindex_with_policy_text(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/v1/2w/MainIndex.aspx"
+    pol_loc = MagicMock()
+    pol_loc.count.return_value = 1
+    mock_page.get_by_text.return_value.first = pol_loc
+    with patch.object(fhi, "_misp_loading_interstitial_visible", return_value=False):
+        with patch.object(fhi, "_navbar_vertical_nav_visible", return_value=True):
+            assert fhi._post_2w_in_app_shell_ready(mock_page) is False
+
+
+def test_misp_nav_milestone_hub_ready_on_mainindex(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/v1/2w/MainIndex.aspx"
+    with patch.object(fhi, "_misp_loading_interstitial_visible", return_value=False):
+        with patch.object(fhi, "_misp_2w_hub_present_on_page", return_value=False):
+            assert fhi._misp_nav_milestone_ready(mock_page, "hub_ready") is True
+            assert fhi._misp_nav_milestone_ready(mock_page, "in_app_shell") is False
+
+
+def test_misp_nav_milestone_hub_ready_false_while_loading(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/v1/2w/MainIndex.aspx"
+    with patch.object(fhi, "_misp_loading_interstitial_visible", return_value=True):
+        assert fhi._misp_nav_milestone_ready(mock_page, "hub_ready") is False
+
+
+def test_wait_misp_post_login_landing_ready_on_mainindex_without_hub_js(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/v1/2w/MainIndex.aspx"
+    mock_page.context.pages = [mock_page]
+    with patch.object(fhi, "_misp_loading_interstitial_visible", return_value=False):
+        with patch.object(fhi, "_misp_2w_hub_present_on_page", return_value=False):
+            with patch.object(fhi, "append_playwright_insurance_line"):
+                t0 = time.monotonic()
+                out = fhi._wait_misp_post_login_landing(mock_page, timeout_ms=2_000)
+                elapsed_ms = int((time.monotonic() - t0) * 1000)
+    assert out is mock_page
+    assert elapsed_ms < 800
+
+
+def test_leave_login_redirection_waits_while_loading_on_redirection_url(mock_page) -> None:
+    poll = {"i": 0}
+    login_url = (
+        "https://misp.heroinsurance.com/PROD/apps/v1/2w/Login_Redirection.html?username=x"
+    )
+    hub_url = "https://misp.heroinsurance.com/prod/apps/v1/2w/MainIndex.aspx"
+
+    def _url_getter(_self):
+        return login_url if poll["i"] < 3 else hub_url
+
+    type(mock_page).url = property(_url_getter)
+    mock_page.context.pages = [mock_page]
+
+    def _loading(_page):
+        poll["i"] += 1
+        return poll["i"] < 3
+
+    def _milestone(_page, milestone, **kwargs):
+        if milestone == "hub_ready":
+            return poll["i"] >= 3
+        return False
+
+    with patch.object(fhi, "_misp_loading_interstitial_visible", side_effect=_loading):
+        with patch.object(fhi, "_misp_nav_milestone_ready", side_effect=_milestone):
+            with patch.object(fhi, "append_playwright_insurance_line"):
+                with patch.object(mock_page, "wait_for_timeout"):
+                    out = fhi._wait_misp_leave_login_redirection(mock_page, timeout_ms=2_000)
+    assert out is mock_page
+    assert poll["i"] >= 3
+
+
+def test_wait_misp_after_2w_nav_landing_returns_when_nav_ready(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/V1/2W/welcome/Default.aspx"
+    mock_page.context.pages = [mock_page]
+    with patch.object(fhi, "_misp_loading_interstitial_visible", return_value=False):
+        with patch.object(fhi, "_post_2w_in_app_shell_ready", return_value=True):
+            with patch.object(fhi, "append_playwright_insurance_line"):
+                out = fhi._wait_misp_after_2w_nav_landing(mock_page, timeout_ms=500)
+    assert out is mock_page
+
+
+def test_wait_misp_after_2w_nav_landing_fails_on_mainindex(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/v1/2w/MainIndex.aspx"
+    mock_page.context.pages = [mock_page]
+    with patch.object(fhi, "_misp_loading_interstitial_visible", return_value=False):
+        with patch.object(fhi, "_post_2w_in_app_shell_ready", return_value=False):
+            with patch.object(fhi, "append_playwright_insurance_line"):
+                with patch.object(mock_page, "wait_for_timeout"):
+                    with pytest.raises(TimeoutError, match="still on MainIndex"):
+                        fhi._wait_misp_after_2w_nav_landing(mock_page, timeout_ms=300)
+
+
+def test_wait_misp_post_login_landing_returns_on_2w_shell(mock_page) -> None:
+    mock_page.url = "https://misp.heroinsurance.com/prod/apps/V1/2W/welcome/Default.aspx"
+    mock_page.context.pages = [mock_page]
+    with patch.object(fhi, "_misp_loading_interstitial_visible", return_value=False):
+        with patch.object(fhi, "_misp_page_is_2w_app_landed", return_value=True):
+            with patch.object(fhi, "append_playwright_insurance_line"):
+                out = fhi._wait_misp_post_login_landing(mock_page, timeout_ms=500)
+    assert out is mock_page
 

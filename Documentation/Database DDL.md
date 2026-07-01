@@ -228,6 +228,7 @@ This document lists the current database tables and their columns, grouped by pr
 | `cpi_reqd` | `char(1)` | NO | `'N'` | **Y** or **N**: whether dealer requires/participates in CPI (separate from **`hero_cpi`**); **Arya Agencies** seeded **Y**, others **N** (**`DDL/alter/34a_dealer_ref_cpi_reqd.sql`**) |
 | `cpa_insurer` | `varchar(512)` | YES |  | Optional CPA third-party portal row (**`ref_type`** = **CPA** on **`master_ref`**); portal login URL stored in **`master_ref.comments`**; composite FK **`fk_dealer_ref_cpa_insurer`** — **`DDL/alter/29a_master_ref_comments_dealer_ref_cpa_insurer.sql`**, greenfield **`DDL/04b_dealer_ref.sql`** |
 | `dms_siebel_portal` | `varchar(8)` | YES |  | Hero Connect Siebel app: **`ASC`** = **`edealerasc`** (subdealers); **`HMCL`** or NULL = **`edealerHMCL`** (main dealers); drives DMS base + GotoView URLs — **`DDL/alter/36a_dealer_ref_dms_siebel_portal.sql`** |
+| `insurance_addon` | `integer` | YES |  | FK → **`insurance_addon_ref(insurance_addon_id)`**; default MISP add-on preset for **`prefer_insurer`** — **`DDL/alter/37b_dealer_ref_insurance_addon.sql`** |
 
 **Primary key:** `dealer_ref_pkey` on (`dealer_id`)
 
@@ -953,6 +954,8 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 3.04 | Jun 2026 | **`dealer_ref.insurance_pay`** (**CC**/**APD**, default **APD**; **100001** **CC**); **`form_insurance_view.insurance_pay`**; MISP **Payment Mode** automation — **`DDL/alter/35b_dealer_ref_insurance_pay_form_insurance_view.sql`**, **`DDL/04b_dealer_ref.sql`**, **`fill_hero_insurance_service`**, Admin Saathi dealer view |
 | 3.05 | Jun 2026 | **`add_sales_staging.insurance_state`**: document **`3`** (GI complete — PDF + **`insurance_master`** INSERT); set by hero insure reports after INSERT — **`DDL/alter/31c_add_sales_staging_insurance_state_3_comment.sql`**, **`hero_insure_reports_service`**, **`add_sales_staging_state_service`** |
 | 3.06 | Jun 2026 | **`dealer_ref.dms_siebel_portal`** (**ASC**/**HMCL**/NULL; **100003** seeded **ASC**); per-dealer Hero Connect Siebel app (**`edealerasc`** vs **`edealerHMCL`**) for DMS automation — **`DDL/alter/36a_dealer_ref_dms_siebel_portal.sql`**, **`hero_dms_portal_service`**, **`/settings/site-urls`**, **`/sidecar/dms/resolve`** |
+| 3.07 | Jul 2026 | **`insurance_addon_ref`** (per-portal-insurer MISP add-on presets); **`dealer_ref.insurance_addon`** + **`add_sales_staging.insurance_addon`** FK; **`form_insurance_view.insurance_addon`** — **`DDL/37a_insurance_addon_ref.sql`**, **`DDL/seed_insurance_addon_ref.sql`**, **`DDL/alter/37b_*.sql`**, **`DDL/alter/37c_*.sql`**, **`DDL/alter/37d_*.sql`**, **`fill_hero_insurance_service`**, Admin + Add Sales UI |
+| 3.08 | Jul 2026 | TNI **`insurance_addon_ref`** presets (**ND Cover, Rim Safeguard** + ND Cover); dealers **100005–100009** default Rim — **`DDL/alter/37e_tni_dealer_insurance_addon_rim.sql`**, **`seed_insurance_addon_ref.sql`** |
 ---
 
 ## Admin Saathi (logs)

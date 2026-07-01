@@ -20,6 +20,13 @@ from app.repositories.add_sales_staging import (
     fetch_staging_payload,
     list_in_process_staging_rows,
 )
+from app.repositories.insurance_addon_ref import (
+    fetch_dealer_insurance_addon_on_cursor,
+    fetch_dealer_prefer_insurer_on_cursor,
+    get_by_id,
+    list_active_by_insurer,
+    resolve_effective_insurance_addon_row,
+)
 from app.repositories.master_ref import (
     REF_TYPE_FINANCER,
     list_cpa_portals,
@@ -91,6 +98,54 @@ def _cpa_alliance_insurance_eligibility(
     }
 
 
+def _resolve_insurance_addon_context(
+    dealer_id: int,
+    staging_id: str | None = None,
+) -> dict[str, object]:
+    """Staging ``insurance_addon`` wins when valid for ``dealer_ref.prefer_insurer``."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            prefer = fetch_dealer_prefer_insurer_on_cursor(cur, dealer_id=int(dealer_id))
+            dealer_addon = fetch_dealer_insurance_addon_on_cursor(cur, dealer_id=int(dealer_id))
+            staging_addon: int | None = None
+            sid = (staging_id or "").strip()
+            if sid:
+                staging_addon = fetch_staging_insurance_addon_on_cursor(
+                    cur, staging_id=sid, dealer_id=int(dealer_id)
+                )
+    finally:
+        conn.close()
+    addons = []
+    if prefer:
+        conn2 = get_connection()
+        try:
+            addons = list_active_by_insurer(conn2, prefer)
+        finally:
+            conn2.close()
+    effective_row = resolve_effective_insurance_addon_row(
+        staging_id=staging_id,
+        dealer_id=int(dealer_id),
+    )
+    return {
+        "prefer_insurer": prefer or None,
+        "dealer_insurance_addon": dealer_addon,
+        "staging_insurance_addon": staging_addon,
+        "effective_insurance_addon": (
+            int(effective_row["insurance_addon_id"])
+            if effective_row and effective_row.get("insurance_addon_id") is not None
+            else None
+        ),
+        "insurance_addons": [
+            {
+                "insurance_addon_id": r.get("insurance_addon_id"),
+                "display_label": r.get("display_label"),
+            }
+            for r in addons
+        ],
+    }
+
+
 def _resolve_cpi_reqd_context(
     dealer_id: int | None,
     staging_id: str | None,
@@ -139,6 +194,10 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         "cpa_alliance_portal_enabled": False,
         "portal_insurers": [],
         "financiers": [],
+        "insurance_addons": [],
+        "dealer_insurance_addon": None,
+        "staging_insurance_addon": None,
+        "effective_insurance_addon": None,
     }
     if dealer_id is None or int(dealer_id) < 1:
         return blank
@@ -149,40 +208,65 @@ def _cpa_eligibility_extras(dealer_id: int | None) -> dict[str, object]:
         financiers = list_ref_values(conn, REF_TYPE_FINANCER)
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT hero_cpi, cpa_insurer, cpi_reqd FROM dealer_ref WHERE dealer_id = %s LIMIT 1",
+                "SELECT hero_cpi, cpa_insurer, cpi_reqd, prefer_insurer, insurance_addon FROM dealer_ref WHERE dealer_id = %s LIMIT 1",
                 (int(dealer_id),),
             )
             row = cur.fetchone()
+        hero = "N"
+        dcpa: str | None = None
+        dealer_cpi = "N"
+        prefer_insurer: str | None = None
+        dealer_insurance_addon: int | None = None
+        if row:
+            if isinstance(row, dict):
+                hero_raw = row.get("hero_cpi")
+                dcpa_raw = row.get("cpa_insurer")
+                cpi_raw = row.get("cpi_reqd")
+                prefer_raw = row.get("prefer_insurer")
+                addon_raw = row.get("insurance_addon")
+            else:
+                hero_raw = row[0] if row else None
+                dcpa_raw = row[1] if row and len(row) > 1 else None
+                cpi_raw = row[2] if row and len(row) > 2 else None
+                prefer_raw = row[3] if row and len(row) > 3 else None
+                addon_raw = row[4] if row and len(row) > 4 else None
+            hero = str(hero_raw or "N").strip().upper()[:1] or "N"
+            if hero not in ("Y", "N"):
+                hero = "N"
+            if dcpa_raw is not None and str(dcpa_raw).strip():
+                dcpa = str(dcpa_raw).strip()
+            dealer_cpi = _normalize_cpi_reqd_flag(cpi_raw)
+            if prefer_raw is not None and str(prefer_raw).strip():
+                prefer_insurer = str(prefer_raw).strip()
+            if addon_raw is not None:
+                try:
+                    dealer_insurance_addon = int(addon_raw)
+                except (TypeError, ValueError):
+                    dealer_insurance_addon = None
+        enabled = hero != "Y" and len(portals) > 0
+        insurance_addons = (
+            list_active_by_insurer(conn, prefer_insurer) if prefer_insurer else []
+        )
+        return {
+            "cpa_insurers": portals,
+            "hero_cpi": hero,
+            "dealer_cpa_insurer": dcpa,
+            "dealer_cpi_reqd": dealer_cpi,
+            "cpa_alliance_portal_enabled": enabled,
+            "portal_insurers": portal_insurers,
+            "financiers": financiers,
+            "prefer_insurer": prefer_insurer,
+            "dealer_insurance_addon": dealer_insurance_addon,
+            "insurance_addons": [
+                {
+                    "insurance_addon_id": r.get("insurance_addon_id"),
+                    "display_label": r.get("display_label"),
+                }
+                for r in insurance_addons
+            ],
+        }
     finally:
         conn.close()
-    hero = "N"
-    dcpa: str | None = None
-    dealer_cpi = "N"
-    if row:
-        if isinstance(row, dict):
-            hero_raw = row.get("hero_cpi")
-            dcpa_raw = row.get("cpa_insurer")
-            cpi_raw = row.get("cpi_reqd")
-        else:
-            hero_raw = row[0] if row else None
-            dcpa_raw = row[1] if row and len(row) > 1 else None
-            cpi_raw = row[2] if row and len(row) > 2 else None
-        hero = str(hero_raw or "N").strip().upper()[:1] or "N"
-        if hero not in ("Y", "N"):
-            hero = "N"
-        if dcpa_raw is not None and str(dcpa_raw).strip():
-            dcpa = str(dcpa_raw).strip()
-        dealer_cpi = _normalize_cpi_reqd_flag(cpi_raw)
-    enabled = hero != "Y" and len(portals) > 0
-    return {
-        "cpa_insurers": portals,
-        "hero_cpi": hero,
-        "dealer_cpa_insurer": dcpa,
-        "dealer_cpi_reqd": dealer_cpi,
-        "cpa_alliance_portal_enabled": enabled,
-        "portal_insurers": portal_insurers,
-        "financiers": financiers,
-    }
 
 
 def _serialize_in_process_row(r: dict[str, Any]) -> dict[str, Any]:
@@ -253,10 +337,15 @@ def get_add_sales_staging_payload(
     if not payload:
         raise HTTPException(status_code=404, detail="Staging not found or not accessible for this dealer.")
     cpi_ctx = _resolve_cpi_reqd_context(did, staging_id.strip())
+    addon_ctx = _resolve_insurance_addon_context(did, staging_id.strip())
     return {
         "staging_id": staging_id.strip(),
         "payload_json": payload,
         "cpi_reqd": cpi_ctx.get("staging_cpi_reqd") or cpi_ctx.get("dealer_cpi_reqd") or "N",
+        "insurance_addon": addon_ctx.get("staging_insurance_addon")
+        or addon_ctx.get("dealer_insurance_addon"),
+        "effective_insurance_addon": addon_ctx.get("effective_insurance_addon"),
+        "insurance_addons": addon_ctx.get("insurance_addons") or [],
         "insurance_state": fetch_staging_insurance_state(staging_id.strip(), did),
     }
 
@@ -495,7 +584,8 @@ def get_create_invoice_eligibility(
     (``cpa_insurers``, ``hero_cpi``, ``dealer_cpa_insurer``, ``cpa_alliance_portal_enabled``).
     """
     cpi_ctx = _resolve_cpi_reqd_context(dealer_id, staging_id)
-    cpa_x = {**_cpa_eligibility_extras(dealer_id), **cpi_ctx}
+    addon_ctx = _resolve_insurance_addon_context(int(dealer_id), staging_id) if dealer_id else {}
+    cpa_x = {**_cpa_eligibility_extras(dealer_id), **cpi_ctx, **addon_ctx}
     effective_cpi = str(cpi_ctx.get("effective_cpi_reqd") or "N")
     if customer_id is not None and vehicle_id is not None:
         return {

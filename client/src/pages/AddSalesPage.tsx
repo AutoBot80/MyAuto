@@ -39,6 +39,11 @@ import { runPrintQueueRtoFlow } from "../utils/printQueueRtoFlow";
 import { loadAddSalesForm, saveAddSalesForm, clearAddSalesForm } from "../utils/addSalesStorage";
 import { markBulkLoadSuccess } from "../api/bulkLoads";
 import { isHeroBajajFinancierForStaging } from "../utils/financierStagingRules";
+import {
+  insuranceAddonDisplayLabel,
+  mergeSelectedInsuranceAddonOption,
+  normalizeInsuranceAddonRows,
+} from "../utils/insuranceAddonUi";
 import { normalizeVehicleDetails, hasVehicleData } from "../utils/vehicleDetails";
 import {
   sanitizeExtractedVehicleDetailFields,
@@ -472,6 +477,10 @@ export function AddSalesPage({
   const [cpaInsurers, setCpaInsurers] = useState<CpaInsurerPortalRow[]>([]);
   /** ``master_ref`` INSURER rows with ``comments = 'Y'`` (Section 3 dropdown). */
   const [portalInsurers, setPortalInsurers] = useState<string[]>([]);
+  const [insuranceAddons, setInsuranceAddons] = useState<
+    { insurance_addon_id: number; display_label: string }[]
+  >([]);
+  const [insuranceAddonId, setInsuranceAddonId] = useState<number | "">("");
   /** ``master_ref`` FINANCER rows (Section 2 financier dropdown). */
   const [masterRefFinanciers, setMasterRefFinanciers] = useState<string[]>([]);
   const [dealerCpaContextError, setDealerCpaContextError] = useState<string | null>(null);
@@ -573,6 +582,10 @@ export function AddSalesPage({
     | "portal_insurers"
     | "financiers"
     | "dealer_cpi_reqd"
+    | "insurance_addons"
+    | "dealer_insurance_addon"
+    | "effective_insurance_addon"
+    | "staging_insurance_addon"
   >;
 
   const applyDealerCpaFromApiSlice = useCallback((res: CpaEligibilitySlice) => {
@@ -590,6 +603,13 @@ export function AddSalesPage({
     setPortalInsurers(Array.isArray(pi) ? pi.map((x) => String(x).trim()).filter(Boolean) : []);
     const fin = res.financiers;
     setMasterRefFinanciers(Array.isArray(fin) ? fin.map((x) => String(x).trim()).filter(Boolean) : []);
+    const addons = res.insurance_addons;
+    setInsuranceAddons(normalizeInsuranceAddonRows(addons));
+    const effAddon =
+      res.effective_insurance_addon ?? res.staging_insurance_addon ?? res.dealer_insurance_addon;
+    if (effAddon != null && Number(effAddon) > 0) {
+      setInsuranceAddonId(Number(effAddon));
+    }
   }, []);
 
   const resolvedCpaPortal = useMemo(
@@ -1006,6 +1026,13 @@ export function AddSalesPage({
     () => resolvePortalInsurer(ins?.insurer, preferInsurer, portalInsurers) ?? "",
     [ins?.insurer, preferInsurer, portalInsurers]
   );
+
+  const insuranceAddonSelectRows = useMemo(
+    () => mergeSelectedInsuranceAddonOption(insuranceAddons, insuranceAddonId, insuranceAddons),
+    [insuranceAddons, insuranceAddonId]
+  );
+
+  const preferInsurerTrimmed = (preferInsurer ?? "").trim();
 
   useEffect(() => {
     if (!portalInsurers.length) return;
@@ -2721,6 +2748,46 @@ export function AddSalesPage({
                           </select>
                         ) : (
                           (preferInsurer ?? ins?.insurer ?? "").trim() || "—"
+                        )}
+                      </dd>
+                    </div>
+                    <div className="add-sales-v2-dl-row">
+                      <dt>Insurance Add-ons</dt>
+                      <dd className="add-sales-v2-dd--insurance-editable">
+                        {preferInsurerTrimmed ? (
+                          <select
+                            className="add-sales-v2-dl-input add-sales-v2-dl-input--insurance-provider-wide"
+                            aria-label="Insurance add-ons"
+                            value={
+                              insuranceAddonSelectRows.some(
+                                (o) => o.insurance_addon_id === insuranceAddonId
+                              )
+                                ? String(insuranceAddonId)
+                                : ""
+                            }
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              const next = v === "" ? "" : Number(v);
+                              setInsuranceAddonId(next);
+                              const patchSid = lastStagingId?.trim();
+                              if (patchSid && dealerId > 0 && typeof next === "number" && next > 0) {
+                                void patchAddSalesStagingPayload(patchSid, dealerId, {
+                                  insurance_addon: next,
+                                }).catch(() => {
+                                  /* GI uses DB snapshot */
+                                });
+                              }
+                            }}
+                          >
+                            <option value="">— None —</option>
+                            {insuranceAddonSelectRows.map((row) => (
+                              <option key={row.insurance_addon_id} value={row.insurance_addon_id}>
+                                {row.display_label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          insuranceAddonDisplayLabel(insuranceAddonId, insuranceAddonSelectRows)
                         )}
                       </dd>
                     </div>

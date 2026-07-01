@@ -185,6 +185,14 @@ run alter/26b_login_ref_redesign.sql
 # admin Saathi dealer scope
 run alter/35a_admin_dealer_access_ref.sql
 
+# insurance add-on presets (per portal insurer; prefer_insurer driver)
+run 37a_insurance_addon_ref.sql
+run seed_insurance_addon_ref.sql
+run alter/37b_dealer_ref_insurance_addon.sql
+run alter/37c_add_sales_staging_insurance_addon.sql
+run alter/37d_form_insurance_view_insurance_addon.sql
+run alter/37e_tni_dealer_insurance_addon_rim.sql
+
 # drop legacy ai_reader_queue (last — no dependents)
 run alter/01z_drop_ai_reader_queue.sql
 run alter/01a_ai_reader_queue_add_classification.sql

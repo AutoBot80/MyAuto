@@ -511,6 +511,12 @@ HERO_MISP_UI_SETTLE_MS = _int_env("HERO_MISP_UI_SETTLE_MS", 200)
 INSURANCE_KYC_POST_MOBILE_DOM_MS = _int_env("INSURANCE_KYC_POST_MOBILE_DOM_MS", 2000)
 # Max wait for #navbarVerticalNav / New Policy / KYC hints after **2W** or **New Policy** click (was 5000).
 HERO_MISP_LANDING_WAIT_MS = _int_env("HERO_MISP_LANDING_WAIT_MS", 2500)
+# Post-sign-in ``Login_Redirection.html`` auto-redirect to ``2W/welcome`` — poll only on that page.
+HERO_MISP_LOGIN_REDIRECTION_WAIT_MS = _int_env("HERO_MISP_LOGIN_REDIRECTION_WAIT_MS", 12_000)
+# After Login_Redirection / through loading screens: wait for MainIndex **2W** hub or in-app shell.
+HERO_MISP_POST_LOGIN_LANDING_WAIT_MS = _int_env("HERO_MISP_POST_LOGIN_LANDING_WAIT_MS", 15_000)
+# After **2W** click / through loading: wait for Policy Issuance nav shell (welcome/Default).
+HERO_MISP_POST_2W_NAV_WAIT_MS = _int_env("HERO_MISP_POST_2W_NAV_WAIT_MS", 15_000)
 # After proposal **Submit** / Issue Policy: max wait for **PrintPolicy.aspx** (or search page) navigation.
 HERO_MISP_POST_SUBMIT_WAIT_MS = _int_env("HERO_MISP_POST_SUBMIT_WAIT_MS", 8000)
 # When 1: after insurer commit (non-light KYC nav), open a temporary ``about:blank`` tab so the KYC document

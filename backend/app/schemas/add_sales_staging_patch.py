@@ -41,3 +41,8 @@ class PatchAddSalesStagingPayloadRequest(BaseModel):
         None,
         description="CPA Required; persisted on add_sales_staging.cpi_reqd.",
     )
+    insurance_addon: int | None = Field(
+        None,
+        ge=1,
+        description="MISP add-on preset FK; must match dealer prefer_insurer.",
+    )

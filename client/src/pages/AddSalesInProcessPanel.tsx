@@ -31,6 +31,11 @@ import {
 import type { ExtractedCustomerDetails, ExtractedInsuranceDetails, ExtractedVehicleDetails } from "../types";
 import { cpaPolicyFromInsuranceRaw } from "../utils/insuranceDisplay";
 import { resolvePortalInsurer } from "../utils/addSalesInsurerResolve";
+import {
+  insuranceAddonDisplayLabel,
+  mergeSelectedInsuranceAddonOption,
+  normalizeInsuranceAddonRows,
+} from "../utils/insuranceAddonUi";
 import { sanitizeFormFieldInputValue, sanitizeFormFieldValue } from "../utils/formFieldSanitize";
 
 function normalizeCpaRequiredFlag(raw: unknown): "Y" | "N" {
@@ -223,6 +228,15 @@ function draftToPatchBody(
   return body;
 }
 
+function insuranceAddonPatchIfChanged(
+  edit: number | "",
+  baseline: number | ""
+): number | undefined {
+  if (edit === baseline) return undefined;
+  if (edit === "" || !Number.isFinite(edit) || edit <= 0) return undefined;
+  return edit;
+}
+
 function payloadInsurance(rec: Record<string, unknown> | null): ExtractedInsuranceDetails | null {
   if (!rec || typeof rec !== "object") return null;
   const i = rec as Record<string, unknown>;
@@ -279,6 +293,11 @@ export function AddSalesInProcessPanel({
 
   const [cpaInsurers, setCpaInsurers] = useState<CpaInsurerPortalRow[]>([]);
   const [portalInsurers, setPortalInsurers] = useState<string[]>([]);
+  const [insuranceAddons, setInsuranceAddons] = useState<
+    { insurance_addon_id: number; display_label: string }[]
+  >([]);
+  const [insuranceAddonEdit, setInsuranceAddonEdit] = useState<number | "">("");
+  const [insuranceAddonBaseline, setInsuranceAddonBaseline] = useState<number | "">("");
   const [dealerCpaInsurer, setDealerCpaInsurer] = useState<string | null>(null);
   const [dealerHeroCpi, setDealerHeroCpi] = useState<string | null>(null);
   const [panelRefreshToken, setPanelRefreshToken] = useState(0);
@@ -310,6 +329,8 @@ export function AddSalesInProcessPanel({
       setDealerCpaInsurer(r.dealer_cpa_insurer?.trim() ? r.dealer_cpa_insurer.trim() : null);
       const hc = r.hero_cpi;
       setDealerHeroCpi(hc != null && String(hc).trim() !== "" ? String(hc).trim() : null);
+      const addons = r.insurance_addons;
+      setInsuranceAddons(normalizeInsuranceAddonRows(addons));
     } catch {
       setCpaInsurers([]);
       setPortalInsurers([]);
@@ -366,6 +387,8 @@ export function AddSalesInProcessPanel({
       setDetailPayload(null);
       setStagingCpiReqd(null);
       setStagingInsuranceState(null);
+      setInsuranceAddonEdit("");
+      setInsuranceAddonBaseline("");
       setDetailErr(null);
       return;
     }
@@ -380,6 +403,14 @@ export function AddSalesInProcessPanel({
           r.cpi_reqd != null ? normalizeCpaRequiredFlag(r.cpi_reqd) : null
         );
         setStagingInsuranceState(r.insurance_state ?? null);
+        const effAddon = r.effective_insurance_addon ?? r.insurance_addon;
+        const addonNum =
+          effAddon != null && Number(effAddon) > 0 ? Number(effAddon) : "";
+        setInsuranceAddonEdit(addonNum);
+        setInsuranceAddonBaseline(addonNum);
+        if (Array.isArray(r.insurance_addons) && r.insurance_addons.length > 0) {
+          setInsuranceAddons(normalizeInsuranceAddonRows(r.insurance_addons));
+        }
       } catch (e) {
         if (!c) setDetailErr(e instanceof Error ? e.message : "Could not load row details.");
       }
@@ -415,8 +446,9 @@ export function AddSalesInProcessPanel({
   );
   const detailDirty = useMemo(() => {
     if (!detailEditDraft || !detailDraftBaseline) return false;
+    if (insuranceAddonEdit !== insuranceAddonBaseline) return true;
     return !draftsEqual(detailEditDraft, detailDraftBaseline);
-  }, [detailEditDraft, detailDraftBaseline]);
+  }, [detailEditDraft, detailDraftBaseline, insuranceAddonEdit, insuranceAddonBaseline]);
 
   const onSaveDetailChanges = useCallback(async () => {
     if (!selectedId || !detailEditDraft || dealerId <= 0 || !detailDirty) return;
@@ -461,7 +493,13 @@ export function AddSalesInProcessPanel({
       await patchAddSalesStagingPayload(
         selectedId,
         dealerId,
-        draftToPatchBody(draftForSave, detailDraftBaseline!, { includeInsurer: insurerEditable })
+        {
+          ...draftToPatchBody(draftForSave, detailDraftBaseline!, { includeInsurer: insurerEditable }),
+          ...(() => {
+            const addon = insuranceAddonPatchIfChanged(insuranceAddonEdit, insuranceAddonBaseline);
+            return addon != null ? { insurance_addon: addon } : {};
+          })(),
+        }
       );
       setPanelRefreshToken((t) => t + 1);
       await refreshList();
@@ -471,7 +509,7 @@ export function AddSalesInProcessPanel({
     } finally {
       setDetailSaveBusy(false);
     }
-  }, [selectedId, detailEditDraft, dealerId, detailDirty, refreshList, detailDraftBaseline, insurerEditable]);
+  }, [selectedId, detailEditDraft, dealerId, detailDirty, refreshList, detailDraftBaseline, insurerEditable, insuranceAddonEdit, insuranceAddonBaseline]);
 
   const saveDetailDisabled =
     !detailDirty ||
@@ -500,6 +538,13 @@ export function AddSalesInProcessPanel({
       : insTrim || String(preferInsurer ?? "").trim() || "—";
   const insuranceProviderSelectValue =
     resolvePortalInsurer(detailEditDraft?.insurer, preferInsurer, portalList) ?? "";
+
+  const preferInsurerTrimmed = String(preferInsurer ?? "").trim();
+
+  const insuranceAddonSelectRows = useMemo(
+    () => mergeSelectedInsuranceAddonOption(insuranceAddons, insuranceAddonEdit, insuranceAddons),
+    [insuranceAddons, insuranceAddonEdit]
+  );
 
   useEffect(() => {
     if (!selectedId || !detailPayload) {
@@ -1167,6 +1212,45 @@ export function AddSalesInProcessPanel({
                         </select>
                       ) : (
                         insuranceProviderDisplay
+                      )}
+                    </dd>
+                  </div>
+                  <div className="add-sales-v2-dl-row">
+                    <dt>Insurance Add-ons</dt>
+                    <dd
+                      className={
+                        insurerEditable && preferInsurerTrimmed
+                          ? "add-sales-v2-dd--insurance-editable"
+                          : "add-sales-in-process-dd--readonly"
+                      }
+                    >
+                      {insurerEditable && preferInsurerTrimmed ? (
+                        <select
+                          className="add-sales-v2-dl-input add-sales-v2-dl-input--insurance-provider-wide"
+                          aria-label="Insurance add-ons"
+                          value={
+                            insuranceAddonSelectRows.some(
+                              (o) => o.insurance_addon_id === insuranceAddonEdit
+                            )
+                              ? String(insuranceAddonEdit)
+                              : ""
+                          }
+                          onChange={(e) => {
+                            clearDetailValidation();
+                            const v = e.target.value;
+                            setInsuranceAddonEdit(v === "" ? "" : Number(v));
+                          }}
+                          disabled={detailSaveBusy}
+                        >
+                          <option value="">— None —</option>
+                          {insuranceAddonSelectRows.map((row) => (
+                            <option key={row.insurance_addon_id} value={row.insurance_addon_id}>
+                              {row.display_label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        insuranceAddonDisplayLabel(insuranceAddonEdit, insuranceAddonSelectRows)
                       )}
                     </dd>
                   </div>

@@ -34,6 +34,11 @@ export interface CreateInvoiceEligibilityResponse {
   staging_cpi_reqd?: string | null;
   /** Staging value when present, else dealer (sheet wins). */
   effective_cpi_reqd?: string | null;
+  prefer_insurer?: string | null;
+  dealer_insurance_addon?: number | null;
+  staging_insurance_addon?: number | null;
+  effective_insurance_addon?: number | null;
+  insurance_addons?: { insurance_addon_id: number; display_label: string }[] | null;
 }
 
 export type FetchCreateInvoiceEligibilityParams =
@@ -72,6 +77,9 @@ export type DealerCpaContextResponse = Pick<
   | "portal_insurers"
   | "financiers"
   | "dealer_cpi_reqd"
+  | "prefer_insurer"
+  | "dealer_insurance_addon"
+  | "insurance_addons"
 >;
 
 export async function fetchDealerCpaContext(dealerId: number): Promise<DealerCpaContextResponse> {
@@ -96,6 +104,7 @@ export interface AddSalesInProcessRow {
   subfolder?: string | null;
   /** Per-sale CPA Required snapshot from ``add_sales_staging.cpi_reqd``. */
   cpi_reqd?: string | null;
+  insurance_addon?: number | null;
 }
 
 export async function fetchAddSalesInProcess(
@@ -161,6 +170,9 @@ export async function fetchAddSalesStagingPayload(
   payload_json: Record<string, unknown>;
   cpi_reqd?: string | null;
   insurance_state?: number | null;
+  insurance_addon?: number | null;
+  effective_insurance_addon?: number | null;
+  insurance_addons?: { insurance_addon_id: number; display_label: string }[];
 }> {
   const q = new URLSearchParams({ dealer_id: String(dealerId) });
   return apiFetch<{
@@ -168,6 +180,9 @@ export async function fetchAddSalesStagingPayload(
     payload_json: Record<string, unknown>;
     cpi_reqd?: string | null;
     insurance_state?: number | null;
+    insurance_addon?: number | null;
+    effective_insurance_addon?: number | null;
+    insurance_addons?: { insurance_addon_id: number; display_label: string }[];
   }>(`/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`);
 }
 
@@ -190,6 +205,8 @@ export interface PatchAddSalesStagingPayloadBody {
   };
   /** CPA Required → ``add_sales_staging.cpi_reqd``. */
   cpi_reqd?: "Y" | "N";
+  /** MISP add-on preset → ``add_sales_staging.insurance_addon``. */
+  insurance_addon?: number;
 }
 
 export async function patchAddSalesStagingPayload(

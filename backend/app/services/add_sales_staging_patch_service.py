@@ -11,6 +11,10 @@ from app.repositories.add_sales_staging import (
     _normalize_cpi_reqd_flag,
     merge_staging_payload_on_cursor,
 )
+from app.repositories.insurance_addon_ref import (
+    fetch_dealer_prefer_insurer_on_cursor,
+    get_by_id,
+)
 from app.schemas.add_sales_staging_patch import PatchAddSalesStagingPayloadRequest
 from app.services.customer_address_infer import (
     enrich_customer_address_from_freeform,
@@ -136,7 +140,8 @@ def patch_add_sales_staging_payload(
         raise ValueError("staging_id is required")
     patch = _build_patch_from_request(req)
     cpi_patch = req.cpi_reqd if "cpi_reqd" in req.model_fields_set else None
-    if not patch and cpi_patch is None:
+    addon_patch = req.insurance_addon if "insurance_addon" in req.model_fields_set else None
+    if not patch and cpi_patch is None and addon_patch is None:
         raise ValueError("At least one editable field is required")
 
     cust_patch = patch.get("customer")
@@ -189,6 +194,30 @@ def patch_add_sales_staging_payload(
                       AND status IN ('draft', 'committed')
                     """,
                     (cpi_val, sid, int(dealer_id)),
+                )
+                if int(cur.rowcount or 0) >= 1:
+                    updated = True
+
+            if addon_patch is not None:
+                prefer = fetch_dealer_prefer_insurer_on_cursor(cur, dealer_id=int(dealer_id))
+                if not prefer:
+                    raise ValueError("Dealer prefer_insurer is not set; cannot assign insurance add-on preset.")
+                addon_row = get_by_id(conn, int(addon_patch))
+                if not addon_row:
+                    raise ValueError("insurance_addon id not found.")
+                if str(addon_row.get("insurer") or "") != prefer:
+                    raise ValueError(
+                        "insurance_addon must belong to the same insurer as dealer prefer_insurer."
+                    )
+                cur.execute(
+                    """
+                    UPDATE add_sales_staging
+                    SET updated_at = now(),
+                        insurance_addon = %s
+                    WHERE staging_id = %s::uuid AND dealer_id = %s
+                      AND status IN ('draft', 'committed')
+                    """,
+                    (int(addon_patch), sid, int(dealer_id)),
                 )
                 if int(cur.rowcount or 0) >= 1:
                     updated = True

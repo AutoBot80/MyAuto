@@ -42,6 +42,22 @@ export function getAdminPortalInsurers() {
   return apiFetch<{ insurers: string[] }>("/admin/portal-insurers");
 }
 
+export interface AdminInsuranceAddonRow {
+  insurance_addon_id: number;
+  insurer: string;
+  display_label: string;
+  nd_cover?: string;
+  rti?: string;
+  rim_safeguard?: string;
+  rsa?: string;
+  sort_order?: number;
+}
+
+export function getAdminInsuranceAddons(insurer?: string | null) {
+  const q = insurer?.trim() ? `?insurer=${encodeURIComponent(insurer.trim())}` : "";
+  return apiFetch<{ insurance_addons: AdminInsuranceAddonRow[] }>(`/admin/insurance-addons${q}`);
+}
+
 export function getAdminDealerNames() {
   return apiFetch<AdminDealerNameRow[]>("/admin/dealers");
 }
@@ -91,6 +107,7 @@ export function patchAdminDealerInsurerCpi(
     cpi_reqd: "Y" | "N";
     insurance_pay: "CC" | "APD";
     dms_siebel_portal: "HMCL" | "ASC";
+    insurance_addon: number | null;
   }
 ) {
   return apiFetch<JsonRecord>(`/admin/dealers/${dealerId}`, {

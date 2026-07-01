@@ -13,7 +13,7 @@ import time
 import urllib.parse
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -23,6 +23,9 @@ from app.config import (
     ENVIRONMENT_IS_PRODUCTION,
     HERO_MISP_KYC_TAB_AWAY_SIMULATION,
     HERO_MISP_LANDING_WAIT_MS,
+    HERO_MISP_LOGIN_REDIRECTION_WAIT_MS,
+    HERO_MISP_POST_LOGIN_LANDING_WAIT_MS,
+    HERO_MISP_POST_2W_NAV_WAIT_MS,
     HERO_MISP_POST_SUBMIT_WAIT_MS,
     HERO_MISP_UI_SETTLE_MS,
     INSURANCE_ACTION_TIMEOUT_MS,
@@ -99,6 +102,38 @@ HERO_MISP_PROPOSAL_OPTIONAL_UNCHECK_CHECKBOX_REGEX = ""
 
 # ASP.NET ``ContentPlaceHolder1`` client-id prefix on ``MispPolicy.aspx`` proposal controls (frame scrape).
 HERO_MISP_CPH1 = "ctl00_ContentPlaceHolder1"
+
+KYC_PROPOSER_NAME_MISMATCH_ERR = "Insurance KYC is picking wrong customer name"
+KYC_PROPOSER_NAME_FIELDS_NOT_FOUND_ERR = (
+    "Could not read KYC proposer First/Last Name on proposal form"
+)
+
+# KYC pre-fill proposer name readback (label first, then CPH1 suffix fallbacks).
+HERO_MISP_PROPOSER_FIRST_NAME_CPH1_SUFFIXES = (
+    "txtFirstName",
+    "txtFName",
+    "txtFstName",
+)
+HERO_MISP_PROPOSER_MIDDLE_NAME_CPH1_SUFFIXES = (
+    "txtMiddleName",
+    "txtMName",
+    "txtMiddle",
+)
+HERO_MISP_PROPOSER_LAST_NAME_CPH1_SUFFIXES = (
+    "txtLastName",
+    "txtLName",
+    "txtLstName",
+)
+_PROPOSER_NAME_LABEL_PATTERNS: dict[str, str] = {
+    "first": r"First\s*Name",
+    "middle": r"Middle\s*Name",
+    "last": r"Last\s*Name",
+}
+_PROPOSER_NAME_CPH1_SUFFIXES_BY_FIELD: dict[str, tuple[str, ...]] = {
+    "first": HERO_MISP_PROPOSER_FIRST_NAME_CPH1_SUFFIXES,
+    "middle": HERO_MISP_PROPOSER_MIDDLE_NAME_CPH1_SUFFIXES,
+    "last": HERO_MISP_PROPOSER_LAST_NAME_CPH1_SUFFIXES,
+}
 
 # Nominee **Relation** ``<select>`` — portal builds vary (try in order per frame root).
 HERO_MISP_NOMINEE_RELATION_CPH1_SUFFIXES = (
@@ -670,15 +705,60 @@ def _misp_click_nav_step(
     return page, None
 
 
-def _hero_misp_after_sign_in_settle(page) -> None:
+def _hero_misp_after_sign_in_settle(page):
     """
     After Sign In, wait for the landing UI. Prefer **domcontentloaded** over **networkidle** — MISP often
     never reaches network idle (analytics / long polling), which added multi-second delays before 2W.
 
-    The hub SPA may paint **2W** after ``domcontentloaded``; wait for the same tile selectors ``_click_2w_icon``
-    tries first (visibility), capped by ``HERO_MISP_LANDING_WAIT_MS``, so the 2W step does not run on a half-ready DOM.
+    When already inside the **2W** app (auto-redirect from ``Login_Redirection.html``), skip hub-tile wait.
+    Otherwise the hub SPA may paint **2W** after ``domcontentloaded``; wait for the same tile selectors
+    ``_click_2w_icon`` tries first (visibility), capped by ``HERO_MISP_LANDING_WAIT_MS``.
     """
     _wait_load_optional(page, 8_000)
+    if _misp_page_is_2w_app_landed(page):
+        logger.info("Hero Insurance: post_sign_in: already in 2W app — skip hub tile wait.")
+        _insurance_click_settle(page)
+        return page
+    try:
+        cur_url = (page.url or "").strip()
+    except Exception:
+        cur_url = ""
+    if _misp_url_is_login_redirection(cur_url):
+        page = _wait_misp_leave_login_redirection(page)
+        if _misp_page_is_2w_app_landed(page):
+            logger.info(
+                "Hero Insurance: post_sign_in: 2W app after Login_Redirection — skip hub tile wait."
+            )
+            _insurance_click_settle(page)
+            return page
+        try:
+            cur_url = (page.url or "").strip()
+        except Exception:
+            cur_url = ""
+        if _misp_nav_milestone_ready(page, "hub_ready"):
+            logger.info(
+                "Hero Insurance: post_sign_in: MainIndex hub ready after Login_Redirection — skip hub tile wait."
+            )
+            _insurance_click_settle(page)
+            return page
+    elif (
+        _misp_nav_milestone_ready(page, "hub_ready")
+        or _misp_nav_milestone_ready(page, "in_app_shell")
+    ):
+        if _misp_page_is_2w_app_landed(page):
+            logger.info("Hero Insurance: post_sign_in: 2W app shell ready — skip hub tile wait.")
+            _insurance_click_settle(page)
+            return page
+        if _misp_nav_milestone_ready(page, "hub_ready"):
+            logger.info("Hero Insurance: post_sign_in: MainIndex hub ready — skip hub tile wait.")
+            _insurance_click_settle(page)
+            return page
+    elif _misp_url_is_mainindex_hub(cur_url) or _misp_loading_interstitial_visible(page):
+        page = _wait_misp_post_login_landing(page)
+        if _misp_page_is_2w_app_landed(page):
+            logger.info("Hero Insurance: post_sign_in: 2W app shell ready — skip hub tile wait.")
+            _insurance_click_settle(page)
+            return page
     cap = min(10_000, max(800, int(HERO_MISP_LANDING_WAIT_MS)))
     try:
         page.locator('a#ctl00_TWO, #ctl00_TWO, #ctl00_w2_menu, img[alt="2W Icon"], [aid="ctl00_TWO"]').first.wait_for(
@@ -687,6 +767,7 @@ def _hero_misp_after_sign_in_settle(page) -> None:
     except Exception:
         pass
     _insurance_click_settle(page)
+    return page
 
 
 def _hero_insurance_log_page_diagnostics(
@@ -2351,30 +2432,451 @@ def _click_sign_in_if_visible(page, *, timeout_ms: int) -> bool:
     return False
 
 
-def _misp_wait_landing_after_product_nav(page, *, step: str, timeout_ms: int) -> None:
+def _misp_url_is_login_redirection(url: str | None) -> bool:
+    """Post-sign-in bridge page that auto-redirects into the 2W app (no MainIndex hub tile)."""
+    return "login_redirection" in (url or "").lower()
+
+
+def _misp_url_is_mainindex_hub(url: str | None) -> bool:
+    """Product picker after login — **2W** tile click still required (not in-app shell)."""
+    return "mainindex.aspx" in (url or "").lower()
+
+
+def _misp_url_is_2w_app(url: str | None) -> bool:
+    """Inside the Hero MISP **2W** in-app shell (welcome, policy, KYC) — hub tile not required."""
+    low = (url or "").lower()
+    if "/2w/" not in low:
+        return False
+    if "misp-partner-login" in low:
+        return False
+    if "login_redirection" in low:
+        return False
+    if _misp_url_is_mainindex_hub(low):
+        return False
+    if "ekycpage" in low or "kycpage.aspx" in low:
+        return False
+    return True
+
+
+def _misp_page_is_2w_app_landed(page, *, nav_timeout_ms: int = 400) -> bool:
+    """Sidebar or in-app URL indicates 2W product nav — hub tile click is not required."""
+    try:
+        if _misp_url_is_mainindex_hub((page.url or "").strip()):
+            return False
+        if _misp_url_is_2w_app((page.url or "").strip()):
+            return True
+    except Exception:
+        pass
+    try:
+        nav = page.locator("#navbarVerticalNav").first
+        if nav.count() > 0:
+            nav.wait_for(state="visible", timeout=min(max(50, int(nav_timeout_ms)), 800))
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _wait_misp_leave_login_redirection(
+    page,
+    *,
+    timeout_ms: int | None = None,
+    ocr_output_dir=None,
+    subfolder: str | None = None,
+):
     """
-    After **2W** or **New Policy** click: short ``domcontentloaded`` + **UI readiness** instead of a long
-    load-state wait (SPAs often do not refire full load).
+    Poll while on ``Login_Redirection.html`` (and through Auto Login loading) until the hub or
+    in-app shell is ready. Do not exit on the first brief URL flash to MainIndex while loading.
+    Returns the active :class:`Page` (may differ from ``page`` when a sibling tab navigated first).
+    """
+    budget_ms = int(
+        timeout_ms if timeout_ms is not None else HERO_MISP_LOGIN_REDIRECTION_WAIT_MS
+    )
+    budget_ms = min(max(1_000, budget_ms), 45_000)
+    try:
+        start_url = (page.url or "").strip()
+    except Exception:
+        start_url = ""
+    if not _misp_url_is_login_redirection(start_url):
+        return page
+
+    def _left_login_redirection_ready(p) -> bool:
+        try:
+            pu = (p.url or "").strip()
+        except Exception:
+            return False
+        if _misp_url_is_login_redirection(pu):
+            return False
+        if _misp_loading_interstitial_visible(p):
+            return False
+        return (
+            _misp_nav_milestone_ready(p, "hub_ready")
+            or _misp_nav_milestone_ready(p, "in_app_shell")
+        )
+
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        "post_sign_in: Login_Redirection — waiting for hub or 2W shell",
+    )
+    logger.info(
+        "Hero Insurance: Login_Redirection — waiting up to %sms for hub or 2W shell.",
+        budget_ms,
+    )
+    return _wait_misp_past_loading_interstitial(
+        page,
+        is_ready=_left_login_redirection_ready,
+        phase="post_sign_in_login_redirection",
+        timeout_ms=budget_ms,
+        default_budget_ms=budget_ms,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+        allow_login_redirection=True,
+    )
+
+
+_MISP_POST_LOGIN_LOADING_JS = """() => {
+  const body = (document.body && document.body.innerText) || '';
+  const s = body.slice(0, 12000).replace(/\\s+/g, ' ');
+  if (/please\\s*wait|processing|redirecting|do\\s*not\\s*(refresh|close)|one\\s*moment|loading\\.\\.\\./i.test(s)) {
+    return true;
+  }
+  if (/loading\\.{2,}/i.test(s)) {
+    return true;
+  }
+  if (/auto\\s*login/i.test(s) && /loading/i.test(s)) {
+    return true;
+  }
+  const title = (document.title || '').replace(/\\s+/g, ' ');
+  if (/auto\\s*login/i.test(title) && /loading/i.test(s)) {
+    return true;
+  }
+  const sel = '.loading, .loader, #loading, #divLoading, [class*="loader" i], [id*="loading" i]';
+  for (const el of document.querySelectorAll(sel)) {
+    try {
+      const st = window.getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      if (st.display !== 'none' && st.visibility !== 'hidden' && r.width > 8 && r.height > 8) {
+        return true;
+      }
+    } catch (e) {}
+  }
+  return false;
+}"""
+
+
+def _misp_loading_interstitial_visible(page) -> bool:
+    """Transient MISP splash while navigating (post-login, post-2W, etc.)."""
+    try:
+        return bool(page.evaluate(_MISP_POST_LOGIN_LOADING_JS))
+    except Exception:
+        return False
+
+
+def _misp_post_login_loading_visible(page) -> bool:
+    """Backward-compatible alias."""
+    return _misp_loading_interstitial_visible(page)
+
+
+def _misp_2w_hub_present_on_page(page) -> bool:
+    try:
+        return bool(page.evaluate(_MISP_2W_HUB_PRESENT_JS))
+    except Exception:
+        return False
+
+
+def _misp_url_is_welcome_shell(url: str | None) -> bool:
+    """In-app 2W shell (Policy Issuance nav lives here), not MainIndex hub."""
+    low = (url or "").lower()
+    if "/2w/" not in low:
+        return False
+    return "/welcome/" in low or "default.aspx" in low
+
+
+def _navbar_vertical_nav_visible(page, *, nav_timeout_ms: int = 500) -> bool:
+    try:
+        nav = page.locator("#navbarVerticalNav").first
+        if nav.count() > 0:
+            nav.wait_for(state="visible", timeout=min(max(80, int(nav_timeout_ms)), 1_500))
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _misp_nav_milestone_ready(page, milestone: str, *, nav_timeout_ms: int = 500) -> bool:
+    """
+    URL-first MISP navigation milestones.
+
+    ``hub_ready`` — MainIndex product picker (URL + not loading; tile click sweep handles DOM lag).
+    ``in_app_shell`` — welcome/Default (or other /2W/ app path) with sidebar; never MainIndex.
+    """
+    if _misp_loading_interstitial_visible(page):
+        return False
+    try:
+        pu = (page.url or "").strip()
+    except Exception:
+        pu = ""
+    low = pu.lower()
+    if milestone == "hub_ready":
+        return _misp_url_is_mainindex_hub(low)
+    if milestone == "in_app_shell":
+        if _misp_url_is_mainindex_hub(low):
+            return False
+        if not _misp_url_is_2w_app(low):
+            return False
+        return _navbar_vertical_nav_visible(page, nav_timeout_ms=nav_timeout_ms)
+    return False
+
+
+def _post_2w_in_app_shell_ready(page, *, nav_timeout_ms: int = 500) -> bool:
+    """Strict post-2W readiness — New Policy only exists on welcome/Default, not MainIndex."""
+    return _misp_nav_milestone_ready(page, "in_app_shell", nav_timeout_ms=nav_timeout_ms)
+
+
+def _misp_nav_milestone_label(page, *, nav_timeout_ms: int = 500) -> str | None:
+    """Return the highest satisfied milestone name for logging."""
+    if _misp_nav_milestone_ready(page, "in_app_shell", nav_timeout_ms=nav_timeout_ms):
+        return "in_app_shell"
+    if _misp_nav_milestone_ready(page, "hub_ready", nav_timeout_ms=nav_timeout_ms):
+        return "hub_ready"
+    return None
+
+
+def _misp_nav_state_snapshot(page) -> dict:
+    """Diagnostic snapshot when a navigation wait fails."""
+    try:
+        pu = (page.url or "").strip()
+    except Exception:
+        pu = ""
+    low = pu.lower()
+    return {
+        "url": pu[:180],
+        "loading": _misp_loading_interstitial_visible(page),
+        "mainindex": _misp_url_is_mainindex_hub(low),
+        "welcome": _misp_url_is_welcome_shell(low),
+        "hub_present": _misp_2w_hub_present_on_page(page) if _misp_url_is_mainindex_hub(low) else False,
+        "navbar": _navbar_vertical_nav_visible(page, nav_timeout_ms=200),
+    }
+
+
+def _misp_policy_nav_shell_ready(page, *, nav_timeout_ms: int = 500) -> bool:
+    """Post-2W Issue Policy navigation shell (sidebar / welcome landing)."""
+    return _post_2w_in_app_shell_ready(page, nav_timeout_ms=nav_timeout_ms)
+
+
+def _wait_misp_past_loading_interstitial(
+    page,
+    *,
+    is_ready,
+    phase: str,
+    timeout_ms: int | None = None,
+    default_budget_ms: int,
+    ocr_output_dir=None,
+    subfolder: str | None = None,
+    allow_login_redirection: bool = False,
+):
+    """
+    Poll through loading / Please-wait screens until ``is_ready(page)`` or budget exhausted.
+    ``is_ready`` receives each candidate :class:`Page` from the browser context.
+    """
+    budget_ms = int(timeout_ms if timeout_ms is not None else default_budget_ms)
+    budget_ms = min(max(2_000, budget_ms), 45_000)
+    t0 = time.monotonic()
+    deadline = t0 + budget_ms / 1000.0
+    active = page
+    logged_loading = False
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        f"{phase}: waiting past loading interstitial (budget_ms={budget_ms})",
+    )
+    logger.info("Hero Insurance: %s — loading-tolerant wait up to %sms.", phase, budget_ms)
+    while time.monotonic() < deadline:
+        try:
+            for p in list(active.context.pages):
+                try:
+                    if p.is_closed():
+                        continue
+                    pu = (p.url or "").strip()
+                except Exception:
+                    continue
+                if _misp_url_is_login_redirection(pu) and not allow_login_redirection:
+                    continue
+                if _misp_loading_interstitial_visible(p):
+                    if not logged_loading:
+                        logged_loading = True
+                        append_playwright_insurance_line(
+                            ocr_output_dir,
+                            subfolder,
+                            "NOTE",
+                            f"{phase}: loading interstitial visible — waiting",
+                        )
+                        logger.info("Hero Insurance: %s — loading interstitial visible.", phase)
+                    continue
+                try:
+                    if is_ready(p):
+                        elapsed_ms = int((time.monotonic() - t0) * 1000)
+                        reason = _misp_nav_milestone_label(p) or "ready"
+                        snap = _misp_nav_state_snapshot(p)
+                        append_playwright_insurance_line(
+                            ocr_output_dir,
+                            subfolder,
+                            "NOTE",
+                            (
+                                f"{phase}: ready reason={reason} elapsed_ms={elapsed_ms} "
+                                f"url={pu[:120]} navbar={snap.get('navbar')}"
+                            ),
+                        )
+                        logger.info(
+                            "Hero Insurance: %s ready after %sms — reason=%s url=%s navbar=%s",
+                            phase,
+                            elapsed_ms,
+                            reason,
+                            pu[:180],
+                            snap.get("navbar"),
+                        )
+                        return p
+                except Exception as exc:
+                    logger.debug("Hero Insurance: %s readiness check: %s", phase, exc)
+                active = p
+        except Exception as exc:
+            logger.debug("Hero Insurance: %s poll: %s", phase, exc)
+        try:
+            if not active.is_closed():
+                active.wait_for_timeout(200)
+            else:
+                time.sleep(0.2)
+        except Exception:
+            time.sleep(0.2)
+
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    snap = _misp_nav_state_snapshot(active)
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "NOTE",
+        (
+            f"{phase}: wait ended without target ready elapsed_ms={elapsed_ms} "
+            f"url={snap.get('url', '')[:120]} loading={snap.get('loading')} "
+            f"mainindex={snap.get('mainindex')} navbar={snap.get('navbar')}"
+        ),
+    )
+    logger.info(
+        "Hero Insurance: %s wait ended without target ready (%sms) — %s",
+        phase,
+        elapsed_ms,
+        snap,
+    )
+    return active
+
+
+def _wait_misp_post_login_landing(
+    page,
+    *,
+    timeout_ms: int | None = None,
+    ocr_output_dir=None,
+    subfolder: str | None = None,
+):
+    """
+    After ``Login_Redirection`` (and optional brief ``MainIndex`` URL): MISP may show a loading
+    screen before the hub tile or ``welcome/Default`` shell. Poll until one is ready.
+    """
+
+    def _post_login_ready(p) -> bool:
+        if _misp_nav_milestone_ready(p, "in_app_shell", nav_timeout_ms=400):
+            return True
+        return _misp_nav_milestone_ready(p, "hub_ready", nav_timeout_ms=400)
+
+    return _wait_misp_past_loading_interstitial(
+        page,
+        is_ready=_post_login_ready,
+        phase="post_sign_in",
+        timeout_ms=timeout_ms,
+        default_budget_ms=HERO_MISP_POST_LOGIN_LANDING_WAIT_MS,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+
+
+def _wait_misp_after_2w_nav_landing(
+    page,
+    *,
+    timeout_ms: int | None = None,
+    ocr_output_dir=None,
+    subfolder: str | None = None,
+):
+    """
+    After **2W** hub click (or auto-nav): loading screen may appear before the Policy Issuance
+    sidebar on ``welcome/Default``. Poll until URL leaves MainIndex and in-app shell is ready.
+    """
+    budget_ms = int(timeout_ms if timeout_ms is not None else HERO_MISP_POST_2W_NAV_WAIT_MS)
+    page = _wait_misp_past_loading_interstitial(
+        page,
+        is_ready=_post_2w_in_app_shell_ready,
+        phase="post_2w_nav",
+        timeout_ms=timeout_ms,
+        default_budget_ms=HERO_MISP_POST_2W_NAV_WAIT_MS,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    try:
+        pu = (page.url or "").strip()
+    except Exception:
+        pu = ""
+    if _misp_url_is_mainindex_hub(pu):
+        msg = (
+            f"2W click did not reach welcome/Default (still on MainIndex after {budget_ms}ms)"
+        )
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            f"post_2w_nav: FAILED — {msg}",
+        )
+        logger.error("Hero Insurance: %s", msg)
+        raise TimeoutError(msg)
+    if not _post_2w_in_app_shell_ready(page):
+        snap = _misp_nav_state_snapshot(page)
+        msg = (
+            f"2W navigation did not reach in-app shell after {budget_ms}ms — {snap}"
+        )
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            f"post_2w_nav: FAILED — {msg[:200]}",
+        )
+        logger.error("Hero Insurance: %s", msg)
+        raise TimeoutError(msg)
+    return page
+
+
+def _misp_wait_landing_after_product_nav(
+    page,
+    *,
+    step: str,
+    timeout_ms: int,
+    ocr_output_dir=None,
+    subfolder: str | None = None,
+):
+    """
+    After **2W** or **New Policy** click: wait for target UI (loading-tolerant for **after_2w**).
     ``step``: ``after_2w`` | ``after_new_policy``.
-    Max UI readiness wait per step: ``HERO_MISP_LANDING_WAIT_MS`` (default **2500** ms).
     """
+    if step == "after_2w":
+        return _wait_misp_after_2w_nav_landing(
+            page,
+            timeout_ms=max(int(timeout_ms), int(HERO_MISP_POST_2W_NAV_WAIT_MS)),
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
     cap = min(max(800, int(timeout_ms)), int(HERO_MISP_LANDING_WAIT_MS))
     short_dom = min(1_500, cap)
     _wait_load_optional(page, short_dom)
-    if step == "after_2w":
-        try:
-            page.locator("#navbarVerticalNav").first.wait_for(state="visible", timeout=cap)
-            logger.debug("Hero Insurance: post-2W readiness: #navbarVerticalNav visible")
-            return
-        except Exception:
-            pass
-        try:
-            page.get_by_text("New Policy", exact=True).first.wait_for(state="visible", timeout=cap)
-            logger.debug("Hero Insurance: post-2W readiness: New Policy visible")
-            return
-        except Exception:
-            pass
-    elif step == "after_new_policy":
+    if step == "after_new_policy":
         try:
             page.wait_for_function(
                 """() => {
@@ -2392,6 +2894,7 @@ def _misp_wait_landing_after_product_nav(page, *, step: str, timeout_ms: int) ->
         except Exception:
             pass
     _wait_load_optional(page, min(2_000, cap))
+    return page
 
 
 _MISP_2W_HUB_PRESENT_JS = """() => !!(
@@ -2484,6 +2987,52 @@ def _click_2w_icon(
     (no nested ``nav iframe`` — this missed single-level hub iframes).
     """
     _insurance_click_settle(page)
+    if _misp_page_is_2w_app_landed(page):
+        logger.info("Hero Insurance: 2W already active — skip hub click.")
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "2W already active — skip hub click",
+        )
+        return
+    try:
+        cur_url = (page.url or "").strip()
+    except Exception:
+        cur_url = ""
+    if _misp_url_is_login_redirection(cur_url):
+        page = _wait_misp_leave_login_redirection(
+            page,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+        if _misp_page_is_2w_app_landed(page):
+            logger.info("Hero Insurance: 2W app ready after Login_Redirection — skip hub click.")
+            append_playwright_insurance_line(
+                ocr_output_dir,
+                subfolder,
+                "NOTE",
+                "2W already active after Login_Redirection — skip hub click",
+            )
+            return
+    if not (
+        _misp_nav_milestone_ready(page, "hub_ready")
+        or _misp_nav_milestone_ready(page, "in_app_shell")
+    ):
+        page = _wait_misp_post_login_landing(
+            page,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+    if _misp_page_is_2w_app_landed(page):
+        logger.info("Hero Insurance: 2W app shell ready after landing wait — skip hub click.")
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "2W already active after post-login landing wait — skip hub click",
+        )
+        return
     wto = min(int(timeout_ms), 8_000)
     hub_wait_ms = min(16_000, max(9_000, int(timeout_ms) * 2))
     if not _wait_misp_2w_hub_ready(page, timeout_ms=hub_wait_ms):
@@ -2605,6 +3154,7 @@ def _click_2w_icon(
 
     def _2w_sweep_all_contexts() -> bool:
         """``iframe`` filter first (``src`` may omit ``2w``); then every :class:`Frame` + JS. Returns **True** if 2W fired."""
+        nonlocal page
         if (INSURANCE_NAV_IFRAME_SELECTOR or "").strip():
             try:
                 fl = page.frame_locator(INSURANCE_NAV_IFRAME_SELECTOR)
@@ -2619,8 +3169,12 @@ def _click_2w_icon(
                     ("img[alt=\"2W Icon\"]", "ifl_img"),
                 ):
                     if _try_click_on_loc(fl.locator(sel), f"IFRAME:{tag}"):
-                        _misp_wait_landing_after_product_nav(
-                            page, step="after_2w", timeout_ms=timeout_ms
+                        page = _misp_wait_landing_after_product_nav(
+                            page,
+                            step="after_2w",
+                            timeout_ms=timeout_ms,
+                            ocr_output_dir=ocr_output_dir,
+                            subfolder=subfolder,
                         )
                         return True
             except Exception as exc:
@@ -2648,8 +3202,12 @@ def _click_2w_icon(
                 pass
             try:
                 if _try_on_root(cfr):
-                    _misp_wait_landing_after_product_nav(
-                        page, step="after_2w", timeout_ms=timeout_ms
+                    page = _misp_wait_landing_after_product_nav(
+                        page,
+                        step="after_2w",
+                        timeout_ms=timeout_ms,
+                        ocr_output_dir=ocr_output_dir,
+                        subfolder=subfolder,
                     )
                     return True
             except Exception as exc:
@@ -2657,8 +3215,12 @@ def _click_2w_icon(
         for fr in list(page.frames):
             try:
                 if _try_on_root(fr):
-                    _misp_wait_landing_after_product_nav(
-                        page, step="after_2w", timeout_ms=timeout_ms
+                    page = _misp_wait_landing_after_product_nav(
+                        page,
+                        step="after_2w",
+                        timeout_ms=timeout_ms,
+                        ocr_output_dir=ocr_output_dir,
+                        subfolder=subfolder,
                     )
                     return True
             except Exception as exc:
@@ -2670,8 +3232,12 @@ def _click_2w_icon(
                 hit = ""
             if hit and hit not in ("err", "e2"):
                 logger.info("Hero Insurance: clicked 2W control (evaluate_in_frame %s).", hit)
-                _misp_wait_landing_after_product_nav(
-                    page, step="after_2w", timeout_ms=timeout_ms
+                page = _misp_wait_landing_after_product_nav(
+                    page,
+                    step="after_2w",
+                    timeout_ms=timeout_ms,
+                    ocr_output_dir=ocr_output_dir,
+                    subfolder=subfolder,
                 )
                 return True
         return False
@@ -2683,6 +3249,24 @@ def _click_2w_icon(
     )
     _t(page, 1_200)
     _wait_misp_2w_hub_ready(page, timeout_ms=6_000)
+    if _2w_sweep_all_contexts():
+        return
+
+    page = _wait_misp_post_login_landing(
+        page,
+        timeout_ms=min(10_000, int(HERO_MISP_POST_LOGIN_LANDING_WAIT_MS)),
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    if _misp_page_is_2w_app_landed(page):
+        logger.info("Hero Insurance: 2W app shell appeared during retry — skip hub click.")
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "NOTE",
+            "2W already active after landing retry — skip hub click",
+        )
+        return
     if _2w_sweep_all_contexts():
         return
 
@@ -2766,13 +3350,30 @@ def _click_new_policy(
     ocr_output_dir: Path | None = None,
     subfolder: str | None = None,
 ) -> None:
-    _ = (ocr_output_dir, subfolder)  # optional: reserved for future frame-dump on miss
+    nav_budget_ms = max(int(timeout_ms), int(HERO_MISP_POST_2W_NAV_WAIT_MS))
+    try:
+        cur_url = (page.url or "").strip()
+    except Exception:
+        cur_url = ""
+    if _misp_url_is_mainindex_hub(cur_url) or not _post_2w_in_app_shell_ready(page):
+        page = _wait_misp_after_2w_nav_landing(
+            page,
+            timeout_ms=nav_budget_ms,
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
     _expand_misp_policy_issuance_nav_if_collapsed(page, timeout_ms=timeout_ms)
     loc = page.get_by_text("New Policy", exact=True)
-    loc.first.wait_for(state="visible", timeout=timeout_ms)
+    loc.first.wait_for(state="visible", timeout=nav_budget_ms)
     loc.first.click(timeout=timeout_ms)
     logger.info("Hero Insurance: clicked New Policy.")
-    _misp_wait_landing_after_product_nav(page, step="after_new_policy", timeout_ms=timeout_ms)
+    _misp_wait_landing_after_product_nav(
+        page,
+        step="after_new_policy",
+        timeout_ms=timeout_ms,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
 
 
 def _misp_snapshot_context_pages(page) -> list:
@@ -5965,7 +6566,7 @@ def _run_hero_misp_portal_after_open(
                 "run_fill_insurance_only: Sign In not auto-clicked — password field not ready or "
                 "Sign In did not leave partner login; complete login manually if needed.",
             )
-    _hero_misp_after_sign_in_settle(page)
+    page = _hero_misp_after_sign_in_settle(page)
 
     page, err_2w = _misp_click_nav_step(
         page, _click_2w_icon, "2W Icon",
@@ -6259,6 +6860,263 @@ def _proposal_read_nominee_name_txt(page) -> str | None:
         except Exception:
             continue
     return None
+
+
+def _split_proposer_name_tokens(full: str) -> tuple[str, str, str]:
+    """Split full name into first, middle (may be empty), last for KYC verify logging/match."""
+    parts = (full or "").strip().split()
+    if not parts:
+        return "", "", ""
+    if len(parts) == 1:
+        return parts[0], "", parts[0]
+    if len(parts) == 2:
+        return parts[0], "", parts[1]
+    return parts[0], " ".join(parts[1:-1]), parts[-1]
+
+
+def _proposal_read_proposer_name_value_from_cph1_roots(
+    page,
+    suffixes: tuple[str, ...],
+) -> tuple[str, bool]:
+    """First visible matching CPH1 control; return ``(value, locator_found)``."""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        for suffix in suffixes:
+            try:
+                loc = _proposal_cph1_locator(root, suffix)
+                n = loc.count()
+                if n == 0:
+                    continue
+                for idx in range(min(n, 12)):
+                    el = loc.nth(idx)
+                    try:
+                        if not el.is_visible(timeout=400):
+                            continue
+                    except Exception:
+                        pass
+                    return _proposal_read_input_value_best_effort(el), True
+            except Exception:
+                continue
+    return "", False
+
+
+def _proposal_read_proposer_name_field(
+    page,
+    *,
+    field: Literal["first", "middle", "last"],
+) -> tuple[str, bool]:
+    """
+    Read KYC-populated proposer name field on **MispPolicy.aspx**.
+    Returns ``(value, locator_found)`` — middle may have ``locator_found=False`` (optional on portal).
+    """
+    label_pat = _PROPOSER_NAME_LABEL_PATTERNS.get(field)
+    if label_pat:
+        el = _proposal_first_label_control_locator(page, label_pat)
+        if el is not None:
+            return _proposal_read_input_value_best_effort(el), True
+    suffixes = _PROPOSER_NAME_CPH1_SUFFIXES_BY_FIELD.get(field, ())
+    return _proposal_read_proposer_name_value_from_cph1_roots(page, suffixes)
+
+
+def _proposal_read_proposer_name_triplet(
+    page,
+) -> tuple[str, str, str, bool, bool]:
+    """``(first, middle, last, first_locator_found, last_locator_found)``."""
+    first, first_found = _proposal_read_proposer_name_field(page, field="first")
+    middle, _middle_found = _proposal_read_proposer_name_field(page, field="middle")
+    last, last_found = _proposal_read_proposer_name_field(page, field="last")
+    return first, middle, last, first_found, last_found
+
+
+def _insurance_kyc_proposer_name_matches(
+    expected_full: str,
+    portal_first: str,
+    portal_middle: str,
+    portal_last: str,
+) -> bool:
+    """
+    Compare portal KYC name to DB ``customer_name``: strong first+last anchor;
+    middle name(s) are optional (low weight — no fail solely on middle mismatch).
+    """
+    exp_first, _exp_middle, exp_last = _split_proposer_name_tokens(expected_full)
+    exp_parts = (expected_full or "").strip().split()
+    port_first = (portal_first or "").strip()
+    port_middle = (portal_middle or "").strip()
+    port_last = (portal_last or "").strip()
+    if not exp_parts:
+        return False
+    if not port_first and not port_last:
+        return False
+
+    if len(exp_parts) == 1:
+        token = exp_parts[0]
+        if port_last:
+            return (
+                _proposal_expected_matches_readback(token, port_first)
+                and _proposal_expected_matches_readback(token, port_last)
+            )
+        return _proposal_expected_matches_readback(token, port_first)
+
+    if not port_first:
+        port_first = port_last
+    if not port_last:
+        port_last = port_first
+
+    if not _proposal_expected_matches_readback(exp_first, port_first):
+        return False
+    if not _proposal_expected_matches_readback(exp_last, port_last):
+        return False
+    return True
+
+
+def _log_kyc_proposer_name_verify(
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    expected_full: str,
+    portal_first: str,
+    portal_middle: str,
+    portal_last: str,
+    portal_full: str,
+    match: bool,
+) -> None:
+    exp_first, exp_middle, exp_last = _split_proposer_name_tokens(expected_full)
+    _proposal_log(
+        ocr_output_dir,
+        subfolder,
+        "kyc_proposer_name",
+        f"expected_full={expected_full!r}",
+    )
+    _proposal_log(
+        ocr_output_dir,
+        subfolder,
+        "kyc_proposer_name",
+        (
+            f"portal_first={portal_first!r} portal_middle={portal_middle!r} "
+            f"portal_last={portal_last!r}"
+        ),
+    )
+    _proposal_log(
+        ocr_output_dir,
+        subfolder,
+        "kyc_proposer_name",
+        f"portal_full={portal_full!r}",
+    )
+    if match:
+        _proposal_log(ocr_output_dir, subfolder, "kyc_proposer_name", "match=ok")
+        return
+    if not _proposal_expected_matches_readback(exp_first, portal_first):
+        _proposal_log(
+            ocr_output_dir,
+            subfolder,
+            "kyc_proposer_name",
+            f"MISMATCH expected_first={exp_first!r} portal_first={portal_first!r}",
+        )
+    if not _proposal_expected_matches_readback(exp_last, portal_last):
+        _proposal_log(
+            ocr_output_dir,
+            subfolder,
+            "kyc_proposer_name",
+            f"MISMATCH expected_last={exp_last!r} portal_last={portal_last!r}",
+        )
+    if exp_middle or portal_middle:
+        if not _proposal_expected_matches_readback(exp_middle, portal_middle):
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                "kyc_proposer_name",
+                (
+                    f"MISMATCH expected_middle={exp_middle!r} "
+                    f"portal_middle={portal_middle!r}"
+                ),
+            )
+
+
+def _hero_misp_verify_kyc_proposer_name(
+    page,
+    values: dict,
+    *,
+    ocr_output_dir: Path | None = None,
+    subfolder: str | None = None,
+) -> str | None:
+    """
+    Before proposal fill: read KYC proposer First/Last (Middle optional) and compare to
+    ``values['customer_name']``. Returns an error message or **None** when ok.
+    """
+    expected_full = clean_text(values.get("customer_name"))
+    if not expected_full:
+        return None
+
+    portal_first, portal_middle, portal_last, first_found, last_found = (
+        _proposal_read_proposer_name_triplet(page)
+    )
+    portal_first = (portal_first or "").strip()
+    portal_middle = (portal_middle or "").strip()
+    portal_last = (portal_last or "").strip()
+    portal_full = " ".join(p for p in (portal_first, portal_middle, portal_last) if p).strip()
+
+    if (
+        not first_found
+        or not last_found
+        or not portal_first
+        or not portal_last
+    ):
+        _proposal_log(
+            ocr_output_dir,
+            subfolder,
+            "kyc_proposer_name",
+            (
+                f"fields_not_found first_found={first_found} last_found={last_found} "
+                f"portal_first={portal_first!r} portal_last={portal_last!r}"
+            ),
+        )
+        if page is not None and ocr_output_dir and (subfolder or "").strip():
+            _append_hero_misp_frame_dump(
+                page,
+                reason="kyc_proposer_name_fields_not_found",
+                ocr_output_dir=ocr_output_dir,
+                subfolder=subfolder,
+            )
+        append_playwright_insurance_line(
+            ocr_output_dir,
+            subfolder,
+            "ERROR",
+            f"main_process proposal form: {KYC_PROPOSER_NAME_FIELDS_NOT_FOUND_ERR}",
+        )
+        return KYC_PROPOSER_NAME_FIELDS_NOT_FOUND_ERR
+
+    match = _insurance_kyc_proposer_name_matches(
+        expected_full,
+        portal_first,
+        portal_middle,
+        portal_last,
+    )
+    _log_kyc_proposer_name_verify(
+        ocr_output_dir,
+        subfolder,
+        expected_full=expected_full,
+        portal_first=portal_first,
+        portal_middle=portal_middle,
+        portal_last=portal_last,
+        portal_full=portal_full,
+        match=match,
+    )
+    if match:
+        return None
+
+    append_playwright_insurance_line(
+        ocr_output_dir,
+        subfolder,
+        "ERROR",
+        f"main_process proposal form: {KYC_PROPOSER_NAME_MISMATCH_ERR}",
+    )
+    if page is not None and ocr_output_dir and (subfolder or "").strip():
+        _append_hero_misp_frame_dump(
+            page,
+            reason="kyc_proposer_name_mismatch",
+            ocr_output_dir=ocr_output_dir,
+            subfolder=subfolder,
+        )
+    return KYC_PROPOSER_NAME_MISMATCH_ERR
 
 
 def _proposal_step_fill_dob(
@@ -7490,19 +8348,42 @@ def _proposal_step_hero_cpi_addon_by_dealer_flag(
     *,
     timeout_ms: int,
 ) -> str | None:
-    """``hero_cpi`` **Y** = check matching add-on row; **N** = uncheck if present (after CPA Tenure 0 in proposal fill)."""
+    """``hero_cpi`` **Y** = check matching add-on row when present; **N** = uncheck if present.
+
+    Bajaj: **CPA Tenure** left at portal default (**1**) when **Y** — CPI is tenure-driven; no separate
+    NIC/CPI checkbox step. Other insurers: check row when found; skip (not fail) when absent.
+    """
     flag = normalize_hero_cpi_flag(values.get("hero_cpi"))
     _proposal_log(
         ocr_output_dir,
         subfolder,
         step_id,
-        f"dealer hero_cpi={flag!r} (Y=check NIC/CPI row, N=uncheck)",
+        f"dealer hero_cpi={flag!r} (Y=check NIC/CPI row when present, N=uncheck)",
     )
     pat = HERO_MISP_HERO_CPI_ADDON_CHECKBOX_PATTERN
+    insurer = (values.get("insurer") or "")
+    is_bajaj = bool(re.search(r"\bbajaj\b", insurer, re.IGNORECASE))
     if flag == "Y":
-        return _proposal_step_checkbox(
+        if is_bajaj:
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                "skip: Bajaj hero_cpi=Y — CPA Tenure default (1) applies; no separate CPI checkbox step",
+            )
+            return None
+        err = _proposal_step_checkbox(
             page, pat, True, step_id, ocr_output_dir, subfolder, timeout_ms=timeout_ms
         )
+        if err and "checkbox not found for pattern" in err:
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                step_id,
+                "skip: CPI/NIC add-on row absent (hero_cpi=Y; portal may enable CPI without this checkbox)",
+            )
+            return None
+        return err
     return _proposal_step_checkbox_uncheck_if_present(
         page, pat, step_id, ocr_output_dir, subfolder, timeout_ms=timeout_ms
     )
@@ -10200,6 +11081,15 @@ def _hero_misp_fill_proposal_and_review(
         subfolder=subfolder,
     )
 
+    kyc_name_err = _hero_misp_verify_kyc_proposer_name(
+        page,
+        values,
+        ocr_output_dir=ocr_output_dir,
+        subfolder=subfolder,
+    )
+    if kyc_name_err:
+        return kyc_name_err, {}
+
     raw_marital = (values.get("marital_status") or "").strip()
     ms = _proposal_map_marital_for_misp(raw_marital)
     if raw_marital:
@@ -10577,6 +11467,11 @@ def _hero_misp_fill_proposal_and_review(
     _is_bajaj_insurance = bool(
         re.search(r"\bbajaj\b", (values.get("insurer") or ""), re.IGNORECASE)
     )
+    _addon_flags = values.get("insurance_addon_flags") if isinstance(values.get("insurance_addon_flags"), dict) else {}
+    _addon_nd = bool(_addon_flags.get("nd_cover"))
+    _addon_rti = bool(_addon_flags.get("rti"))
+    _addon_rim = bool(_addon_flags.get("rim_safeguard"))
+    _addon_rsa = bool(_addon_flags.get("rsa"))
     # MispPolicy add-on grid: **ND Cover** is the top row; **ND Plus Cover** is directly below.
     # Do not use plain ``Nil\s*Depreciation`` for ND Cover — it matches **Nil Depreciation Plus** on the next row.
     # **Mutual exclusion:** checking one row clears the other; unchecking one does **not** clear the other.
@@ -10584,37 +11479,56 @@ def _hero_misp_fill_proposal_and_review(
     _nd_cover_label_pat = r"ND\s*Cover(?!\s*Plus)|Nil\s*Depreciation(?!\s*Plus)"
     _nd_plus_label_pat = r"ND\s*Plus\s*Cover|Nil\s*Depreciation\s*Plus"
     if _is_national_insurance:
-        err = _proposal_addon_checkbox_id_or_label(
-            page,
-            "chkNilDepreciation",
-            False,
-            "addon_nd_cover_uncheck_before_nd_plus",
-            _nd_cover_label_pat,
-            ocr_output_dir,
-            subfolder,
-            timeout_ms=pt,
-        )
-        if err:
-            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
-        _t(page, 600)
-        err = _proposal_addon_checkbox_id_or_label(
-            page,
-            "chkNilDepreciationPlus",
-            True,
-            "addon_nd_plus_cover",
-            _nd_plus_label_pat,
-            ocr_output_dir,
-            subfolder,
-            timeout_ms=pt,
-        )
-        if err:
-            return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
-        _t(page, 800)
+        if _addon_nd:
+            err = _proposal_addon_checkbox_id_or_label(
+                page,
+                "chkNilDepreciation",
+                False,
+                "addon_nd_cover_uncheck_before_nd_plus",
+                _nd_cover_label_pat,
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+            )
+            if err:
+                return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
+            _t(page, 600)
+            err = _proposal_addon_checkbox_id_or_label(
+                page,
+                "chkNilDepreciationPlus",
+                True,
+                "addon_nd_plus_cover",
+                _nd_plus_label_pat,
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=pt,
+            )
+            if err:
+                return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
+            _t(page, 800)
+        else:
+            for _nd_id, _nd_step, _nd_pat, _nd_on in (
+                ("chkNilDepreciation", "addon_nd_cover_uncheck", _nd_cover_label_pat, False),
+                ("chkNilDepreciationPlus", "addon_nd_plus_cover_uncheck", _nd_plus_label_pat, False),
+            ):
+                err = _proposal_addon_checkbox_id_or_label(
+                    page,
+                    _nd_id,
+                    _nd_on,
+                    _nd_step,
+                    _nd_pat,
+                    ocr_output_dir,
+                    subfolder,
+                    timeout_ms=pt,
+                    optional=True,
+                )
+                if err:
+                    return _proposal_fail_with_addon_dump(ocr_output_dir, subfolder, err, page=page)
     else:
         err = _proposal_addon_checkbox_id_or_label(
             page,
             "chkNilDepreciation",
-            True,
+            _addon_nd,
             "addon_nd_cover",
             _nd_cover_label_pat,
             ocr_output_dir,
@@ -10628,7 +11542,7 @@ def _hero_misp_fill_proposal_and_review(
     err = _proposal_addon_checkbox_id_or_label(
         page,
         "chkroicover",
-        False,
+        _addon_rti,
         "addon_rti",
         r"RTI\s*Cover|RTI\s*&?\s*Cover|R\.?T\.?I\.?\s*Cover|Return\s+to\s+Invoice|"
         r"Return\s*to\s*Invoice\s*\(?\s*RTI|Invoice\s*Cover|Cover\s*[-–]?\s*RTI|ROI",
@@ -10654,14 +11568,14 @@ def _hero_misp_fill_proposal_and_review(
             _proposal_scroll_root_to_bottom(_r)
         _t(page, 400)
         # Phase 1 — Addons section: id-only (shared panel text breaks label regex).
-        for _id_suffix, _step_id in (
-            ("chkRim", "addon_rim_safeguard"),
-            ("chkRSA", "addon_rsa"),
+        for _id_suffix, _step_id, _target in (
+            ("chkRim", "addon_rim_safeguard", _addon_rim),
+            ("chkRSA", "addon_rsa", _addon_rsa),
         ):
             err = _proposal_addon_checkbox_id_or_label(
                 page,
                 _id_suffix,
-                True,
+                _target,
                 _step_id,
                 _rim_safeguard_pat if _step_id == "addon_rim_safeguard" else _rsa_addon_pat,
                 ocr_output_dir,
@@ -10754,7 +11668,7 @@ def _hero_misp_fill_proposal_and_review(
         err = _proposal_addon_checkbox_id_or_label(
             page,
             "chkRSA",
-            False,
+            _addon_rsa,
             "addon_rsa",
             _rsa_addon_pat,
             ocr_output_dir,
@@ -10793,7 +11707,7 @@ def _hero_misp_fill_proposal_and_review(
 
     # Re-assert ND Plus Cover for NIC after all other addon toggles which may
     # have triggered ASP.NET postbacks that reset the addon grid.
-    if _is_national_insurance:
+    if _is_national_insurance and _addon_nd:
         _t(page, 500)
         for _nd_retry in range(3):
             err = _proposal_addon_checkbox_id_or_label(
@@ -11708,7 +12622,7 @@ def open_misp_page_sign_in_and_2w_only(
                 ocr_output_dir, subfolder, "NOTE",
                 "open_misp_2w_only: Sign In not auto-clicked — complete login manually if needed.",
             )
-    _hero_misp_after_sign_in_settle(page)
+    page = _hero_misp_after_sign_in_settle(page)
     _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_sign_in_settle")
     page, err_2w = _misp_click_nav_step(
         page, _click_2w_icon, "2W (two-wheeler)",
@@ -11838,7 +12752,7 @@ def run_fill_insurance_only(
                     "Sign In did not leave partner login; complete login manually if needed.",
                 )
         # Same MISP landing as Hero pre_process: after login, **2W** then **New Policy** before KYC / dummy fields.
-        _hero_misp_after_sign_in_settle(page)
+        page = _hero_misp_after_sign_in_settle(page)
         _insurance_pre_elapsed_note(ocr_output_dir, subfolder, t0_flow, "after_sign_in_settle")
         page, err_2w = _misp_click_nav_step(
             page, _click_2w_icon, "2W (two-wheeler)",

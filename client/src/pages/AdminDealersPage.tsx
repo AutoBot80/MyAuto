@@ -6,16 +6,23 @@ import {
   getAdminDealerDiscounts,
   getAdminDealerLogins,
   getAdminDealerNames,
+  getAdminInsuranceAddons,
   getAdminLoginCatalog,
   getAdminPortalInsurers,
   getAdminRoles,
   patchAdminDealerInsurerCpi,
   upsertLoginAssignments,
   type DealerLoginAssignmentRow,
+  type AdminInsuranceAddonRow,
   type JsonRecord,
   type SubdealerDiscountRow,
 } from "../api/adminDealers";
 import "./AdminDealersPage.css";
+import {
+  mergeSelectedInsuranceAddonOption,
+  normalizeInsuranceAddonRows,
+  type InsuranceAddonSelectRow,
+} from "../utils/insuranceAddonUi";
 
 type SubTab = "logins" | "discounts";
 
@@ -127,6 +134,9 @@ export function AdminDealersPage() {
   const [preferInsurerEdit, setPreferInsurerEdit] = useState("");
   const [portalInsurers, setPortalInsurers] = useState<string[]>([]);
   const [portalInsurersError, setPortalInsurersError] = useState<string | null>(null);
+  const [insuranceAddonCatalog, setInsuranceAddonCatalog] = useState<AdminInsuranceAddonRow[]>([]);
+  const [insuranceAddonOptions, setInsuranceAddonOptions] = useState<AdminInsuranceAddonRow[]>([]);
+  const [insuranceAddonEdit, setInsuranceAddonEdit] = useState<number | "">("");
   const [heroCpiEdit, setHeroCpiEdit] = useState<"Y" | "N">("N");
   const [cpiReqdEdit, setCpiReqdEdit] = useState<"Y" | "N">("N");
   const [insurancePayEdit, setInsurancePayEdit] = useState<"CC" | "APD">("APD");
@@ -181,6 +191,47 @@ export function AdminDealersPage() {
         setPortalInsurersError(e instanceof Error ? e.message : "Could not load portal insurers.");
       });
   }, []);
+
+  useEffect(() => {
+    getAdminInsuranceAddons()
+      .then((res) => {
+        setInsuranceAddonCatalog(
+          Array.isArray(res.insurance_addons) ? res.insurance_addons : []
+        );
+      })
+      .catch(() => {
+        setInsuranceAddonCatalog([]);
+      });
+  }, []);
+
+  useEffect(() => {
+    const pi = preferInsurerEdit.trim();
+    if (!pi) {
+      setInsuranceAddonOptions([]);
+      return;
+    }
+    let cancelled = false;
+    getAdminInsuranceAddons(pi)
+      .then((res) => {
+        if (!cancelled) {
+          setInsuranceAddonOptions(
+            Array.isArray(res.insurance_addons) ? res.insurance_addons : []
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setInsuranceAddonOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [preferInsurerEdit]);
+
+  const insuranceAddonSelectRows = useMemo((): InsuranceAddonSelectRow[] => {
+    const scoped = normalizeInsuranceAddonRows(insuranceAddonOptions);
+    const catalog = normalizeInsuranceAddonRows(insuranceAddonCatalog);
+    return mergeSelectedInsuranceAddonOption(scoped, insuranceAddonEdit, catalog);
+  }, [insuranceAddonOptions, insuranceAddonCatalog, insuranceAddonEdit]);
 
   useEffect(() => {
     if (selectedId == null) {
@@ -277,6 +328,7 @@ export function AdminDealersPage() {
       setCpiReqdEdit("N");
       setInsurancePayEdit("APD");
       setDmsSiebelPortalEdit("HMCL");
+      setInsuranceAddonEdit("");
       return;
     }
     const pi = detail.prefer_insurer;
@@ -285,6 +337,13 @@ export function AdminDealersPage() {
     setCpiReqdEdit(normalizeCpiReqd(detail.cpi_reqd));
     setInsurancePayEdit(normalizeInsurancePay(detail.insurance_pay));
     setDmsSiebelPortalEdit(normalizeDmsSiebelPortal(detail.dms_siebel_portal));
+    const addonRaw = detail.insurance_addon;
+    if (addonRaw == null || addonRaw === "") {
+      setInsuranceAddonEdit("");
+    } else {
+      const n = Number(addonRaw);
+      setInsuranceAddonEdit(Number.isFinite(n) && n > 0 ? n : "");
+    }
   }, [detail]);
 
   const detailRows = useMemo(() => {
@@ -303,6 +362,7 @@ export function AdminDealersPage() {
     }
     rows.push(
       { key: "prefer_insurer", label: "Prefered Insurance" },
+      { key: "insurance_addon", label: "Insurance Add-ons" },
       { key: "hero_cpi", label: "Hero CPI" },
       { key: "insurance_pay", label: "Insurance Pay" },
       { key: "cpi_reqd", label: "CPA Reqd" },
@@ -322,14 +382,23 @@ export function AdminDealersPage() {
     const savedCpiReqd = normalizeCpiReqd(detail.cpi_reqd);
     const savedInsurancePay = normalizeInsurancePay(detail.insurance_pay);
     const savedDmsSiebelPortal = normalizeDmsSiebelPortal(detail.dms_siebel_portal);
+    const savedAddon =
+      detail.insurance_addon == null || detail.insurance_addon === ""
+        ? ""
+        : Number(detail.insurance_addon);
+    const savedAddonNorm =
+      typeof savedAddon === "number" && Number.isFinite(savedAddon) && savedAddon > 0
+        ? savedAddon
+        : "";
     return (
       preferInsurerEdit !== savedPi ||
+      insuranceAddonEdit !== savedAddonNorm ||
       heroCpiEdit !== savedHero ||
       cpiReqdEdit !== savedCpiReqd ||
       insurancePayEdit !== savedInsurancePay ||
       dmsSiebelPortalEdit !== savedDmsSiebelPortal
     );
-  }, [detail, selectedId, preferInsurerEdit, heroCpiEdit, cpiReqdEdit, insurancePayEdit, dmsSiebelPortalEdit]);
+  }, [detail, selectedId, preferInsurerEdit, insuranceAddonEdit, heroCpiEdit, cpiReqdEdit, insurancePayEdit, dmsSiebelPortalEdit]);
 
   function addLoginDraftRow() {
     setLoginDrafts((prev) => [...prev, newLoginDraft()]);
@@ -541,6 +610,7 @@ export function AdminDealersPage() {
         cpi_reqd: cpiReqdEdit,
         insurance_pay: insurancePayEdit,
         dms_siebel_portal: dmsSiebelPortalEdit,
+        insurance_addon: insuranceAddonEdit === "" ? null : insuranceAddonEdit,
       });
       setDetail(updated);
     } catch (e) {
@@ -645,7 +715,10 @@ export function AdminDealersPage() {
                                 ? preferInsurerEdit
                                 : ""
                             }
-                            onChange={(e) => setPreferInsurerEdit(e.target.value)}
+                            onChange={(e) => {
+                              setPreferInsurerEdit(e.target.value);
+                              setInsuranceAddonEdit("");
+                            }}
                             disabled={busy || savingDetail}
                             aria-label="Preferred Insurance"
                           >
@@ -674,6 +747,34 @@ export function AdminDealersPage() {
                             aria-label="Preferred Insurance"
                             placeholder="Portal insurers not loaded"
                           />
+                        )
+                      ) : key === "insurance_addon" ? (
+                        preferInsurerEdit.trim() ? (
+                          <select
+                            className="view-vehicles-kv-select"
+                            value={
+                              insuranceAddonSelectRows.some(
+                                (o) => o.insurance_addon_id === insuranceAddonEdit
+                              )
+                                ? String(insuranceAddonEdit)
+                                : ""
+                            }
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setInsuranceAddonEdit(v === "" ? "" : Number(v));
+                            }}
+                            disabled={busy || savingDetail}
+                            aria-label="Insurance Add-ons"
+                          >
+                            <option value="">— None —</option>
+                            {insuranceAddonSelectRows.map((row) => (
+                              <option key={row.insurance_addon_id} value={row.insurance_addon_id}>
+                                {row.display_label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span>Select preferred insurance first</span>
                         )
                       ) : key === "hero_cpi" ? (
                         <select
