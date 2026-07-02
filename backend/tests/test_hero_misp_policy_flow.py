@@ -618,6 +618,13 @@ def test_insurance_kyc_proposer_name_matches_anchor() -> None:
         "SINGH",
     )
     assert fhi._insurance_kyc_proposer_name_matches("Madonna", "Madonna", "", "")
+    assert fhi._insurance_kyc_proposer_name_matches("GHANSHYAM", "GHANSHYAM", "", ".")
+    assert fhi._insurance_kyc_proposer_name_matches(
+        "ANOOP KUMAR SINGH",
+        "ANOOP KUMAR",
+        "",
+        ".",
+    )
     assert not fhi._insurance_kyc_proposer_name_matches(
         "ANOOP SINGH",
         "ANOOP",

@@ -6874,6 +6874,34 @@ def _split_proposer_name_tokens(full: str) -> tuple[str, str, str]:
     return parts[0], " ".join(parts[1:-1]), parts[-1]
 
 
+_KYC_PROPOSER_NAME_JUNK_TOKENS = frozenset({".", "..", "...", "-", "--", "_", "na", "n/a"})
+
+
+def _kyc_proposer_name_clean_token(raw: str) -> str:
+    """Strip whitespace and trailing dots from a portal name token."""
+    return (raw or "").strip().strip(".").strip()
+
+
+def _is_kyc_proposer_name_junk_token(token: str) -> bool:
+    """True when middle/last readback is placeholder punctuation, not a real name."""
+    t = _kyc_proposer_name_clean_token(token)
+    if not t:
+        return True
+    if t.lower() in _KYC_PROPOSER_NAME_JUNK_TOKENS:
+        return True
+    if all(c in ".-_" for c in t):
+        return True
+    return False
+
+
+def _kyc_proposer_first_word(field_value: str) -> str:
+    """First meaningful word from a portal name field (multi-word first names use first token only)."""
+    cleaned = _kyc_proposer_name_clean_token(field_value)
+    if not cleaned:
+        return ""
+    return cleaned.split()[0]
+
+
 def _proposal_read_proposer_name_value_from_cph1_roots(
     page,
     suffixes: tuple[str, ...],
@@ -6934,37 +6962,29 @@ def _insurance_kyc_proposer_name_matches(
     portal_last: str,
 ) -> bool:
     """
-    Compare portal KYC name to DB ``customer_name``: strong first+last anchor;
-    middle name(s) are optional (low weight — no fail solely on middle mismatch).
+    Compare portal KYC name to DB ``customer_name``.
+
+    Primary gate: **first name** — portal **First Name** field's first word vs expected
+    first token. Middle/last junk (e.g. ``.``) is ignored. When expected has a surname,
+    portal **Last Name** is checked only when it contains a meaningful (non-junk) token.
     """
-    exp_first, _exp_middle, exp_last = _split_proposer_name_tokens(expected_full)
     exp_parts = (expected_full or "").strip().split()
-    port_first = (portal_first or "").strip()
-    port_middle = (portal_middle or "").strip()
-    port_last = (portal_last or "").strip()
     if not exp_parts:
         return False
-    if not port_first and not port_last:
+
+    exp_first = exp_parts[0]
+    port_first_word = _kyc_proposer_first_word(portal_first)
+    if not port_first_word:
+        return False
+    if not _proposal_expected_matches_readback(exp_first, port_first_word):
         return False
 
-    if len(exp_parts) == 1:
-        token = exp_parts[0]
-        if port_last:
-            return (
-                _proposal_expected_matches_readback(token, port_first)
-                and _proposal_expected_matches_readback(token, port_last)
-            )
-        return _proposal_expected_matches_readback(token, port_first)
-
-    if not port_first:
-        port_first = port_last
-    if not port_last:
-        port_last = port_first
-
-    if not _proposal_expected_matches_readback(exp_first, port_first):
-        return False
-    if not _proposal_expected_matches_readback(exp_last, port_last):
-        return False
+    if len(exp_parts) >= 2:
+        exp_last = exp_parts[-1]
+        port_last_clean = _kyc_proposer_name_clean_token(portal_last)
+        if not _is_kyc_proposer_name_junk_token(port_last_clean):
+            if not _proposal_expected_matches_readback(exp_last, port_last_clean):
+                return False
     return True
 
 
@@ -7004,29 +7024,42 @@ def _log_kyc_proposer_name_verify(
     if match:
         _proposal_log(ocr_output_dir, subfolder, "kyc_proposer_name", "match=ok")
         return
-    if not _proposal_expected_matches_readback(exp_first, portal_first):
+    port_first_word = _kyc_proposer_first_word(portal_first)
+    if not _proposal_expected_matches_readback(exp_first, port_first_word):
         _proposal_log(
             ocr_output_dir,
             subfolder,
             "kyc_proposer_name",
-            f"MISMATCH expected_first={exp_first!r} portal_first={portal_first!r}",
+            (
+                f"MISMATCH expected_first={exp_first!r} "
+                f"portal_first={port_first_word!r}"
+            ),
         )
-    if not _proposal_expected_matches_readback(exp_last, portal_last):
-        _proposal_log(
-            ocr_output_dir,
-            subfolder,
-            "kyc_proposer_name",
-            f"MISMATCH expected_last={exp_last!r} portal_last={portal_last!r}",
-        )
-    if exp_middle or portal_middle:
-        if not _proposal_expected_matches_readback(exp_middle, portal_middle):
+    exp_parts = (expected_full or "").strip().split()
+    if len(exp_parts) >= 2:
+        exp_last_token = exp_parts[-1]
+        port_last_clean = _kyc_proposer_name_clean_token(portal_last)
+        if not _is_kyc_proposer_name_junk_token(port_last_clean):
+            if not _proposal_expected_matches_readback(exp_last_token, port_last_clean):
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    "kyc_proposer_name",
+                    (
+                        f"MISMATCH expected_last={exp_last_token!r} "
+                        f"portal_last={port_last_clean!r}"
+                    ),
+                )
+    port_middle_clean = _kyc_proposer_name_clean_token(portal_middle)
+    if exp_middle and not _is_kyc_proposer_name_junk_token(port_middle_clean):
+        if not _proposal_expected_matches_readback(exp_middle, port_middle_clean):
             _proposal_log(
                 ocr_output_dir,
                 subfolder,
                 "kyc_proposer_name",
                 (
                     f"MISMATCH expected_middle={exp_middle!r} "
-                    f"portal_middle={portal_middle!r}"
+                    f"portal_middle={port_middle_clean!r}"
                 ),
             )
 
