@@ -101,6 +101,10 @@ try:
 except ValueError:
     _ORDER_LINE_JQGRID_PAGER_AFTER_VISIBLE_MS = 120
 
+# My Orders mobile search: re-read jqGrid when an invoiced row's Mobile_Phone__ readback ≠ searched mobile.
+_MY_ORDERS_INVOICED_MOBILE_VERIFY_ATTEMPTS = 3
+_MY_ORDERS_INVOICED_MOBILE_VERIFY_RETRY_MS = 1500
+
 
 def _scrape_total_ex_showroom_after_price_allocate(
     page: Page,
@@ -1541,6 +1545,8 @@ class _MyOrdersGridSearchResult:
     outcome: str  # invoiced | pending | allocated | no_rows | unknown_rows | error
     primary_order: str = ""
     primary_invoice: str = ""
+    primary_mobile: str = ""
+    mobile_readback_mismatch: bool = False
     rows: list[dict] | None = None
     error: str | None = None
 
@@ -1598,7 +1604,7 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
         for (const tr of dataRows) {
             if (tr.classList.contains('jqgfirstrow')) continue;
             if (!vis(tr)) continue;
-            const row = { status: '', invoice: '', order: '', raw: (tr.innerText || '').trim() };
+            const row = { status: '', invoice: '', order: '', mobile: '', raw: (tr.innerText || '').trim() };
             /** 1) Canonical Invoice# — id-based selectors; skip vis() because wide
              *  grids scroll columns offscreen giving zero-width bounding rects.
              *  Prefer ``_l_Invoice__`` (double-underscore, the # column) to avoid
@@ -1643,7 +1649,26 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                     if (ot) row.order = ot;
                 }
             }
-            /** 3) Status — ``td[id*=_l_Status]`` id-based pick. */
+            /** 3) Mobile Phone# — readonly list-ctrl (name=Mobile_Phone__) like Order#. */
+            const mobInp = tr.querySelector(
+                'input[name="Mobile_Phone__"], '
+                + 'input[id*="_Mobile_Phone__"], input[id$="_Mobile_Phone__"], '
+                + 'input[aria-labelledby*="Mobile_Phone__"], '
+                + 'input.siebui-list-ctrl[id*="Mobile_Phone__"]'
+            );
+            if (mobInp) {
+                const mv = String(mobInp.value || '').trim();
+                if (mv) row.mobile = mv;
+            }
+            if (!row.mobile) {
+                const mobTd = tr.querySelector('td[id*="_l_Mobile_Phone__"]');
+                if (mobTd) {
+                    const mt = (mobTd.getAttribute('title') || '').trim()
+                        || (mobTd.textContent || '').trim();
+                    if (mt) row.mobile = mt;
+                }
+            }
+            /** 4) Status — ``td[id*=_l_Status]`` id-based pick. */
             if (!row.status) {
                 const stTd = tr.querySelector('td[id*="_l_Status"]');
                 if (stTd) {
@@ -1674,6 +1699,15 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                 ) {
                     const a = td.querySelector('a[name="Order Number"], a[name="Order #"], a');
                     row.order = ((a && a.textContent) ? a.textContent : txt).trim();
+                } else if (
+                    !row.mobile
+                    && (
+                        (key.includes('mobile') && key.includes('phone'))
+                        || (adb.includes('mobile') && adb.includes('phone'))
+                        || adb.includes('mobile_phone__')
+                    )
+                ) {
+                    row.mobile = txt;
                 }
             });
             if (!row.order && !row.status && !row.invoice) {
@@ -1709,6 +1743,48 @@ def _my_orders_invoice_meaningful(s: str) -> bool:
     if re.search(r"\d{1,2}/\d{1,2}/\d{4}", t) and re.search(r"\d{1,2}:\d{2}", t):
         return False
     return bool(re.search(r"[A-Za-z0-9]", t))
+
+
+def _my_orders_normalize_mobile_digits(mobile: str) -> str:
+    """Digits-only mobile for My Orders readback compare (last 10 when longer)."""
+    dig = re.sub(r"\D", "", (mobile or "").strip())
+    if len(dig) > 10:
+        return dig[-10:]
+    return dig
+
+
+def _my_orders_row_mobile_digits(row: dict) -> str:
+    """Mobile digits from a jqGrid row dict (``mobile`` cell from scraper)."""
+    mob = (row.get("mobile") or "").strip()
+    if mob:
+        return _my_orders_normalize_mobile_digits(mob)
+    return ""
+
+
+def _my_orders_row_matches_searched_mobile(row: dict, searched_digits: str) -> bool:
+    """True when row ``mobile`` cell normalizes to the searched mobile digits."""
+    want = _my_orders_normalize_mobile_digits(searched_digits)
+    if not want:
+        return True
+    got = _my_orders_row_mobile_digits(row)
+    return bool(got) and got == want
+
+
+def _my_orders_has_invoiced_mobile_false_positive(rows: list[dict], searched_digits: str) -> bool:
+    """
+    Whether any jqGrid row looks invoiced but its Mobile_Phone__ readback ≠ searched mobile
+    (stale grid / wrong-customer row while Siebel is still refreshing).
+    """
+    want = _my_orders_normalize_mobile_digits(searched_digits)
+    if not want or not rows:
+        return False
+    for r in rows:
+        inv = (r.get("invoice") or "").strip()
+        if not _my_orders_invoice_meaningful(inv):
+            continue
+        if not _my_orders_row_matches_searched_mobile(r, searched_digits):
+            return True
+    return False
 
 
 def _my_orders_row_text_blob(r: dict) -> str:
@@ -1747,30 +1823,45 @@ def _my_orders_blob_looks_pending(blob: str) -> bool:
     return True
 
 
-def _classify_my_orders_grid_rows(rows: list[dict]) -> tuple[str, str, str]:
+def _classify_my_orders_grid_rows(
+    rows: list[dict],
+    *,
+    searched_mobile_digits: str = "",
+) -> tuple[str, str, str, str]:
     """
-    From jqGrid row dicts, pick branching outcome and primary order/invoice.
-    Returns ``(outcome, primary_order, primary_invoice)``.
+    From jqGrid row dicts, pick branching outcome and primary order/invoice/mobile.
+    Returns ``(outcome, primary_order, primary_invoice, primary_mobile)``.
+
+    When ``searched_mobile_digits`` is set, **invoiced** requires the picked row's
+    ``Mobile_Phone__`` readback to match (skips stale / wrong-customer invoiced rows).
 
     **Precedence:** **allocated** is checked before **pending** so a grid with both (e.g. older Pending
     rows plus one **Allocated** row) drills the Allocated **Order#** — matching operator expectation.
     """
     if not rows:
-        return "no_rows", "", ""
+        return "no_rows", "", "", ""
 
     for r in rows:
         inv = (r.get("invoice") or "").strip()
-        if _my_orders_invoice_meaningful(inv):
-            return "invoiced", (r.get("order") or "").strip(), inv
+        if not _my_orders_invoice_meaningful(inv):
+            continue
+        if searched_mobile_digits and not _my_orders_row_matches_searched_mobile(r, searched_mobile_digits):
+            continue
+        return (
+            "invoiced",
+            (r.get("order") or "").strip(),
+            inv,
+            _my_orders_row_mobile_digits(r),
+        )
     for r in rows:
         blob = _my_orders_row_text_blob(r)
         if _my_orders_blob_looks_allocated(blob):
-            return "allocated", (r.get("order") or "").strip(), ""
+            return "allocated", (r.get("order") or "").strip(), "", ""
     for r in rows:
         blob = _my_orders_row_text_blob(r)
         if _my_orders_blob_looks_pending(blob):
-            return "pending", (r.get("order") or "").strip(), ""
-    return "unknown_rows", (rows[0].get("order") or "").strip(), ""
+            return "pending", (r.get("order") or "").strip(), "", ""
+    return "unknown_rows", (rows[0].get("order") or "").strip(), "", ""
 
 
 def _norm_my_orders_order_key(s: str) -> str:
@@ -2196,28 +2287,69 @@ def _run_vehicle_sales_my_orders_mobile_search(
             pass
         _safe_page_wait(page, 500, log_label="after_my_orders_enter_grid_settle")
         _safe_page_wait(page, min(2500, _tmo), log_label="after_my_orders_find_enter")
-        rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
-        _full_row_count = len(rows or [])
+        _searched_mob = _my_orders_normalize_mobile_digits(digits)
+        oc, po, pi, pm = "no_rows", "", "", ""
+        rows: list[dict] = []
+        _full_row_count = 0
         _needle = (restrict_to_order_number or "").strip()
-        if _needle and rows:
-            _matched = [r for r in rows if _my_orders_row_matches_order_number(r, _needle)]
-            if not _matched:
+        _mobile_mismatch = False
+        for _attempt in range(_MY_ORDERS_INVOICED_MOBILE_VERIFY_ATTEMPTS):
+            if _attempt > 0:
                 note(
-                    f"Create Order: My Orders grid has {_full_row_count} row(s) for mobile but none match "
-                    f"expected Order# {_needle!r}."
+                    f"Create Order: My Orders invoiced row mobile false positive "
+                    f"(readback={pm!r} searched={_searched_mob!r}) — "
+                    f"retry {_attempt + 1}/{_MY_ORDERS_INVOICED_MOBILE_VERIFY_ATTEMPTS}."
                 )
-                return _MyOrdersGridSearchResult(
-                    outcome="error",
-                    error="my_orders_no_matching_order",
-                    rows=rows or [],
+                _safe_page_wait(
+                    page,
+                    _MY_ORDERS_INVOICED_MOBILE_VERIFY_RETRY_MS,
+                    log_label=f"my_orders_invoiced_mobile_retry_{_attempt}",
                 )
-            rows = _matched
-        oc, po, pi = _classify_my_orders_grid_rows(rows)
+            rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
+            _full_row_count = len(rows or [])
+            if _needle and rows:
+                _matched = [r for r in rows if _my_orders_row_matches_order_number(r, _needle)]
+                if not _matched:
+                    note(
+                        f"Create Order: My Orders grid has {_full_row_count} row(s) for mobile but none match "
+                        f"expected Order# {_needle!r}."
+                    )
+                    return _MyOrdersGridSearchResult(
+                        outcome="error",
+                        error="my_orders_no_matching_order",
+                        rows=rows or [],
+                    )
+                rows = _matched
+            oc, po, pi, pm = _classify_my_orders_grid_rows(rows, searched_mobile_digits=digits)
+            if oc == "invoiced":
+                break
+            if not _my_orders_has_invoiced_mobile_false_positive(rows, digits):
+                break
+        if oc != "invoiced" and _my_orders_has_invoiced_mobile_false_positive(rows, digits):
+            _mobile_mismatch = True
+            note(
+                f"Create Order: My Orders still has invoiced row(s) with mobile ≠ searched "
+                f"after {_MY_ORDERS_INVOICED_MOBILE_VERIFY_ATTEMPTS} read(s) — not treating as invoiced."
+            )
+        if oc == "invoiced":
+            _readback_mob = pm or ""
+            note(
+                f"Create Order: My Orders invoiced row readback mobile={_readback_mob!r} "
+                f"(searched={_searched_mob!r}) invoice={pi!r} order={po!r} "
+                f"mismatch=False."
+            )
         note(
             f"Create Order: My Orders grid search outcome={oc!r} rows={len(rows)} "
             f"(full_grid_rows={_full_row_count}) primary_order={po!r} primary_invoice={pi!r}."
         )
-        return _MyOrdersGridSearchResult(outcome=oc, primary_order=po, primary_invoice=pi, rows=rows or [])
+        return _MyOrdersGridSearchResult(
+            outcome=oc,
+            primary_order=po,
+            primary_invoice=pi,
+            primary_mobile=pm if oc == "invoiced" else "",
+            mobile_readback_mismatch=_mobile_mismatch,
+            rows=rows or [],
+        )
     except Exception as _ex:
         note(f"Create Order: My Orders mobile search failed: {_ex!r}")
         return _MyOrdersGridSearchResult(outcome="error", error=str(_ex))
@@ -2346,12 +2478,23 @@ def _run_vehicle_sales_my_orders_order_number_search(
             )
             return _MyOrdersGridSearchResult(outcome="no_rows", error="my_orders_order_no_match", rows=rows or [])
         rows = _matched
-        oc, po, pi = _classify_my_orders_grid_rows(rows)
+        oc, po, pi, pm = _classify_my_orders_grid_rows(rows)
+        if oc == "invoiced" and pm:
+            note(
+                f"Create Order: My Orders Order# search invoiced row readback mobile={pm!r} "
+                f"invoice={pi!r} order={po!r}."
+            )
         note(
             f"Create Order: My Orders Order# grid outcome={oc!r} rows={len(rows)} "
             f"primary_order={po!r} primary_invoice={pi!r}."
         )
-        return _MyOrdersGridSearchResult(outcome=oc, primary_order=po, primary_invoice=pi, rows=rows or [])
+        return _MyOrdersGridSearchResult(
+            outcome=oc,
+            primary_order=po,
+            primary_invoice=pi,
+            primary_mobile=pm if oc == "invoiced" else "",
+            rows=rows or [],
+        )
     except Exception as _ex:
         note(f"Create Order: My Orders Order# search failed: {_ex!r}")
         return _MyOrdersGridSearchResult(outcome="error", error=str(_ex))
