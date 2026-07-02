@@ -101,9 +101,10 @@ try:
 except ValueError:
     _ORDER_LINE_JQGRID_PAGER_AFTER_VISIBLE_MS = 120
 
-# My Orders mobile search: re-read jqGrid when an invoiced row's Mobile_Phone__ readback ≠ searched mobile.
-_MY_ORDERS_INVOICED_MOBILE_VERIFY_ATTEMPTS = 3
-_MY_ORDERS_INVOICED_MOBILE_VERIFY_RETRY_MS = 1500
+# My Orders mobile search: re-read jqGrid when invoiced row guards fail (name/date or stale mobile readback).
+_MY_ORDERS_INVOICED_VERIFY_ATTEMPTS = 3
+_MY_ORDERS_INVOICED_VERIFY_RETRY_MS = 1500
+_MY_ORDERS_INVOICED_RECENCY_DAYS = 7
 
 
 def _scrape_total_ex_showroom_after_price_allocate(
@@ -1546,6 +1547,8 @@ class _MyOrdersGridSearchResult:
     primary_order: str = ""
     primary_invoice: str = ""
     primary_mobile: str = ""
+    primary_contact_first_name: str = ""
+    primary_invoice_date: str = ""
     mobile_readback_mismatch: bool = False
     rows: list[dict] | None = None
     error: str | None = None
@@ -1604,7 +1607,11 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
         for (const tr of dataRows) {
             if (tr.classList.contains('jqgfirstrow')) continue;
             if (!vis(tr)) continue;
-            const row = { status: '', invoice: '', order: '', mobile: '', raw: (tr.innerText || '').trim() };
+            const row = {
+                status: '', invoice: '', order: '', mobile: '',
+                contact_first_name: '', invoice_date: '',
+                raw: (tr.innerText || '').trim()
+            };
             /** 1) Canonical Invoice# — id-based selectors; skip vis() because wide
              *  grids scroll columns offscreen giving zero-width bounding rects.
              *  Prefer ``_l_Invoice__`` (double-underscore, the # column) to avoid
@@ -1676,6 +1683,18 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                     if (st) row.status = st;
                 }
             }
+            /** 5) Contact First Name — ``td[id*=_l_Contact_First_Name]``. */
+            const fnTd = tr.querySelector('td[id*="_l_Contact_First_Name"]');
+            if (fnTd) {
+                const fn = (fnTd.getAttribute('title') || '').trim() || (fnTd.textContent || '').trim();
+                if (fn) row.contact_first_name = fn;
+            }
+            /** 6) Invoice Date — ``td[id*=_l_Invoice_Date]`` (not Invoice#). */
+            const invDtTd = tr.querySelector('td[id*="_l_Invoice_Date"]');
+            if (invDtTd) {
+                const idt = (invDtTd.getAttribute('title') || '').trim() || (invDtTd.textContent || '').trim();
+                if (idt && looksLikeDateTime(idt)) row.invoice_date = idt;
+            }
             const tds = tr.querySelectorAll('td[role="gridcell"], td');
             tds.forEach((td, i) => {
                 const txt = (td.textContent || '').trim();
@@ -1708,6 +1727,17 @@ _JS_MY_ORDERS_JQGRID_ROWS = """() => {
                     )
                 ) {
                     row.mobile = txt;
+                } else if (!row.contact_first_name && (key.includes('contact') && key.includes('first') && key.includes('name'))) {
+                    row.contact_first_name = txt;
+                } else if (
+                    !row.contact_first_name
+                    && (adb.includes('contact_first_name') || adb.includes('contact first name'))
+                ) {
+                    row.contact_first_name = txt;
+                } else if (!row.invoice_date && (key.includes('invoice') && key.includes('date'))) {
+                    if (looksLikeDateTime(txt)) row.invoice_date = txt;
+                } else if (!row.invoice_date && adb.includes('invoice_date')) {
+                    if (looksLikeDateTime(txt)) row.invoice_date = txt;
                 }
             });
             if (!row.order && !row.status && !row.invoice) {
@@ -1759,6 +1789,131 @@ def _my_orders_row_mobile_digits(row: dict) -> str:
     if mob:
         return _my_orders_normalize_mobile_digits(mob)
     return ""
+
+
+def _my_orders_row_contact_first_name(row: dict) -> str:
+    return (row.get("contact_first_name") or "").strip()
+
+
+def _my_orders_row_invoice_date(row: dict) -> str:
+    return (row.get("invoice_date") or "").strip()
+
+
+def _my_orders_norm_first_name_key(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "").strip().lower())
+
+
+def _my_orders_row_matches_expected_first_name(row: dict, expected_first_name: str) -> bool:
+    want = _my_orders_norm_first_name_key(expected_first_name)
+    if not want:
+        return True
+    got = _my_orders_norm_first_name_key(_my_orders_row_contact_first_name(row))
+    return bool(got) and got == want
+
+
+def _my_orders_parse_invoice_date(text: str) -> datetime | None:
+    """Parse Siebel My Orders **Invoice Date** cell (IST wall-clock, timezone-naive)."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    t = re.sub(r"[\u00a0\u202f]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    for fmt in (
+        "%d/%m/%Y %I:%M:%S %p",
+        "%d/%m/%Y %I:%M %p",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d-%m-%Y %H:%M:%S",
+        "%d-%m-%Y %H:%M",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+    ):
+        try:
+            return datetime.strptime(t[:96].strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _my_orders_invoice_date_within_last_days(
+    invoice_date_str: str,
+    *,
+    days: int = _MY_ORDERS_INVOICED_RECENCY_DAYS,
+    as_of: date | None = None,
+) -> bool:
+    as_of = as_of or datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    min_date = as_of - timedelta(days=max(1, days) - 1)
+    parsed = _my_orders_parse_invoice_date(invoice_date_str)
+    if parsed is None:
+        return False
+    inv_d = parsed.date()
+    return min_date <= inv_d <= as_of
+
+
+def _my_orders_row_eligible_invoiced_candidate(
+    row: dict,
+    *,
+    expected_first_name: str,
+    invoice_recency_days: int = _MY_ORDERS_INVOICED_RECENCY_DAYS,
+    as_of: date | None = None,
+) -> bool:
+    if not _my_orders_invoice_meaningful((row.get("invoice") or "").strip()):
+        return False
+    if not _my_orders_row_matches_expected_first_name(row, expected_first_name):
+        return False
+    if not _my_orders_invoice_date_within_last_days(
+        _my_orders_row_invoice_date(row),
+        days=invoice_recency_days,
+        as_of=as_of,
+    ):
+        return False
+    return True
+
+
+def _my_orders_has_invoiced_guard_retry_candidate(
+    rows: list[dict],
+    expected_first_name: str,
+) -> bool:
+    """True when grid shows invoiced row(s) but none pass first-name + invoice-date guards."""
+    if not _my_orders_norm_first_name_key(expected_first_name) or not rows:
+        return False
+    any_invoiced = any(
+        _my_orders_invoice_meaningful((r.get("invoice") or "").strip()) for r in rows
+    )
+    any_eligible = any(
+        _my_orders_row_eligible_invoiced_candidate(r, expected_first_name=expected_first_name)
+        for r in rows
+    )
+    return any_invoiced and not any_eligible
+
+
+def _my_orders_note_grid_row_readbacks(
+    rows: list[dict],
+    note,
+    *,
+    expected_contact_first_name: str = "",
+) -> None:
+    """Log per-row mobile / contact first name / invoice date readbacks (duplicate-mobile diagnostics)."""
+    if not rows:
+        return
+    _n = len(rows)
+    _expect_name = _my_orders_norm_first_name_key(expected_contact_first_name)
+    for _i, _r in enumerate(rows, 1):
+        _eligible = ""
+        if _expect_name:
+            _eligible = (
+                f" eligible_invoiced="
+                f"{_my_orders_row_eligible_invoiced_candidate(_r, expected_first_name=expected_contact_first_name)!s}"
+            )
+        note(
+            f"Create Order: My Orders grid row {_i}/{_n} "
+            f"mobile={_my_orders_row_mobile_digits(_r)!r} "
+            f"contact_first_name={_my_orders_row_contact_first_name(_r)!r} "
+            f"invoice_date={_my_orders_row_invoice_date(_r)!r} "
+            f"invoice={(_r.get('invoice') or '').strip()!r} "
+            f"order={(_r.get('order') or '').strip()!r} "
+            f"status={(_r.get('status') or '').strip()!r}{_eligible}."
+        )
 
 
 def _my_orders_row_matches_searched_mobile(row: dict, searched_digits: str) -> bool:
@@ -1827,41 +1982,53 @@ def _classify_my_orders_grid_rows(
     rows: list[dict],
     *,
     searched_mobile_digits: str = "",
-) -> tuple[str, str, str, str]:
+    expected_contact_first_name: str = "",
+) -> tuple[str, str, str, str, str, str]:
     """
-    From jqGrid row dicts, pick branching outcome and primary order/invoice/mobile.
-    Returns ``(outcome, primary_order, primary_invoice, primary_mobile)``.
+    From jqGrid row dicts, pick branching outcome and primary order/invoice/mobile/first-name/invoice-date.
+    Returns ``(outcome, primary_order, primary_invoice, primary_mobile, primary_contact_first_name, primary_invoice_date)``.
 
-    When ``searched_mobile_digits`` is set, **invoiced** requires the picked row's
-    ``Mobile_Phone__`` readback to match (skips stale / wrong-customer invoiced rows).
+    When ``expected_contact_first_name`` is set, **invoiced** requires contact first name match and
+    invoice date within the last ``_MY_ORDERS_INVOICED_RECENCY_DAYS`` IST calendar days (inclusive).
+
+    When only ``searched_mobile_digits`` is set (legacy mobile search without a name), **invoiced**
+  requires the picked row's ``Mobile_Phone__`` readback to match.
 
     **Precedence:** **allocated** is checked before **pending** so a grid with both (e.g. older Pending
     rows plus one **Allocated** row) drills the Allocated **Order#** — matching operator expectation.
     """
     if not rows:
-        return "no_rows", "", "", ""
+        return "no_rows", "", "", "", "", ""
 
+    _use_name_date_guard = bool(_my_orders_norm_first_name_key(expected_contact_first_name))
     for r in rows:
         inv = (r.get("invoice") or "").strip()
         if not _my_orders_invoice_meaningful(inv):
             continue
-        if searched_mobile_digits and not _my_orders_row_matches_searched_mobile(r, searched_mobile_digits):
+        if _use_name_date_guard:
+            if not _my_orders_row_eligible_invoiced_candidate(
+                r, expected_first_name=expected_contact_first_name
+            ):
+                continue
+        elif searched_mobile_digits and not _my_orders_row_matches_searched_mobile(r, searched_mobile_digits):
             continue
         return (
             "invoiced",
             (r.get("order") or "").strip(),
             inv,
             _my_orders_row_mobile_digits(r),
+            _my_orders_row_contact_first_name(r),
+            _my_orders_row_invoice_date(r),
         )
     for r in rows:
         blob = _my_orders_row_text_blob(r)
         if _my_orders_blob_looks_allocated(blob):
-            return "allocated", (r.get("order") or "").strip(), "", ""
+            return "allocated", (r.get("order") or "").strip(), "", "", "", ""
     for r in rows:
         blob = _my_orders_row_text_blob(r)
         if _my_orders_blob_looks_pending(blob):
-            return "pending", (r.get("order") or "").strip(), "", ""
-    return "unknown_rows", (rows[0].get("order") or "").strip(), "", ""
+            return "pending", (r.get("order") or "").strip(), "", "", "", ""
+    return "unknown_rows", (rows[0].get("order") or "").strip(), "", "", "", ""
 
 
 def _norm_my_orders_order_key(s: str) -> str:
@@ -2187,6 +2354,7 @@ def _run_vehicle_sales_my_orders_mobile_search(
     content_frame_selector: str | None,
     note,
     restrict_to_order_number: str = "",
+    expected_contact_first_name: str = "",
 ) -> _MyOrdersGridSearchResult:
     """
     My Orders view: Find dropdown ``s_1_1_1_0`` → Mobile Phone# → value field → Enter → read ``ui-jqgrid-btable``.
@@ -2288,22 +2456,37 @@ def _run_vehicle_sales_my_orders_mobile_search(
         _safe_page_wait(page, 500, log_label="after_my_orders_enter_grid_settle")
         _safe_page_wait(page, min(2500, _tmo), log_label="after_my_orders_find_enter")
         _searched_mob = _my_orders_normalize_mobile_digits(digits)
-        oc, po, pi, pm = "no_rows", "", "", ""
+        oc, po, pi, pm, pfn, pidt = "no_rows", "", "", "", "", ""
         rows: list[dict] = []
         _full_row_count = 0
         _needle = (restrict_to_order_number or "").strip()
+        _expected_fn = (expected_contact_first_name or "").strip()
+        _use_name_date_guard = bool(_my_orders_norm_first_name_key(_expected_fn))
         _mobile_mismatch = False
-        for _attempt in range(_MY_ORDERS_INVOICED_MOBILE_VERIFY_ATTEMPTS):
+
+        def _invoiced_guard_retry_candidate(grid_rows: list[dict]) -> bool:
+            if _use_name_date_guard:
+                return _my_orders_has_invoiced_guard_retry_candidate(grid_rows, _expected_fn)
+            return _my_orders_has_invoiced_mobile_false_positive(grid_rows, digits)
+
+        for _attempt in range(_MY_ORDERS_INVOICED_VERIFY_ATTEMPTS):
             if _attempt > 0:
-                note(
-                    f"Create Order: My Orders invoiced row mobile false positive "
-                    f"(readback={pm!r} searched={_searched_mob!r}) — "
-                    f"retry {_attempt + 1}/{_MY_ORDERS_INVOICED_MOBILE_VERIFY_ATTEMPTS}."
-                )
+                if _use_name_date_guard:
+                    note(
+                        f"Create Order: My Orders invoiced row name/date guard false positive "
+                        f"(expected_first_name={_expected_fn!r}) — "
+                        f"retry {_attempt + 1}/{_MY_ORDERS_INVOICED_VERIFY_ATTEMPTS}."
+                    )
+                else:
+                    note(
+                        f"Create Order: My Orders invoiced row mobile false positive "
+                        f"(readback={pm!r} searched={_searched_mob!r}) — "
+                        f"retry {_attempt + 1}/{_MY_ORDERS_INVOICED_VERIFY_ATTEMPTS}."
+                    )
                 _safe_page_wait(
                     page,
-                    _MY_ORDERS_INVOICED_MOBILE_VERIFY_RETRY_MS,
-                    log_label=f"my_orders_invoiced_mobile_retry_{_attempt}",
+                    _MY_ORDERS_INVOICED_VERIFY_RETRY_MS,
+                    log_label=f"my_orders_invoiced_verify_retry_{_attempt}",
                 )
             rows = _read_my_orders_jqgrid_rows_anywhere(page, content_frame_selector)
             _full_row_count = len(rows or [])
@@ -2320,33 +2503,51 @@ def _run_vehicle_sales_my_orders_mobile_search(
                         rows=rows or [],
                     )
                 rows = _matched
-            oc, po, pi, pm = _classify_my_orders_grid_rows(rows, searched_mobile_digits=digits)
+            oc, po, pi, pm, pfn, pidt = _classify_my_orders_grid_rows(
+                rows,
+                searched_mobile_digits=digits,
+                expected_contact_first_name=_expected_fn,
+            )
             if oc == "invoiced":
                 break
-            if not _my_orders_has_invoiced_mobile_false_positive(rows, digits):
+            if not _invoiced_guard_retry_candidate(rows):
                 break
-        if oc != "invoiced" and _my_orders_has_invoiced_mobile_false_positive(rows, digits):
+        _my_orders_note_grid_row_readbacks(
+            rows, note, expected_contact_first_name=_expected_fn
+        )
+        if oc != "invoiced" and _invoiced_guard_retry_candidate(rows):
             _mobile_mismatch = True
-            note(
-                f"Create Order: My Orders still has invoiced row(s) with mobile ≠ searched "
-                f"after {_MY_ORDERS_INVOICED_MOBILE_VERIFY_ATTEMPTS} read(s) — not treating as invoiced."
-            )
+            if _use_name_date_guard:
+                note(
+                    f"Create Order: My Orders still has invoiced row(s) failing name/date guards "
+                    f"(expected_first_name={_expected_fn!r}) after "
+                    f"{_MY_ORDERS_INVOICED_VERIFY_ATTEMPTS} read(s) — not treating as invoiced."
+                )
+            else:
+                note(
+                    f"Create Order: My Orders still has invoiced row(s) with mobile ≠ searched "
+                    f"after {_MY_ORDERS_INVOICED_VERIFY_ATTEMPTS} read(s) — not treating as invoiced."
+                )
         if oc == "invoiced":
             _readback_mob = pm or ""
             note(
                 f"Create Order: My Orders invoiced row readback mobile={_readback_mob!r} "
-                f"(searched={_searched_mob!r}) invoice={pi!r} order={po!r} "
+                f"(searched={_searched_mob!r}) contact_first_name={pfn!r} "
+                f"(expected={_expected_fn!r}) invoice_date={pidt!r} invoice={pi!r} order={po!r} "
                 f"mismatch=False."
             )
         note(
             f"Create Order: My Orders grid search outcome={oc!r} rows={len(rows)} "
-            f"(full_grid_rows={_full_row_count}) primary_order={po!r} primary_invoice={pi!r}."
+            f"(full_grid_rows={_full_row_count}) primary_order={po!r} primary_invoice={pi!r} "
+            f"primary_contact_first_name={pfn!r} primary_invoice_date={pidt!r}."
         )
         return _MyOrdersGridSearchResult(
             outcome=oc,
             primary_order=po,
             primary_invoice=pi,
             primary_mobile=pm if oc == "invoiced" else "",
+            primary_contact_first_name=pfn if oc == "invoiced" else "",
+            primary_invoice_date=pidt if oc == "invoiced" else "",
             mobile_readback_mismatch=_mobile_mismatch,
             rows=rows or [],
         )
@@ -2478,21 +2679,25 @@ def _run_vehicle_sales_my_orders_order_number_search(
             )
             return _MyOrdersGridSearchResult(outcome="no_rows", error="my_orders_order_no_match", rows=rows or [])
         rows = _matched
-        oc, po, pi, pm = _classify_my_orders_grid_rows(rows)
+        oc, po, pi, pm, pfn, pidt = _classify_my_orders_grid_rows(rows)
         if oc == "invoiced" and pm:
             note(
                 f"Create Order: My Orders Order# search invoiced row readback mobile={pm!r} "
+                f"contact_first_name={pfn!r} invoice_date={pidt!r} "
                 f"invoice={pi!r} order={po!r}."
             )
         note(
             f"Create Order: My Orders Order# grid outcome={oc!r} rows={len(rows)} "
-            f"primary_order={po!r} primary_invoice={pi!r}."
+            f"primary_order={po!r} primary_invoice={pi!r} "
+            f"primary_contact_first_name={pfn!r} primary_invoice_date={pidt!r}."
         )
         return _MyOrdersGridSearchResult(
             outcome=oc,
             primary_order=po,
             primary_invoice=pi,
             primary_mobile=pm if oc == "invoiced" else "",
+            primary_contact_first_name=pfn if oc == "invoiced" else "",
+            primary_invoice_date=pidt if oc == "invoiced" else "",
             rows=rows or [],
         )
     except Exception as _ex:
@@ -5498,6 +5703,7 @@ def _create_order(
             content_frame_selector=content_frame_selector,
             note=note,
             restrict_to_order_number=(expected_order_number or "").strip(),
+            expected_contact_first_name=(first_name or "").strip(),
         )
         _mo_oc = (_mos.outcome or "").strip()
         _mo_po = (_mos.primary_order or "").strip()
@@ -7157,6 +7363,7 @@ def print_hero_dms_forms(
     mobile: str,
     order_number: str = "",
     invoice_number: str = "",
+    contact_first_name: str = "",
     action_timeout_ms: int,
     content_frame_selector: str | None,
     note: Callable[..., None] | None = None,
@@ -7274,6 +7481,7 @@ def print_hero_dms_forms(
         content_frame_selector=content_frame_selector,
         note=_note,
         restrict_to_order_number=_on_arg,
+        expected_contact_first_name=(contact_first_name or "").strip(),
     )
     if (_mos.outcome or "").strip() == "error" and (_mos.error or "").strip() == "my_orders_no_matching_order":
         _msg = (
