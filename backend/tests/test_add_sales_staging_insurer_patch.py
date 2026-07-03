@@ -54,7 +54,7 @@ def test_fetch_insurance_state_on_cursor() -> None:
 
 def test_patch_rejects_insurer_when_insurance_state_not_zero() -> None:
     cur = MagicMock()
-    cur.fetchone.return_value = {"insurance_state": 2}
+    cur.fetchone.side_effect = [{"dms_state": 0}, {"insurance_state": 2}]
     conn = MagicMock()
     conn.__enter__ = MagicMock(return_value=conn)
     conn.__exit__ = MagicMock(return_value=False)
@@ -83,7 +83,7 @@ def test_patch_rejects_insurer_when_insurance_state_not_zero() -> None:
 def test_patch_cpi_reqd_only_updates_column() -> None:
     cur = MagicMock()
     cur.rowcount = 1
-    cur.fetchone.return_value = {"updated_at": datetime(2026, 1, 1, 12, 0, 0)}
+    cur.fetchone.side_effect = [{"dms_state": 0}, {"updated_at": datetime(2026, 1, 1, 12, 0, 0)}]
     conn = MagicMock()
     conn.__enter__ = MagicMock(return_value=conn)
     conn.__exit__ = MagicMock(return_value=False)
@@ -105,8 +105,8 @@ def test_patch_cpi_reqd_only_updates_column() -> None:
                     req=req,
                 )
                 merge.assert_not_called()
-                cpi_sql = cur.execute.call_args_list[0][0][0]
-                assert "cpi_reqd" in cpi_sql
+                cpi_calls = [c for c in cur.execute.call_args_list if "cpi_reqd" in c[0][0]]
+                assert cpi_calls
                 assert result["ok"] is True
 
 

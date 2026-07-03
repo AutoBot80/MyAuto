@@ -149,6 +149,7 @@ def list_in_process_staging_rows(*, dealer_id: int, days: int = 7) -> list[dict[
                     s.status,
                     s.cpi_reqd,
                     s.insurance_addon,
+                    s.dms_state,
                     NULLIF(trim(s.payload_json->'customer'->>'name'), '') AS customer_name,
                     NULLIF(trim(s.payload_json->'customer'->>'mobile_number'), '') AS mobile,
                     NULLIF(trim(s.payload_json->'vehicle'->>'frame_no'), '') AS chassis,

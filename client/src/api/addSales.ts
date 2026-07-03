@@ -105,6 +105,7 @@ export interface AddSalesInProcessRow {
   /** Per-sale CPA Required snapshot from ``add_sales_staging.cpi_reqd``. */
   cpi_reqd?: string | null;
   insurance_addon?: number | null;
+  dms_state?: number | null;
 }
 
 export async function fetchAddSalesInProcess(
@@ -175,6 +176,7 @@ export async function fetchAddSalesStagingPayload(
   effective_insurance_addon_label?: string | null;
   addon_config_warnings?: string[] | null;
   insurance_addons?: { insurance_addon_id: number; display_label: string }[];
+  dms_state?: number | null;
 }> {
   const q = new URLSearchParams({ dealer_id: String(dealerId) });
   return apiFetch<{
@@ -187,6 +189,7 @@ export async function fetchAddSalesStagingPayload(
     effective_insurance_addon_label?: string | null;
     addon_config_warnings?: string[] | null;
     insurance_addons?: { insurance_addon_id: number; display_label: string }[];
+    dms_state?: number | null;
   }>(`/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`);
 }
 
@@ -195,6 +198,8 @@ export interface PatchAddSalesStagingPayloadBody {
   customer?: {
     care_of?: string | null;
     address?: string | null;
+    mobile_number?: number | null;
+    alt_phone_num?: string | null;
   };
   vehicle?: {
     frame_no?: string | null;
@@ -217,9 +222,19 @@ export async function patchAddSalesStagingPayload(
   stagingId: string,
   dealerId: number,
   body: PatchAddSalesStagingPayloadBody
-): Promise<{ ok: boolean; staging_id: string; updated_at: string | null }> {
+): Promise<{
+  ok: boolean;
+  staging_id: string;
+  updated_at: string | null;
+  file_location?: string | null;
+}> {
   const q = new URLSearchParams({ dealer_id: String(dealerId) });
-  return apiFetch<{ ok: boolean; staging_id: string; updated_at: string | null }>(
+  return apiFetch<{
+    ok: boolean;
+    staging_id: string;
+    updated_at: string | null;
+    file_location?: string | null;
+  }>(
     `/add-sales/staging/${encodeURIComponent(stagingId)}/payload?${q.toString()}`,
     {
       method: "PATCH",

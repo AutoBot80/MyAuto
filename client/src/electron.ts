@@ -56,6 +56,11 @@ export interface ElectronAPI {
       | { ok: true; copied: string[]; destDir: string }
       | { ok: false; message: string }
     >;
+    renameSaleSubfolders: (payload: {
+      dealerId: number;
+      oldSubfolder: string;
+      newSubfolder: string;
+    }) => Promise<{ ok: true; renamed: string[] } | { ok: false; message: string }>;
   };
   config: {
     getSiteUrls: () => Promise<{

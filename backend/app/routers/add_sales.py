@@ -16,6 +16,7 @@ from app.repositories.add_sales_staging import (
     _normalize_cpi_reqd_flag,
     fetch_dealer_cpi_reqd_on_cursor,
     fetch_staging_cpi_reqd_on_cursor,
+    fetch_staging_dms_state,
     fetch_staging_insurance_state,
     fetch_staging_payload,
     list_in_process_staging_rows,
@@ -386,6 +387,7 @@ def get_add_sales_staging_payload(
         "addon_config_warnings": addon_ctx.get("addon_config_warnings") or [],
         "insurance_addons": addon_ctx.get("insurance_addons") or [],
         "insurance_state": fetch_staging_insurance_state(staging_id.strip(), did),
+        "dms_state": fetch_staging_dms_state(staging_id.strip(), did),
     }
 
 

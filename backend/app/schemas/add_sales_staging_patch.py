@@ -12,6 +12,17 @@ class PatchAddSalesStagingCustomer(BaseModel):
 
     care_of: str | None = Field(None, max_length=512)
     address: str | None = Field(None, max_length=2048)
+    mobile_number: int | None = Field(
+        None,
+        ge=1000000000,
+        le=9999999999,
+        description="10-digit primary mobile; only when dms_state < 2.",
+    )
+    alt_phone_num: str | None = Field(
+        None,
+        max_length=16,
+        description="Alternate mobile (10 digits) or empty to clear.",
+    )
 
 
 class PatchAddSalesStagingVehicle(BaseModel):

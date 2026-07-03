@@ -1,0 +1,8 @@
+Dealer Saathi Playwright Chromium pack
+App version: 0.9.55
+Match installer: Dealer Saathi Setup 0.9.55.exe
+
+Run Install-Playwright-Chromium.bat (or .ps1) on the dealer PC before the main Saathi installer.
+Default target: D:\Saathi\playwright-browsers
+
+Rebuild this pack when shipping a new Saathi desktop version (Chromium revision must match job_runner.exe).

@@ -152,6 +152,28 @@ def sync_ocr_file_to_s3(
     return False, last_err
 
 
+def delete_s3_objects_with_prefix(prefix: str, bucket: str | None = None) -> int:
+    """Delete all S3 objects under ``prefix``; no-op when S3 disabled. Returns delete count."""
+    if not STORAGE_USE_S3 or not S3_DATA_BUCKET:
+        return 0
+    norm = (prefix or "").strip().replace("\\", "/").strip("/")
+    if not norm:
+        return 0
+    pfx = f"{norm}/"
+    keys = s3_storage.list_objects_with_prefix(pfx)
+    deleted = 0
+    for item in keys:
+        key = str(item.get("Key") or "").strip()
+        if not key:
+            continue
+        try:
+            s3_storage.delete_object(key, bucket=bucket)
+            deleted += 1
+        except Exception:
+            logger.exception("dealer_storage: failed to delete S3 object %s", key)
+    return deleted
+
+
 def sync_uploads_subfolder_to_s3(dealer_id: int, subfolder: str) -> None:
     """Upload all files under ``Uploaded scans/{dealer_id}/{subfolder}/`` recursively."""
     if not STORAGE_USE_S3 or not S3_DATA_BUCKET:

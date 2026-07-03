@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
       artifactLeaf: string;
       items: { sourcePath: string; destFileName: string }[];
     }) => ipcRenderer.invoke("file:copyChallanScanArtifacts", payload),
+    renameSaleSubfolders: (payload: {
+      dealerId: number;
+      oldSubfolder: string;
+      newSubfolder: string;
+    }) => ipcRenderer.invoke("file:renameSaleSubfolders", payload),
   },
   config: {
     getSiteUrls: () => ipcRenderer.invoke("config:siteUrls"),

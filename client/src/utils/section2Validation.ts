@@ -223,6 +223,8 @@ export function getSection2ValidationErrors(opts: GetSection2ValidationErrorsOpt
 
 /** Editable In-process Sales Details draft (Save Changes). */
 export type InProcessDetailDraftFields = {
+  mobile_number: string;
+  alt_phone_num: string;
   care_of: string;
   address: string;
   frame_no: string;
@@ -233,14 +235,30 @@ export type InProcessDetailDraftFields = {
   nominee_relationship: string;
 };
 
+export type GetInProcessDetailValidationOpts = {
+  /** When false, mobile/alt are read-only and not validated. */
+  phonesEditable?: boolean;
+};
+
 /** Validation for Add Sales In-process Save Changes (parity with Section 2 editable subset). */
 export function getInProcessDetailValidationErrors(
-  draft: InProcessDetailDraftFields
+  draft: InProcessDetailDraftFields,
+  opts?: GetInProcessDetailValidationOpts
 ): Section2FieldError[] {
   const m = new Map<string, string>();
   const setErr = (field: string, message: string) => {
     if (!m.has(field)) m.set(field, message);
   };
+
+  if (opts?.phonesEditable) {
+    if (!/^\d{10}$/.test((draft.mobile_number ?? "").trim())) {
+      setErr("mobile_number", "Enter exactly 10 digits.");
+    }
+    const alt = (draft.alt_phone_num ?? "").trim();
+    if (alt && !/^\d{10}$/.test(alt)) {
+      setErr("alt_phone_num", "Enter exactly 10 digits.");
+    }
+  }
 
   const careOfTrimmed = (draft.care_of ?? "").trim();
   if (!careOfTrimmed) {

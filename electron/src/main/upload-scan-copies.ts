@@ -134,3 +134,57 @@ export async function copyUploadScanArtifacts(args: {
   logInfo(`copyUploadScanArtifacts: copied ${copied.join(", ")} -> ${destResolved}`);
   return { ok: true, copied, destDir: destResolved };
 }
+
+function ocrOutputLeaf(): string {
+  return "ocr_output";
+}
+
+function renameDirIfExists(parent: string, oldLeaf: string, newLeaf: string): boolean {
+  const oldDir = path.join(parent, oldLeaf);
+  const newDir = path.join(parent, newLeaf);
+  if (!fs.existsSync(oldDir) || !fs.statSync(oldDir).isDirectory()) {
+    return false;
+  }
+  if (fs.existsSync(newDir)) {
+    throw new Error(`target_folder_exists:${newLeaf}`);
+  }
+  fs.renameSync(oldDir, newDir);
+  return true;
+}
+
+/** Rename per-sale folders on dealer PC when in-process mobile changes (leaf only). */
+export function renameSaleSubfolders(args: {
+  dealerId: number;
+  oldSubfolder: string;
+  newSubfolder: string;
+}): { ok: true; renamed: string[] } | { ok: false; message: string } {
+  const dealerId = Math.floor(Number(args.dealerId));
+  if (!Number.isFinite(dealerId) || dealerId <= 0) {
+    return { ok: false, message: "invalid_dealer_id" };
+  }
+  const oldSub = safeSaleSubfolder(args.oldSubfolder);
+  const newSub = safeSaleSubfolder(args.newSubfolder);
+  if (!oldSub || !newSub) {
+    return { ok: false, message: "invalid_subfolder" };
+  }
+  if (oldSub === newSub) {
+    return { ok: true, renamed: [] };
+  }
+  const base = getSaathiBaseDir();
+  const renamed: string[] = [];
+  try {
+    const uploadsParent = path.join(base, uploadsLeaf(), String(dealerId));
+    if (renameDirIfExists(uploadsParent, oldSub, newSub)) {
+      renamed.push("uploads");
+    }
+    const ocrParent = path.join(base, ocrOutputLeaf(), String(dealerId));
+    if (renameDirIfExists(ocrParent, oldSub, newSub)) {
+      renamed.push("ocr_output");
+    }
+  } catch (e) {
+    logError("renameSaleSubfolders", e);
+    return { ok: false, message: String(e) };
+  }
+  logInfo(`renameSaleSubfolders: ${oldSub} -> ${newSub} (${renamed.join(", ") || "none"})`);
+  return { ok: true, renamed };
+}

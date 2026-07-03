@@ -1,6 +1,6 @@
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from "electron";
 import * as fileOps from "./file-ops";
-import { copyUploadScanArtifacts } from "./upload-scan-copies";
+import { copyUploadScanArtifacts, renameSaleSubfolders } from "./upload-scan-copies";
 import { copyChallanScanArtifacts } from "./challan-scan-copies";
 import { logError, logInfo } from "./logger";
 import { getSiteUrlsFromEnv } from "./paths";
@@ -107,6 +107,21 @@ export function registerIpc(mainWindow: BrowserWindow): void {
         return await copyChallanScanArtifacts(payload);
       } catch (e) {
         logError("file:copyChallanScanArtifacts", e);
+        return { ok: false as const, message: String(e) };
+      }
+    }
+  );
+
+  ipcMain.handle(
+    "file:renameSaleSubfolders",
+    async (
+      _evt: IpcMainInvokeEvent,
+      payload: { dealerId: number; oldSubfolder: string; newSubfolder: string }
+    ) => {
+      try {
+        return renameSaleSubfolders(payload);
+      } catch (e) {
+        logError("file:renameSaleSubfolders", e);
         return { ok: false as const, message: String(e) };
       }
     }

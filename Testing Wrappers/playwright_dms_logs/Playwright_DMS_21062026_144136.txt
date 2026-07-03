@@ -1,0 +1,184 @@
+Playwright DMS — execution log (this run only; IST / Asia/Kolkata timestamps)
+
+git_commit='e75a5c1'
+# Client API base: VITE_API_URL at build (browser/Electron); empty string = relative URLs / Vite proxy.
+client_api_base_url=''
+# HTTP request base: FastAPI Request.base_url for this fill-forms call (which host the API saw).
+http_request_base_url=''
+
+started_ist=2026-06-21T14:41:36.858+05:30
+skip_contact_find=False
+dms_contact_path='found'
+mobile_phone=''
+first_name=''
+last_name=''
+address_line_1=''
+state=''
+pin_code=''
+landline=''
+care_of=''
+key_partial='7870'
+frame_partial='19977'
+engine_partial='18800'
+aadhar_id=''
+# Siebel URLs (truncated) are written again in the automation trace section after login.
+url_contact_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Contact+Opportunity+Buyer/CoBuyer+View+(SDW)&SWERF=1&SWEHo=&SWEBU=1'
+url_enquiry_truncated=''
+url_vehicle_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+
+--- login_phase_capture ---
+# Lines below (until --- automation_trace ---) are JS dialogs, popups, #statusBar, and PNG paths.
+
+
+--- automation_trace ---
+
+Legend: [STEP]/[NOTE]/[MILESTONE] = operator narrative; [FORM] = siebel_step + Siebel form/screen + action + fields/values being applied on that form.
+
+2026-06-21T14:41:43.479+05:30 [LOGIN_CAPTURE] Installed BrowserContext dialog + main page popup listeners for Siebel login phase.
+2026-06-21T14:41:43.526+05:30 [NOTE] Manual login mode — type user/password and click Login in the browser (waiting up to 120s).
+2026-06-21T14:41:45.959+05:30 [NOTE] Siebel session ready — starting automation shortly.
+2026-06-21T14:41:55.997+05:30 [STEP] Test wrapper: prepare_vehicle only (no prepare_customer).
+2026-06-21T14:41:55.997+05:30 [STEP] Begin prepare_vehicle.
+2026-06-21T14:41:55.997+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='18800' | frame_partial='19977' | key_partial='7870' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-06-21T14:42:01.653+05:30 [NOTE] prepare_vehicle: Find → Vehicles for list query.
+2026-06-21T14:42:01.678+05:30 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
+2026-06-21T14:42:01.678+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='18800' | find_vehicles_vin_engine_ok=True | frame_partial='19977'
+2026-06-21T14:42:02.444+05:30 [NOTE] prepare_vehicle: left Search Results pane shows the VIN.
+2026-06-21T14:42:02.741+05:30 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).
+2026-06-21T14:42:03.870+05:30 [NOTE] prepare_vehicle: center vehicle list shows selected VIN.
+2026-06-21T14:42:03.905+05:30 [NOTE] prepare_vehicle: scraped vehicle row from center grid.
+2026-06-21T14:42:04.674+05:30 [NOTE] Vehicle prep: filled Battery No. = '418145' on vehicle page.
+2026-06-21T14:42:04.913+05:30 [NOTE] Vehicle prep: filled Key Number = '7870' on vehicle page.
+2026-06-21T14:42:06.590+05:30 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
+2026-06-21T14:42:06.883+05:30 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
+2026-06-21T14:42:06.883+05:30 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='SBK' | full_chassis='MBLHAW435THE19977' | full_engine='HA11F4THE18800' | model='HF DELUXE' | variant='HDLHADRSCFISBK' | year_of_mfg='2,026'
+2026-06-21T14:42:06.935+05:30 [NOTE] DECISION: Inventory Location present, not In Transit — 'External Location'; in_transit=False (overrides grid heuristic).
+2026-06-21T14:42:06.935+05:30 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='External Location'
+2026-06-21T14:42:07.213+05:30 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number', scoped #s_1_l).
+2026-06-21T14:42:09.478+05:30 [NOTE] prepare_vehicle: 1s settle before Feature-id scrape (HHML cubic capacity / vehicle type).
+2026-06-21T14:42:09.505+05:30 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='100', vehicle_type='MOTORCYCLE WITH GEAR'.
+2026-06-21T14:42:09.505+05:30 [NOTE] prepare_vehicle: [frame-focus] precheck_pdi_entry_before_precheck_tab url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Vehicle+Features+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1LF5U0HU&SWEApplet1=SIS+Auto+Product+Features+List+Applet&SWERowId1=2-1BLACL2H'
+2026-06-21T14:42:09.506+05:30 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
+2026-06-21T14:42:09.516+05:30 [NOTE] prepare_vehicle: Features view + third-level bar (Pre-check/PDI) settled before Pre-check tab click.
+2026-06-21T14:42:10.461+05:30 [NOTE] prepare_vehicle: third-level bar stable (#s_vctrl_div via 'strip') before Pre-check click tabs=['Contacts', 'Contacts', 'PDI', 'PDI', 'Features and Image', 'Features and Image', 'PreCheck', 'PreCheck', 'Finance Info', 'Finance Info', 'Complaints', 'Complaints', 'RC FollowUp', 'RC FollowUp', 'HB Disclaimer', 'HB Disclaimer']
+2026-06-21T14:42:10.498+05:30 [NOTE] prepare_vehicle: clicked Pre-check from #s_vctrl_div tab strip.
+2026-06-21T14:42:17.042+05:30 [NOTE] prepare_vehicle: Pre-check post-tab DOM ready-wait timed out after 5000ms (third-level tabs and/or + missing) — continuing.
+2026-06-21T14:42:17.814+05:30 [NOTE] prepare_vehicle: Pre-check tab loaded (networkidle + post-tab ready-wait complete).
+2026-06-21T14:42:17.814+05:30 [NOTE] prepare_vehicle: [frame-focus] precheck_pdi_after_precheck_tab_networkidle url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HMCL+Auto+Vehicle+PDIPre+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1LF5U0HU&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1LKL1KN4'
+2026-06-21T14:42:18.475+05:30 [NOTE] prepare_vehicle: Pre-check tab click may be on PDIPre / Precheck-only view URL='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HMCL+Auto+Vehicle+PDIPre+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1LF5U0HU&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1LKL1KN4'. Third-level tabs may be missing.
+2026-06-21T14:42:18.503+05:30 [NOTE] prepare_vehicle: precheck_row_probe found rows=1 via UNSCOPED fallback ('root[6]:fallbackRows=1(unscoped_non_pdi)') but third-level tabs are NOT loaded — this is likely a false positive (wrong Siebel view). Discounting fallbackRows.
+2026-06-21T14:42:18.503+05:30 [NOTE] prepare_vehicle: third-level tabs (PreCheck/PDI) NOT loaded after Pre-check tab click — chassis/VIN recovery re-navigation is disabled (skipping Vehicle List re-search).
+2026-06-21T14:42:18.503+05:30 [NOTE] prepare_vehicle: frame dump skipped — no output_dir supplied.
+2026-06-21T14:42:18.503+05:30 [NOTE] prepare_vehicle: chassis/VIN recovery disabled (no Vehicle List re-navigation).
+2026-06-21T14:42:18.512+05:30 [NOTE] prepare_vehicle: precheck_date_cells opened='' status='' closed='' technician='' source='' row_counter=''
+2026-06-21T14:42:18.513+05:30 [NOTE] prepare_vehicle: precheck_row_probe rows=0 signal=none already_present=False third_level_tabs_loaded=False
+2026-06-21T14:42:18.513+05:30 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_row_probe | log_prefix='prepare_vehicle' | precheck_already_present=False | precheck_existing_rows='0' | precheck_signal='none'
+2026-06-21T14:42:18.520+05:30 [NOTE] prepare_vehicle: active_element_before_plus tag='body' id='' aria-label='' parent_applet=''
+2026-06-21T14:42:18.525+05:30 [NOTE] prepare_vehicle: Pre-check + JS phase miss. tried=['s_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:not-button', 's_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:span-label-mismatch'] all_newrecord_btns=[]
+2026-06-21T14:42:18.530+05:30 [NOTE] prepare_vehicle: Pre-check + JS phase miss. tried=['s_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:not-button', 's_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:span-label-mismatch'] all_newrecord_btns=[]
+2026-06-21T14:42:18.530+05:30 [NOTE] prepare_vehicle: Pre-check + JS phase exhausted all roots, trying role-based scan.
+2026-06-21T14:42:18.982+05:30 [NOTE] prepare_vehicle: Pre-check + role-based scan exhausted, trying CSS selectors.
+2026-06-21T14:42:20.944+05:30 [NOTE] prepare_vehicle: Pre-check + all phases (JS/role/CSS) failed — returning False.
+2026-06-21T14:42:20.945+05:30 [NOTE] prepare_vehicle: frame dump skipped — no output_dir supplied.
+2026-06-21T14:42:20.945+05:30 [NOTE] prepare_vehicle: DIAGNOSTIC — third-level tabs not loaded in #s_vctrl_div (Pre-check tab may not have reached serial detail). s_3_1_12_0_Ctrl button often absent; s_3_1_12_0 may exist as empty SPAN only.
+2026-06-21T14:42:20.946+05:30 [STEP] Stopped: vehicle serial drilldown, Features, Pre-check, or PDI failed.
+2026-06-21T14:42:20.946+05:30 [NOTE] prepare_vehicle attempt 1/5 failed (transient Pre-check/PDI): 'Wrong PDIPre deeplink — Could not find + button in Pre-check tab.' — retrying after 500ms settle.
+2026-06-21T14:42:21.447+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='18800' | frame_partial='19977' | key_partial='7870' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-06-21T14:42:22.437+05:30 [NOTE] prepare_vehicle: Find → Vehicles for list query.
+2026-06-21T14:42:22.465+05:30 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
+2026-06-21T14:42:22.465+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='18800' | find_vehicles_vin_engine_ok=True | frame_partial='19977'
+2026-06-21T14:42:22.993+05:30 [NOTE] prepare_vehicle: left Search Results pane shows the VIN.
+2026-06-21T14:42:23.171+05:30 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).
+2026-06-21T14:42:24.221+05:30 [NOTE] prepare_vehicle: center vehicle list shows selected VIN.
+2026-06-21T14:42:24.249+05:30 [NOTE] prepare_vehicle: scraped vehicle row from center grid.
+2026-06-21T14:42:25.056+05:30 [NOTE] Vehicle prep: filled Battery No. = '418145' on vehicle page.
+2026-06-21T14:42:25.282+05:30 [NOTE] Vehicle prep: filled Key Number = '7870' on vehicle page.
+2026-06-21T14:42:26.948+05:30 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
+2026-06-21T14:42:27.151+05:30 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
+2026-06-21T14:42:27.152+05:30 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='SBK' | full_chassis='MBLHAW435THE19977' | full_engine='HA11F4THE18800' | model='HF DELUXE' | variant='HDLHADRSCFISBK' | year_of_mfg='2,026'
+2026-06-21T14:42:27.185+05:30 [NOTE] DECISION: Inventory Location present, not In Transit — 'External Location'; in_transit=False (overrides grid heuristic).
+2026-06-21T14:42:27.185+05:30 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='External Location'
+2026-06-21T14:42:27.383+05:30 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number', scoped #s_1_l).
+2026-06-21T14:42:29.630+05:30 [NOTE] prepare_vehicle: 1s settle before Feature-id scrape (HHML cubic capacity / vehicle type).
+2026-06-21T14:42:29.658+05:30 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='100', vehicle_type='MOTORCYCLE WITH GEAR'.
+2026-06-21T14:42:29.659+05:30 [NOTE] prepare_vehicle: [frame-focus] precheck_pdi_entry_before_precheck_tab url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Vehicle+Features+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1LF5U0HU&SWEApplet1=SIS+Auto+Product+Features+List+Applet&SWERowId1=2-1BLACL2H'
+2026-06-21T14:42:29.659+05:30 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
+2026-06-21T14:42:29.670+05:30 [NOTE] prepare_vehicle: Features view + third-level bar (Pre-check/PDI) settled before Pre-check tab click.
+2026-06-21T14:42:30.620+05:30 [NOTE] prepare_vehicle: third-level bar stable (#s_vctrl_div via 'strip') before Pre-check click tabs=['Contacts', 'Contacts', 'PDI', 'PDI', 'Features and Image', 'Features and Image', 'PreCheck', 'PreCheck', 'Finance Info', 'Finance Info', 'Complaints', 'Complaints', 'RC FollowUp', 'RC FollowUp', 'HB Disclaimer', 'HB Disclaimer']
+2026-06-21T14:42:30.670+05:30 [NOTE] prepare_vehicle: clicked Pre-check from #s_vctrl_div tab strip.
+2026-06-21T14:42:37.555+05:30 [NOTE] prepare_vehicle: Pre-check post-tab DOM ready-wait timed out after 5000ms (third-level tabs and/or + missing) — continuing.
+2026-06-21T14:42:38.328+05:30 [NOTE] prepare_vehicle: Pre-check tab loaded (networkidle + post-tab ready-wait complete).
+2026-06-21T14:42:38.330+05:30 [NOTE] prepare_vehicle: [frame-focus] precheck_pdi_after_precheck_tab_networkidle url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HMCL+Auto+Vehicle+PDIPre+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1LF5U0HU&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1LKL1KN4'
+2026-06-21T14:42:39.004+05:30 [NOTE] prepare_vehicle: Pre-check tab click may be on PDIPre / Precheck-only view URL='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HMCL+Auto+Vehicle+PDIPre+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1LF5U0HU&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1LKL1KN4'. Third-level tabs may be missing.
+2026-06-21T14:42:39.039+05:30 [NOTE] prepare_vehicle: precheck_row_probe found rows=1 via UNSCOPED fallback ('root[6]:fallbackRows=1(unscoped_non_pdi)') but third-level tabs are NOT loaded — this is likely a false positive (wrong Siebel view). Discounting fallbackRows.
+2026-06-21T14:42:39.040+05:30 [NOTE] prepare_vehicle: third-level tabs (PreCheck/PDI) NOT loaded after Pre-check tab click — chassis/VIN recovery re-navigation is disabled (skipping Vehicle List re-search).
+2026-06-21T14:42:39.040+05:30 [NOTE] prepare_vehicle: frame dump skipped — no output_dir supplied.
+2026-06-21T14:42:39.041+05:30 [NOTE] prepare_vehicle: chassis/VIN recovery disabled (no Vehicle List re-navigation).
+2026-06-21T14:42:39.055+05:30 [NOTE] prepare_vehicle: precheck_date_cells opened='' status='' closed='' technician='' source='' row_counter=''
+2026-06-21T14:42:39.055+05:30 [NOTE] prepare_vehicle: precheck_row_probe rows=0 signal=none already_present=False third_level_tabs_loaded=False
+2026-06-21T14:42:39.055+05:30 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_row_probe | log_prefix='prepare_vehicle' | precheck_already_present=False | precheck_existing_rows='0' | precheck_signal='none'
+2026-06-21T14:42:39.060+05:30 [NOTE] prepare_vehicle: active_element_before_plus tag='body' id='' aria-label='' parent_applet=''
+2026-06-21T14:42:39.067+05:30 [NOTE] prepare_vehicle: Pre-check + JS phase miss. tried=['s_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:not-button', 's_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:span-label-mismatch'] all_newrecord_btns=[]
+2026-06-21T14:42:39.072+05:30 [NOTE] prepare_vehicle: Pre-check + JS phase miss. tried=['s_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:not-button', 's_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:span-label-mismatch'] all_newrecord_btns=[]
+2026-06-21T14:42:39.072+05:30 [NOTE] prepare_vehicle: Pre-check + JS phase exhausted all roots, trying role-based scan.
+2026-06-21T14:42:39.504+05:30 [NOTE] prepare_vehicle: Pre-check + role-based scan exhausted, trying CSS selectors.
+2026-06-21T14:42:41.448+05:30 [NOTE] prepare_vehicle: Pre-check + all phases (JS/role/CSS) failed — returning False.
+2026-06-21T14:42:41.448+05:30 [NOTE] prepare_vehicle: frame dump skipped — no output_dir supplied.
+2026-06-21T14:42:41.448+05:30 [NOTE] prepare_vehicle: DIAGNOSTIC — third-level tabs not loaded in #s_vctrl_div (Pre-check tab may not have reached serial detail). s_3_1_12_0_Ctrl button often absent; s_3_1_12_0 may exist as empty SPAN only.
+2026-06-21T14:42:41.449+05:30 [STEP] Stopped: vehicle serial drilldown, Features, Pre-check, or PDI failed.
+2026-06-21T14:42:41.449+05:30 [NOTE] prepare_vehicle attempt 2/5 failed (transient Pre-check/PDI): 'Wrong PDIPre deeplink — Could not find + button in Pre-check tab.' — retrying after 500ms settle.
+2026-06-21T14:42:41.949+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='18800' | frame_partial='19977' | key_partial='7870' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-06-21T14:42:42.934+05:30 [NOTE] prepare_vehicle: Find → Vehicles for list query.
+2026-06-21T14:42:42.960+05:30 [NOTE] prepare_vehicle: VIN + Engine# submitted in Find→Vehicles applet.
+2026-06-21T14:42:42.960+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='18800' | find_vehicles_vin_engine_ok=True | frame_partial='19977'
+2026-06-21T14:42:43.538+05:30 [NOTE] prepare_vehicle: left Search Results pane shows the VIN.
+2026-06-21T14:42:43.686+05:30 [NOTE] prepare_vehicle: opened vehicle from left Search Results (VIN Title drilldown).
+2026-06-21T14:42:45.047+05:30 [NOTE] prepare_vehicle: center vehicle list shows selected VIN.
+2026-06-21T14:42:45.059+05:30 [NOTE] prepare_vehicle: scraped vehicle row from center grid.
+2026-06-21T14:42:45.779+05:30 [NOTE] Vehicle prep: filled Battery No. = '418145' on vehicle page.
+2026-06-21T14:42:45.973+05:30 [NOTE] Vehicle prep: filled Key Number = '7870' on vehicle page.
+2026-06-21T14:42:47.663+05:30 [NOTE] Vehicle prep: saved vehicle record after Key/Battery fill.
+2026-06-21T14:42:47.860+05:30 [NOTE] prepare_vehicle: vehicle detail applet (aria-labels) → ['full_chassis', 'model', 'year_of_mfg', 'variant', 'color', 'full_engine'].
+2026-06-21T14:42:47.860+05:30 [FORM] siebel_step=5_vehicle_detail | form=Auto Vehicle — detail applet | action=scrape_VIN_Model_Year_Manu_SKU_Color_Engine_by_aria_label | color='SBK' | full_chassis='MBLHAW435THE19977' | full_engine='HA11F4THE18800' | model='HF DELUXE' | variant='HDLHADRSCFISBK' | year_of_mfg='2,026'
+2026-06-21T14:42:47.893+05:30 [NOTE] DECISION: Inventory Location present, not In Transit — 'External Location'; in_transit=False (overrides grid heuristic).
+2026-06-21T14:42:47.893+05:30 [FORM] siebel_step=5_vehicle_inventory_location | form=Auto Vehicle | action=inventory_location_scrape | in_transit=False | inventory_location='External Location'
+2026-06-21T14:42:48.098+05:30 [NOTE] prepare_vehicle: clicked Serial Number drilldown (name='Serial Number', scoped #s_1_l).
+2026-06-21T14:42:50.358+05:30 [NOTE] prepare_vehicle: 1s settle before Feature-id scrape (HHML cubic capacity / vehicle type).
+2026-06-21T14:42:50.382+05:30 [NOTE] prepare_vehicle: feature-id scrape cubic_capacity='100', vehicle_type='MOTORCYCLE WITH GEAR'.
+2026-06-21T14:42:50.382+05:30 [NOTE] prepare_vehicle: [frame-focus] precheck_pdi_entry_before_precheck_tab url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+Vehicle+Features+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1LF5U0HU&SWEApplet1=SIS+Auto+Product+Features+List+Applet&SWERowId1=2-1BLACL2H'
+2026-06-21T14:42:50.382+05:30 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_tab_open | log_prefix='prepare_vehicle'
+2026-06-21T14:42:50.393+05:30 [NOTE] prepare_vehicle: Features view + third-level bar (Pre-check/PDI) settled before Pre-check tab click.
+2026-06-21T14:42:51.340+05:30 [NOTE] prepare_vehicle: third-level bar stable (#s_vctrl_div via 'strip') before Pre-check click tabs=['Contacts', 'Contacts', 'PDI', 'PDI', 'Features and Image', 'Features and Image', 'PreCheck', 'PreCheck', 'Finance Info', 'Finance Info', 'Complaints', 'Complaints', 'RC FollowUp', 'RC FollowUp', 'HB Disclaimer', 'HB Disclaimer']
+2026-06-21T14:42:51.384+05:30 [NOTE] prepare_vehicle: clicked Pre-check from #s_vctrl_div tab strip.
+2026-06-21T14:42:57.992+05:30 [NOTE] prepare_vehicle: Pre-check post-tab DOM ready-wait timed out after 5000ms (third-level tabs and/or + missing) — continuing.
+2026-06-21T14:42:58.760+05:30 [NOTE] prepare_vehicle: Pre-check tab loaded (networkidle + post-tab ready-wait complete).
+2026-06-21T14:42:58.761+05:30 [NOTE] prepare_vehicle: [frame-focus] precheck_pdi_after_precheck_tab_networkidle url='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HMCL+Auto+Vehicle+PDIPre+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1LF5U0HU&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1LKL1KN4'
+2026-06-21T14:42:59.424+05:30 [NOTE] prepare_vehicle: Pre-check tab click may be on PDIPre / Precheck-only view URL='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=HMCL+Auto+Vehicle+PDIPre+Assessment+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+Entry+Applet&SWERowId0=2-1LF5U0HU&SWEApplet1=HMCL+PDI+Precheck+List+Applet&SWERowId1=2-1LKL1KN4'. Third-level tabs may be missing.
+2026-06-21T14:42:59.456+05:30 [NOTE] prepare_vehicle: precheck_row_probe found rows=1 via UNSCOPED fallback ('root[6]:fallbackRows=1(unscoped_non_pdi)') but third-level tabs are NOT loaded — this is likely a false positive (wrong Siebel view). Discounting fallbackRows.
+2026-06-21T14:42:59.456+05:30 [NOTE] prepare_vehicle: third-level tabs (PreCheck/PDI) NOT loaded after Pre-check tab click — chassis/VIN recovery re-navigation is disabled (skipping Vehicle List re-search).
+2026-06-21T14:42:59.456+05:30 [NOTE] prepare_vehicle: frame dump skipped — no output_dir supplied.
+2026-06-21T14:42:59.457+05:30 [NOTE] prepare_vehicle: chassis/VIN recovery disabled (no Vehicle List re-navigation).
+2026-06-21T14:42:59.467+05:30 [NOTE] prepare_vehicle: precheck_date_cells opened='' status='' closed='' technician='' source='' row_counter=''
+2026-06-21T14:42:59.468+05:30 [NOTE] prepare_vehicle: precheck_row_probe rows=0 signal=none already_present=False third_level_tabs_loaded=False
+2026-06-21T14:42:59.468+05:30 [FORM] siebel_step=vehicle_serial_precheck_pdi | form=Vehicle serial detail | action=precheck_row_probe | log_prefix='prepare_vehicle' | precheck_already_present=False | precheck_existing_rows='0' | precheck_signal='none'
+2026-06-21T14:42:59.472+05:30 [NOTE] prepare_vehicle: active_element_before_plus tag='body' id='' aria-label='' parent_applet=''
+2026-06-21T14:42:59.479+05:30 [NOTE] prepare_vehicle: Pre-check + JS phase miss. tried=['s_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:not-button', 's_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:span-label-mismatch'] all_newrecord_btns=[]
+2026-06-21T14:42:59.484+05:30 [NOTE] prepare_vehicle: Pre-check + JS phase miss. tried=['s_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:not-button', 's_3_1_12_0_Ctrl:missing', 's_2_1_14_0_Ctrl:missing', 's_2_2_32_0:missing', 's_2_1_12_0_Ctrl:missing', 's_2_2_31_0_Ctrl:missing', 's_2_2_33_0_Ctrl:missing', 's_2_1_11_0_Ctrl:missing', 's_2_2_30_0_Ctrl:missing', 's_2_1_12_0:missing', 's_3_1_12_0:span-label-mismatch'] all_newrecord_btns=[]
+2026-06-21T14:42:59.484+05:30 [NOTE] prepare_vehicle: Pre-check + JS phase exhausted all roots, trying role-based scan.
+2026-06-21T14:42:59.963+05:30 [NOTE] prepare_vehicle: Pre-check + role-based scan exhausted, trying CSS selectors.
+2026-06-21T14:43:01.990+05:30 [NOTE] prepare_vehicle: Pre-check + all phases (JS/role/CSS) failed — returning False.
+2026-06-21T14:43:01.990+05:30 [NOTE] prepare_vehicle: frame dump skipped — no output_dir supplied.
+2026-06-21T14:43:01.990+05:30 [NOTE] prepare_vehicle: DIAGNOSTIC — third-level tabs not loaded in #s_vctrl_div (Pre-check tab may not have reached serial detail). s_3_1_12_0_Ctrl button often absent; s_3_1_12_0 may exist as empty SPAN only.
+2026-06-21T14:43:01.990+05:30 [STEP] Stopped: vehicle serial drilldown, Features, Pre-check, or PDI failed.
+2026-06-21T14:43:01.991+05:30 [NOTE] prepare_vehicle attempt 3/5 failed (transient Pre-check/PDI): 'Wrong PDIPre deeplink — Could not find + button in Pre-check tab.' — retrying after 500ms settle.
+2026-06-21T14:43:02.491+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List (DMS_REAL_URL_VEHICLE) | action=begin_vehicle_flow_navigate_then_search_applet | engine_partial='18800' | frame_partial='19977' | key_partial='7870' | vehicle_url_truncated='https://connect.heromotocorp.biz/siebel/app/edealerHMCL/enu/?SWECmd=GotoView&SWEView=eAuto+All+Vehicle+View&SWERF=1&SWEHo=&SWEBU=1&SWEApplet0=Auto+Vehicle+List+Applet&SWERowId0=1-100-1676'
+2026-06-21T14:43:03.514+05:30 [NOTE] prepare_vehicle: Find → Vehicles not confirmed — still attempting VIN/Engine fill in find field box.
+2026-06-21T14:43:03.520+05:30 [NOTE] prepare_vehicle: Find→Vehicles VIN/Engine fill failed — one retry (expand Find, Vehicles).
+2026-06-21T14:43:04.085+05:30 [FORM] siebel_step=5_vehicle_list | form=Auto Vehicle List — search/query row | action=find_vehicles_vin_engine_applet_only | engine_partial='18800' | find_vehicles_vin_engine_ok=False | frame_partial='19977'
+2026-06-21T14:43:04.090+05:30 [NOTE] prepare_vehicle: Find→Vehicles VIN/Engine query failed (technical): frame_partial present; final_ready=False; find applet not ready/visible; if controls live in a nested iframe, set DMS_SIEBEL_CONTENT_FRAME_SELECTOR.
+2026-06-21T14:43:04.090+05:30 [STEP] Stopped during vehicle list search.
+
+--- scraped_vehicle (after_prepare_vehicle) ---
+2026-06-21T14:43:04.091+05:30 [NOTE] DMS site is not open. Please log in to DMS and try again.
+
+2026-06-21T14:43:04.091+05:30 [END] exit_code=1 error='DMS site is not open. Please log in to DMS and try again.'

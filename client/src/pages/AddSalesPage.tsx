@@ -2751,6 +2751,8 @@ export function AddSalesPage({
                         )}
                       </dd>
                     </div>
+                  </div>
+                  <div className="add-sales-v2-dl-row-group">
                     <div className="add-sales-v2-dl-row">
                       <dt>Insurance Add-ons</dt>
                       <dd className="add-sales-v2-dd--insurance-editable">

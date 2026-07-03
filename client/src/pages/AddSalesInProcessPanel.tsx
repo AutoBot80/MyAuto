@@ -36,6 +36,7 @@ import {
   mergeSelectedInsuranceAddonOption,
   normalizeInsuranceAddonRows,
 } from "../utils/insuranceAddonUi";
+import { renameSaleSubfoldersOnDealerPc } from "../utils/electronSaleFolderRename";
 import { sanitizeFormFieldInputValue, sanitizeFormFieldValue } from "../utils/formFieldSanitize";
 
 function normalizeCpaRequiredFlag(raw: unknown): "Y" | "N" {
@@ -51,17 +52,6 @@ function formatCpaRequiredDisplay(raw: unknown): string {
 function formatTenDigitSegment(raw: unknown): string {
   const d = String(raw ?? "").replace(/\D/g, "").slice(-10);
   return d.length === 10 ? d : "";
-}
-
-/** Primary mobile / alternate as ``9999999999/8888888888``; ``—`` when neither valid. */
-function formatMobileAlternateSlash(custRec: Record<string, unknown> | null | undefined): string {
-  if (!custRec) return "—";
-  const m = formatTenDigitSegment(custRec.mobile_number ?? custRec.mobile);
-  const a = formatTenDigitSegment(custRec.alt_phone_num ?? custRec.alternate_no ?? custRec.alternate_mobile_number);
-  if (m && a) return `${m}/${a}`;
-  if (m) return m;
-  if (a) return `—/${a}`;
-  return "—";
 }
 
 function rowHasCommittedIds(r: AddSalesInProcessRow): boolean {
@@ -129,6 +119,8 @@ function payloadVehicle(rec: Record<string, unknown> | null): ExtractedVehicleDe
 
 /** Editable subset of In-process Sales Details (maps to PATCH whitelist). */
 interface InProcessDetailDraft {
+  mobile_number: string;
+  alt_phone_num: string;
   care_of: string;
   address: string;
   frame_no: string;
@@ -147,13 +139,20 @@ function buildDraftFromPayload(
 ): InProcessDetailDraft | null {
   if (!payload) return null;
   const cust = payloadCustomer((payload.customer as Record<string, unknown>) ?? null);
+  const custRec = (payload.customer as Record<string, unknown>) ?? null;
   const veh = payloadVehicle((payload.vehicle as Record<string, unknown>) ?? null);
   const ins = payloadInsurance((payload.insurance as Record<string, unknown>) ?? null);
   const address =
     inProcessAddressFromStaging(cust) ||
     (cust ? buildSection2FullAddress(cust) : "") ||
     "";
+  const mobileSeg = formatTenDigitSegment(custRec?.mobile_number ?? custRec?.mobile);
+  const altSeg = formatTenDigitSegment(
+    custRec?.alt_phone_num ?? custRec?.alternate_no ?? custRec?.alternate_mobile_number
+  );
   return {
+    mobile_number: mobileSeg,
+    alt_phone_num: altSeg,
     care_of: cust?.care_of?.trim() ?? "",
     address: address.trim(),
     frame_no: veh?.frame_no?.trim() ?? "",
@@ -169,6 +168,8 @@ function buildDraftFromPayload(
 
 function draftsEqual(a: InProcessDetailDraft, b: InProcessDetailDraft): boolean {
   return (
+    a.mobile_number === b.mobile_number &&
+    a.alt_phone_num === b.alt_phone_num &&
     a.care_of === b.care_of &&
     a.address === b.address &&
     a.frame_no === b.frame_no &&
@@ -201,10 +202,22 @@ function InProcessFieldError({
 function draftToPatchBody(
   draft: InProcessDetailDraft,
   baseline: InProcessDetailDraft,
-  opts: { includeInsurer: boolean }
+  opts: { includeInsurer: boolean; phonesEditable: boolean }
 ): PatchAddSalesStagingPayloadBody {
+  const customer: NonNullable<PatchAddSalesStagingPayloadBody["customer"]> = {
+    care_of: draft.care_of,
+    address: draft.address,
+  };
+  if (opts.phonesEditable) {
+    if (draft.mobile_number !== baseline.mobile_number) {
+      customer.mobile_number = parseInt(draft.mobile_number, 10);
+    }
+    if (draft.alt_phone_num !== baseline.alt_phone_num) {
+      customer.alt_phone_num = draft.alt_phone_num.trim() || null;
+    }
+  }
   const body: PatchAddSalesStagingPayloadBody = {
-    customer: { care_of: draft.care_of, address: draft.address },
+    customer,
     vehicle: {
       frame_no: draft.frame_no,
       engine_no: draft.engine_no,
@@ -285,6 +298,7 @@ export function AddSalesInProcessPanel({
   const [detailPayload, setDetailPayload] = useState<Record<string, unknown> | null>(null);
   const [stagingCpiReqd, setStagingCpiReqd] = useState<"Y" | "N" | null>(null);
   const [stagingInsuranceState, setStagingInsuranceState] = useState<number | null>(null);
+  const [stagingDmsState, setStagingDmsState] = useState<number | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
   const [rowMsg, setRowMsg] = useState<{ text: string; success: boolean } | null>(null);
@@ -387,6 +401,7 @@ export function AddSalesInProcessPanel({
       setDetailPayload(null);
       setStagingCpiReqd(null);
       setStagingInsuranceState(null);
+      setStagingDmsState(null);
       setInsuranceAddonEdit("");
       setInsuranceAddonBaseline("");
       setDetailErr(null);
@@ -403,6 +418,7 @@ export function AddSalesInProcessPanel({
           r.cpi_reqd != null ? normalizeCpaRequiredFlag(r.cpi_reqd) : null
         );
         setStagingInsuranceState(r.insurance_state ?? null);
+        setStagingDmsState(r.dms_state ?? null);
         const effAddon = r.effective_insurance_addon ?? r.insurance_addon;
         const addonNum =
           effAddon != null && Number(effAddon) > 0 ? Number(effAddon) : "";
@@ -440,6 +456,15 @@ export function AddSalesInProcessPanel({
 
   const insurerEditable = stagingInsuranceState == null || stagingInsuranceState === 0;
 
+  const phonesEditable = useMemo(() => {
+    if (stagingDmsState != null && stagingDmsState >= 2) return false;
+    const cid = detailPayload?.customer_id;
+    if (cid != null && String(cid).trim() !== "" && String(cid).trim() !== "0") {
+      return false;
+    }
+    return true;
+  }, [stagingDmsState, detailPayload]);
+
   const clearDetailValidation = useCallback(() => {
     setDetailValidationErrors([]);
     setDetailSaveAttempted(false);
@@ -464,11 +489,15 @@ export function AddSalesInProcessPanel({
 
   const onSaveDetailChanges = useCallback(async () => {
     if (!selectedId || !detailEditDraft || dealerId <= 0 || !detailDirty) return;
-    const validationErrors = getInProcessDetailValidationErrors(detailEditDraft);
+    const validationErrors = getInProcessDetailValidationErrors(detailEditDraft, {
+      phonesEditable,
+    });
     if (validationErrors.length > 0) {
       setDetailValidationErrors(validationErrors);
       setDetailSaveAttempted(true);
       const labels: Record<string, string> = {
+        mobile_number: "Mobile",
+        alt_phone_num: "Alternate No.",
         care_of: "Care of",
         address: "Address",
         frame_no: "Chassis",
@@ -501,18 +530,30 @@ export function AddSalesInProcessPanel({
     setDetailSaveAttempted(false);
     setDetailSaveBusy(true);
     setDetailErr(null);
+    const oldSubfolder = String(detailPayload?.file_location ?? "").trim();
     try {
-      await patchAddSalesStagingPayload(
+      const patchResult = await patchAddSalesStagingPayload(
         selectedId,
         dealerId,
         {
-          ...draftToPatchBody(draftForSave, detailDraftBaseline!, { includeInsurer: insurerEditable }),
+          ...draftToPatchBody(draftForSave, detailDraftBaseline!, {
+            includeInsurer: insurerEditable,
+            phonesEditable,
+          }),
           ...(() => {
             const addon = insuranceAddonPatchIfChanged(insuranceAddonEdit, insuranceAddonBaseline);
             return addon != null ? { insurance_addon: addon } : {};
           })(),
         }
       );
+      const newSubfolder = String(patchResult.file_location ?? "").trim();
+      if (oldSubfolder && newSubfolder && oldSubfolder !== newSubfolder) {
+        await renameSaleSubfoldersOnDealerPc({
+          dealerId,
+          oldSubfolder,
+          newSubfolder,
+        });
+      }
       setPanelRefreshToken((t) => t + 1);
       await refreshList();
       setRowMsg({ text: "Changes saved.", success: true });
@@ -521,7 +562,7 @@ export function AddSalesInProcessPanel({
     } finally {
       setDetailSaveBusy(false);
     }
-  }, [selectedId, detailEditDraft, dealerId, detailDirty, refreshList, detailDraftBaseline, insurerEditable, insuranceAddonEdit, insuranceAddonBaseline]);
+  }, [selectedId, detailEditDraft, dealerId, detailDirty, refreshList, detailDraftBaseline, insurerEditable, phonesEditable, insuranceAddonEdit, insuranceAddonBaseline, detailPayload]);
 
   const saveDetailDisabled =
     !detailDirty ||
@@ -707,11 +748,6 @@ export function AddSalesInProcessPanel({
     createInvoicePrimaryDisabled &&
     generateInsurancePrimaryDisabled;
 
-  const custRaw = useMemo(
-    () => (detailPayload?.customer as Record<string, unknown> | undefined) ?? undefined,
-    [detailPayload]
-  );
-  const mobileAlternateDisplay = useMemo(() => formatMobileAlternateSlash(custRaw ?? null), [custRaw]);
   const heroCpiFlag = useMemo(
     () => normalizeHeroCpiFlag(elig?.hero_cpi ?? dealerHeroCpi),
     [elig?.hero_cpi, dealerHeroCpi]
@@ -998,7 +1034,57 @@ export function AddSalesInProcessPanel({
                 <dl className="add-sales-v2-dl add-sales-in-process-sales-dl">
                   <div className="add-sales-v2-dl-row">
                     <dt>Mobile</dt>
-                    <dd className="add-sales-in-process-dd--readonly">{mobileAlternateDisplay}</dd>
+                    <dd>
+                      {phonesEditable ? (
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={detailEditDraft.mobile_number}
+                          onChange={(e) => {
+                            clearDetailValidation();
+                            const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+                            setDetailEditDraft((prev) =>
+                              prev ? { ...prev, mobile_number: digits } : prev
+                            );
+                          }}
+                          inputMode="numeric"
+                          placeholder="10-digit mobile"
+                          disabled={detailSaveBusy}
+                          aria-invalid={detailFieldInvalid("mobile_number")}
+                        />
+                      ) : (
+                        <span className="add-sales-in-process-dd--readonly">
+                          {formatTenDigitSegment(detailEditDraft.mobile_number) || "—"}
+                        </span>
+                      )}
+                      <InProcessFieldError field="mobile_number" errors={detailErrorsToShow} />
+                    </dd>
+                  </div>
+                  <div className="add-sales-v2-dl-row">
+                    <dt>Alternate No.</dt>
+                    <dd>
+                      {phonesEditable ? (
+                        <input
+                          className="add-sales-v2-dl-input"
+                          value={detailEditDraft.alt_phone_num}
+                          onChange={(e) => {
+                            clearDetailValidation();
+                            const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+                            setDetailEditDraft((prev) =>
+                              prev ? { ...prev, alt_phone_num: digits } : prev
+                            );
+                          }}
+                          inputMode="numeric"
+                          placeholder="Optional 10-digit"
+                          disabled={detailSaveBusy}
+                          aria-invalid={detailFieldInvalid("alt_phone_num")}
+                        />
+                      ) : (
+                        <span className="add-sales-in-process-dd--readonly">
+                          {formatTenDigitSegment(detailEditDraft.alt_phone_num) || "—"}
+                        </span>
+                      )}
+                      <InProcessFieldError field="alt_phone_num" errors={detailErrorsToShow} />
+                    </dd>
                   </div>
                   <div className="add-sales-v2-dl-row">
                     <dt>Customer Name</dt>
