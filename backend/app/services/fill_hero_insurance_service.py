@@ -163,6 +163,9 @@ HERO_MISP_MODEL_NAME_CPH1_SUFFIXES = (
 MISP_PROPOSAL_MODEL_FUZZY_FLOOR = 0.1
 # Financier names are often short aliases in DB vs long legal-name labels in MISP.
 MISP_PROPOSAL_FINANCER_FUZZY_FLOOR = 0.35
+_MISP_FINANCER_PHRASE_TRAILING = frozenset(
+    {"ltd", "limited", "pvt", "private", "co", "company", "corporation", "corp"}
+)
 # RTO dropdown: ``RJ - City`` labels; prefer exact city casing over typo variants (e.g. BHARTPUR).
 MISP_PROPOSAL_RTO_FUZZY_FLOOR = 0.55
 
@@ -3596,6 +3599,51 @@ def _norm_misp_model_key(s: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _norm_misp_financer_phrase(s: str) -> str:
+    """
+    Phrase norm for financier containment: keeps ``finance`` / ``bank`` etc.; strips trailing legal
+    suffix tokens and punctuation noise (leading ``.``, trailing ``...``).
+    """
+    t = normalize_for_fuzzy_match(s)
+    t = t.replace("&", " and ")
+    t = re.sub(r"[^a-z0-9]+", " ", t)
+    toks = [x for x in t.split() if x]
+    while toks and toks[-1] in _MISP_FINANCER_PHRASE_TRAILING:
+        toks.pop()
+    return " ".join(toks).strip()
+
+
+def _misp_financer_spacing_variants(phrase: str) -> list[str]:
+    """Portal may spell ``shriram`` as one token or ``shri ram`` — yield both for phrase containment."""
+    p = (phrase or "").strip()
+    if not p:
+        return []
+    out = [p]
+    if "shriram" in p.split():
+        alt = p.replace("shriram", "shri ram")
+        if alt not in out:
+            out.append(alt)
+    if "shri ram" in p:
+        alt = p.replace("shri ram", "shriram")
+        if alt not in out:
+            out.append(alt)
+    return out
+
+
+def _misp_financer_phrase_contains(candidate: str, query_phrase: str) -> bool:
+    """True when the entire normalized query phrase appears contiguously in the candidate phrase."""
+    cp = _norm_misp_financer_phrase(candidate)
+    qp = (query_phrase or "").strip()
+    if not cp or not qp:
+        return False
+    if cp == qp or qp in cp:
+        return True
+    for variant in _misp_financer_spacing_variants(qp):
+        if variant in cp:
+            return True
+    return False
+
+
 def _norm_misp_financer_key(s: str) -> str:
     """Normalize financier labels while removing legal suffix noise for robust short-vs-long matching."""
     t = normalize_for_fuzzy_match(s)
@@ -3672,9 +3720,23 @@ def _pick_misp_model_option_label(
 
 
 def _pick_misp_financer_option_label(query: str, candidates: list[str]) -> str | None:
-    """Match short financier aliases to long legal-name dropdown labels."""
+    """Match financier query to MISP ``<option>`` labels; prefer full passed-phrase containment."""
     if not (query or "").strip() or not candidates:
         return None
+
+    query_phrase = _norm_misp_financer_phrase(query)
+    if query_phrase:
+        full_matches = [
+            c
+            for c in candidates
+            if (c or "").strip()
+            and not _misp_ddl_option_text_is_placeholder(c)
+            and _misp_financer_phrase_contains(c, query_phrase)
+        ]
+        if full_matches:
+            full_matches.sort(key=lambda c: (len(c.strip()), c.strip().lower()))
+            return full_matches[0]
+
     nq = _norm_misp_financer_key(query)
     if not nq:
         return fuzzy_best_option_label(
@@ -3689,9 +3751,7 @@ def _pick_misp_financer_option_label(query: str, candidates: list[str]) -> str |
         nc = _norm_misp_financer_key(t)
         if not nc:
             continue
-        if len(nq) >= 3 and nq in nc:
-            sc = 0.99
-        elif len(nc) >= 3 and nc in nq:
+        if nc == nq or (len(nc) >= 3 and nc in nq):
             sc = 0.90
         else:
             hit = sum(1 for w in qt if w in nc) if qt else 0
@@ -3699,7 +3759,7 @@ def _pick_misp_financer_option_label(query: str, candidates: list[str]) -> str |
             sc = 0.65 * tok_ratio + 0.35 * difflib.SequenceMatcher(None, nq, nc).ratio()
         scored.append((sc, t))
     if scored:
-        scored.sort(key=lambda x: (-x[0], -len(x[1])))
+        scored.sort(key=lambda x: (-x[0], len(x[1])))
         best_s, best_l = scored[0]
         if best_s >= MISP_PROPOSAL_FINANCER_FUZZY_FLOOR:
             return best_l
@@ -6718,15 +6778,20 @@ def _proposal_model_portal_auto_populated(step_id: str, readback: str) -> bool:
 
 
 def _proposal_financer_expected_matches_readback(expected: str, readback: str) -> bool:
-    """Accept short financier aliases when readback is a longer legal-name variant."""
+    """Accept financier readback when it contains the entire expected phrase (not partial brand tokens)."""
     if _proposal_expected_matches_readback(expected, readback):
+        return True
+    eq = _norm_misp_financer_phrase(expected)
+    if eq and _misp_financer_phrase_contains(readback, eq):
         return True
     e_key = _norm_misp_financer_key(expected)
     r_key = _norm_misp_financer_key(readback)
     if not e_key or not r_key:
         return False
-    if e_key == r_key or e_key in r_key or r_key in e_key:
+    if e_key == r_key or r_key in e_key:
         return True
+    if e_key in r_key:
+        return False
     e_tokens = [t for t in e_key.split() if len(t) >= 2]
     if not e_tokens:
         return False

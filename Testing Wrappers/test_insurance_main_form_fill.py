@@ -1,9 +1,12 @@
 """
 Local test wrapper: Hero MISP — **full Generate Insurance** flow (``pre_process`` → ``main_process`` → ``post_process``).
 
-Default scenario reproduces sale **7878793294_290626** (dealer **100003**, customer **70** / vehicle **94**,
-staging **2e7091bc-b3c0-4f5d-a5af-2d2e5759cce0**) — Bajaj **ND Cover, Rim Safeguard** (no RSA).
-Same sale data as log ``Playwright_insurance_29062026_152630.txt`` (originally dealer 100001).
+Default scenario reproduces sale **8209031977** / **PUNEET KUMAR** (dealer **100001**, VIN **MBLHAW431T9E44739**)
+— Bajaj **ND Cover, Rim Safeguard, RSA**; financier **Shriram Finance Ltd.** (focus: proposal **Financer Name**).
+
+When ``INSURANCE_TEST_CUSTOMER_ID`` / ``VEHICLE_ID`` / ``STAGING_ID`` are unset or ``0``, the wrapper tries
+DB auto-resolve from mobile + chassis + engine (same natural keys as Create Invoice eligibility) and the
+latest ``add_sales_staging`` row whose ``subfolder`` starts with the test mobile.
 
 By default tries **DB-backed** ``build_insurance_fill_values`` + ``fetch_staging_payload`` when
 ``DATABASE_URL`` is set (``INSURANCE_TEST_USE_DB=1``). Falls back to a log/OCR-derived patched dict.
@@ -13,16 +16,19 @@ when present. OCR merge checks (in order): ``INSURANCE_TEST_OCR_JSON``, ``ocr_ou
 ``Desktop/{subfolder}``, ``Uploaded scans/{dealer}/{subfolder}``.
 
 Environment (optional):
-  INSURANCE_TEST_DEALER_ID          default: 100003 (ND+Rim, no RSA; use 100001 for RSA preset)
-  INSURANCE_TEST_SUBFOLDER          default: 7878793294_290626
-  INSURANCE_TEST_STAGING_ID         default: 2e7091bc-b3c0-4f5d-a5af-2d2e5759cce0
-  INSURANCE_TEST_CUSTOMER_ID        default: 70
-  INSURANCE_TEST_VEHICLE_ID         default: 94
+  INSURANCE_TEST_DEALER_ID          default: 100001
+  INSURANCE_TEST_SUBFOLDER          default: (auto: latest 8209031977_* staging subfolder)
+  INSURANCE_TEST_STAGING_ID         default: (auto from subfolder lookup)
+  INSURANCE_TEST_CUSTOMER_ID        default: (auto natural-key resolve; override from prod Add Sales)
+  INSURANCE_TEST_VEHICLE_ID         default: (auto natural-key resolve; override from prod Add Sales)
   INSURANCE_TEST_USE_DB             default: 1 — load fill values + staging from DB when possible
-  INSURANCE_TEST_HERO_CPI           default: N (log: dealer hero_cpi='N')
+  INSURANCE_TEST_HERO_CPI           default: N
   INSURANCE_TEST_CPI_REQD           default: Y
-  INSURANCE_TEST_INSURANCE_PAY      default: CC (log: ddlPaymentMode CC + HDFC)
+  INSURANCE_TEST_INSURANCE_PAY      default: CC
   INSURANCE_TEST_INSURER            default: BAJAJ GENERAL INSURANCE LIMITED
+  INSURANCE_TEST_EXPECTED_FINANCER  default: Shriram Finance Ltd. — logged vs built value
+  INSURANCE_TEST_CHASSIS_NUM        default: MBLHAW431T9E44739 (also used for natural-key resolve)
+  INSURANCE_TEST_ENGINE_NUM         default: 03038
   INSURANCE_TEST_PAUSE_BEFORE_EXIT  default: 1
   INSURANCE_TEST_OCR_JSON           path to OCR_To_be_Used.json
 
@@ -48,38 +54,41 @@ if _BACKEND.is_dir() and str(_BACKEND) not in sys.path:
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("test_insurance_main_form_fill")
 
-# --- 7878793294_290626 @ dealer 100003 (Bajaj ND+Rim; DB sales_master/staging point at 100003) ---
-DEALER_ID_TEST = "100003"
-SALE_SUBFOLDER = "7878793294_290626"
-STAGING_ID_TEST = "2e7091bc-b3c0-4f5d-a5af-2d2e5759cce0"
-CUSTOMER_ID_TEST = "70"
-VEHICLE_ID_TEST = "94"
+# --- 8209031977 / PUNEET KUMAR @ dealer 100001 (financier Shriram Finance Ltd.) ---
+DEALER_ID_TEST = "100001"
+SALE_SUBFOLDER = ""
+STAGING_ID_TEST = ""
+CUSTOMER_ID_TEST = "0"
+VEHICLE_ID_TEST = "0"
 HERO_CPI = "N"
 CPI_REQD = "Y"
 INSURANCE_PAY = "CC"
-MOBILE = "7878793294"
-VIN = "MBLHAW481T9F01047"
-CUSTOMER_NAME = "ANOOP SINGH"
+MOBILE = "8209031977"
+VIN = "MBLHAW431T9E44739"
+CHASSIS_NUM = VIN
+ENGINE_NUM = "03038"
+CUSTOMER_NAME = "PUNEET KUMAR"
 FULL_CHASSIS = VIN
-FULL_ENGINE = "HA11F6T9F027353"
+FULL_ENGINE = ENGINE_NUM
 MODEL_NAME = "SPLENDOR + BS6 DRS"
 RTO_NAME = "RJ - BHARATPUR"
 YEAR_OF_MFG = "2026"
 FUEL_TYPE = "PETROL"
 STATE = "RAJASTHAN"
 CITY = "Bharatpur"
-PIN_CODE = "321026"
-ADDRESS = "CHAUKIPURA, BABEN, BHARATPUR, RAJASTHAN, 321026"
+PIN_CODE = "321001"
+ADDRESS = "MOHALLA- SURAJPOL, BHARATPUR, RAJASTHAN"
 GENDER = "Male"
-DOB = "01/01/1996"
+DOB = ""
 MARITAL_STATUS = "Married"
 PROFESSION = "Employed"
-ALT_PHONE = "9259431877"
-NOMINEE_NAME = "VIVEK"
-NOMINEE_AGE = "18"
-NOMINEE_RELATIONSHIP = "Brother"
-NOMINEE_GENDER = "Male"
-FINANCER_NAME = ".AXIS BANK LTD."
+ALT_PHONE = "8875219843"
+NOMINEE_NAME = "Meera Devi"
+NOMINEE_AGE = ""
+NOMINEE_RELATIONSHIP = "Mother"
+NOMINEE_GENDER = "Female"
+FINANCER_NAME = "Shriram Finance Ltd."
+EXPECTED_FINANCER = "Shriram Finance Ltd."
 INSURER = "BAJAJ GENERAL INSURANCE LIMITED"
 OEM_NAME = "Hero"
 VEHICLE_PRICE = ""
@@ -98,6 +107,152 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None or not str(raw).strip():
         return default
     return str(raw).strip().lower() in ("1", "true", "yes", "y")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        return default
+
+
+def _try_resolve_staging_by_mobile_prefix(mobile: str, dealer_id: int) -> tuple[str | None, dict[str, Any] | None]:
+    """Latest ``add_sales_staging`` row whose ``subfolder`` starts with ``{mobile}_``."""
+    mob = (mobile or "").strip()[:10]
+    if not mob:
+        return None, None
+    try:
+        from app.db import get_connection
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT staging_id, subfolder, payload_json
+                    FROM add_sales_staging
+                    WHERE dealer_id = %s
+                      AND subfolder LIKE %s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (dealer_id, f"{mob}_%"),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None, None
+        sid = str(row.get("staging_id") or "").strip()
+        sub = str(row.get("subfolder") or "").strip()
+        payload = row.get("payload_json")
+        if isinstance(payload, dict):
+            logger.info(
+                "Auto-resolved staging subfolder=%s staging_id=%s (mobile prefix %s_)",
+                sub,
+                sid,
+                mob,
+            )
+            return sid, dict(payload)
+        return sid, None
+    except Exception as exc:
+        logger.warning("Could not auto-resolve staging by mobile prefix %s_: %s", mob, exc)
+        return None, None
+
+
+def _try_resolve_ids_by_natural_keys(chassis: str, engine: str, mobile: str) -> tuple[int | None, int | None]:
+    try:
+        from app.services.add_sales_natural_key_resolve import resolve_customer_vehicle_ids_by_natural_keys
+
+        cid, vid = resolve_customer_vehicle_ids_by_natural_keys(chassis, engine, mobile)
+        if cid and vid:
+            logger.info(
+                "Auto-resolved customer_id=%s vehicle_id=%s from chassis=%r engine=%r mobile=%s",
+                cid,
+                vid,
+                chassis,
+                engine,
+                mobile,
+            )
+        return cid, vid
+    except Exception as exc:
+        logger.warning("Natural-key ID resolve failed: %s", exc)
+        return None, None
+
+
+def _log_financier_diagnostics(
+    *,
+    customer_id: int,
+    vehicle_id: int,
+    dealer_id: int,
+    staging_payload: dict[str, Any] | None,
+    ocr_path: Path,
+    built_values: dict[str, Any],
+    expected_financer: str,
+) -> None:
+    """Trace every financier source before MISP main form fill (wrapper-only observability)."""
+    logger.info("=== Financier trace (expected: %r) ===", expected_financer or "—")
+    try:
+        from app.db import get_connection
+
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT financier, name FROM customer_master WHERE customer_id = %s LIMIT 1",
+                    (customer_id,),
+                )
+                crow = cur.fetchone()
+                if crow:
+                    logger.info(
+                        "  customer_master.financier (%s): %r",
+                        crow.get("name"),
+                        crow.get("financier") or "—",
+                    )
+                cur.execute(
+                    """
+                    SELECT financer_name, customer_name, frame_no
+                    FROM form_insurance_view
+                    WHERE customer_id = %s AND vehicle_id = %s
+                    LIMIT 1
+                    """,
+                    (customer_id, vehicle_id),
+                )
+                frow = cur.fetchone()
+                if frow:
+                    logger.info("  form_insurance_view.financer_name: %r", frow.get("financer_name") or "—")
+                else:
+                    logger.info("  form_insurance_view: no row for customer_id=%s vehicle_id=%s", customer_id, vehicle_id)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.warning("  DB financier trace failed: %s", exc)
+
+    if staging_payload and isinstance(staging_payload, dict):
+        cust = staging_payload.get("customer") if isinstance(staging_payload.get("customer"), dict) else {}
+        ins = staging_payload.get("insurance") if isinstance(staging_payload.get("insurance"), dict) else {}
+        logger.info("  staging customer.financier: %r", cust.get("financier") or "—")
+        logger.info("  staging insurance.financier: %r", ins.get("financier") or "—")
+    else:
+        logger.info("  staging payload: —")
+
+    ocr_fin = _ocr_merge_defaults(_load_ocr_json(ocr_path)).get("financer_name")
+    logger.info("  OCR insurance.financier: %r", ocr_fin or "—")
+
+    built = str(built_values.get("financer_name") or "").strip()
+    logger.info("  build_insurance_fill_values financer_name: %r", built or "—")
+    if expected_financer and built and built.casefold() != expected_financer.casefold():
+        logger.warning(
+            "  MISMATCH: built financer_name %r != expected %r — check customer_master / MISP fuzzy select",
+            built,
+            expected_financer,
+        )
+    elif expected_financer and built:
+        logger.info("  built financer_name matches expected (case-insensitive)")
+    logger.info("=== end financier trace ===")
 
 
 def _resolve_ocr_json_path(ocr_out: Path, subfolder: str, dealer_id: int) -> Path:
@@ -207,7 +362,11 @@ def _build_insurance_values(*, subfolder: str, ocr_path: Path) -> dict[str, Any]
     from app.repositories.add_sales_staging import _normalize_cpi_reqd_flag
 
     mobile = _env_str("INSURANCE_TEST_MOBILE_NUMBER", MOBILE)[:10]
-    chassis = _env_str("INSURANCE_TEST_FRAME_NO", _env_str("INSURANCE_TEST_VIN", VIN)).strip()
+    chassis = _env_str(
+        "INSURANCE_TEST_FRAME_NO",
+        _env_str("INSURANCE_TEST_VIN", _env_str("INSURANCE_TEST_CHASSIS_NUM", CHASSIS_NUM)),
+    ).strip()
+    engine = _env_str("INSURANCE_TEST_ENGINE_NO", _env_str("INSURANCE_TEST_ENGINE_NUM", FULL_ENGINE)).strip()
     dealer_hero_cpi = normalize_hero_cpi_flag(_env_str("INSURANCE_TEST_HERO_CPI", HERO_CPI))
     effective_cpi_reqd = _normalize_cpi_reqd_flag(_env_str("INSURANCE_TEST_CPI_REQD", CPI_REQD))
     effective_hero_cpi = effective_misp_hero_cpi(
@@ -230,7 +389,7 @@ def _build_insurance_values(*, subfolder: str, ocr_path: Path) -> dict[str, Any]
         "address": ADDRESS,
         "frame_no": chassis,
         "full_chassis": chassis,
-        "engine_no": FULL_ENGINE,
+        "engine_no": engine,
         "model_name": MODEL_NAME,
         "fuel_type": FUEL_TYPE,
         "year_of_mfg": YEAR_OF_MFG,
@@ -355,24 +514,67 @@ def main() -> int:
 
     try:
         dealer_id = int(_env_str("INSURANCE_TEST_DEALER_ID", DEALER_ID_TEST))
-        customer_id = int(_env_str("INSURANCE_TEST_CUSTOMER_ID", CUSTOMER_ID_TEST))
-        vehicle_id = int(_env_str("INSURANCE_TEST_VEHICLE_ID", VEHICLE_ID_TEST))
     except ValueError:
-        logger.error("INSURANCE_TEST_DEALER_ID / CUSTOMER_ID / VEHICLE_ID must be integers.")
+        logger.error("INSURANCE_TEST_DEALER_ID must be an integer.")
         return 1
+
+    mobile = _env_str("INSURANCE_TEST_MOBILE_NUMBER", MOBILE)[:10]
+    chassis = _env_str(
+        "INSURANCE_TEST_FRAME_NO",
+        _env_str("INSURANCE_TEST_VIN", _env_str("INSURANCE_TEST_CHASSIS_NUM", CHASSIS_NUM)),
+    ).strip()
+    engine = _env_str("INSURANCE_TEST_ENGINE_NO", _env_str("INSURANCE_TEST_ENGINE_NUM", ENGINE_NUM)).strip()
+    expected_financer = _env_str("INSURANCE_TEST_EXPECTED_FINANCER", EXPECTED_FINANCER)
+
+    customer_id = _env_int("INSURANCE_TEST_CUSTOMER_ID", int(CUSTOMER_ID_TEST or "0"))
+    vehicle_id = _env_int("INSURANCE_TEST_VEHICLE_ID", int(VEHICLE_ID_TEST or "0"))
+    if customer_id <= 0 or vehicle_id <= 0:
+        cid, vid = _try_resolve_ids_by_natural_keys(chassis, engine, mobile)
+        if cid and vid:
+            customer_id, vehicle_id = cid, vid
+        elif customer_id <= 0 or vehicle_id <= 0:
+            logger.warning(
+                "customer_id/vehicle_id not resolved — set INSURANCE_TEST_CUSTOMER_ID and "
+                "INSURANCE_TEST_VEHICLE_ID from prod Add Sales (or import sale into local DB). "
+                "Falling back to patched fill dict if DB build fails."
+            )
 
     subfolder = _env_str("INSURANCE_TEST_SUBFOLDER", SALE_SUBFOLDER)
     staging_id = _env_str("INSURANCE_TEST_STAGING_ID", STAGING_ID_TEST) or None
+    staging_payload_pre: dict[str, Any] | None = None
+    if not subfolder:
+        sid_auto, payload_auto = _try_resolve_staging_by_mobile_prefix(mobile, dealer_id)
+        if sid_auto:
+            staging_id = staging_id or sid_auto
+        if payload_auto:
+            staging_payload_pre = payload_auto
+            subfolder = str(payload_auto.get("subfolder") or payload_auto.get("file_location") or "").strip()
+        if not subfolder and sid_auto:
+            try:
+                from app.repositories.add_sales_staging import fetch_staging_payload
+
+                sp = fetch_staging_payload(sid_auto, dealer_id)
+                if sp:
+                    staging_payload_pre = dict(sp)
+                    subfolder = str(sp.get("subfolder") or sp.get("file_location") or "").strip()
+            except Exception:
+                pass
+    if not subfolder:
+        subfolder = f"{mobile}_puneet_financier_test"
+        logger.warning("No staging subfolder found — using placeholder %r (set INSURANCE_TEST_SUBFOLDER)", subfolder)
+
     use_db = _env_bool("INSURANCE_TEST_USE_DB", True)
     ocr_out = get_ocr_output_dir(dealer_id)
     ocr_out.mkdir(parents=True, exist_ok=True)
     ocr_path = _resolve_ocr_json_path(ocr_out, subfolder, dealer_id)
 
-    staging_payload = _try_load_staging_payload(staging_id or "", dealer_id) if use_db else None
+    staging_payload = staging_payload_pre
+    if staging_payload is None and use_db and staging_id:
+        staging_payload = _try_load_staging_payload(staging_id or "", dealer_id)
 
     values: dict[str, Any] | None = None
     db_values_ok = False
-    if use_db:
+    if use_db and customer_id > 0 and vehicle_id > 0:
         values = _try_build_from_db(
             customer_id=customer_id,
             vehicle_id=vehicle_id,
@@ -386,6 +588,23 @@ def main() -> int:
     if values is None:
         values = _build_insurance_values(subfolder=subfolder, ocr_path=ocr_path)
         logger.info("Using patched fill dict (no DB or INSURANCE_TEST_USE_DB=0)")
+
+    if customer_id > 0 and vehicle_id > 0:
+        _log_financier_diagnostics(
+            customer_id=customer_id,
+            vehicle_id=vehicle_id,
+            dealer_id=dealer_id,
+            staging_payload=staging_payload,
+            ocr_path=ocr_path,
+            built_values=values,
+            expected_financer=expected_financer,
+        )
+    else:
+        built_fn = str(values.get("financer_name") or "").strip()
+        logger.info("=== Financier trace (patched dict only) ===")
+        logger.info("  expected: %r", expected_financer or "—")
+        logger.info("  patched financer_name: %r", built_fn or "—")
+        logger.info("=== end financier trace ===")
 
     _log_values_summary(values)
 
@@ -414,7 +633,14 @@ def main() -> int:
     logger.info("OCR JSON: %s (%s)", ocr_path, "found" if ocr_path.is_file() else "missing")
     logger.info("Full insurance flow: pre_process → main_process → post_process")
     logger.info("ocr_output: %s", ocr_out / subfolder)
-    logger.info("VIN=%s  mobile=%s  insurer=%s", values.get("frame_no"), values.get("mobile_number"), values.get("insurer"))
+    logger.info(
+        "VIN=%s  engine=%s  mobile=%s  insurer=%s  expected_financier=%s",
+        values.get("frame_no"),
+        values.get("engine_no"),
+        values.get("mobile_number"),
+        values.get("insurer"),
+        expected_financer,
+    )
 
     def _patched_build_insurance_fill_values(
         cid: int | None,

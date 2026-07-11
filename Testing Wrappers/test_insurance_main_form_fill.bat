@@ -24,37 +24,45 @@ if not exist "%CD%\backend\.env" (
 
 )
 
-rem --- Scenario: dealer 100003 Bajaj ND Cover + Rim Safeguard (no RSA) ---
-rem To test 100001 (with RSA): set INSURANCE_TEST_DEALER_ID=100001 before python line below.
-set INSURANCE_TEST_DEALER_ID=100003
-set INSURANCE_TEST_CUSTOMER_ID=70
-set INSURANCE_TEST_VEHICLE_ID=94
-set INSURANCE_TEST_STAGING_ID=2e7091bc-b3c0-4f5d-a5af-2d2e5759cce0
-set INSURANCE_TEST_SUBFOLDER=7878793294_290626
+rem --- Puneet Kumar / Shriram Finance Ltd. financier focus (dealer 100001) ---
+rem Override from prod Add Sales when sale is not in local auto_ai DB:
+rem   set INSURANCE_TEST_CUSTOMER_ID=<id>
+rem   set INSURANCE_TEST_VEHICLE_ID=<id>
+rem   set INSURANCE_TEST_STAGING_ID=<uuid>
+rem   set INSURANCE_TEST_SUBFOLDER=8209031977_DDMMYY
+set INSURANCE_TEST_DEALER_ID=100001
+set INSURANCE_TEST_CUSTOMER_ID=0
+set INSURANCE_TEST_VEHICLE_ID=0
+set INSURANCE_TEST_STAGING_ID=
+set INSURANCE_TEST_SUBFOLDER=
+set INSURANCE_TEST_VIN=MBLHAW431T9E44739
+set INSURANCE_TEST_CHASSIS_NUM=MBLHAW431T9E44739
+set INSURANCE_TEST_ENGINE_NUM=03038
+set INSURANCE_TEST_MOBILE_NUMBER=8209031977
+set INSURANCE_TEST_EXPECTED_FINANCER=Shriram Finance Ltd.
 set INSURANCE_TEST_INSURER=BAJAJ GENERAL INSURANCE LIMITED
+set INSURANCE_TEST_CPI_REQD=Y
 set INSURANCE_TEST_USE_DB=1
 
 echo Repo: %CD%
 
 echo.
 
-echo Generate Insurance — sale 7878793294_290626
+echo Generate Insurance — PUNEET KUMAR (financier trace)
 
 echo   dealer=%INSURANCE_TEST_DEALER_ID%  customer_id=%INSURANCE_TEST_CUSTOMER_ID%  vehicle_id=%INSURANCE_TEST_VEHICLE_ID%
 
-echo   staging_id=%INSURANCE_TEST_STAGING_ID%
+echo   VIN=%INSURANCE_TEST_VIN%  engine=%INSURANCE_TEST_ENGINE_NUM%  mobile=%INSURANCE_TEST_MOBILE_NUMBER%
 
-echo   VIN=MBLHAW481T9F01047  mobile=7878793294
+echo   expected_financier=%INSURANCE_TEST_EXPECTED_FINANCER%
 
-echo   insurer=BAJAJ GENERAL INSURANCE LIMITED  addon preset: ND Cover, Rim Safeguard (no RSA)
+echo   insurer=BAJAJ GENERAL INSURANCE LIMITED  addons: ND Cover, Rim Safeguard, RSA
 
 echo.
 
-echo DB mode: form_insurance_view + staging from auto_ai (sales_master.dealer_id must match).
+echo DB mode: form_insurance_view + staging when IDs resolve; else patched dict with Shriram Finance Ltd.
 
-echo OCR folder: ocr_output\%INSURANCE_TEST_DEALER_ID%\%INSURANCE_TEST_SUBFOLDER% (copy from 100001 if missing)
-
-echo If Rim Safeguard wrong: run Testing Wrappers\fix_insurance_test_staging_addon_100003.sql on auto_ai
+echo Financier trace logs: customer_master, form_insurance_view, staging, OCR, built value.
 
 echo Optional: set INSURANCE_TEST_PAUSE_BEFORE_EXIT=0
 
