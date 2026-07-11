@@ -110,6 +110,7 @@ def test_row_eligible_invoiced_candidate_shruti_not_hemant() -> None:
 
 
 def test_has_invoiced_guard_retry_candidate() -> None:
+    as_of = date(2026, 7, 2)
     rows = [
         {
             "invoice": "INV-OLD",
@@ -122,8 +123,8 @@ def test_has_invoiced_guard_retry_candidate() -> None:
             "invoice_date": "02/07/2026 02:15:12 PM",
         },
     ]
-    assert _my_orders_has_invoiced_guard_retry_candidate(rows, "SHRUTI") is False
-    assert _my_orders_has_invoiced_guard_retry_candidate(rows, "OTHER") is True
+    assert _my_orders_has_invoiced_guard_retry_candidate(rows, "SHRUTI", as_of=as_of) is False
+    assert _my_orders_has_invoiced_guard_retry_candidate(rows, "OTHER", as_of=as_of) is True
 
 
 def test_has_invoiced_mobile_false_positive() -> None:
@@ -164,6 +165,7 @@ def test_classify_invoiced_returns_first_row_without_guards() -> None:
 
 
 def test_classify_picks_shruti_by_name_and_date_when_hemant_first() -> None:
+    as_of = date(2026, 7, 2)
     rows = [
         {
             "order": "ORD-OLD",
@@ -186,6 +188,7 @@ def test_classify_picks_shruti_by_name_and_date_when_hemant_first() -> None:
         rows,
         searched_mobile_digits="9351244099",
         expected_contact_first_name="SHRUTI",
+        as_of=as_of,
     )
     assert oc == "invoiced"
     assert po == "ORD-NEW"

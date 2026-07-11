@@ -2,13 +2,53 @@
 
 from app.services.sales_ocr_service import (
     _canonical_marital_status_from_text,
+    _map_key_value_pairs_to_insurance,
     _normalize_cpa_required_value,
     _normalize_details_marital_status_value,
     _parse_cpa_required_from_ocr,
     _parse_insurance_from_full_text,
     _parse_sales_detail_checkbox_from_tables,
     _parse_sales_detail_checkbox_regions,
+    _sanitize_details_financier_value,
 )
+
+
+def test_sanitize_financier_rejects_label_fragment():
+    assert _sanitize_details_financier_value("Name (If Hypo):") is None
+    assert _sanitize_details_financier_value("Financier Name (if Hypo):") is None
+    assert _sanitize_details_financier_value("Name of Financier") is None
+    assert _sanitize_details_financier_value("CPA Required (Yes/ No)?") is None
+
+
+def test_sanitize_financier_keeps_real_name():
+    assert _sanitize_details_financier_value("HDFC Bank") == "HDFC Bank"
+    assert _sanitize_details_financier_value("Bajaj Finance") == "Bajaj Finance"
+
+
+def test_map_key_value_pairs_to_insurance_rejects_financier_label_bleed():
+    out = _map_key_value_pairs_to_insurance([{"key": "Financier", "value": "Name (If Hypo):"}])
+    assert "financier" not in out
+
+
+def test_parse_insurance_from_full_text_blank_hypo_financier_omitted():
+    text = """SALES DETAIL SHEET
+Payment Mode and Insurance Details
+Payment:
+Cash
+Financier Name (if Hypo):
+CPA Required (Yes/ No)?
+"""
+    out = _parse_insurance_from_full_text(text)
+    assert "financier" not in out
+
+
+def test_parse_insurance_from_full_text_keeps_real_financier():
+    text = """SALES DETAIL SHEET
+Financier Name: HDFC Bank
+CPA Required (Yes/ No)? NO
+"""
+    out = _parse_insurance_from_full_text(text)
+    assert out.get("financier") == "HDFC Bank"
 
 
 def test_marital_yes_no_maps_to_married_single():

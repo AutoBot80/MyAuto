@@ -1873,6 +1873,8 @@ def _my_orders_row_eligible_invoiced_candidate(
 def _my_orders_has_invoiced_guard_retry_candidate(
     rows: list[dict],
     expected_first_name: str,
+    *,
+    as_of: date | None = None,
 ) -> bool:
     """True when grid shows invoiced row(s) but none pass first-name + invoice-date guards."""
     if not _my_orders_norm_first_name_key(expected_first_name) or not rows:
@@ -1881,7 +1883,9 @@ def _my_orders_has_invoiced_guard_retry_candidate(
         _my_orders_invoice_meaningful((r.get("invoice") or "").strip()) for r in rows
     )
     any_eligible = any(
-        _my_orders_row_eligible_invoiced_candidate(r, expected_first_name=expected_first_name)
+        _my_orders_row_eligible_invoiced_candidate(
+            r, expected_first_name=expected_first_name, as_of=as_of
+        )
         for r in rows
     )
     return any_invoiced and not any_eligible
@@ -1983,6 +1987,7 @@ def _classify_my_orders_grid_rows(
     *,
     searched_mobile_digits: str = "",
     expected_contact_first_name: str = "",
+    as_of: date | None = None,
 ) -> tuple[str, str, str, str, str, str]:
     """
     From jqGrid row dicts, pick branching outcome and primary order/invoice/mobile/first-name/invoice-date.
@@ -2007,7 +2012,7 @@ def _classify_my_orders_grid_rows(
             continue
         if _use_name_date_guard:
             if not _my_orders_row_eligible_invoiced_candidate(
-                r, expected_first_name=expected_contact_first_name
+                r, expected_first_name=expected_contact_first_name, as_of=as_of
             ):
                 continue
         elif searched_mobile_digits and not _my_orders_row_matches_searched_mobile(r, searched_mobile_digits):

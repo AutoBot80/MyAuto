@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
@@ -2058,6 +2059,7 @@ def details_fragment_to_api_payload(frag_d: dict[str, Any]) -> dict[str, Any]:
         else:
             del insurance_merged["cpa_reqd"]
 
+    _apply_financier_sanitize_to_mapping(insurance_merged)
     _apply_nominee_relationship_gender_to_mapping(insurance_merged)
     customer = enrich_customer_address_from_freeform(customer)
     return {"vehicle": vehicle, "customer": customer, "insurance": insurance_merged}
@@ -2497,13 +2499,15 @@ def _apply_initcap_on_read(
             if insurance.get(k):
                 insurance[k] = _initcap_words(insurance.get(k))
         if insurance.get("financier"):
-            fv = str(insurance.get("financier") or "").strip()
+            fv = _sanitize_details_financier_value(insurance.get("financier"))
             if fv:
                 if master_financers:
                     fcanon = fuzzy_best_master_ref_value(fv, master_financers, min_score=0.5)
                     insurance["financier"] = fcanon if fcanon else _initcap_words(fv)
                 else:
                     insurance["financier"] = _initcap_words(fv)
+            else:
+                insurance.pop("financier", None)
         data["insurance"] = insurance
 
     if data.get("details_customer_name"):
@@ -2770,6 +2774,68 @@ def _sanitize_details_profession_value(val: str | None) -> str | None:
     if q.replace(" ", "") in ("privatejob", "pvtjob"):
         return "Private Job"
     return None
+
+
+def _sanitize_details_financier_value(val: str | None) -> str | None:
+    """
+    Reject OCR bleed when **Financier Name (if Hypo)** is blank but Textract captures the printed
+    label fragment or an adjacent form label (e.g. CPA Required, SMS consent).
+    """
+    if not val or not str(val).strip():
+        return None
+    s = " ".join(str(val).split())
+    s = unicodedata.normalize("NFKC", s)
+    s = s.rstrip(".。．:：").strip()
+    # Compound label bleed: "Financier Name: HDFC Bank" → captured value "Name: HDFC Bank"
+    m_name_prefix = re.match(r"(?i)^name\s*:\s*(.+)$", s)
+    if m_name_prefix:
+        s = m_name_prefix.group(1).strip()
+    low = s.lower()
+
+    _financier_label_only = (
+        r"^(?:financier|financer)(?:\s+name)?(?:\s*\(\s*if\s+hypo\s*\))?\s*:?\s*$",
+        r"^name\s*(?:\(\s*if\s+hypo\s*\))?\s*:?\s*$",
+        r"^name\s+of\s+financier\s*:?\s*$",
+        r"^hypothecation\s*:?\s*$",
+        r"^bank\s*/\s*financier\s*:?\s*$",
+        r"^financier\s*/\s*bank\s*:?\s*$",
+        r"^finance\s+company\s*:?\s*$",
+        r"^financing\s+(?:bank|institution)\s*:?\s*$",
+        r"^loan\s+from\s*:?\s*$",
+    )
+    for pat in _financier_label_only:
+        if re.match(pat, low, re.I):
+            return None
+
+    if re.search(r"(?i)cpa\s+required", low):
+        return None
+    if re.search(r"(?i)payment\s+mode\s+and\s+insurance", low):
+        return None
+    if re.search(r"(?i)customer\s+signature", low):
+        return None
+    if re.search(r"(?i)i\s+agree\s+to\s+receiving", low):
+        return None
+    if re.search(r"(?i)periodic\s+sms", low):
+        return None
+    if re.search(r"(?i)registration\s+and\s+service", low):
+        return None
+    if "i agree" in low and ("sms" in low or "registration" in low):
+        return None
+
+    if len(s) > 160:
+        return None
+    return s
+
+
+def _apply_financier_sanitize_to_mapping(out: dict[str, str]) -> None:
+    """Drop or keep ``financier`` after label/boilerplate rejection."""
+    if "financier" not in out:
+        return
+    fin = _sanitize_details_financier_value(out.get("financier"))
+    if fin:
+        out["financier"] = fin
+    else:
+        out.pop("financier", None)
 
 
 def _strip_cpa_required_label_prefix(raw: str) -> str:
@@ -3130,6 +3196,7 @@ def _map_key_value_pairs_to_insurance(pairs: list[dict]) -> dict[str, str]:
             out["insurer"] = ins
         else:
             out.pop("insurer", None)
+    _apply_financier_sanitize_to_mapping(out)
     _apply_nominee_relationship_gender_to_mapping(out)
     return out
 
@@ -3196,6 +3263,7 @@ def _map_key_value_pairs_to_details_customer(pairs: list[dict]) -> dict[str, str
             out["payment_mode"] = pm
         else:
             out.pop("payment_mode", None)
+    _apply_financier_sanitize_to_mapping(out)
     _apply_nominee_relationship_gender_to_mapping(out)
     return out
 
@@ -3526,6 +3594,10 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                 val = sanitize_details_sheet_insurer_value(val)
                 if not val:
                     continue
+            elif key == "financier":
+                val = _sanitize_details_financier_value(val)
+                if not val:
+                    continue
             elif key == "nominee_relationship":
                 cb = _extract_checkbox_selection_value(val, "nominee_relationship")
                 if cb:
@@ -3547,14 +3619,19 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
             cand = _extract_checkbox_selection_value(nxt, "profession") or _sanitize_details_profession_value(nxt)
             if cand:
                 out["profession"] = cand
-        if "financier" not in out and low in (
-            "financier",
-            "financing bank",
-            "name of financier",
-            "finance company",
-            "bank name",
+        if "financier" not in out and (
+            low in (
+                "financier",
+                "financing bank",
+                "name of financier",
+                "finance company",
+                "bank name",
+            )
+            or re.match(r"(?i)^financier\s+name\s*\(\s*if\s+hypo\s*\)\s*:?\s*$", low)
         ):
-            out["financier"] = nxt
+            fin = _sanitize_details_financier_value(nxt)
+            if fin:
+                out["financier"] = fin
         if "nominee_name" not in out and ("nominee" in low and "name" in low) and "age" not in low:
             out["nominee_name"] = nxt
         if "nominee_age" not in out and low in ("nominee age", "age of nominee", "nominee age (years)"):
@@ -3585,7 +3662,9 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
             ln,
         )
         if same_f and "financier" not in out:
-            out["financier"] = same_f.group(2).strip()
+            fin = _sanitize_details_financier_value(same_f.group(2).strip())
+            if fin:
+                out["financier"] = fin
         if "insurer" not in out and "insurer" in low and "name" in low and "nominee" not in low:
             if nxt and len(nxt) < 120 and not re.match(r"^[:\s_]+$", nxt):
                 cand = sanitize_details_sheet_insurer_value(nxt.strip())
@@ -3639,6 +3718,7 @@ def _parse_insurance_from_full_text(full_text: str) -> dict[str, str]:
                     out[key] = cand
             break
 
+    _apply_financier_sanitize_to_mapping(out)
     _apply_nominee_relationship_gender_to_mapping(out)
     return out
 
@@ -3957,6 +4037,7 @@ class OcrService:
                 else:
                     del insurance_merged["cpa_reqd"]
 
+            _apply_financier_sanitize_to_mapping(insurance_merged)
             _apply_nominee_relationship_gender_to_mapping(insurance_merged)
 
             if details_customer_name and frag_a and frag_a.get("raw_parts"):
@@ -4488,6 +4569,7 @@ class OcrService:
             if "profession" in insurance_merged:
                 sp_im = _sanitize_details_profession_value(insurance_merged.get("profession"))
                 insurance_merged["profession"] = sp_im if sp_im else default_profession_if_empty("")
+            _apply_financier_sanitize_to_mapping(insurance_merged)
             customer_merged = enrich_customer_address_from_freeform(customer_merged)
             details_json = {"vehicle": vehicle, "customer": customer_merged, "insurance": insurance_merged}
             if details_customer_name:
