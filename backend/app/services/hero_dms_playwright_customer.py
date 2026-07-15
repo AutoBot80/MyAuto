@@ -8407,6 +8407,19 @@ def _add_enquiry_landline_to_fill(mobile: str, landline: str) -> tuple[str, bool
     return "", False
 
 
+def _mr_ms_candidates_for_add_enquiry(gender_raw: str) -> tuple[str, ...]:
+    """
+    Siebel Opportunity Form Mr/Ms LOV candidates for Add Enquiry.
+
+    Female only: prefer UI spelling ``Ms`` (no period), then ``Ms.``.
+    Male / unknown: empty — leave Siebel default untouched.
+    """
+    g = (gender_raw or "").strip().lower()
+    if g in ("f", "female"):
+        return ("Ms", "Ms.")
+    return ()
+
+
 def _add_enquiry_opportunity(
     page: Page,
     dms_values: dict,
@@ -8888,6 +8901,10 @@ def _add_enquiry_opportunity(
         return False, "Could not set Contact First Name.", ""
     if not try_field(("Contact Last Name", "Last Name"), last, required=True):
         return False, "Could not set Contact Last Name.", ""
+    _mr_cands = _mr_ms_candidates_for_add_enquiry(dms_values.get("gender") or "")
+    if _mr_cands:
+        if not try_field_any(("Mr/Ms",), _mr_cands):
+            note(f"Add Enquiry: could not set Mr/Ms (candidates={_mr_cands!r}).")
     if not try_field(("Mobile Phone", "Mobile Phone #", "Cellular Phone"), mobile, required=True):
         return False, "Could not set Mobile Phone.", ""
     landline_raw = (dms_values.get("landline") or dms_values.get("alt_phone_num") or "").strip()

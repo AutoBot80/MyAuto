@@ -46,16 +46,26 @@ CPA_PORTAL_READY_POLL_MS = 1_000
 _ALLIANCE_LOGIN_AUTOFILL_MAX_MS = 14_000
 _ALLIANCE_CONTINUE_PAUSE_MS = 500
 _ALLIANCE_CONTINUE_MAX_ATTEMPTS = 4
-# Alliance ``Plan`` dropdown preset (``master_ref`` / dealer SOP). When selected, plan amounts auto-fill.
-ALLIANCE_CPA_PLAN_DEFAULT = "PLAN348 RGI"
+# Alliance ``Plan`` dropdown preset (``master_ref`` / dealer SOP).
+# Flexible-RGI does not auto-fill amounts — Total Amount must be set explicitly.
+ALLIANCE_CPA_PLAN_DEFAULT = "Flexible-RGI"
+ALLIANCE_CPA_FLEXIBLE_PLAN_TOTAL_AMOUNT_DEFAULT = "1100"
 
 logger = logging.getLogger(__name__)
 _IST = ZoneInfo("Asia/Kolkata")
 
 
 def _resolve_alliance_cpa_plan_name() -> str:
-    """``ALLIANCE_CPA_PLAN`` env override (default ``PLAN348 RGI``)."""
+    """``ALLIANCE_CPA_PLAN`` env override (default ``Flexible-RGI``)."""
     return (os.getenv("ALLIANCE_CPA_PLAN") or ALLIANCE_CPA_PLAN_DEFAULT).strip() or ALLIANCE_CPA_PLAN_DEFAULT
+
+
+def _resolve_alliance_cpa_flexible_plan_total_amount() -> str:
+    """``ALLIANCE_CPA_PLAN_TOTAL_AMOUNT`` env override (default ``1100`` for Flexible-RGI)."""
+    return (
+        (os.getenv("ALLIANCE_CPA_PLAN_TOTAL_AMOUNT") or ALLIANCE_CPA_FLEXIBLE_PLAN_TOTAL_AMOUNT_DEFAULT).strip()
+        or ALLIANCE_CPA_FLEXIBLE_PLAN_TOTAL_AMOUNT_DEFAULT
+    )
 
 
 def _resolve_cpa_portal_url(portal_url: str | None) -> str:
@@ -1192,6 +1202,101 @@ def _select_by_formcontrol_model_fuzzy(
     return _alliance_model_fuzzy_select_on_locator(loc, log_path, q, field=field, min_score=min_score)
 
 
+def _locate_alliance_plan_total_amount_input(page):
+    """Prefer ``input[formcontrolname=planTotalAmount]``, then label ``Total Amount``."""
+    for root in _iter_cpa_page_frames(page):
+        try:
+            cands = root.locator('input[formcontrolname="planTotalAmount"]')
+            if cands.count() > 0:
+                first = cands.first
+                try:
+                    if first.is_visible():
+                        return first
+                except Exception:
+                    return first
+        except Exception:
+            pass
+    for root in _iter_cpa_page_frames(page):
+        try:
+            labels = root.locator("label").filter(has_text=re.compile(r"^total amount$", re.I))
+            if labels.count() < 1:
+                continue
+            loc = labels.last.locator("xpath=following-sibling::input[1]")
+            if loc.count() < 1:
+                loc = labels.last.locator("input")
+            if loc.count() > 0:
+                return loc.first
+        except Exception:
+            continue
+    return None
+
+
+def _fill_alliance_plan_total_amount(page, log_path: Path, amount: str) -> bool:
+    """
+    Set Alliance Plan ``Total Amount`` (``planTotalAmount``).
+
+    Flexible-RGI leaves this at 0 and the control is often ``disabled`` until unlocked —
+    remove disabled, set value, and fire input/change for Angular.
+    """
+    amt = (amount or "").strip()
+    if not amt:
+        return False
+    loc = _locate_alliance_plan_total_amount_input(page)
+    if loc is None:
+        ok = _fill_text_by_label(
+            page,
+            log_path,
+            re.compile(r"^total amount$", re.I),
+            amt,
+            field="Plan Total Amount",
+        )
+        return ok
+    try:
+        try:
+            loc.scroll_into_view_if_needed(timeout=2_000)
+        except Exception:
+            pass
+        try:
+            loc.evaluate(
+                """(el, value) => {
+                    el.removeAttribute('disabled');
+                    el.disabled = false;
+                    el.readOnly = false;
+                    el.focus();
+                    el.value = '';
+                    el.value = value;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                amt,
+            )
+        except Exception:
+            try:
+                loc.evaluate("el => { el.removeAttribute('disabled'); el.disabled = false; }")
+            except Exception:
+                pass
+            loc.fill(amt, timeout=4_000, force=True)
+        got = ""
+        try:
+            got = (loc.input_value(timeout=2_000) or "").strip()
+        except Exception:
+            try:
+                got = str(loc.evaluate("el => el.value") or "").strip()
+            except Exception:
+                got = ""
+        if got.replace(".0", "") == amt or got == amt or got.startswith(amt):
+            _append_cpa_log(log_path, f"NOTE filled Alliance Plan Total Amount={amt}")
+            return True
+        _append_cpa_log(
+            log_path,
+            f"NOTE Plan Total Amount fill inconclusive (wanted={amt!r} got={got!r})",
+        )
+        return bool(got)
+    except Exception as exc:
+        _append_cpa_log(log_path, f"NOTE Plan Total Amount fill failed: {exc}")
+        return False
+
+
 def _try_fill_alliance_certificate_form(page, log_path: Path, payload: CpaAllianceFillPayload) -> tuple[int, list[str]]:
     """Alliance ``issueCertificate`` full SOP. Returns (filled_count, missing_required)."""
     filled = 0
@@ -1310,6 +1415,15 @@ def _try_fill_alliance_certificate_form(page, log_path: Path, payload: CpaAllian
             field="Plan",
             min_score=0.72,
         )
+        if not ok and "FLEXIBLE" in plan_name.upper():
+            ok = _select_by_label_fuzzy(
+                page,
+                log_path,
+                re.compile(r"^plan$", re.I),
+                "Flexible",
+                field="Plan",
+                min_score=0.65,
+            )
         if not ok and "PLAN348" in plan_name.upper():
             ok = _select_by_label_fuzzy(
                 page,
@@ -1326,43 +1440,21 @@ def _try_fill_alliance_certificate_form(page, log_path: Path, payload: CpaAllian
                 page.wait_for_timeout(900)
             except Exception:
                 time.sleep(0.9)
-            _append_cpa_log(
-                log_path,
-                f"NOTE Plan preset {plan_name!r} selected — skipping manual Plan Total Amount entry.",
-            )
+            if "FLEXIBLE" in plan_name.upper():
+                # Flexible-RGI leaves Total Amount at 0 — set explicitly (field may be disabled).
+                plan_amt = _resolve_alliance_cpa_flexible_plan_total_amount()
+                amt_ok = _fill_alliance_plan_total_amount(page, log_path, plan_amt)
+                steps.append(("plan_total_amount", amt_ok, False))
+            else:
+                _append_cpa_log(
+                    log_path,
+                    f"NOTE Plan preset {plan_name!r} selected — skipping manual Plan Total Amount entry.",
+                )
 
     if not plan_selected:
         plan_amt = (payload.plan_total_amount or "5400").strip() or "5400"
-        loc = None
-        for root in _iter_cpa_page_frames(page):
-            try:
-                labels = root.locator("label").filter(has_text=re.compile(r"^total amount$", re.I))
-                if labels.count() > 0:
-                    loc = labels.last.locator("xpath=following-sibling::input[1]")
-                    if loc.count() < 1:
-                        loc = labels.last.locator("input")
-            except Exception:
-                continue
-        if loc is not None:
-            try:
-                if loc.count() > 0 and loc.first.is_visible():
-                    loc.first.fill(plan_amt, timeout=4_000)
-                    _append_cpa_log(log_path, f"NOTE filled Alliance Plan Total Amount={plan_amt}")
-                    steps.append(("plan_total_amount", True, False))
-                else:
-                    steps.append(("plan_total_amount", False, False))
-            except Exception as exc:
-                _append_cpa_log(log_path, f"NOTE Plan Total Amount fill failed: {exc}")
-                steps.append(("plan_total_amount", False, False))
-        else:
-            ok = _fill_text_by_label(
-                page,
-                log_path,
-                re.compile(r"^total amount$", re.I),
-                plan_amt,
-                field="Plan Total Amount",
-            )
-            steps.append(("plan_total_amount", ok, False))
+        amt_ok = _fill_alliance_plan_total_amount(page, log_path, plan_amt)
+        steps.append(("plan_total_amount", amt_ok, False))
 
     if payload.nominee_name:
         ok = _fill_text_by_label(

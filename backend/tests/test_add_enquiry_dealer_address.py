@@ -7,6 +7,7 @@ from app.services.hero_dms_playwright_customer import (
     _add_enquiry_landline_to_fill,
     _dms_values_dealer_id,
     _enquiry_dealer_address_defaults,
+    _mr_ms_candidates_for_add_enquiry,
     _resolve_add_enquiry_address_fields,
 )
 
@@ -205,3 +206,16 @@ def test_add_enquiry_landline_normalizes_formatted_alternate() -> None:
     value, required = _add_enquiry_landline_to_fill("9414687819", "+91 95685 64536")
     assert value == "9568564536"
     assert required is True
+
+
+def test_mr_ms_candidates_female() -> None:
+    assert _mr_ms_candidates_for_add_enquiry("female") == ("Ms", "Ms.")
+    assert _mr_ms_candidates_for_add_enquiry("F") == ("Ms", "Ms.")
+    assert _mr_ms_candidates_for_add_enquiry("f") == ("Ms", "Ms.")
+
+
+def test_mr_ms_candidates_male_and_unknown_are_noop() -> None:
+    assert _mr_ms_candidates_for_add_enquiry("male") == ()
+    assert _mr_ms_candidates_for_add_enquiry("M") == ()
+    assert _mr_ms_candidates_for_add_enquiry("") == ()
+    assert _mr_ms_candidates_for_add_enquiry("other") == ()

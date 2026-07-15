@@ -4,8 +4,8 @@ Open DMS, Find Contact by mobile, then Add Enquiry only.
 Double-click ``test_dms_add_enquiry.bat`` or:
   python test_dms_add_enquiry.py
 
-Edit the ASKAR_* constants below for another customer. Requires ``backend/.env``
-(DMS_BASE_URL, DMS_MODE=real, DMS_REAL_URL_CONTACT, login).
+Current fixture: KHOOB KALA (female, W/O) @ dealer 100003 — exercises Mr/Ms → Ms.
+Requires ``backend/.env`` (DMS_BASE_URL, DMS_MODE=real, DMS_REAL_URL_CONTACT, login).
 """
 from __future__ import annotations
 
@@ -26,19 +26,27 @@ os.environ.setdefault("DEALER_ID", "100003")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("test_dms_add_enquiry")
 
-# In-process row: Askar @ dealer 100003 (edit for other runs)
-ASKAR_MOBILE = "8094061172"
-ASKAR_FIRST_NAME = "Askar"
-ASKAR_AADHAR_LAST4 = "5761"
-ASKAR_FRAME_PARTIAL = "57936"
-ASKAR_ENGINE_PARTIAL = "58197"
-ASKAR_KEY = "1975"
-ASKAR_MODEL = "SPLENDOR +"
-ASKAR_COLOR = "IDG"
-ASKAR_YEAR = "2026"
-ASKAR_ADDRESS = "Village Kukarpuri"
-ASKAR_PIN = "321023"
-ASKAR_STATE = "RAJASTHAN"
+# In-process row: KHOOB KALA @ dealer 100003 (Sales Details screenshot; female via W/O)
+CUSTOMER_MOBILE = "9772098406"
+CUSTOMER_FIRST_NAME = "KHOOB"
+CUSTOMER_LAST_NAME = "KALA"
+CUSTOMER_GENDER = "female"  # Care of W/O BHAGWAN DAS → set Mr/Ms to Ms
+CUSTOMER_LANDLINE = "7878874921"
+CUSTOMER_ADDRESS = "NAGLA LODHA PEER NAGAR, BHARATPUR"
+CUSTOMER_STATE = "RAJASTHAN"
+CUSTOMER_FINANCIER = "Hinduja Leyland Finance"
+CUSTOMER_FRAME_PARTIAL = "20236"
+CUSTOMER_ENGINE_PARTIAL = "T4463"
+CUSTOMER_KEY = "2355"
+CUSTOMER_BATTERY = "769516"
+# Required by Add Enquiry / vehicle_merge (filled for live Mr/Ms test):
+CUSTOMER_AADHAR_LAST4 = "1234"
+CUSTOMER_PIN = "321001"
+CUSTOMER_AGE = "34"
+CUSTOMER_DOB = ""  # optional if CUSTOMER_AGE set
+CUSTOMER_MODEL = "Splendor"
+CUSTOMER_COLOR = "RBG"
+CUSTOMER_YEAR = "2025"
 DEALER_ID_TEST = "100003"
 
 
@@ -74,28 +82,51 @@ def main() -> int:
         logger.error("DMS_REAL_URL_CONTACT is not set in backend/.env")
         return 1
 
+    missing = [
+        name
+        for name, val in (
+            ("CUSTOMER_AADHAR_LAST4", CUSTOMER_AADHAR_LAST4),
+            ("CUSTOMER_PIN", CUSTOMER_PIN),
+            ("CUSTOMER_AGE or CUSTOMER_DOB", CUSTOMER_AGE or CUSTOMER_DOB),
+            ("CUSTOMER_MODEL", CUSTOMER_MODEL),
+            ("CUSTOMER_COLOR", CUSTOMER_COLOR),
+            ("CUSTOMER_YEAR", CUSTOMER_YEAR),
+        )
+        if not (val or "").strip()
+    ]
+    if missing:
+        logger.error(
+            "Fill these constants in test_dms_add_enquiry.py before running: %s",
+            ", ".join(missing),
+        )
+        return 1
+
     dms_values: dict[str, str] = {
         "dealer_id": DEALER_ID_TEST,
-        "mobile_phone": ASKAR_MOBILE,
-        "first_name": ASKAR_FIRST_NAME,
-        "aadhar_id": ASKAR_AADHAR_LAST4,
-        "address_line_1": ASKAR_ADDRESS,
-        "pin_code": ASKAR_PIN,
-        "state": ASKAR_STATE,
-        "frame_partial": ASKAR_FRAME_PARTIAL,
-        "engine_partial": ASKAR_ENGINE_PARTIAL,
-        "key_partial": ASKAR_KEY,
-        "finance_required": "N",
-        "financier_name": "",
+        "mobile_phone": CUSTOMER_MOBILE,
+        "first_name": CUSTOMER_FIRST_NAME,
+        "last_name": CUSTOMER_LAST_NAME,
+        "gender": CUSTOMER_GENDER,
+        "landline": CUSTOMER_LANDLINE,
+        "aadhar_id": CUSTOMER_AADHAR_LAST4,
+        "address_line_1": CUSTOMER_ADDRESS,
+        "pin_code": CUSTOMER_PIN,
+        "state": CUSTOMER_STATE,
+        "age": CUSTOMER_AGE,
+        "date_of_birth": CUSTOMER_DOB,
+        "frame_partial": CUSTOMER_FRAME_PARTIAL,
+        "engine_partial": CUSTOMER_ENGINE_PARTIAL,
+        "key_partial": CUSTOMER_KEY,
+        "battery_partial": CUSTOMER_BATTERY,
+        "finance_required": "Y" if CUSTOMER_FINANCIER.strip() else "N",
+        "financier_name": CUSTOMER_FINANCIER,
         "dms_contact_path": "found",
     }
     vehicle: dict[str, Any] = {
-        "model": ASKAR_MODEL,
-        "color": ASKAR_COLOR,
-        "year_of_mfg": ASKAR_YEAR,
-        "full_chassis": "MBLHAW471THE57936",
-        "full_engine": "HA11F6THE58197",
-        "key_num": ASKAR_KEY,
+        "model": CUSTOMER_MODEL,
+        "color": CUSTOMER_COLOR,
+        "year_of_mfg": CUSTOMER_YEAR,
+        "key_num": CUSTOMER_KEY,
     }
 
     tmo = int(DMS_SIEBEL_ACTION_TIMEOUT_MS or 8000)
@@ -129,12 +160,14 @@ def main() -> int:
     logger.info("Browser open — log in if needed (15s).")
     time.sleep(15)
 
-    note("Find Contact by mobile.")
+    note(
+        f"Find Contact by mobile (gender={CUSTOMER_GENDER!r} → expect Mr/Ms Ms on new enquiry)."
+    )
     ok_find = _contact_view_find_by_mobile_strategy_two(
         page,
         contact_url=contact_url,
-        mobile=ASKAR_MOBILE,
-        first_name=ASKAR_FIRST_NAME,
+        mobile=CUSTOMER_MOBILE,
+        first_name=CUSTOMER_FIRST_NAME,
         nav_timeout_ms=nav,
         action_timeout_ms=tmo,
         content_frame_selector=frame_sel,
@@ -152,7 +185,7 @@ def main() -> int:
     n_rows = len(
         _contact_mobile_drilldown_plans(
             page,
-            ASKAR_MOBILE,
+            CUSTOMER_MOBILE,
             content_frame_selector=frame_sel,
             first_name_exact=None,
         )
@@ -165,7 +198,7 @@ def main() -> int:
             n_rows,
         )
 
-    note("Add Enquiry.")
+    note("Add Enquiry (female → Mr/Ms Ms).")
     ok, detail, enq_no = _add_enquiry_opportunity(
         page,
         dms_values,

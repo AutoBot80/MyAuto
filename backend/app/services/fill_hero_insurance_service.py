@@ -8429,6 +8429,163 @@ def _proposal_step_nominee_gender_radio(
     return f"{step_id}: nominee gender radio not found ({last_err or 'no candidate'})"
 
 
+def _nominee_relation_needs_gender_refresh(rel: str) -> bool:
+    """True when MISP may need a Male/Female toggle before Husband/Wife options appear."""
+    qn = normalize_for_fuzzy_match((rel or "").strip())
+    return qn in ("husband", "wife")
+
+
+def _proposal_toggle_nominee_gender_radio(
+    page,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """Flip nominee Gender radio Male↔Female to refresh dependent Relation options."""
+    last_err = ""
+    for root in _hero_misp_page_and_frame_roots(page, purpose="proposal"):
+        try:
+            loc_male = _proposal_cph1_locator(root, "rdbtnMale")
+            loc_female = _proposal_cph1_locator(root, "rdbtnFemale")
+            if loc_male.count() == 0 or loc_female.count() == 0:
+                continue
+            el_male = loc_male.first
+            el_female = loc_female.first
+            if not el_male.is_visible(timeout=800):
+                _proposal_scroll_visible(el_male, timeout_ms=timeout_ms)
+            if not el_male.is_visible(timeout=1_800) and not el_female.is_visible(timeout=800):
+                continue
+            male_checked = False
+            try:
+                male_checked = bool(el_male.is_checked())
+            except Exception:
+                male_checked = False
+            from_suffix = "rdbtnMale" if male_checked else "rdbtnFemale"
+            to_suffix = "rdbtnFemale" if male_checked else "rdbtnMale"
+            el_to = el_female if male_checked else el_male
+            if not el_to.is_visible(timeout=800):
+                _proposal_scroll_visible(el_to, timeout_ms=timeout_ms)
+            if not el_to.is_visible(timeout=1_800):
+                continue
+            try:
+                el_to.check(timeout=timeout_ms, force=True)
+            except Exception:
+                el_to.check(timeout=timeout_ms)
+            if not el_to.is_checked():
+                return (
+                    f"nominee_gender: toggle to {to_suffix} still not checked after check()"
+                )
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                "nominee_gender",
+                f"toggle {from_suffix} -> {to_suffix}",
+            )
+            return None
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+    return f"nominee_gender: toggle radio not found ({last_err or 'no candidate'})"
+
+
+_NOMINEE_RELATION_LABEL_PATTERNS: tuple[str, ...] = (
+    r"Nominee\s*Relation",
+    r"Relation\s*with\s*Nominee",
+    r"Relation\s*with\s*Proposer",
+    r"Relation\s*with",
+)
+
+
+def _proposal_step_nominee_relationship(
+    page,
+    rel: str,
+    ng: str,
+    ocr_output_dir: Path | None,
+    subfolder: str | None,
+    *,
+    timeout_ms: int,
+) -> str | None:
+    """
+    Select nominee Relation; for Husband/Wife, toggle gender and retry if options are empty.
+    """
+    q = (rel or "").strip()
+    if not q:
+        return None
+
+    def _try_select() -> str | None:
+        return _proposal_step_select_fuzzy(
+            page,
+            _NOMINEE_RELATION_LABEL_PATTERNS,
+            q,
+            "nominee_relationship",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=timeout_ms,
+            cph1_id_suffix="ddlNomineeRelation",
+        )
+
+    err = _try_select()
+    if err and _nominee_relation_needs_gender_refresh(q):
+        for attempt in range(1, 4):
+            tog_err = _proposal_toggle_nominee_gender_radio(
+                page,
+                ocr_output_dir,
+                subfolder,
+                timeout_ms=timeout_ms,
+            )
+            if tog_err:
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    "nominee_relationship",
+                    f"gender-refresh attempt {attempt}/3 toggle failed: {tog_err}",
+                )
+                _t(page, 1000)
+                continue
+            _t(page, 500)
+            _proposal_log(
+                ocr_output_dir,
+                subfolder,
+                "nominee_relationship",
+                f"gender-refresh attempt {attempt}/3 after toggle",
+            )
+            err = _try_select()
+            if not err:
+                _proposal_log(
+                    ocr_output_dir,
+                    subfolder,
+                    "nominee_relationship",
+                    "select ok after gender refresh",
+                )
+                ng_want = (ng or "").strip()
+                if ng_want:
+                    restore_err = _proposal_step_nominee_gender_radio(
+                        page,
+                        ng_want,
+                        "nominee_gender",
+                        ocr_output_dir,
+                        subfolder,
+                        timeout_ms=timeout_ms,
+                    )
+                    if restore_err:
+                        return restore_err
+                return None
+            _t(page, 1000)
+
+    if err:
+        err = _proposal_step_fill_input(
+            page,
+            (r"Relation\s*with|Nominee\s*Relation",),
+            q,
+            "nominee_relationship",
+            ocr_output_dir,
+            subfolder,
+            timeout_ms=timeout_ms,
+        )
+    return err
+
+
 # CPA bottom add-on: portal label varies (NIC / CPI / Hero CPI / …); match by row text. ``hero_cpi`` **N** runs after CPA Tenure→0 in ``_hero_misp_fill_proposal_and_review``; **Y** skips tenure change then checks this row.
 # Inline ``(?i)``/``(?m)`` mid-pattern breaks ``re.compile(..., re.I)`` — use flags on ``compile`` only (**LLD** **6.212**).
 HERO_MISP_HERO_CPI_ADDON_CHECKBOX_PATTERN = (
@@ -11723,31 +11880,14 @@ def _hero_misp_fill_proposal_and_review(
 
     rel = (values.get("nominee_relationship") or "").strip()
     if rel:
-        err = _proposal_step_select_fuzzy(
+        err = _proposal_step_nominee_relationship(
             page,
-            (
-                r"Nominee\s*Relation",
-                r"Relation\s*with\s*Nominee",
-                r"Relation\s*with\s*Proposer",
-                r"Relation\s*with",
-            ),
             rel,
-            "nominee_relationship",
+            ng,
             ocr_output_dir,
             subfolder,
             timeout_ms=pt,
-            cph1_id_suffix="ddlNomineeRelation",
         )
-        if err:
-            err = _proposal_step_fill_input(
-                page,
-                (r"Relation\s*with|Nominee\s*Relation",),
-                rel,
-                "nominee_relationship",
-                ocr_output_dir,
-                subfolder,
-                timeout_ms=pt,
-            )
         if err:
             return _proposal_fail(ocr_output_dir, subfolder, err, page=page)
 

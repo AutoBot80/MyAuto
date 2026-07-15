@@ -32,7 +32,7 @@ from app.services.utility_functions import (
 
 logger = logging.getLogger(__name__)
 
-CPA_PLAN_TOTAL_AMOUNT_DEFAULT = "380"
+CPA_PLAN_TOTAL_AMOUNT_DEFAULT = "1100"
 
 
 def load_latest_cpa_insurance_values(customer_id: int, vehicle_id: int) -> dict:

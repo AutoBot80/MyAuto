@@ -1,8 +1,9 @@
 """
 Local test wrapper: Hero MISP — **full Generate Insurance** flow (``pre_process`` → ``main_process`` → ``post_process``).
 
-Default scenario reproduces sale **8209031977** / **PUNEET KUMAR** (dealer **100001**, VIN **MBLHAW431T9E44739**)
-— Bajaj **ND Cover, Rim Safeguard, RSA**; financier **Shriram Finance Ltd.** (focus: proposal **Financer Name**).
+Default scenario reproduces sale **9772098406** / **KHOOB KALA** (dealer **100001**, VIN **MBLHAW436THA20236**)
+— Bajaj **ND Cover, Rim Safeguard, RSA**; financier **Hinduja Leyland Finance**
+  (focus: nominee **Relation** **Son** + age **45** on MISP main form).
 
 When ``INSURANCE_TEST_CUSTOMER_ID`` / ``VEHICLE_ID`` / ``STAGING_ID`` are unset or ``0``, the wrapper tries
 DB auto-resolve from mobile + chassis + engine (same natural keys as Create Invoice eligibility) and the
@@ -17,7 +18,7 @@ when present. OCR merge checks (in order): ``INSURANCE_TEST_OCR_JSON``, ``ocr_ou
 
 Environment (optional):
   INSURANCE_TEST_DEALER_ID          default: 100001
-  INSURANCE_TEST_SUBFOLDER          default: (auto: latest 8209031977_* staging subfolder)
+  INSURANCE_TEST_SUBFOLDER          default: (auto: latest 9772098406_* staging subfolder)
   INSURANCE_TEST_STAGING_ID         default: (auto from subfolder lookup)
   INSURANCE_TEST_CUSTOMER_ID        default: (auto natural-key resolve; override from prod Add Sales)
   INSURANCE_TEST_VEHICLE_ID         default: (auto natural-key resolve; override from prod Add Sales)
@@ -26,9 +27,11 @@ Environment (optional):
   INSURANCE_TEST_CPI_REQD           default: Y
   INSURANCE_TEST_INSURANCE_PAY      default: CC
   INSURANCE_TEST_INSURER            default: BAJAJ GENERAL INSURANCE LIMITED
-  INSURANCE_TEST_EXPECTED_FINANCER  default: Shriram Finance Ltd. — logged vs built value
-  INSURANCE_TEST_CHASSIS_NUM        default: MBLHAW431T9E44739 (also used for natural-key resolve)
-  INSURANCE_TEST_ENGINE_NUM         default: 03038
+  INSURANCE_TEST_EXPECTED_FINANCER  default: Hinduja Leyland Finance — logged vs built value
+  INSURANCE_TEST_NOMINEE_RELATIONSHIP default: Son — pass-through / override of staging relation for MISP test
+  INSURANCE_TEST_NOMINEE_AGE          default: 45 — forces Nominee Age when DB/staging leave it blank
+  INSURANCE_TEST_CHASSIS_NUM        default: MBLHAW436THA20236 (also used for natural-key resolve)
+  INSURANCE_TEST_ENGINE_NUM         default: T4463
   INSURANCE_TEST_PAUSE_BEFORE_EXIT  default: 1
   INSURANCE_TEST_OCR_JSON           path to OCR_To_be_Used.json
 
@@ -54,7 +57,7 @@ if _BACKEND.is_dir() and str(_BACKEND) not in sys.path:
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("test_insurance_main_form_fill")
 
-# --- 8209031977 / PUNEET KUMAR @ dealer 100001 (financier Shriram Finance Ltd.) ---
+# --- 9772098406 / KHOOB KALA @ dealer 100001 (nominee relation Son, age 45) ---
 DEALER_ID_TEST = "100001"
 SALE_SUBFOLDER = ""
 STAGING_ID_TEST = ""
@@ -63,11 +66,11 @@ VEHICLE_ID_TEST = "0"
 HERO_CPI = "N"
 CPI_REQD = "Y"
 INSURANCE_PAY = "CC"
-MOBILE = "8209031977"
-VIN = "MBLHAW431T9E44739"
+MOBILE = "9772098406"
+VIN = "MBLHAW436THA20236"
 CHASSIS_NUM = VIN
-ENGINE_NUM = "03038"
-CUSTOMER_NAME = "PUNEET KUMAR"
+ENGINE_NUM = "T4463"
+CUSTOMER_NAME = "KHOOB KALA"
 FULL_CHASSIS = VIN
 FULL_ENGINE = ENGINE_NUM
 MODEL_NAME = "SPLENDOR + BS6 DRS"
@@ -77,18 +80,18 @@ FUEL_TYPE = "PETROL"
 STATE = "RAJASTHAN"
 CITY = "Bharatpur"
 PIN_CODE = "321001"
-ADDRESS = "MOHALLA- SURAJPOL, BHARATPUR, RAJASTHAN"
-GENDER = "Male"
+ADDRESS = "NAGLA LODHA PEER NAGAR, BHARATPUR"
+GENDER = "Female"
 DOB = ""
 MARITAL_STATUS = "Married"
 PROFESSION = "Employed"
-ALT_PHONE = "8875219843"
-NOMINEE_NAME = "Meera Devi"
-NOMINEE_AGE = ""
-NOMINEE_RELATIONSHIP = "Mother"
-NOMINEE_GENDER = "Female"
-FINANCER_NAME = "Shriram Finance Ltd."
-EXPECTED_FINANCER = "Shriram Finance Ltd."
+ALT_PHONE = "7878874921"
+NOMINEE_NAME = "Harveer"
+NOMINEE_AGE = "45"
+NOMINEE_RELATIONSHIP = "Son"
+NOMINEE_GENDER = "Male"
+FINANCER_NAME = "Hinduja Leyland Finance"
+EXPECTED_FINANCER = "Hinduja Leyland Finance"
 INSURER = "BAJAJ GENERAL INSURANCE LIMITED"
 OEM_NAME = "Hero"
 VEHICLE_PRICE = ""
@@ -436,6 +439,32 @@ def _build_insurance_values(*, subfolder: str, ocr_path: Path) -> dict[str, Any]
     return out
 
 
+def _apply_nominee_relationship_override(values: dict[str, Any]) -> None:
+    """Force nominee relation for wrapper tests (e.g. pin Son/Husband regardless of staging)."""
+    override = _env_str("INSURANCE_TEST_NOMINEE_RELATIONSHIP", NOMINEE_RELATIONSHIP).strip()
+    if not override:
+        return
+    prior = str(values.get("nominee_relationship") or "").strip()
+    if prior.casefold() == override.casefold():
+        logger.info("nominee_relationship already %r (no override)", override)
+        return
+    values["nominee_relationship"] = override
+    logger.info("nominee_relationship override: %r -> %r", prior or "—", override)
+
+
+def _apply_nominee_age_override(values: dict[str, Any]) -> None:
+    """Force nominee age for wrapper tests when DB/staging leave it blank."""
+    override = _env_str("INSURANCE_TEST_NOMINEE_AGE", NOMINEE_AGE).strip()
+    if not override:
+        return
+    prior = str(values.get("nominee_age") or "").strip()
+    if prior == override:
+        logger.info("nominee_age already %r (no override)", override)
+        return
+    values["nominee_age"] = override
+    logger.info("nominee_age override: %r -> %r", prior or "—", override)
+
+
 def _log_values_summary(values: dict[str, Any]) -> None:
     logger.info("--- Insurance fill values ---")
     for key in (
@@ -452,6 +481,8 @@ def _log_values_summary(values: dict[str, Any]) -> None:
         "hero_cpi",
         "insurance_pay",
         "nominee_name",
+        "nominee_age",
+        "nominee_relationship",
         "financer_name",
     ):
         logger.info("  %s: %s", key, values.get(key) or "—")
@@ -560,7 +591,7 @@ def main() -> int:
             except Exception:
                 pass
     if not subfolder:
-        subfolder = f"{mobile}_puneet_financier_test"
+        subfolder = f"{mobile}_khoob_nominee_relation_test"
         logger.warning("No staging subfolder found — using placeholder %r (set INSURANCE_TEST_SUBFOLDER)", subfolder)
 
     use_db = _env_bool("INSURANCE_TEST_USE_DB", True)
@@ -588,6 +619,9 @@ def main() -> int:
     if values is None:
         values = _build_insurance_values(subfolder=subfolder, ocr_path=ocr_path)
         logger.info("Using patched fill dict (no DB or INSURANCE_TEST_USE_DB=0)")
+
+    _apply_nominee_relationship_override(values)
+    _apply_nominee_age_override(values)
 
     if customer_id > 0 and vehicle_id > 0:
         _log_financier_diagnostics(
@@ -634,11 +668,12 @@ def main() -> int:
     logger.info("Full insurance flow: pre_process → main_process → post_process")
     logger.info("ocr_output: %s", ocr_out / subfolder)
     logger.info(
-        "VIN=%s  engine=%s  mobile=%s  insurer=%s  expected_financier=%s",
+        "VIN=%s  engine=%s  mobile=%s  insurer=%s  nominee_relationship=%s  expected_financier=%s",
         values.get("frame_no"),
         values.get("engine_no"),
         values.get("mobile_number"),
         values.get("insurer"),
+        values.get("nominee_relationship"),
         expected_financer,
     )
 
