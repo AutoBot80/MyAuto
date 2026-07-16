@@ -32,8 +32,9 @@ interface FileWithPath extends File {
   path?: string;
 }
 
-const IN_PROCESS_STATUSES = new Set(["Queued", "Pending", "In Progress", "Failed"]);
+const IN_PROCESS_STATUSES = new Set(["Queued", "Pending", "In Progress", "Failed", "Needs TRC"]);
 const COMPLETED_STATUSES = new Set(["Completed", "Manually Completed"]);
+const NEEDS_TRC_STATUS = "Needs TRC";
 
 function filePathFromInput(file: File | null): string | null {
   if (!file) return null;
@@ -700,8 +701,13 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                 <td colSpan={columns.length}>No records.</td>
               </tr>
             ) : subTab === "in_process" ? (
-              filteredRows.map((r) => (
-                <tr key={r.rto_queue_id}>
+              filteredRows.map((r) => {
+                const needsTrc = r.status === NEEDS_TRC_STATUS;
+                return (
+                <tr
+                  key={r.rto_queue_id}
+                  className={needsTrc ? "rto-queue-row--needs-trc" : undefined}
+                >
                   <td>{r.rto_queue_id}</td>
                   <td>{r.rto_application_id ?? "—"}</td>
                   <td>{r.customer_name ?? "—"}</td>
@@ -712,12 +718,18 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                   <td>
                     <label
                       className="rto-in-queue-label"
-                      title={r.status === "In Progress" ? "Release this row first" : undefined}
+                      title={
+                        needsTrc
+                          ? "Needs TRC — out of state"
+                          : r.status === "In Progress"
+                            ? "Release this row first"
+                            : undefined
+                      }
                     >
                       <input
                         type="checkbox"
-                        checked={r.in_queue !== false}
-                        disabled={r.status === "In Progress"}
+                        checked={needsTrc ? false : r.in_queue !== false}
+                        disabled={needsTrc || r.status === "In Progress"}
                         onChange={(ev) => void handleInQueueChange(r, ev.target.checked)}
                       />
                       <span>In Queue</span>
@@ -739,7 +751,8 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                         type="button"
                         className="app-button"
                         onClick={() => void handleMarkDone(r.rto_queue_id)}
-                        disabled={actionQueueId === r.rto_queue_id}
+                        disabled={needsTrc || actionQueueId === r.rto_queue_id}
+                        title={needsTrc ? "Needs TRC — out of state" : undefined}
                       >
                         {actionQueueId === r.rto_queue_id ? "…" : "Mark Done"}
                       </button>
@@ -756,7 +769,8 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                     ) : null}
                   </td>
                 </tr>
-              ))
+                );
+              })
             ) : subTab === "forms_missing" ? (
               filteredRows.map((r) => (
                 <tr key={r.rto_queue_id}>

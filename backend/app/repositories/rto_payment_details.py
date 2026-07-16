@@ -4,6 +4,9 @@ import re
 from datetime import date, datetime, timezone
 
 from app.db import get_connection
+from app.services.customer_address_infer import canonical_states_differ
+
+RTO_STATUS_NEEDS_TRC = "Needs TRC"
 
 
 def _normalize_indian_mobile_10(mobile: str) -> str | None:
@@ -111,6 +114,36 @@ def get_dealer_id_for_sales(sales_id: int) -> int | None:
         conn.close()
 
 
+def get_customer_and_dealer_states_for_sales(
+    sales_id: int,
+    dealer_id: int | None = None,
+) -> tuple[str | None, str | None]:
+    """Return ``(customer_state, dealer_state)`` for interstate Needs TRC detection."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(TRIM(cm.state::text), '') AS customer_state,
+                    COALESCE(TRIM(dr.state::text), '') AS dealer_state
+                FROM sales_master sm
+                JOIN customer_master cm ON cm.customer_id = sm.customer_id
+                LEFT JOIN dealer_ref dr ON dr.dealer_id = COALESCE(%s, sm.dealer_id)
+                WHERE sm.sales_id = %s
+                """,
+                (dealer_id, sales_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None, None
+            cust = (row.get("customer_state") or "").strip() or None
+            deal = (row.get("dealer_state") or "").strip() or None
+            return cust, deal
+    finally:
+        conn.close()
+
+
 def insert(
     sales_id: int,
     insurance_id: int | None = None,
@@ -120,8 +153,20 @@ def insert(
     status: str = "Queued",
     staging_id: str | None = None,
     dealer_id: int | None = None,
+    in_queue: bool | None = None,
 ) -> int:
-    """Insert a queue row; returns rto_queue_id. Upserts on sales_id conflict."""
+    """Insert a queue row; returns rto_queue_id. Upserts on sales_id conflict.
+
+    When customer and dealer states are both known Indian states/UTs and differ,
+    forces ``status=Needs TRC`` and ``in_queue=false`` (out-of-state / TRC path).
+    """
+    status_use = (status or "Queued").strip() or "Queued"
+    in_queue_use = True if in_queue is None else bool(in_queue)
+    cust_state, deal_state = get_customer_and_dealer_states_for_sales(sales_id, dealer_id)
+    if canonical_states_differ(cust_state, deal_state):
+        status_use = RTO_STATUS_NEEDS_TRC
+        in_queue_use = False
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -137,9 +182,10 @@ def insert(
                     rto_application_date,
                     rto_payment_amount,
                     status,
+                    in_queue,
                     updated_at
                 )
-                VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (sales_id) DO UPDATE SET
                   staging_id = COALESCE(EXCLUDED.staging_id, rto_queue.staging_id),
                   dealer_id = COALESCE(EXCLUDED.dealer_id, rto_queue.dealer_id),
@@ -148,6 +194,7 @@ def insert(
                   rto_application_date = COALESCE(EXCLUDED.rto_application_date, rto_queue.rto_application_date),
                   rto_payment_amount = COALESCE(EXCLUDED.rto_payment_amount, rto_queue.rto_payment_amount),
                   status = EXCLUDED.status,
+                  in_queue = EXCLUDED.in_queue,
                   last_error = NULL,
                   leased_until = NULL,
                   processing_session_id = NULL,
@@ -163,7 +210,8 @@ def insert(
                     (customer_mobile or "").strip() or None,
                     rto_application_date,
                     rto_payment_amount,
-                    (status or "Queued").strip(),
+                    status_use,
+                    in_queue_use,
                 ),
             )
             row = cur.fetchone()
@@ -596,6 +644,7 @@ def mark_forms_ready(rto_queue_id: int) -> bool:
 
 
 def mark_manually_completed(rto_queue_id: int) -> bool:
+    """Mark Done — Queued/Pending/Failed only (excludes Needs TRC and in-flight statuses)."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -677,6 +726,7 @@ def release_in_progress_row(rto_queue_id: int) -> bool:
 
 
 def set_in_queue(rto_queue_id: int, in_queue: bool) -> bool:
+    """Toggle In Queue for Queued/Pending/Failed only (Needs TRC cannot opt into batch)."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:

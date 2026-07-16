@@ -1465,6 +1465,117 @@ def _scrape_ex_showroom_for_order_line_row(
     return ""
 
 
+def _scrape_hhml_total_for_order_line_row(
+    page: Page,
+    *,
+    row_n: int,
+    content_frame_selector: str | None,
+) -> str:
+    """
+    Best-effort **HHML Total** (ex-showroom) for one order line after discount fill.
+
+    Reads ``td`` / drilldown ``a[name='HHML Total']`` (e.g. id ``{n}_s_1_l_HHML_Total``,
+    title ``Rs.75,318.10``). Empty on failure — callers must not fail attach on this.
+    """
+    logical = int(row_n)
+    js = """(p) => {
+      const domN = Math.max(1, Number(p && p.dom) || 1);
+      const logicalN = Math.max(1, Number(p && p.logical) || domN);
+      const vis = (el) => {
+        if (!el) return false;
+        const st = window.getComputedStyle(el);
+        if (st.display === 'none' || st.visibility === 'hidden' || Number(st.opacity) === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 2 && r.height >= 2;
+      };
+      const textOf = (el) => {
+        if (!el) return '';
+        const title = String(el.getAttribute('title') || '').trim();
+        if (title) return title;
+        const a = el.querySelector && el.querySelector("a.drilldown[name='HHML Total'], a[name='HHML Total']");
+        if (a) {
+          const at = String(a.getAttribute('title') || '').trim();
+          if (at) return at;
+          return String(a.textContent || '').trim();
+        }
+        if (el.tagName === 'A' || el.tagName === 'INPUT') {
+          return String(el.value || el.textContent || el.getAttribute('title') || '').trim();
+        }
+        return String(el.textContent || '').trim();
+      };
+      const tryId = (id) => {
+        const el = document.getElementById(id);
+        if (!el || !vis(el)) return '';
+        return textOf(el);
+      };
+      const suffixes = ['HHML_Total', 'HHML Total'];
+      const tryPfx = (pfx) => {
+        for (const suf of suffixes) {
+          const v = tryId(pfx + '_s_1_l_' + suf.replace(/ /g, '_'));
+          if (v) return v;
+          const v2 = tryId(pfx + '_s_1_l_' + suf);
+          if (v2) return v2;
+        }
+        const td = document.querySelector(
+          "td[id='" + pfx + "_s_1_l_HHML_Total'], td[id$='_s_1_l_HHML_Total'][id^='" + pfx + "_']"
+        );
+        if (td && vis(td)) {
+          const t = textOf(td);
+          if (t) return t;
+        }
+        return '';
+      };
+      let out = tryPfx(String(domN));
+      if (out) return out;
+      if (domN !== logicalN) {
+        out = tryPfx(String(logicalN));
+        if (out) return out;
+      }
+      const anchors = Array.from(
+        document.querySelectorAll("a.drilldown[name='HHML Total'], a[name='HHML Total']")
+      );
+      for (const a of anchors) {
+        if (!vis(a)) continue;
+        const td = a.closest && a.closest('td');
+        const id = String((td && td.id) || a.id || '');
+        if (id.indexOf(String(domN) + '_') === 0 || id.indexOf(String(logicalN) + '_') === 0) {
+          const t = textOf(td || a);
+          if (t) return t;
+        }
+      }
+      return '';
+    }"""
+    roots: list = []
+    try:
+        roots.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+    except Exception:
+        pass
+    try:
+        roots.extend(list(_ordered_frames(page)))
+    except Exception:
+        pass
+    roots.append(page)
+    try:
+        _ensure_order_line_jqgrid_global_row_visible(
+            page, row_n=logical, content_frame_selector=content_frame_selector
+        )
+    except Exception:
+        pass
+    _ctr_e = _read_order_line_jqgrid_row_counter(page, content_frame_selector=content_frame_selector)
+    dom_n = _order_line_jqgrid_dom_row_index(logical, _ctr_e)
+    _payload = {"logical": logical, "dom": dom_n}
+    for root in roots:
+        try:
+            v = root.evaluate(js, _payload)
+            if (v or "").strip():
+                raw = str(v).strip()
+                if _looks_like_ex_showroom_price(raw) or raw:
+                    return raw
+        except Exception:
+            continue
+    return ""
+
+
 def _scrape_create_order_financier_display_value(
     page: Page,
     *,
@@ -4495,6 +4606,39 @@ def _attach_vehicle_to_bkg(
         _n_tot = len(_line_items)
         _start0 = max(1, int(attach_start_row_1based or 1))
         _scrape_lines = scrape_attach_line_items if isinstance(scrape_attach_line_items, list) else _line_items
+        # Best-effort HHML Total (ex-showroom) per row after discount; never fails attach.
+        _hhml_line_ex: list[dict[str, str]] = []
+
+        def _best_effort_scrape_hhml_total_after_discount(row_n: int, chassis: str) -> None:
+            try:
+                _ex_raw = _scrape_hhml_total_for_order_line_row(
+                    page, row_n=row_n, content_frame_selector=content_frame_selector
+                )
+                _ex_s = (_ex_raw or "").strip()
+                if not _ex_s:
+                    note(
+                        f"attach_vehicle_to_bkg: HHML Total scrape empty for row {row_n} "
+                        f"(chassis={chassis!r:.24}) — continuing."
+                    )
+                    return
+                _hhml_line_ex.append(
+                    {
+                        "full_chassis": chassis,
+                        "vin": chassis,
+                        "ex_showroom": _ex_s,
+                        "vehicle_ex_showroom_cost": _ex_s,
+                    }
+                )
+                note(
+                    f"attach_vehicle_to_bkg: HHML Total row {row_n}={_ex_s!r:.40} "
+                    f"(chassis={chassis!r:.24})."
+                )
+            except Exception as _hhml_exc:
+                note(
+                    f"attach_vehicle_to_bkg: HHML Total scrape failed row {row_n} "
+                    f"(ignored): {_hhml_exc!r:.200}"
+                )
+
         if skip_line_item_fill:
             note(
                 "attach_vehicle_to_bkg: skip_line_item_fill=True — line items already on form; "
@@ -4535,6 +4679,7 @@ def _attach_vehicle_to_bkg(
                                 {},
                             )
                         _safe_page_wait(page, 500, log_label="after_discount_tab_settle")
+                        _best_effort_scrape_hhml_total_after_discount(n, _ch)
                 else:
                     # ────────────────────────────────────────────────────────────────────────────
                     # Rows >= 2: NEW Playwright-based approach
@@ -4549,6 +4694,8 @@ def _attach_vehicle_to_bkg(
                         _safe_page_wait(page, 2800, log_label="after_row_2_plus_playwright_settle_last")
                     else:
                         _safe_page_wait(page, 500, log_label=f"after_row_2_plus_playwright_settle_row_{n}")
+                    if _disc_raw:
+                        _best_effort_scrape_hhml_total_after_discount(n, _ch)
 
                 if callable(challan_progress_callback):
                     try:
@@ -4575,6 +4722,8 @@ def _attach_vehicle_to_bkg(
             return False, f"Siebel error after Allocate All: {_aa_err[:200]}", {}
 
         _extra: dict = {}
+        if _hhml_line_ex:
+            _extra["order_line_ex_showroom"] = list(_hhml_line_ex)
         # Legacy ex-showroom scrape (input / per-row pager) — disabled; Total_Cost runs after Create Invoice.
         # try:
         #     _safe_page_wait(page, 1200, log_label="after_allocate_all_before_ex_showroom_scrape")

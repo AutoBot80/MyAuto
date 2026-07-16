@@ -87,6 +87,45 @@ def test_resolve_add_enquiry_district_falls_back_to_customer_city() -> None:
     assert dist == "Bharatpur"
 
 
+def test_resolve_add_enquiry_out_of_state_uses_customer_locality() -> None:
+    dms = {
+        "state": "Uttar Pradesh",
+        "district": "Mathura",
+        "tehsil": "",
+        "city": "Mathura",
+    }
+    dealer = {
+        "city": "KAMAN",
+        "state": "RAJASTHAN",
+        "district": "Bharatpur",
+    }
+    state, dist, tehsil, city = _resolve_add_enquiry_address_fields(dms, dealer)
+    assert state == "UP"
+    assert dist == "Mathura"
+    assert tehsil == "Mathura"
+    assert city == "Mathura"
+
+
+def test_resolve_add_enquiry_case_only_state_diff_keeps_dealer() -> None:
+    dms = {"state": "Rajasthan", "district": "", "tehsil": "", "city": "Bharatpur"}
+    dealer = {"city": "KAMAN", "state": "RAJASTHAN", "district": "Bharatpur"}
+    state, dist, tehsil, city = _resolve_add_enquiry_address_fields(dms, dealer)
+    assert state == "RAJASTHAN"
+    assert dist == "Bharatpur"
+    assert tehsil == "KAMAN"
+    assert city == "KAMAN"
+
+
+def test_resolve_add_enquiry_invalid_customer_state_keeps_dealer() -> None:
+    dms = {"state": "xyz-not-a-state", "district": "", "tehsil": "", "city": "Lucknow"}
+    dealer = {"city": "KAMAN", "state": "RAJASTHAN", "district": "Bharatpur"}
+    state, dist, tehsil, city = _resolve_add_enquiry_address_fields(dms, dealer)
+    assert state == "RAJASTHAN"
+    assert dist == "Bharatpur"
+    assert tehsil == "KAMAN"
+    assert city == "KAMAN"
+
+
 @patch("app.repositories.form_dms.get_connection")
 def test_lookup_dealer_enquiry_address_parses_rto_district(mock_get_conn: MagicMock) -> None:
     mock_cur = MagicMock()

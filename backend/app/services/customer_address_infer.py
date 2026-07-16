@@ -167,6 +167,52 @@ def resolve_indian_state_name(
     return None
 
 
+def canonical_states_differ(
+    customer_state: str | None,
+    dealer_state: str | None,
+    *,
+    allow_la_ladakh: bool = True,
+) -> bool:
+    """
+    True only when both sides resolve to known Indian states/UTs and they differ.
+
+    Invalid / blank customer OCR must not be treated as interstate (Add Enquiry + RTO).
+    """
+    customer_canon = resolve_indian_state_name(
+        customer_state, allow_la_ladakh=allow_la_ladakh
+    )
+    if not customer_canon:
+        return False
+    dealer_canon = resolve_indian_state_name(dealer_state, allow_la_ladakh=allow_la_ladakh)
+    if not dealer_canon:
+        return False
+    return customer_canon != dealer_canon
+
+
+def indian_state_two_letter_code(
+    ocr_token: str | None,
+    *,
+    allow_la_ladakh: bool = True,
+) -> str | None:
+    """
+    Map a state/UT token to the standard two-letter code (e.g. Uttar Pradesh → UP).
+
+    Used for Siebel Add Enquiry State LOV values. Prefers ``OD`` over legacy ``OR`` for Odisha.
+    """
+    canon = resolve_indian_state_name(ocr_token, allow_la_ladakh=allow_la_ladakh)
+    if not canon:
+        return None
+    preferred: str | None = None
+    for code, name in _INDIAN_STATE_TWO_LETTER.items():
+        if name != canon:
+            continue
+        if code == "OR":
+            continue
+        preferred = code
+        break
+    return preferred
+
+
 def strip_junk_between_last_indian_state_and_pin(text: str) -> str:
     """
     UIDAI English backs often read as ``..., State, <OCR noise>, PIN`` at the tail.

@@ -1883,6 +1883,14 @@
   background: #f5f9fd;
 }
 
+.rto-payments-table tbody tr.rto-queue-row--needs-trc {
+  background: #ececec;
+}
+
+.rto-payments-table tbody tr.rto-queue-row--needs-trc:hover {
+  background: #e4e4e4;
+}
+
 .rto-payments-error {
   color: #c00;
 }
@@ -3785,6 +3793,39 @@
 .challans-invoices-vehicle-heading {
   margin-bottom: 0;
   padding-bottom: 0;
+}
+
+.challans-invoices-eway-bill {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 2px 0 4px;
+  padding: 2px 0;
+  font-size: 0.82rem;
+  line-height: 1.25;
+}
+
+.challans-invoices-eway-bill-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  max-width: 28rem;
+}
+
+.challans-invoices-eway-bill-label {
+  color: var(--text-muted, #555);
+}
+
+.challans-invoices-eway-bill-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.challans-invoices-eway-bill-line--final .challans-invoices-eway-bill-label,
+.challans-invoices-eway-bill-line--final .challans-invoices-eway-bill-value {
+  font-weight: 600;
 }
 
 .challans-invoices-vehicle-wrap {

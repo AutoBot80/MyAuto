@@ -38,3 +38,24 @@ def test_multi_line_no_inventory_update_without_order_line_list(mock_upd: object
         {"vehicle_ex_showroom_cost": "Rs.78,993.00"},
     )
     mock_upd.assert_not_called()
+
+
+@patch("app.services.add_subdealer_challan_commit_service.fetch_lines_for_batch_inventory")
+@patch("app.services.add_subdealer_challan_commit_service.update_discount_and_ex_showroom")
+def test_order_line_list_matches_by_chassis(mock_upd: object, mock_fetch: object) -> None:
+    mock_fetch.return_value = [
+        {"inventory_line_id": 10, "chassis_no": "MBLAAA11111111111"},
+        {"inventory_line_id": 11, "chassis_no": "MBLBBB22222222222"},
+    ]
+    update_inventory_ex_showroom_from_order_scrape(
+        [10, 11],
+        {
+            "order_line_ex_showroom": [
+                {
+                    "full_chassis": "MBLBBB22222222222",
+                    "vehicle_ex_showroom_cost": "Rs.75,318.10",
+                }
+            ]
+        },
+    )
+    mock_upd.assert_called_once_with(11, ex_showroom_price=75318.10)

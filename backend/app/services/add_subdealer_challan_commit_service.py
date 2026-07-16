@@ -9,9 +9,16 @@ from decimal import Decimal
 from typing import Any
 
 from app.db import get_connection
-from app.repositories.vehicle_inventory import update_discount_and_ex_showroom
+from app.repositories.vehicle_inventory import (
+    fetch_lines_for_batch_inventory,
+    update_discount_and_ex_showroom,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _norm_chassis_key(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]", "", (s or "").upper())
 
 
 def scraped_total_ex_showroom_from_vehicle_out(vehicle_out: dict[str, Any]) -> float | None:
@@ -311,6 +318,47 @@ def update_inventory_ex_showroom_from_order_scrape(
             return
 
         if isinstance(raw, list):
+            # Prefer chassis/VIN match when scrape rows carry full_chassis/vin (partial attach / resume).
+            by_chassis: dict[str, int] = {}
+            try:
+                for _ln in fetch_lines_for_batch_inventory(list(inventory_line_ids)):
+                    _ck = _norm_chassis_key(str(_ln.get("chassis_no") or ""))
+                    if _ck and int(_ln.get("inventory_line_id") or 0):
+                        by_chassis[_ck] = int(_ln["inventory_line_id"])
+            except Exception as _fetch_exc:
+                logger.warning(
+                    "update_inventory_ex_showroom_from_order_scrape: chassis lookup failed: %s",
+                    _fetch_exc,
+                )
+            chassis_matched = False
+            if by_chassis:
+                for item in raw:
+                    if not isinstance(item, dict):
+                        continue
+                    ch = (
+                        item.get("full_chassis")
+                        or item.get("vin")
+                        or item.get("chassis")
+                        or item.get("chassis_no")
+                        or ""
+                    )
+                    ck = _norm_chassis_key(str(ch))
+                    iid_m = by_chassis.get(ck) if ck else None
+                    pr = _ex_showroom_from_line_item_dict(item)
+                    if iid_m is None or pr is None:
+                        continue
+                    chassis_matched = True
+                    try:
+                        update_discount_and_ex_showroom(int(iid_m), ex_showroom_price=float(pr))
+                    except Exception as exc:
+                        logger.warning(
+                            "update_inventory_ex_showroom_from_order_scrape: chassis-line update failed "
+                            "iid=%s: %s",
+                            iid_m,
+                            exc,
+                        )
+            if chassis_matched:
+                return
             for i, iid in enumerate(inventory_line_ids):
                 if i >= len(raw):
                     break

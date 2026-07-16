@@ -219,6 +219,59 @@ function formatInrAmount(n: number | null | undefined): string {
   }
 }
 
+/** Usable positive (or zero) amount for Eway / ex-showroom math. */
+function usableMoney(n: number | null | undefined): number | null {
+  if (n == null || Number.isNaN(Number(n))) return null;
+  return Number(n);
+}
+
+type EwayBillAmounts = {
+  totalExShowroom: number | null;
+  lessGst: number | null;
+  lessDiscounts: number | null;
+  finalAmount: number | null;
+};
+
+/**
+ * 2A: sum of per-line ex-showroom when every line has a value; else challan-level total.
+ * 2B: 2A / 1.18. 2C/2D: 2B − sum(line discounts).
+ */
+function computeEwayBillAmounts(
+  lines: ChallanInvoiceDetailLine[],
+  challanTotalExShowroom: number | null | undefined,
+): EwayBillAmounts {
+  const empty: EwayBillAmounts = {
+    totalExShowroom: null,
+    lessGst: null,
+    lessDiscounts: null,
+    finalAmount: null,
+  };
+  if (!lines.length) return empty;
+
+  const lineEx = lines.map((ln) => usableMoney(ln.ex_showroom_price));
+  const allLinesHaveEx = lineEx.every((v) => v != null);
+  let totalEx: number | null = null;
+  if (allLinesHaveEx) {
+    totalEx = lineEx.reduce<number>((s, v) => s + (v as number), 0);
+  } else {
+    totalEx = usableMoney(challanTotalExShowroom);
+  }
+  if (totalEx == null) return empty;
+
+  const lessGst = totalEx / 1.18;
+  const discountSum = lines.reduce((s, ln) => {
+    const d = usableMoney(ln.discount);
+    return s + (d != null ? d : 0);
+  }, 0);
+  const afterDiscount = lessGst - discountSum;
+  return {
+    totalExShowroom: totalEx,
+    lessGst,
+    lessDiscounts: afterDiscount,
+    finalAmount: afterDiscount,
+  };
+}
+
 function showRetryOrderOnly(r: ChallanMasterProcessedRow): boolean {
   const inv = (r.invoice_status || "").trim().toLowerCase();
   const failed = r.failed_line_count ?? 0;
@@ -350,6 +403,23 @@ export function SubdealerChallanPage({
   const selectedBatchVehicleLines = useMemo(
     () => sortedDetailLinesForBatch(selectedProcessedRow),
     [selectedProcessedRow],
+  );
+
+  const selectedInvoiceMaster = useMemo(
+    () =>
+      selectedInvoiceChallanId == null
+        ? null
+        : (invoiceMasters.find((r) => r.challan_id === selectedInvoiceChallanId) ?? null),
+    [invoiceMasters, selectedInvoiceChallanId],
+  );
+
+  const ewayBillAmounts = useMemo(
+    () =>
+      computeEwayBillAmounts(
+        invoiceLines,
+        selectedInvoiceMaster?.total_ex_showroom_price ?? null,
+      ),
+    [invoiceLines, selectedInvoiceMaster],
   );
 
   const showSummaryBar =
@@ -1315,6 +1385,40 @@ export function SubdealerChallanPage({
                 <h3 className="challans-processed-failed-heading challans-invoices-vehicle-heading" id="challans-invoices-detail-heading">
                   Vehicles (discount per line)
                 </h3>
+                {selectedInvoiceChallanId !== null &&
+                !invoiceDetailsLoading &&
+                !invoiceDetailsError &&
+                invoiceLines.length > 0 ? (
+                  <div
+                    className="challans-invoices-eway-bill"
+                    aria-label="Eway Bill calculations"
+                  >
+                    <div className="challans-invoices-eway-bill-line">
+                      <span className="challans-invoices-eway-bill-label">Total ex-showroom value</span>
+                      <span className="challans-invoices-eway-bill-value">
+                        {formatInrAmount(ewayBillAmounts.totalExShowroom)}
+                      </span>
+                    </div>
+                    <div className="challans-invoices-eway-bill-line">
+                      <span className="challans-invoices-eway-bill-label">Less 18% GST</span>
+                      <span className="challans-invoices-eway-bill-value">
+                        {formatInrAmount(ewayBillAmounts.lessGst)}
+                      </span>
+                    </div>
+                    <div className="challans-invoices-eway-bill-line">
+                      <span className="challans-invoices-eway-bill-label">Less Discounts</span>
+                      <span className="challans-invoices-eway-bill-value">
+                        {formatInrAmount(ewayBillAmounts.lessDiscounts)}
+                      </span>
+                    </div>
+                    <div className="challans-invoices-eway-bill-line challans-invoices-eway-bill-line--final">
+                      <span className="challans-invoices-eway-bill-label">Final Eway Bill Amount</span>
+                      <span className="challans-invoices-eway-bill-value">
+                        {formatInrAmount(ewayBillAmounts.finalAmount)}
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="challans-processed-failed-table-wrap challans-invoices-vehicle-wrap">
                   {selectedInvoiceChallanId === null ? (
                     <p className="app-table-empty challans-processed-failed-placeholder">

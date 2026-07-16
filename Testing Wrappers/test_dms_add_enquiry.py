@@ -4,7 +4,8 @@ Open DMS, Find Contact by mobile, then Add Enquiry only.
 Double-click ``test_dms_add_enquiry.bat`` or:
   python test_dms_add_enquiry.py
 
-Current fixture: KHOOB KALA (female, W/O) @ dealer 100003 — exercises Mr/Ms → Ms.
+Current fixture: same-state customer (RAJASTHAN / Bharatpur) @ dealer 100003
+(KAMAN) — exercises dealer_ref defaults for State/District/Tehsil/City.
 Requires ``backend/.env`` (DMS_BASE_URL, DMS_MODE=real, DMS_REAL_URL_CONTACT, login).
 """
 from __future__ import annotations
@@ -26,22 +27,24 @@ os.environ.setdefault("DEALER_ID", "100003")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("test_dms_add_enquiry")
 
-# In-process row: KHOOB KALA @ dealer 100003 (Sales Details screenshot; female via W/O)
+# Same-state vs dealer 100003 (Rajasthan / KAMAN): expect dealer city/tehsil KAMAN
 CUSTOMER_MOBILE = "9772098406"
 CUSTOMER_FIRST_NAME = "KHOOB"
 CUSTOMER_LAST_NAME = "KALA"
-CUSTOMER_GENDER = "female"  # Care of W/O BHAGWAN DAS → set Mr/Ms to Ms
+CUSTOMER_GENDER = "female"  # Care of W/O → set Mr/Ms to Ms
 CUSTOMER_LANDLINE = "7878874921"
-CUSTOMER_ADDRESS = "NAGLA LODHA PEER NAGAR, BHARATPUR"
+# NAGLA LODHA PEER NAGAR, Kaman, BHARATPUR, RAJASTHAN, 321001
+CUSTOMER_ADDRESS = "NAGLA LODHA PEER NAGAR"
+CUSTOMER_CITY = "Kaman"
+CUSTOMER_DISTRICT = "BHARATPUR"
 CUSTOMER_STATE = "RAJASTHAN"
+CUSTOMER_PIN = "321001"
 CUSTOMER_FINANCIER = "Hinduja Leyland Finance"
 CUSTOMER_FRAME_PARTIAL = "20236"
 CUSTOMER_ENGINE_PARTIAL = "T4463"
 CUSTOMER_KEY = "2355"
 CUSTOMER_BATTERY = "769516"
-# Required by Add Enquiry / vehicle_merge (filled for live Mr/Ms test):
 CUSTOMER_AADHAR_LAST4 = "1234"
-CUSTOMER_PIN = "321001"
 CUSTOMER_AGE = "34"
 CUSTOMER_DOB = ""  # optional if CUSTOMER_AGE set
 CUSTOMER_MODEL = "Splendor"
@@ -59,6 +62,8 @@ def main() -> int:
         DMS_SIEBEL_NAV_TIMEOUT_MS,
         dms_automation_is_real_siebel,
     )
+    from app.repositories import form_dms as form_dms_repo
+    from app.services.customer_address_infer import canonical_states_differ
     from app.services.fill_hero_dms_service import _install_playwright_js_dialog_handler
     from app.services.handle_browser_opening import (
         get_or_open_site_page,
@@ -68,6 +73,7 @@ def main() -> int:
         _add_enquiry_opportunity,
         _contact_mobile_drilldown_plans,
         _contact_view_find_by_mobile_strategy_two,
+        _resolve_add_enquiry_address_fields,
     )
     from app.services.hero_dms_shared_utilities import SiebelDmsUrls
 
@@ -91,6 +97,8 @@ def main() -> int:
             ("CUSTOMER_MODEL", CUSTOMER_MODEL),
             ("CUSTOMER_COLOR", CUSTOMER_COLOR),
             ("CUSTOMER_YEAR", CUSTOMER_YEAR),
+            ("CUSTOMER_CITY", CUSTOMER_CITY),
+            ("CUSTOMER_STATE", CUSTOMER_STATE),
         )
         if not (val or "").strip()
     ]
@@ -101,8 +109,10 @@ def main() -> int:
         )
         return 1
 
-    dms_values: dict[str, str] = {
+    dealer_addr = form_dms_repo.lookup_dealer_enquiry_address(int(DEALER_ID_TEST))
+    dms_values: dict[str, Any] = {
         "dealer_id": DEALER_ID_TEST,
+        "dealer_enquiry_address": dealer_addr,
         "mobile_phone": CUSTOMER_MOBILE,
         "first_name": CUSTOMER_FIRST_NAME,
         "last_name": CUSTOMER_LAST_NAME,
@@ -110,6 +120,8 @@ def main() -> int:
         "landline": CUSTOMER_LANDLINE,
         "aadhar_id": CUSTOMER_AADHAR_LAST4,
         "address_line_1": CUSTOMER_ADDRESS,
+        "city": CUSTOMER_CITY,
+        "district": CUSTOMER_DISTRICT,
         "pin_code": CUSTOMER_PIN,
         "state": CUSTOMER_STATE,
         "age": CUSTOMER_AGE,
@@ -122,6 +134,34 @@ def main() -> int:
         "financier_name": CUSTOMER_FINANCIER,
         "dms_contact_path": "found",
     }
+    state_use, dist_use, tehsil_use, city_use = _resolve_add_enquiry_address_fields(
+        dms_values, dealer_addr
+    )
+    interstate = canonical_states_differ(CUSTOMER_STATE, dealer_addr.get("state") or "")
+    logger.info(
+        "Address resolve preview — interstate=%s dealer=%s customer_state=%s → "
+        "state=%r district=%r tehsil=%r city=%r pin=%r addr=%r",
+        interstate,
+        dealer_addr,
+        CUSTOMER_STATE,
+        state_use,
+        dist_use,
+        tehsil_use,
+        city_use,
+        CUSTOMER_PIN,
+        CUSTOMER_ADDRESS,
+    )
+    if interstate:
+        logger.warning(
+            "Unexpected interstate for same-state fixture "
+            "(customer RAJASTHAN vs dealer). Check dealer_ref.state for dealer_id=%s.",
+            DEALER_ID_TEST,
+        )
+    else:
+        logger.info(
+            "Same-state path — expect dealer defaults (e.g. KAMAN tehsil/city, Bharatpur district)."
+        )
+
     vehicle: dict[str, Any] = {
         "model": CUSTOMER_MODEL,
         "color": CUSTOMER_COLOR,
@@ -161,7 +201,7 @@ def main() -> int:
     time.sleep(15)
 
     note(
-        f"Find Contact by mobile (gender={CUSTOMER_GENDER!r} → expect Mr/Ms Ms on new enquiry)."
+        "Find Contact by mobile (same-state → expect dealer_ref KAMAN / RAJASTHAN on enquiry)."
     )
     ok_find = _contact_view_find_by_mobile_strategy_two(
         page,
@@ -198,7 +238,7 @@ def main() -> int:
             n_rows,
         )
 
-    note("Add Enquiry (female → Mr/Ms Ms).")
+    note("Add Enquiry (same-state dealer address defaults).")
     ok, detail, enq_no = _add_enquiry_opportunity(
         page,
         dms_values,

@@ -66,6 +66,11 @@ from app.services.hero_dms_shared_utilities import (
     _try_select_option,
     _try_click_generate_booking,
 )
+from app.services.customer_address_infer import (
+    canonical_states_differ,
+    indian_state_two_letter_code,
+    resolve_indian_state_name,
+)
 from app.services.hero_dms_playwright_vehicle import (
     _add_enquiry_vehicle_scrape_has_model_year_color,
     _apply_year_of_mfg_yyyy,
@@ -8357,6 +8362,9 @@ def _resolve_add_enquiry_address_fields(
     """
     Merge customer OCR address with ``dealer_ref`` defaults for Add Enquiry only.
 
+    When customer state is a known Indian state/UT and differs from dealer state,
+    prefer customer city/state/district/tehsil. Otherwise dealer-first coalesce.
+
     Returns ``(state_use, dist_use, tehsil_use, city_use)``.
     """
     state_customer = (dms_values.get("state") or "").strip()
@@ -8367,6 +8375,17 @@ def _resolve_add_enquiry_address_fields(
     dealer_city = (dealer_addr.get("city") or "").strip()
     dealer_state = (dealer_addr.get("state") or "").strip()
     dealer_district = (dealer_addr.get("district") or "").strip()
+
+    if canonical_states_differ(state_customer, dealer_state):
+        # Siebel Opportunity State LOV uses two-letter codes (e.g. UP), not full names.
+        state_use = (
+            indian_state_two_letter_code(state_customer)
+            or (resolve_indian_state_name(state_customer, allow_la_ladakh=True) or state_customer).upper()
+        )
+        dist_use = district_customer or city_customer
+        tehsil_use = tehsil or city_customer
+        city_use = city_customer
+        return state_use, dist_use, tehsil_use, city_use
 
     state_use = dealer_state or state_customer
     dist_use = dealer_district or district_customer or city_customer
@@ -8880,7 +8899,17 @@ def _add_enquiry_opportunity(
         dms_values,
         dealer_addr,
     )
-    if (dealer_addr.get("city") or dealer_addr.get("state") or dealer_addr.get("district")):
+    if canonical_states_differ(
+        (dms_values.get("state") or "").strip(),
+        (dealer_addr.get("state") or "").strip(),
+    ):
+        note(
+            "Add Enquiry: out-of-state customer address — "
+            f"state={state_use!r}, district={dist_use!r}, "
+            f"tehsil/city={tehsil_use!r} "
+            f"(dealer_id={_dms_values_dealer_id(dms_values)})."
+        )
+    elif dealer_addr.get("city") or dealer_addr.get("state") or dealer_addr.get("district"):
         note(
             "Add Enquiry: address defaults from dealer_ref — "
             f"state={state_use!r}, district={dist_use!r}, "
