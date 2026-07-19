@@ -1058,6 +1058,461 @@ def _norm_vin_chassis_key(s: str) -> str:
     return re.sub(r"\s+", "", (s or "").strip()).upper()
 
 
+def _ensure_order_line_items_view_ready(
+    page: Page,
+    *,
+    order_number: str,
+    content_frame_selector: str | None,
+    note,
+    action_timeout_ms: int,
+) -> str:
+    """
+    Ensure the order **Line Items** row is actually rendered, then return its **row-1 VIN** (``""`` if
+    still blank). Used before comparing / DeAllocate+Delete on the My Orders *allocated* branch.
+
+    Readiness keys on the **real data row**, not the applet toolbar: the DeAllocate/Delete/New buttons
+    are always present on the Line Items applet, so their visibility is *not* a reliable signal (an
+    Allocated order's row stays blank until **Apply Campaign** is clicked). We therefore poll
+    ``_read_vin_from_order_line_row(row_n=1)`` and escalate:
+
+    1. Read row-1 VIN as-is.
+    2. If blank, click **Apply Campaign** (``#s_2_1_59_0_Ctrl``) — the action that renders the allocated
+       row (per DMS behavior) — then re-read.
+    3. If still blank, click the ``Order:<order#>`` thread link, click Apply Campaign again, then re-read.
+
+    Emits a diagnostic ``note(...)`` (toolbar element presence + row-1 VIN) at the end. ``attach_vehicle_to_bkg``
+    also clicks Apply Campaign at Step 11; re-applying the campaign is idempotent.
+    """
+    _tmo = min(int(action_timeout_ms or 3000), 4000)
+    _order_num = (order_number or "").strip()
+
+    def _roots() -> list:
+        r: list = []
+        try:
+            r.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+        except Exception:
+            pass
+        try:
+            r.extend(list(_ordered_frames(page)))
+        except Exception:
+            pass
+        r.append(page)
+        return r
+
+    def _first_visible(selector: str) -> bool:
+        for root in _roots():
+            try:
+                loc = root.locator(selector).first
+                if loc.count() > 0 and loc.is_visible(timeout=300):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _row_vin() -> str:
+        try:
+            return str(
+                _read_vin_from_order_line_row(
+                    page, row_n=1, content_frame_selector=content_frame_selector
+                )
+                or ""
+            ).strip()
+        except Exception:
+            return ""
+
+    def _poll_row_vin(total_ms: int) -> str:
+        """Spaced discrete reads (the VIN read is heavy) until a non-empty row-1 VIN or deadline."""
+        deadline = time.monotonic() + max(200, int(total_ms)) / 1000.0
+        v = _row_vin()
+        if v:
+            return v
+        while time.monotonic() < deadline:
+            _safe_page_wait(page, 800, log_label="poll_row1_vin")
+            v = _row_vin()
+            if v:
+                return v
+        return ""
+
+    def _diag(prefix: str, vin: str) -> None:
+        _present = {
+            "vin_input": _first_visible("input[id$='_l_VIN']") or _first_visible("input[name='VIN']"),
+            "vin_td": _first_visible("td[aria-describedby*='VIN' i]"),
+            "deallocate_8_0": _first_visible("#s_1_1_8_0_Ctrl"),
+            "delete_14_0": _first_visible("#s_1_1_14_0_Ctrl"),
+            "new_35_0": _first_visible("#s_1_1_35_0_Ctrl"),
+        }
+        note(
+            f"ensure_line_items_ready: {prefix} — elements={_present!r}, row1_vin={vin!r}."
+        )
+
+    def _click_apply_campaign() -> bool:
+        _ac_selectors = (
+            "#s_2_1_59_0_Ctrl",
+            "[name='s_2_1_59_0']",
+            "button[title*='Apply Campaign' i]",
+            "[aria-label*='Apply Campaign' i]",
+            "button:has-text('Apply Campaign')",
+            "a:has-text('Apply Campaign')",
+        )
+        for root in _roots():
+            for css in _ac_selectors:
+                try:
+                    loc = root.locator(css).first
+                    if loc.count() > 0 and loc.is_visible(timeout=500):
+                        try:
+                            loc.click(timeout=_tmo)
+                        except Exception:
+                            loc.click(timeout=_tmo, force=True)
+                        note(f"ensure_line_items_ready: clicked Apply Campaign (selector={css!r}) to render allocated row.")
+                        return True
+                except Exception:
+                    continue
+        for root in _roots():
+            try:
+                hit = root.evaluate("""() => {
+                    const vis = (el) => {
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    };
+                    const all = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
+                    for (const el of all) {
+                        const t = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+                        if (/apply\\s*campaign/i.test(t) && vis(el)) { el.click(); return true; }
+                    }
+                    return false;
+                }""")
+                if hit:
+                    note("ensure_line_items_ready: JS clicked Apply Campaign to render allocated row.")
+                    return True
+            except Exception:
+                continue
+        note("ensure_line_items_ready: Apply Campaign button not found.")
+        return False
+
+    def _settle_after_click(label: str, context: str) -> None:
+        _safe_page_wait(page, 1500, log_label=label)
+        try:
+            page.wait_for_load_state("networkidle", timeout=8_000)
+        except Exception:
+            pass
+        _poll_and_handle_siebel_error_popup(
+            page,
+            content_frame_selector,
+            note,
+            context=context,
+            total_ms=1200,
+            step_ms=300,
+        )
+
+    def _click_order_thread_link() -> bool:
+        if not _order_num:
+            note("ensure_line_items_ready: no order_number available to click the Order:<n> thread link.")
+            return False
+        _order_link_pattern = f"Order:{_order_num}"
+        for root in _roots():
+            try:
+                _ol_result = root.evaluate(f"""(pat) => {{
+                    const vis = (el) => {{
+                        if (!el) return false;
+                        const st = window.getComputedStyle(el);
+                        if (st.display === 'none' || st.visibility === 'hidden') return false;
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                    }};
+                    const links = Array.from(document.querySelectorAll('a'));
+                    for (const a of links) {{
+                        const ih = (a.innerHTML || '').trim();
+                        if (ih.includes(pat) && vis(a)) {{
+                            a.scrollIntoView({{ block: 'center' }});
+                            a.click();
+                            return ih;
+                        }}
+                    }}
+                    return '';
+                }}""", _order_link_pattern)
+                if _ol_result:
+                    note(f"ensure_line_items_ready: clicked Order link ({_ol_result!r}) to render line items.")
+                    return True
+            except Exception:
+                continue
+        for root in _roots():
+            try:
+                loc = root.locator(f"a:has-text('Order:{_order_num}')").first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    note("ensure_line_items_ready: clicked Order link via Playwright locator to render line items.")
+                    return True
+            except Exception:
+                continue
+        return False
+
+    # 1) Row already populated? (no action)
+    _vin = _poll_row_vin(2000)
+    if _vin:
+        _diag("row present, no action", _vin)
+        return _vin
+
+    # 2) Apply Campaign — the primary action that renders the allocated row.
+    if _click_apply_campaign():
+        _settle_after_click(
+            "after_ensure_line_items_apply_campaign",
+            "ensure_line_items_ready after Apply Campaign",
+        )
+        _vin = _poll_row_vin(4000)
+        if _vin:
+            _diag("row present after Apply Campaign", _vin)
+            return _vin
+
+    # 3) Fallback: click the Order:<n> thread link, then Apply Campaign again.
+    if _click_order_thread_link():
+        _settle_after_click(
+            "after_ensure_line_items_order_link",
+            "ensure_line_items_ready after Order# thread link",
+        )
+        if _click_apply_campaign():
+            _settle_after_click(
+                "after_ensure_line_items_apply_campaign_2",
+                "ensure_line_items_ready after Apply Campaign (post Order link)",
+            )
+        _vin = _poll_row_vin(4000)
+
+    _diag("row present" if _vin else "row STILL blank after Apply Campaign + Order link", _vin)
+    return _vin
+
+
+def _deallocate_and_delete_stale_order_line_items(
+    page: Page,
+    *,
+    incoming_vin_key: str,
+    content_frame_selector: str | None,
+    note,
+    action_timeout_ms: int,
+    order_number: str = "",
+) -> tuple[bool, str | None]:
+    """
+    On an already-drilled order **Line Items List** (e.g. the My Orders *allocated* branch), remove any
+    line item whose attached VIN differs from the incoming VIN, so the correct VIN can be re-attached.
+
+    For each stale row (bounded loop): select row 1 → **DeAllocate** (``#s_1_1_8_0_Ctrl``) → wait for
+    **Delete** (``#s_1_1_14_0_Ctrl``) to enable → **Delete** → confirm the Siebel dialog. Stops when the
+    grid is empty or the top row matches ``incoming_vin_key``. Returns ``(success, error_detail)``.
+
+    Individual-sales only: callers gate this on a single-VIN mismatch. Shared Siebel LOV completion and the
+    contact/enquiry sweep are not touched.
+    """
+    _tmo = min(int(action_timeout_ms or 3000), 4000)
+    _want = _norm_vin_chassis_key(incoming_vin_key or "")
+
+    # Belt-and-suspenders: guarantee the Line Items detail view (DeAllocate/Delete controls) is rendered
+    # before the loop. Best-effort — never fail the removal on readiness alone.
+    try:
+        _ensure_order_line_items_view_ready(
+            page,
+            order_number=order_number,
+            content_frame_selector=content_frame_selector,
+            note=note,
+            action_timeout_ms=action_timeout_ms,
+        )
+    except Exception as _rdy_exc:
+        note(f"deallocate_delete_stale: ensure_line_items_ready raised {_rdy_exc!r} (ignored).")
+
+    def _roots() -> list:
+        r: list = []
+        try:
+            r.extend(list(_siebel_locator_search_roots(page, content_frame_selector)))
+        except Exception:
+            pass
+        try:
+            r.extend(list(_ordered_frames(page)))
+        except Exception:
+            pass
+        r.append(page)
+        return r
+
+    def _select_first_line_row() -> bool:
+        """Click a data cell in the first jqGrid data row to make it the active/selected record."""
+        _js = """() => {
+          const vis = (el) => {
+            if (!el) return false;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+          };
+          const tbodies = [];
+          const tPrimary = document.querySelector('table#s_1_l tbody');
+          if (tPrimary) tbodies.push(tPrimary);
+          document.querySelectorAll('table.ui-jqgrid-btable tbody').forEach((tb) => {
+            if (tb && tbodies.indexOf(tb) < 0) tbodies.push(tb);
+          });
+          for (const tbody of tbodies) {
+            if (tbody.closest && tbody.closest('thead')) continue;
+            const tr = tbody.querySelector('tr.jqgrow');
+            if (!tr || !vis(tr)) continue;
+            const cells = Array.from(tr.querySelectorAll('td')).filter(vis);
+            const cell = cells.find((td) => (td.textContent || '').trim().length > 0) || cells[0] || tr;
+            try { cell.scrollIntoView({ block: 'center' }); } catch (e) {}
+            try { cell.click(); return 'ok'; } catch (e) {}
+          }
+          return '';
+        }"""
+        for root in _roots():
+            try:
+                if root.evaluate(_js):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _click_ctrl_by_id(element_id: str, label: str) -> bool:
+        for root in _roots():
+            try:
+                loc = root.locator(f"#{element_id}").first
+                if loc.count() > 0 and loc.is_visible(timeout=700):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    note(f"deallocate_delete_stale: clicked {label} (id={element_id!r}).")
+                    return True
+            except Exception:
+                continue
+        # Fallback: title-based button, then raw JS click by id.
+        _title = "Line Items List:DeAllocate" if "8_0" in element_id else "Line Items List:Delete"
+        for root in _roots():
+            try:
+                loc = root.locator(f"button[title='{_title}']").first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    try:
+                        loc.click(timeout=_tmo)
+                    except Exception:
+                        loc.click(timeout=_tmo, force=True)
+                    note(f"deallocate_delete_stale: clicked {label} (title={_title!r}).")
+                    return True
+            except Exception:
+                continue
+        for root in _roots():
+            try:
+                hit = root.evaluate(f"""() => {{
+                    const el = document.getElementById("{element_id}");
+                    if (!el) return false;
+                    const st = window.getComputedStyle(el);
+                    if (st.display === 'none' || st.visibility === 'hidden') return false;
+                    el.scrollIntoView({{ block: 'center' }});
+                    el.click();
+                    return true;
+                }}""")
+                if hit:
+                    note(f"deallocate_delete_stale: JS clicked {label} (id={element_id!r}).")
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _delete_button_enabled() -> bool:
+        for root in _roots():
+            try:
+                loc = root.locator("#s_1_1_14_0_Ctrl").first
+                if loc.count() <= 0:
+                    continue
+                disabledish = loc.evaluate(
+                    """el => {
+                        if (!el) return true;
+                        if (el.disabled === true) return true;
+                        const aria = (el.getAttribute('aria-disabled') || '').toLowerCase();
+                        if (aria === 'true') return true;
+                        const cls = String(el.className || '');
+                        return cls.includes('appletButtonDis') || cls.includes('ui-state-disabled');
+                    }"""
+                )
+                if not disabledish:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _confirm_siebel_dialog(context: str) -> None:
+        """Confirm (OK / Yes) any Siebel confirmation dialog; note a real error popup if present."""
+        _err = _detect_siebel_error_popup(page, content_frame_selector)
+        for _ in range(3):
+            _try_dismiss_siebel_error_dialog(page, content_frame_selector)
+            _safe_page_wait(page, 200, log_label=f"after_{context}_confirm_dismiss")
+            try:
+                if not _detect_siebel_error_popup(page, content_frame_selector):
+                    break
+            except Exception:
+                break
+        if _err:
+            note(f"deallocate_delete_stale: dialog after {context} → {_err!r:.300}")
+
+    _removed: list[str] = []
+    for _iter in range(5):
+        _cur_vin = _read_vin_from_order_line_row(
+            page, row_n=1, content_frame_selector=content_frame_selector
+        )
+        _cur_key = _norm_vin_chassis_key(str((_cur_vin or "")).strip())
+        if not _cur_key:
+            note(
+                "deallocate_delete_stale: no VIN in line-item row 1 — grid cleared "
+                f"(removed {len(_removed)} stale row(s): {_removed!r})."
+            )
+            return True, None
+        if _want and _cur_key == _want:
+            note(
+                "deallocate_delete_stale: row 1 VIN now matches incoming VIN — stopping "
+                f"(removed {len(_removed)} stale row(s): {_removed!r})."
+            )
+            return True, None
+
+        note(f"deallocate_delete_stale: [iter {_iter + 1}] removing stale line item VIN={_cur_key!r}.")
+        if not _select_first_line_row():
+            return False, "Create Order: could not select the stale allocated line item row for DeAllocate/Delete."
+        _safe_page_wait(page, 400, log_label="after_select_stale_line_row")
+
+        if not _click_ctrl_by_id("s_1_1_8_0_Ctrl", "DeAllocate"):
+            return False, "Create Order: could not click DeAllocate (id=s_1_1_8_0_Ctrl) on the stale line item."
+        _safe_page_wait(page, 900, log_label="after_deallocate_stale_line")
+        _da_err = _detect_siebel_error_popup(page, content_frame_selector)
+        if _da_err:
+            _confirm_siebel_dialog("DeAllocate")
+            note(f"deallocate_delete_stale: Siebel popup after DeAllocate → {_da_err!r:.300}")
+
+        # Delete enables only after the row is deallocated and selected.
+        _deadline = time.monotonic() + 2.5
+        while time.monotonic() < _deadline and not _delete_button_enabled():
+            _select_first_line_row()
+            _safe_page_wait(page, 250, log_label="poll_delete_enabled")
+        if not _delete_button_enabled():
+            note("deallocate_delete_stale: Delete still disabled after DeAllocate — attempting click anyway.")
+        if not _click_ctrl_by_id("s_1_1_14_0_Ctrl", "Delete"):
+            return False, "Create Order: could not click Delete (id=s_1_1_14_0_Ctrl) on the stale line item."
+        _safe_page_wait(page, 700, log_label="after_delete_stale_line")
+        _confirm_siebel_dialog("Delete")
+        _safe_page_wait(page, 900, log_label="after_delete_stale_line_confirm")
+
+        _after_vin = _read_vin_from_order_line_row(
+            page, row_n=1, content_frame_selector=content_frame_selector
+        )
+        _after_key = _norm_vin_chassis_key(str((_after_vin or "")).strip())
+        if _after_key == _cur_key:
+            return False, (
+                f"Create Order: stale allocated line item (VIN={_cur_key!r}) still present after "
+                "DeAllocate/Delete."
+            )
+        _removed.append(_cur_key)
+
+    return False, (
+        "Create Order: exceeded retries removing stale allocated line item(s) "
+        f"(removed {len(_removed)}: {_removed!r})."
+    )
+
+
 def _discount_cell_matches_expected(expected: str, readback: str) -> bool:
     """True when ``expected`` discount is considered satisfied by ``readback`` (trim / comma / spacing)."""
 
@@ -6015,6 +6470,55 @@ def _create_order(
                 )
             _safe_page_wait(page, 1800, log_label="after_my_orders_allocated_drilldown")
             scraped["order_number"] = _mo_po or scraped.get("order_number") or ""
+
+            # Individual sales: an allocated booking sometimes carries a stale VIN (e.g. a prior
+            # invoice attempt attached the wrong vehicle). If the already-attached line-item VIN
+            # differs from the incoming VIN, DeAllocate + Delete the stale line(s), then attach the
+            # correct VIN via the full path. Same-VIN allocated rows are a strict no-op (unchanged),
+            # and subdealer challans never reach this branch.
+            #
+            # The My Orders Order# drilldown lands with the Line Items grid blank — the allocated VIN row
+            # only renders after **Apply Campaign** is clicked. ``_ensure_order_line_items_view_ready``
+            # forces the row to render and returns its VIN, otherwise the read is empty and this
+            # remediation silently no-ops.
+            _mo_order_for_ready = _mo_po or scraped.get("order_number") or ""
+            _existing_vin = _ensure_order_line_items_view_ready(
+                page,
+                order_number=_mo_order_for_ready,
+                content_frame_selector=content_frame_selector,
+                note=note,
+                action_timeout_ms=action_timeout_ms,
+            )
+            _incoming_key = _norm_vin_chassis_key(full_chassis)
+            _existing_key = _norm_vin_chassis_key(str((_existing_vin or "")).strip())
+            note(
+                "Create Order: allocated VIN check — "
+                f"incoming={_incoming_key!r} existing={_existing_key!r} "
+                f"line_items_ready={bool(_existing_key)}."
+            )
+            if _incoming_key and _existing_key and _existing_key != _incoming_key:
+                note(
+                    "Create Order: allocated row has stale VIN "
+                    f"(existing={_existing_key!r} != incoming={_incoming_key!r}) — "
+                    "deallocating + deleting stale line item(s) before re-attaching."
+                )
+                _rm_ok, _rm_err = _deallocate_and_delete_stale_order_line_items(
+                    page,
+                    incoming_vin_key=_incoming_key,
+                    content_frame_selector=content_frame_selector,
+                    note=note,
+                    action_timeout_ms=action_timeout_ms,
+                    order_number=_mo_order_for_ready,
+                )
+                if not _rm_ok:
+                    return False, (_rm_err or "Create Order: failed to remove stale allocated line item.").strip(), scraped
+                scraped["allocated_stale_vin_replaced"] = True
+                scraped["allocated_stale_vin_removed"] = _existing_key
+                note(
+                    f"Create Order: removed stale allocated VIN={_existing_key!r}; "
+                    "re-attaching incoming VIN via full attach path."
+                )
+                return _finalize_my_orders_attach("pending")
             return _finalize_my_orders_attach("allocated")
 
         if _mo_oc == "error":

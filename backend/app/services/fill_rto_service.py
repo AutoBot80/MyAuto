@@ -110,25 +110,32 @@ _SCREEN3_HYP_INS_TAB_ANCHOR_RE = re.compile(
 
 # 3c / 3d — Insurance & Hypothecation (same tab). Ids follow ``workbench_tabview:*`` like other workbench fields
 # (RTO page dumps: see ``_dump_page_state`` — all ``<select>`` + tax id hints; mixed list cap ``_DUMP_PAGE_STATE_GENERAL_CAP``).
+# Live Vahan ids (9650693610 RTO log): ``ins_type`` / ``ins_cd`` — legacy names kept as fallback.
 _SCREEN3_INSURANCE_TYPE_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:ins_type"]',
     '[id="workbench_tabview:insurance_type"]',
     '[id="workbench_tabview:insuranceType"]',
-    '[id="workbench_tabview:ins_type"]',
 )
 _SCREEN3_INSURANCE_TYPE_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:ins_type_input"]',
     'select[id="workbench_tabview:insurance_type_input"]',
     'select[id="workbench_tabview:insuranceType_input"]',
     "select[id*='insuranceType'], select[name*='insuranceType']",
 )
 _SCREEN3_INSURANCE_COMPANY_PF_WRAPPERS: tuple[str, ...] = (
+    '[id="workbench_tabview:ins_cd"]',
     '[id="workbench_tabview:insurance_company"]',
     '[id="workbench_tabview:insuranceCompany"]',
 )
 _SCREEN3_INSURANCE_COMPANY_NATIVE: tuple[str, ...] = (
+    'select[id="workbench_tabview:ins_cd_input"]',
     'select[id="workbench_tabview:insurance_company_input"]',
     'select[id="workbench_tabview:insuranceCompany_input"]',
     "select[id*='insuranceCompany'], select[name*='insuranceCompany']",
 )
+_SCREEN3_INSURANCE_COMPANY_WRAPPER_ID = "workbench_tabview:ins_cd"
+_INSURANCE_PERIOD_ONE_YEAR_LABEL = "1 Year"
+_POLICY_NO_BLANK_ALERT_RE = re.compile(r"Policy\s*No\s*Can'?t\s*be\s*Blank", re.I)
 _SCREEN3_POLICY_NO_INPUT: tuple[str, ...] = (
     '[id="workbench_tabview:policy_no"]',
     '[id="workbench_tabview:policyNo"]',
@@ -2777,6 +2784,51 @@ def _screen_3_log_tax_mode_wiring_snapshot(page: Page) -> None:
         logger.debug("fill_rto: Tax Mode wiring snapshot: %s", e)
 
 
+def _screen_3_find_policy_no_blank_alert_dialog(page: Page) -> Locator | None:
+    """Visible dialog whose text includes **Policy No Can't be Blank**."""
+    for sel in (".ui-dialog:visible", "[role='dialog']:visible"):
+        try:
+            loc = page.locator(sel).filter(has_text=_POLICY_NO_BLANK_ALERT_RE)
+            if loc.count() > 0 and loc.first.is_visible(timeout=400):
+                return loc.first
+        except Exception:
+            continue
+    return None
+
+
+def _screen_3_dismiss_policy_no_blank_alert(page: Page) -> bool:
+    """Dismiss **Policy No Can't be Blank** via **Close**; dump frames if Close missing."""
+    dlg = _screen_3_find_policy_no_blank_alert_dialog(page)
+    if dlg is None:
+        return False
+    _rto_log("Screen 3: Policy No blank alert detected — clicking Close")
+    dismissed = False
+    try:
+        dlg.get_by_role("button", name=re.compile(r"^\s*Close\s*$", re.I)).first.click(timeout=2000)
+        dismissed = True
+        _rto_log("Screen 3: Policy No blank alert — Close clicked")
+    except Exception:
+        pass
+    if not dismissed:
+        try:
+            dlg.locator("button, a.ui-button, input[type='button'], input[type='submit']").filter(
+                has_text=re.compile(r"Close", re.I)
+            ).first.click(timeout=2000)
+            dismissed = True
+            _rto_log("Screen 3: Policy No blank alert — Close (text fallback)")
+        except Exception:
+            pass
+    if not dismissed:
+        dismissed = _screen_3_click_dialog_dismiss_any(dlg, page, log_prefix="Screen 3 Policy No alert")
+    if not dismissed:
+        _rto_log("WARNING: Policy No blank alert visible but Close not found — frame/popup dump")
+        _screen_3_dump_frames_and_popup_candidates(page)
+        _dump_page_state(page, "Policy No blank alert Close missing")
+        return False
+    _wait_for_progress_close_loop(page)
+    return True
+
+
 def _screen_3_click_dialog_dismiss_any(dlg: Locator, page: Page, *, log_prefix: str = "Screen 3") -> bool:
     """Click OK / Ok / Close / Yes / first button on a PrimeFaces ``ui-dialog`` (or similar)."""
     for pat in (
@@ -3324,6 +3376,7 @@ def _screen_3_pf_dropdown_chain(
     *,
     label: str,
     option_label_regex: re.Pattern | None = None,
+    use_native_select: bool = True,
 ) -> bool:
     """Try PrimeFaces ``ui-selectonemenu`` wrappers in order (``workbench_tabview:*`` ids)."""
     if not (value or "").strip() and option_label_regex is None:
@@ -3339,6 +3392,7 @@ def _screen_3_pf_dropdown_chain(
                 label=label,
                 option_label_regex=option_label_regex,
                 timeout=_DEFAULT_TIMEOUT_MS,
+                use_native_select=use_native_select,
             )
             if wrapper_id:
                 _close_pf_selectonemenu_overlay(page, wrapper_id)
@@ -3445,6 +3499,162 @@ def _screen_3_insurance_period_already_set(page: Page) -> bool:
     if _workbench_pf_menu_label_has_value(page, "workbench_tabview:ins_year_label"):
         return True
     return _screen_3_native_select_has_non_placeholder_value(page, _SCREEN3_INSURANCE_PERIOD_NATIVE)
+
+
+def _screen_3_insurer_filter_tokens(insurer: str) -> list[str]:
+    """Search tokens for the PF **Insurance Company** filter (skip generic insurer words)."""
+    skip = frozenset(
+        {"general", "insurance", "limited", "ltd", "co", "company", "the", "of", "and", "pvt", "private"}
+    )
+    tokens: list[str] = []
+    for w in re.findall(r"[A-Za-z0-9]+", insurer):
+        if len(w) < 3 or w.lower() in skip:
+            continue
+        tokens.append(w)
+    if not tokens:
+        tokens = [w for w in re.findall(r"[A-Za-z0-9]+", insurer) if len(w) >= 3][:2]
+    return tokens[:3]
+
+
+def _screen_3_insurer_option_matches(insurer: str, option_text: str) -> bool:
+    """Fuzzy match DB insurer label to Vahan portal option text."""
+    opt = (option_text or "").strip()
+    if not opt or _screen_3_is_select_placeholder_label(opt):
+        return False
+    tokens = _screen_3_insurer_filter_tokens(insurer)
+    if tokens and all(t.lower() in opt.lower() for t in tokens[: min(2, len(tokens))]):
+        return True
+    ins_lower = insurer.lower()
+    if "bajaj" in ins_lower and re.search(r"bajaj.*general", opt, re.I):
+        return True
+    norm_ins = re.sub(r"[^a-z0-9]", "", ins_lower)
+    norm_opt = re.sub(r"[^a-z0-9]", "", opt.lower())
+    if norm_ins and len(norm_ins) >= 8 and norm_ins[:10] in norm_opt:
+        return True
+    return False
+
+
+def _screen_3_select_insurance_company_overlay(page: Page, insurer: str) -> bool:
+    """Pick **Insurance Company** via ``ins_cd`` PF overlay + filter (359 options)."""
+    wid = _SCREEN3_INSURANCE_COMPANY_WRAPPER_ID
+    wrap = page.locator(f'[id="{wid}"]').first
+    try:
+        wrap.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+        wrap.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+        wrap.click(timeout=_FIRST_TRY_MS)
+        _pause()
+        panel = page.locator(f'[id="{wid}_panel"]').first
+        panel.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+    except Exception:
+        return False
+
+    for tok in _screen_3_insurer_filter_tokens(insurer):
+        try:
+            fin = panel.locator("input.ui-selectonemenu-filter").first
+            fin.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            fin.fill("")
+            fin.fill(tok)
+            _pause()
+            break
+        except Exception:
+            continue
+
+    try:
+        items = panel.locator("li.ui-selectonemenu-item")
+        n = min(items.count(), 80)
+        for i in range(n):
+            el = items.nth(i)
+            txt = (el.inner_text(timeout=800) or "").strip()
+            if _screen_3_insurer_option_matches(insurer, txt):
+                el.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+                el.click(timeout=_FIRST_TRY_MS)
+                _rto_log(f"pf-dropdown (overlay): Insurance Company = {txt}")
+                _pause()
+                _close_pf_selectonemenu_overlay(page, wid)
+                return True
+    except Exception:
+        pass
+    try:
+        _close_pf_selectonemenu_overlay(page, wid)
+    except Exception:
+        pass
+    return False
+
+
+def _screen_3_select_insurance_company_native_fuzzy(page: Page, insurer: str) -> bool:
+    """Native ``ins_cd_input`` — pick first option whose text fuzzy-matches ``insurer``."""
+    for sel in _SCREEN3_INSURANCE_COMPANY_NATIVE:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="attached", timeout=2000)
+            options: list[str] = loc.evaluate(
+                "el => [...el.options].map(o => (o.textContent || '').trim()).filter(Boolean)"
+            )
+            for opt in options:
+                if _screen_3_insurer_option_matches(insurer, opt):
+                    loc.select_option(label=opt, timeout=_DEFAULT_TIMEOUT_MS)
+                    _rto_log(f"pf-dropdown (native fuzzy): Insurance Company = {opt}")
+                    _pause()
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _screen_3_select_insurance_company(page: Page, insurer: str) -> bool:
+    """Set **Insurance Company** — overlay filter first, then native fuzzy match."""
+    if _screen_3_select_insurance_company_overlay(page, insurer):
+        return True
+    if _screen_3_select_insurance_company_native_fuzzy(page, insurer):
+        return True
+    return False
+
+
+def _screen_3_pf_label_matches(page: Page, label_id: str, expected: str) -> bool:
+    """True when visible PF label shows a non-placeholder value matching ``expected``."""
+    try:
+        lab = page.locator(f'[id="{label_id}"]').first
+        t = (lab.inner_text(timeout=2000) or "").strip()
+        if _screen_3_is_select_placeholder_label(t):
+            return False
+        exp = (expected or "").strip()
+        if not exp:
+            return bool(t)
+        return exp.lower() in t.lower() or t.lower() in exp.lower()
+    except Exception:
+        return False
+
+
+def _screen_3_select_financier_location_dropdown(
+    page: Page,
+    *,
+    pf_wrappers: tuple[str, ...],
+    native_selectors: tuple[str, ...],
+    value: str,
+    label: str,
+    label_id: str,
+    overlay_wrapper_id: str,
+) -> bool:
+    """Financier State/District — overlay click so visible label updates; verify + one retry."""
+    disp = (value or "").strip()
+    if not disp:
+        return False
+    for attempt in range(2):
+        ok = _screen_3_pf_dropdown_chain(
+            page, pf_wrappers, disp, label=label, use_native_select=False
+        )
+        if not ok:
+            ok = _screen_3_native_select_chain(page, native_selectors, disp, label=label)
+        if ok and _screen_3_pf_label_matches(page, label_id, disp):
+            _close_pf_selectonemenu_overlay(page, overlay_wrapper_id)
+            return True
+        if attempt == 0:
+            _rto_log(f"NOTE: {label} attempt 1 — visible label not verified, retry overlay")
+    if _screen_3_pf_label_matches(page, label_id, disp):
+        return True
+    _rto_log(f"WARNING: {label} not verified on visible label (tried {disp!r})")
+    _dump_page_state(page, f"dropdown not set: {label}")
+    return False
 
 
 def _screen_3_log_series_type_ids_probe(page: Page) -> None:
@@ -3752,30 +3962,30 @@ def _screen_3_fill_financier_hypothecation_details(page: Page, data: dict) -> No
     st = (data.get("state") or "").strip()
     if st:
         st_disp = _init_cap_place_name(st)
-        if not _screen_3_pf_dropdown_chain(
-            page, _SCREEN3_FIN_STATE_PF_WRAPPERS, st_disp, label="Financier State"
-        ):
-            if not _screen_3_native_select_chain(
-                page, _SCREEN3_FIN_STATE_NATIVE, st_disp, label="Financier State"
-            ):
-                _rto_log("WARNING: Financier State not set")
-                _dump_page_state(page, "dropdown not set: Financier State")
-        _close_pf_selectonemenu_overlay(page, "workbench_tabview:hpa_fncr_state")
+        _screen_3_select_financier_location_dropdown(
+            page,
+            pf_wrappers=_SCREEN3_FIN_STATE_PF_WRAPPERS,
+            native_selectors=_SCREEN3_FIN_STATE_NATIVE,
+            value=st_disp,
+            label="Financier State",
+            label_id="workbench_tabview:hpa_fncr_state_label",
+            overlay_wrapper_id="workbench_tabview:hpa_fncr_state",
+        )
         # State AJAX populates district options — wait for progress overlay to close
         _wait_for_progress_close_loop(page)
 
     # District — dealer RTO place name (e.g. Bharatpur), not village/city (e.g. Barakhur).
     dist_disp = _resolve_vahan_district(data)
     if dist_disp:
-        if not _screen_3_pf_dropdown_chain(
-            page, _SCREEN3_FIN_DISTRICT_PF_WRAPPERS, dist_disp, label="Financier District"
-        ):
-            if not _screen_3_native_select_chain(
-                page, _SCREEN3_FIN_DISTRICT_NATIVE, dist_disp, label="Financier District"
-            ):
-                _rto_log(f"WARNING: Financier District not set (tried {dist_disp!r})")
-                _dump_page_state(page, "dropdown not set: Financier District")
-        _close_pf_selectonemenu_overlay(page, "workbench_tabview:hpa_fncr_district")
+        _screen_3_select_financier_location_dropdown(
+            page,
+            pf_wrappers=_SCREEN3_FIN_DISTRICT_PF_WRAPPERS,
+            native_selectors=_SCREEN3_FIN_DISTRICT_NATIVE,
+            value=dist_disp,
+            label="Financier District",
+            label_id="workbench_tabview:hpa_fncr_district_label",
+            overlay_wrapper_id="workbench_tabview:hpa_fncr_district",
+        )
 
     if data.get("pin"):
         _fill_first_matching(page, _SCREEN3_FIN_PIN_INPUT, data["pin"], label="Financier Pincode")
@@ -3928,22 +4138,9 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
     if insurer:
         if _screen_3_insurance_company_already_set(page):
             _rto_log("skip: Insurance Company already set on form (Vahan pre-fill)")
-        elif not _screen_3_pf_dropdown_chain(
-            page, _SCREEN3_INSURANCE_COMPANY_PF_WRAPPERS, insurer, label="Insurance Company"
-        ):
-            if not _screen_3_native_select_chain(
-                page, _SCREEN3_INSURANCE_COMPANY_NATIVE, insurer, label="Insurance Company"
-            ):
-                try:
-                    _type_typeahead(
-                        page,
-                        "input[id*='insuranceCompany'], input[name*='insuranceCompany']",
-                        insurer,
-                        label="Insurance Company typeahead",
-                        timeout=_DEFAULT_TIMEOUT_MS,
-                    )
-                except PwTimeout:
-                    _rto_log("WARNING: Insurance Company not set")
+        elif not _screen_3_select_insurance_company(page, insurer):
+            _rto_log("WARNING: Insurance Company not set")
+            _dump_page_state(page, "dropdown not set: Insurance Company")
     elif _screen_3_insurance_company_already_set(page):
         _rto_log("skip: Insurance Company already set on form (Vahan pre-fill; no insurer in queue data)")
 
@@ -3954,20 +4151,37 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
             page, _SCREEN3_POLICY_NO_INPUT, data.get("policy_num", ""), label="Policy/Cover Note No."
         )
 
-    if _screen_3_input_already_has_value(page, _SCREEN3_INSURANCE_FROM_INPUT):
-        _rto_log("skip: Insurance From already set on form (Vahan pre-fill)")
-    else:
-        _fill_first_matching(
-            page, _SCREEN3_INSURANCE_FROM_INPUT, data.get("policy_from_str", ""), label="Insurance From"
-        )
+    policy_from = (data.get("policy_from_str") or "").strip()
+    if policy_from:
+        if _screen_3_input_already_has_value(page, _SCREEN3_INSURANCE_FROM_INPUT):
+            _rto_log("skip: Insurance From already set on form (Vahan pre-fill)")
+        else:
+            try:
+                _screen_3_fill_datepicker_js(
+                    page, _SCREEN3_INSURANCE_FROM_INPUT[0], policy_from, label="Insurance From"
+                )
+            except PwTimeout:
+                _rto_log("WARNING: Insurance From not filled (datepicker)")
 
     if _screen_3_insurance_period_already_set(page):
         _rto_log("skip: Insurance Period (in year) already set on form (Vahan pre-fill)")
     else:
-        _rto_log(
-            "NOTE: Insurance Period (in year) not pre-filled — leaving as-is "
-            "(add insurance_period_label to queue data if automation must set it)"
-        )
+        if not _screen_3_pf_dropdown_chain(
+            page,
+            _SCREEN3_INSURANCE_PERIOD_PF_WRAPPERS,
+            _INSURANCE_PERIOD_ONE_YEAR_LABEL,
+            label="Insurance Period (in year)",
+        ):
+            if not _screen_3_native_select_chain(
+                page,
+                _SCREEN3_INSURANCE_PERIOD_NATIVE,
+                _INSURANCE_PERIOD_ONE_YEAR_LABEL,
+                label="Insurance Period (in year)",
+            ):
+                _rto_log(f"WARNING: Insurance Period not set ({_INSURANCE_PERIOD_ONE_YEAR_LABEL})")
+                _dump_page_state(page, "dropdown not set: Insurance Period")
+        else:
+            _close_pf_selectonemenu_overlay(page, "workbench_tabview:ins_year")
 
     # Series Type (*Please Select Series Type*) → **STATE SERIES** (skip if already STATE SERIES).
     for scroll_sel in (_SCREEN3_SERIES_TYPE_PF_WRAPPERS[0], _SCREEN3_SERIES_TYPE_NATIVE[0]):
@@ -4185,7 +4399,10 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
             "RTO Screen 3: Tax Mode must be ONE TIME before Save Vehicle Details — automation stopped"
         )
 
+    _screen_3_dismiss_policy_no_blank_alert(page)
+
     _screen_3_click_save_vehicle_details(page)
+    _screen_3_dismiss_policy_no_blank_alert(page)
     _screen_3_clear_blocking_overlay_after_vehicle_save(page, data)
 
     # 3c: Scroll to sub-tab strip, open **Hypothecation/Insurance Information**, then fill insurance.
