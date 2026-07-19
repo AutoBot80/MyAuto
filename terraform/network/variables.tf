@@ -26,8 +26,22 @@ variable "tags" {
 
 variable "alb_ingress_cidr_blocks" {
   type        = list(string)
-  description = "IPv4 CIDRs allowed to reach the ALB on 80/443. Use 0.0.0.0/0 for public beta; tighten when CloudFront or IP allowlists are fixed."
+  description = "IPv4 CIDRs allowed to reach the ALB on 80/443. Only used as a fallback when CloudFront is disabled; when CloudFront is enabled, ALB ingress is locked to the CloudFront origin-facing prefix list."
   default     = ["0.0.0.0/0"]
+}
+
+# --- WAF (CloudFront scope) ---
+
+variable "waf_scanner_block_cidrs" {
+  type        = list(string)
+  description = "IPv4 CIDRs hard-blocked at the CloudFront WAF (e.g. the unauthorized Qualys scanner range)."
+  default     = ["103.75.173.0/24"]
+}
+
+variable "waf_rate_limit_per_5min" {
+  type        = number
+  description = "Rate-based WAF rule limit: max requests per 5-minute window per client IP. Deployed in COUNT mode; tune from access logs before switching to block."
+  default     = 2000
 }
 
 # --- RDS PostgreSQL ---

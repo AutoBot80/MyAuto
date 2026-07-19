@@ -8,6 +8,14 @@ resource "aws_lb" "public" {
 
   idle_timeout = 60
 
+  access_logs {
+    bucket  = aws_s3_bucket.alb_logs.id
+    prefix  = "${var.project_name}-alb"
+    enabled = true
+  }
+
+  depends_on = [aws_s3_bucket_policy.alb_logs]
+
   tags = {
     Name = "${var.project_name}-pub-alb"
   }

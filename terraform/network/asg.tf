@@ -2,9 +2,12 @@ data "aws_ami" "al2023_x86" {
   most_recent = true
   owners      = ["amazon"]
 
+  # Base Amazon Linux 2023 only (kernel 6.1). The broader "al2023-ami-*-x86_64"
+  # also matched ecs / ecs-neuron / minimal variants, so most_recent could flip
+  # the launch template onto a specialized image (e.g. the ECS Neuron AMI).
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-2023.*-kernel-6.1-x86_64"]
   }
 
   filter {

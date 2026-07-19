@@ -62,12 +62,17 @@ flowchart LR
 
 ### 2.2 AWS WAF
 
-- **Role:** Rate limits and managed rule groups at the edge (or regional on ALB if chosen—prefer **one** primary association to avoid duplicate tuning).
+- **Role:** Managed rule groups, IP deny-list, and rate limiting at the edge (**CloudFront** scope, us-east-1). Single primary association on CloudFront to avoid duplicate tuning.
+- **Scanner IP-set block:** `aws_wafv2_ip_set.scanner_block` (Terraform var **`waf_scanner_block_cidrs`**, default **`["103.75.173.0/24"]`**) is referenced by the highest-priority rule **`BlockScannerIpSet`** (priority 1, **block**). Added after an unauthorized daily **Qualys** vulnerability scan (UA `QualysGuard`, marker path `/QUALYS730242`) was found hitting the ALB directly. Blocking at the WAF stops it even if it reaches the CloudFront hostname.
+- **Rate-based rule:** **`RateLimitCount`** (priority 2), aggregate by **IP** over a **5-minute** window, limit from **`waf_rate_limit_per_5min`** (default **2000**). Deployed in **`count` mode** (observe only) with `/health` excluded via a scope-down `not_statement`; tune the limit from ALB access logs (§2.3) before switching the action to `block`. A single office behind one NAT IP and chatty upload/SSE sessions are the main false-positive risks, hence count-first.
+- **Managed rule groups (unchanged):** CommonRuleSet (+ uploads-exclusions variant), KnownBadInputs, AnonymousIpList, AmazonIpReputationList, Linux/Unix rule sets.
 - **Tuning:** Long-running requests and large uploads must be allowed after testing; align with **Gunicorn timeout** and **Nginx** timeouts (§4.2).
 
 ### 2.3 Application Load Balancer (ALB) + ACM
 
-- **Role:** Load balance to **EC2** instances in the **target group**; **TLS** between **CloudFront** and **ALB** (ACM certificate in the **same region** as ALB, e.g. ap-south-1).
+- **Role:** Load balance to **EC2** instances in the **target group**; listener is **HTTP:80** only (TLS terminates at CloudFront; origin protocol is `http-only`).
+- **Ingress lock (CloudFront-only):** the ALB security group (`saathi-sg-alb`) ingress on port 80 is restricted to the **CloudFront origin-facing managed prefix list** (`com.amazonaws.global.cloudfront.origin-facing`) whenever CloudFront is enabled, instead of `0.0.0.0/0`. This makes the raw ALB DNS name unreachable from arbitrary internet clients, so all traffic must flow through CloudFront + WAF. `var.alb_ingress_cidr_blocks` is only used as a fallback when CloudFront is disabled. The unused port-443 ingress rule was removed (no HTTPS listener on the ALB).
+- **Access logs:** enabled to S3 (`access_logs` on `aws_lb.public`, prefix `saathi-alb`) → bucket in §2.7. Gives per-request client IP / path / user-agent (queryable via Athena) to attribute future traffic spikes; previously no ALB log sink existed.
 - **Health checks:** Should target a stable HTTP path such as **`/health`** (see `backend/app/routers/health.py`).
 
 ### 2.4 Auto Scaling Group (ASG) + EC2
@@ -114,6 +119,7 @@ Source: `deploy/ec2/gunicorn.conf.py` (loaded by `deploy/ec2/saathi-api.service`
 
 - **Artifacts** (uploads, OCR output, challans, bulk uploads): **object keys** with **per-dealer** prefixes; **block public access**; encryption at rest.
 - **Terraform:** `terraform/network/s3_data.tf` defines the data bucket (name `"{project_name}-data-{account_id}"`). EC2 IAM allows `GetObject` / `PutObject` / `ListBucket` on that bucket only. Set **`S3_DATA_BUCKET`** on the app host and **`STORAGE_BACKEND=s3`** so the API syncs `Uploaded scans/` and `ocr_output/` trees under keys `uploaded-scans/{dealer_id}/…` and `ocr-output/{dealer_id}/…`. **Presigned GET URLs** are returned in **`print_jobs`** on Fill DMS / Insurance / Gate Pass responses for the Electron client to print locally (the server does not print to dealer printers).
+- **ALB access-logs bucket:** `terraform/network/s3_alb_logs.tf` defines `"{project_name}-alb-logs-{account_id}"` (private, SSE-S3, **90-day** lifecycle expiry). Bucket policy grants the ap-south-1 **ELB log-delivery account** (`718504428378`, via `data.aws_elb_service_account`) `s3:PutObject` under `{prefix}/AWSLogs/{account_id}/*`. Referenced by the ALB `access_logs` block (§2.3).
 
 ### 2.8 SQS
 
@@ -148,7 +154,7 @@ Source: `deploy/ec2/gunicorn.conf.py` (loaded by `deploy/ec2/saathi-api.service`
 | **Secrets** | Secrets Manager, IAM instance profiles |
 | **Observability** | CloudWatch |
 
-**Trust boundaries:** Internet clients **only** reach **CloudFront**; **ALB** is not directly exposed to end users if all traffic goes through CloudFront (security group rules should enforce **CloudFront → ALB** patterns as appropriate for your account setup).
+**Trust boundaries:** Internet clients **only** reach **CloudFront**. The **ALB is not directly exposed**: its security group ingress (port 80) is locked to the **CloudFront origin-facing prefix list** (§2.3), so the raw ALB DNS name cannot be scanned or reached directly, and all traffic is inspected by the CloudFront-scoped WAF (§2.2) before origin fetch.
 
 ---
 
@@ -167,7 +173,10 @@ Source: `deploy/ec2/gunicorn.conf.py` (loaded by `deploy/ec2/saathi-api.service`
 ### 4.3 WAF + CloudFront
 
 - Prefer **single** Web ACL on **CloudFront** for the logical flow “CloudFront → WAF → ALB”.
-- Terraform: account for **us-east-1** provider for CloudFront + CloudFront-scoped WAF resources.
+- Terraform: account for **us-east-1** provider for CloudFront + CloudFront-scoped WAF resources (`aws.us_east_1` alias); `aws_wafv2_ip_set.scanner_block` uses the same provider/scope.
+- **Rule order (low priority = first):** `BlockScannerIpSet` (1, block) → `RateLimitCount` (2, count) → managed groups (10–60). Keep custom deny/rate rules above managed groups.
+- **Rate rule lifecycle:** ships as `count {}`; review the `saathi-RateLimitCount` CloudWatch metric / WAF sampled requests against real traffic (using ALB access logs to find the busiest legitimate single-IP rate) before changing the action to `block {}` and finalizing `waf_rate_limit_per_5min`.
+- **ALB reachability:** the ALB SG is locked to the CloudFront origin prefix list; do not re-open ALB ingress to `0.0.0.0/0` (it would bypass the WAF).
 
 ### 4.4 Terraform layout (pointer)
 
@@ -268,6 +277,18 @@ This section records **what we configured in Terraform and runtime**, not every 
 - **Deploy automation scripts** and **daily 08:00 synthetic health check** — tracked in **[`deploy/POST_ELECTRON_TODO.md`](../deploy/POST_ELECTRON_TODO.md)** (after Electron build stabilization).
 - **Routine smoke tests** (health, login) — operational validation, not infra.
 
+### 7.8 Edge hardening — ALB lock, access logs, scanner block (July 2026)
+
+Triggered by the daily off-hours **`saathi-alb-request-rate-warn`** alarm. Investigation (CloudWatch `RequestCount`/HTTP-code metrics + on-instance `nginx` access log via SSM) showed an unauthorized **Qualys** vulnerability scan from **`103.75.173.20`** (UA `QualysGuard`, marker `/QUALYS730242`) hitting the **raw ALB DNS directly**, bypassing CloudFront/WAF. ~10,042 of ~10,330 requests returned **401** from `AuthMiddleware` (no breach), but the burst still triggered wasteful **ASG scale-out** (the alarm is wired to the scale-out step policy, §7.4).
+
+As-built changes (all in `terraform/network/`):
+
+- **ALB ingress locked to CloudFront** (`security_groups.tf`, §2.3) — port 80 uses the `com.amazonaws.global.cloudfront.origin-facing` prefix list; raw ALB DNS no longer reachable directly. In-place SG update (description kept to avoid replacement).
+- **WAF scanner IP-set block + rate rule (count mode)** (`cloudfront_waf.tf`, §2.2) — `BlockScannerIpSet` blocks `103.75.173.0/24`; `RateLimitCount` observes 2000/5min per IP. New vars `waf_scanner_block_cidrs`, `waf_rate_limit_per_5min` in `variables.tf`.
+- **ALB access logs to S3** (`s3_alb_logs.tf` + `alb.tf`, §2.3/§2.7) — closes the prior per-request source-IP visibility gap.
+
+Follow-ups: after access logs accumulate, tune and flip `RateLimitCount` to `block`; consider decoupling scanner-driven bursts from ASG scale-out (alarm tuning per §7.4). If a Qualys/other scan is ever **authorized**, allowlist rather than block.
+
 ---
 
 ## 8. Versioning
@@ -281,3 +302,4 @@ This section records **what we configured in Terraform and runtime**, not every 
 | 0.4.1 | 2026-05-13 | §7.5 / launch `user_data`: explicit **`amazon-ssm-agent`** install + early **`systemctl`** so Session Manager is not stuck **Offline** during long bootstrap |
 | 0.4.3 | 2026-05-13 | App **launch template**: explicit **root gp3** volume (**`ec2_root_volume_size_gb`**, default **40 GiB**, encrypted) — fixes **`dnf` “needs … more space on /”** during user_data (CloudWatch agent + dev packages); §2.4 updated |
 | 0.4.2 | 2026-05-13 | Launch `user_data`: **`amazon-ssm-agent`** installed in a **dedicated early `dnf`** before the main package set (avoid SSM never starting if the large `dnf` fails); §7.5–7.6 updated |
+| 0.5 | 2026-07-19 | **Edge hardening** (§7.8): ALB ingress locked to **CloudFront origin-facing prefix list** (§2.3), **WAF scanner IP-set block** `103.75.173.0/24` + **rate rule in count mode** (§2.2, §4.3), **ALB access logs to S3** (§2.3, §2.7); trust boundaries tightened (§3). Response to unauthorized daily Qualys scan hitting the ALB directly |

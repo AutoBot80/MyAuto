@@ -65,6 +65,24 @@ resource "aws_acm_certificate_validation" "cloudfront" {
   ]
 }
 
+# Deny-list of scanner CIDRs (e.g. the daily Qualys vulnerability scan from
+# 103.75.173.0/24). Blocked at the WAF so it is stopped even if it reaches the
+# CloudFront hostname, not just the (now locked-down) ALB DNS.
+resource "aws_wafv2_ip_set" "scanner_block" {
+  count = local.cloudfront_waf_enabled ? 1 : 0
+
+  provider = aws.us_east_1
+
+  name               = "${var.project_name}-scanner-block"
+  scope              = "CLOUDFRONT"
+  ip_address_version = "IPV4"
+  addresses          = var.waf_scanner_block_cidrs
+
+  tags = {
+    Name = "${var.project_name}-scanner-block"
+  }
+}
+
 resource "aws_wafv2_web_acl" "cloudfront" {
   count = local.cloudfront_waf_enabled ? 1 : 0
 
@@ -75,6 +93,71 @@ resource "aws_wafv2_web_acl" "cloudfront" {
 
   default_action {
     allow {}
+  }
+
+  # Highest priority: hard block known scanner CIDRs.
+  rule {
+    name     = "BlockScannerIpSet"
+    priority = 1
+
+    action {
+      block {}
+    }
+
+    statement {
+      ip_set_reference_statement {
+        arn = aws_wafv2_ip_set.scanner_block[0].arn
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.project_name}-BlockScannerIpSet"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Rate-based safety net, in COUNT mode for now. Observe the RateLimitCount metric
+  # / sampled requests against real traffic (once ALB access logs accumulate) before
+  # switching action to block {}. /health is excluded so ELB health checks never count.
+  rule {
+    name     = "RateLimitCount"
+    priority = 2
+
+    action {
+      count {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = var.waf_rate_limit_per_5min
+        aggregate_key_type = "IP"
+
+        scope_down_statement {
+          not_statement {
+            statement {
+              byte_match_statement {
+                search_string         = "/health"
+                positional_constraint = "STARTS_WITH"
+                field_to_match {
+                  uri_path {}
+                }
+                text_transformation {
+                  priority = 0
+                  type     = "LOWERCASE"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.project_name}-RateLimitCount"
+      sampled_requests_enabled   = true
+    }
   }
 
   # Exclude body-inspection rules that false-positive on multipart file uploads
