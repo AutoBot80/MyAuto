@@ -2389,6 +2389,136 @@ def _dispatch_warm_vahan(params: dict) -> dict:
     return warm_vahan_browser_session()
 
 
+def _multipart_vahan_hsrp_report(
+    api_url: str,
+    jwt: str,
+    dealer_id: int,
+    file_path: Path,
+    timeout: int = 300,
+) -> dict:
+    """POST Excel to ``/sidecar/vahan/hsrp-report`` (cloud DB load + plate_num update)."""
+    boundary = f"----SaathiFormBoundary{uuid.uuid4().hex}"
+    crlf = b"\r\n"
+    bnd = boundary.encode("ascii")
+    parts: list[bytes] = []
+    parts.append(b"--" + bnd + crlf)
+    parts.append(b'Content-Disposition: form-data; name="dealer_id"' + crlf + crlf)
+    parts.append(str(int(dealer_id)).encode("utf-8") + crlf)
+    fname = file_path.name.replace('"', "_")
+    data = file_path.read_bytes()
+    parts.append(b"--" + bnd + crlf)
+    cd = (
+        f'Content-Disposition: form-data; name="file"; filename="{fname}"'.encode("ascii")
+        + crlf
+        + b"Content-Type: application/octet-stream"
+        + crlf
+        + crlf
+    )
+    parts.append(cd + data + crlf)
+    parts.append(b"--" + bnd + b"--" + crlf)
+    body = b"".join(parts)
+    url = f"{api_url.rstrip('/')}/sidecar/vahan/hsrp-report"
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Authorization": f"Bearer {jwt}",
+            "User-Agent": "DealerSaathi-Sidecar/1.0",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _get_api_download_opener().open(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        body_text = ""
+        try:
+            body_text = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        raise RuntimeError(f"vahan/hsrp-report failed HTTP {exc.code}: {body_text[:500]}") from exc
+    try:
+        parsed = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"vahan/hsrp-report bad JSON: {raw[:300]}") from exc
+    return parsed if isinstance(parsed, dict) else {"success": False, "error": "invalid response"}
+
+
+def _dispatch_vahan_hsrp_report(params: dict) -> dict:
+    """Playwright download on dealer PC (local), then cloud API loads holding + plate_num."""
+    api_url, jwt = _require_api_credentials(params)
+    dealer_id = _resolve_sidecar_local_dealer_id(params)
+
+    from app.services.vahan_hsrp_report_service import get_vahan_hsrp_report
+
+    # No local DATABASE_URL — download only; DB apply via /sidecar/vahan/hsrp-report.
+    result = get_vahan_hsrp_report(dealer_id=dealer_id, load_to_db=False)
+    if result.get("needs_login"):
+        return result
+    if not result.get("success"):
+        return result
+
+    saved = (result.get("saved_path") or "").strip()
+    if not saved:
+        return {
+            "success": False,
+            "error": "Download succeeded but saved_path was empty",
+            "needs_login": False,
+            "saved_path": None,
+            "rows_loaded": 0,
+            "plates_updated": 0,
+        }
+
+    path = Path(saved)
+    if not path.is_file():
+        return {
+            "success": False,
+            "error": f"Downloaded file missing: {saved}",
+            "needs_login": False,
+            "saved_path": saved,
+            "rows_loaded": 0,
+            "plates_updated": 0,
+        }
+
+    # Best-effort: also push the log for support.
+    try:
+        log_path = path.parent / "vahan_hsrp_log.txt"
+        if log_path.is_file():
+            _multipart_upload_file(
+                api_url, jwt, dealer_id, "ocr", f"hsrp/{log_path.name}", log_path
+            )
+    except Exception:
+        logging.exception("vahan_hsrp_report: log upload skipped")
+
+    try:
+        api_result = _multipart_vahan_hsrp_report(api_url, jwt, dealer_id, path)
+    except Exception as exc:
+        logging.exception("vahan_hsrp_report: cloud load failed")
+        return {
+            "success": True,
+            "error": str(exc),
+            "message": f"Excel saved locally to {saved} but cloud load/apply failed: {exc}",
+            "needs_login": False,
+            "saved_path": saved,
+            "rows_loaded": 0,
+            "plates_updated": 0,
+        }
+
+    return {
+        "success": bool(api_result.get("success")),
+        "error": api_result.get("error"),
+        "message": api_result.get("message")
+        or f"HSRP report saved locally; cloud rows_loaded={api_result.get('rows_loaded')} "
+        f"plates_updated={api_result.get('plates_updated')}",
+        "needs_login": False,
+        "saved_path": saved,
+        "rows_loaded": int(api_result.get("rows_loaded") or 0),
+        "plates_updated": int(api_result.get("plates_updated") or 0),
+    }
+
+
 # ---------------------------------------------------------------------------
 # DMS Create Invoice — PRE (API) → Playwright (local) → POST (API)
 # ---------------------------------------------------------------------------
@@ -4130,6 +4260,14 @@ def dispatch(payload: dict) -> dict:
     if job_type == "warm_vahan":
         data = _run_sidecar_playwright_job(lambda: _dispatch_warm_vahan(params))
         return {"success": True, "data": data}
+    if job_type == "vahan_hsrp_report":
+        data = _run_sidecar_playwright_job(lambda: _dispatch_vahan_hsrp_report(params))
+        ok = isinstance(data, dict) and bool(data.get("success") or data.get("needs_login"))
+        return {
+            "success": ok,
+            "data": data,
+            "error": data.get("error") if isinstance(data, dict) else None,
+        }
     if job_type == "fill_dms":
         data = _run_sidecar_playwright_job(lambda: _dispatch_fill_dms_impl(params))
         return {"success": True, "data": data}

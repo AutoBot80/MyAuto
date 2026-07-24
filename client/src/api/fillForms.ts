@@ -746,3 +746,47 @@ export async function warmVahanBrowserLocal(): Promise<WarmVahanBrowserResponse>
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+export type VahanHsrpReportResponse = {
+  success: boolean;
+  error?: string | null;
+  message?: string | null;
+  needs_login?: boolean;
+  saved_path?: string | null;
+  rows_loaded?: number;
+  plates_updated?: number;
+};
+
+/** Dealer Registration Pendency Excel → holding + plate_num. Electron sidecar only. */
+const VAHAN_HSRP_TIMEOUT_MS = 600_000; // 10 min (Get Details + download + cloud load)
+
+export async function getVahanHsrpReportLocal(opts?: {
+  dealer_id?: number;
+}): Promise<VahanHsrpReportResponse> {
+  if (!isElectron()) {
+    return {
+      success: false,
+      error: "HSRP report download requires the Electron dealer app (local Vahan browser).",
+    };
+  }
+  try {
+    const result = await window.electronAPI!.sidecar.runJob({
+      type: "vahan_hsrp_report",
+      api_url: getBaseUrl(),
+      jwt: getAccessToken() ?? "",
+      params: { dealer_id: opts?.dealer_id },
+      timeoutMs: VAHAN_HSRP_TIMEOUT_MS,
+    });
+    if (result.timedOut) {
+      return { success: false, error: "HSRP report timed out. Log in on Vahan and try again." };
+    }
+    const data = (result.parsed as { data?: VahanHsrpReportResponse })?.data;
+    if (data) return data;
+    return {
+      success: Boolean(result.success),
+      error: result.error ?? "HSRP report sidecar returned no data.",
+    };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

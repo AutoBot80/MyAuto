@@ -1514,7 +1514,7 @@ def update_sales_master_from_dms_scrape(customer_id: int, vehicle_id: int, vehic
     Persist DMS-scraped **Order#**, **Invoice#**, and **Enquiry#** onto ``sales_master`` as each
     becomes available across **different Siebel stages** (enquiry / order / invoice — see **BRD §6.1d**).
     Uses ``COALESCE`` so non-null scraped values fill empty cells only when provided.
-    Does **not** set ``vahan_application_id`` or ``rto_charges`` (Vahan / RTO queue).
+    Does **not** set ``rto_queue.rto_application_id`` or ``sales_master.rto_charges`` (Vahan / RTO queue).
     """
     order_n = (vehicle_dict.get("order_number") or "").strip() or None
     inv_n = (vehicle_dict.get("invoice_number") or "").strip() or None

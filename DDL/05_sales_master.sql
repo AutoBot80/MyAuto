@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS sales_master (
     vehicle_id INTEGER NOT NULL,
     billing_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     dealer_id INTEGER,
-    vahan_application_id VARCHAR(128),
     rto_charges NUMERIC(12, 2),
     CONSTRAINT uq_sales_customer_vehicle UNIQUE (customer_id, vehicle_id),
     CONSTRAINT fk_sales_customer FOREIGN KEY (customer_id) REFERENCES customer_master(customer_id),

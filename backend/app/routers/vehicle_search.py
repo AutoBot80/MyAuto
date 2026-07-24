@@ -1,4 +1,4 @@
-"""Vehicle search by chassis and/or engine (partial / wildcard) — no dealer scoping on match keys."""
+"""Vehicle search by chassis, engine, and/or plate number (partial / wildcard) — no dealer scoping on match keys."""
 
 from __future__ import annotations
 
@@ -252,6 +252,7 @@ def _synthetic_vehicle_master_from_vim(vim: dict) -> dict:
         "engine": vim.get("engine_no"),
         "model": vim.get("model"),
         "colour": vim.get("color"),
+        "plate_num": None,
         "_match_note": "No vehicle_master row found; matched from yard inventory or staging only.",
     }
 
@@ -305,7 +306,12 @@ def _fetch_match_bundle(
                 sm.vehicle_id,
                 sm.billing_date,
                 sm.dealer_id,
-                sm.vahan_application_id,
+                (
+                    SELECT rq.rto_application_id
+                    FROM rto_queue rq
+                    WHERE rq.sales_id = sm.sales_id
+                    LIMIT 1
+                ) AS rto_application_id,
                 sm.rto_charges,
                 sm.file_location,
                 sm.order_number,
@@ -417,21 +423,31 @@ def _fetch_match_bundle(
 def search_vehicles(
     chassis: str | None = Query(None, description="Chassis / VIN fragment; * as wildcard; 4–6 digits = suffix match"),
     engine: str | None = Query(None, description="Engine number fragment; same rules as chassis"),
-    dealer_id: int | None = Query(None, description="Ignored; matching uses chassis/engine only."),
+    plate_num: str | None = Query(
+        None,
+        description="Registration / plate number from vehicle_master.plate_num; * as wildcard",
+    ),
+    dealer_id: int | None = Query(None, description="Ignored; matching uses chassis/engine/plate only."),
 ) -> dict:
     """
-    Match **vehicle_master**, yard inventory, and challans by **chassis** and **engine** patterns only
-    (no dealer filter; internal fallback may use challan staging to discover inventory rows).
+    Match **vehicle_master**, yard inventory, and challans by **chassis**, **engine**, and/or
+    **plate_num** (``vehicle_master.plate_num``) patterns (no dealer filter; inventory fallback
+    only when chassis/engine patterns are provided).
     """
     del dealer_id  # optional query param kept for backward compatibility
 
     chassis_q = (chassis or "").strip()
     engine_q = (engine or "").strip()
-    if not chassis_q and not engine_q:
-        raise HTTPException(status_code=400, detail="Provide chassis and/or engine search text.")
+    plate_q = (plate_num or "").strip()
+    if not chassis_q and not engine_q and not plate_q:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide chassis, engine, and/or plate number search text.",
+        )
 
     chassis_pat = _search_pattern(chassis_q) if chassis_q else ""
     engine_pat = _search_pattern(engine_q) if engine_q else ""
+    plate_pat = _search_pattern(plate_q) if plate_q else ""
 
     conn = get_connection()
     try:
@@ -454,6 +470,9 @@ def search_vehicles(
                     ")"
                 )
                 params.extend([engine_pat, engine_pat])
+            if plate_pat:
+                wheres.append("COALESCE(vm.plate_num, '') ILIKE %s")
+                params.append(plate_pat)
 
             sql = f"""
                 SELECT DISTINCT ON (vm.vehicle_id) vm.*
@@ -470,7 +489,8 @@ def search_vehicles(
                 if isinstance(vid, int):
                     seen_vehicle_ids.add(vid)
 
-            if not vm_rows:
+            # Yard / staging fallback is chassis/engine only (inventory has no plate_num).
+            if not vm_rows and (chassis_pat or engine_pat):
                 vim_list = _fetch_inventory_lines(
                     cur, chassis_pat, engine_pat, chassis_q, engine_q, limit=100
                 )
@@ -497,12 +517,22 @@ def search_vehicles(
                     row = cur.fetchone()
                     if row:
                         vmd = dict(row)
+                        if plate_pat:
+                            cur.execute(
+                                """
+                                SELECT 1 FROM vehicle_master vm
+                                WHERE vm.vehicle_id = %s AND COALESCE(vm.plate_num, '') ILIKE %s
+                                """,
+                                (vmd.get("vehicle_id"), plate_pat),
+                            )
+                            if not cur.fetchone():
+                                continue
                         vid = vmd.get("vehicle_id")
                         if isinstance(vid, int) and vid not in seen_vehicle_ids:
                             vm_rows.append(vmd)
                             seen_vehicle_ids.add(vid)
 
-                if not vm_rows and vim_list:
+                if not vm_rows and vim_list and not plate_pat:
                     matches = []
                     for vim in vim_list:
                         vim_safe = _json_safe_row(vim)
@@ -550,7 +580,7 @@ def search_vehicles(
             return {
                 "found": False,
                 "matches": [],
-                "message": "No match for these chassis/engine patterns in vehicle master or yard inventory.",
+                "message": "No match for these chassis/engine/plate patterns in vehicle master or yard inventory.",
             }
 
         matches: list[dict] = []

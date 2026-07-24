@@ -30,6 +30,7 @@ rq.rto_application_id,
 rq.rto_application_date,
 rq.rto_payment_id,
 rq.rto_payment_amount,
+rq.rto_status,
 rq.status,
 rq.in_queue,
 rq.processing_session_id,
@@ -65,6 +66,7 @@ COALESCE(dr.rto_name, 'RTO' || sm.dealer_id::text) AS dealer_rto,
 im.insurer,
 im.policy_num,
 im.policy_from,
+im.policy_to,
 im.idv,
 im.nominee_name,
 im.nominee_relationship,
@@ -417,6 +419,44 @@ def mark_batch_row_in_progress(rto_queue_id: int, processing_session_id: str, wo
         conn.close()
 
 
+def update_application_progress(
+    rto_queue_id: int,
+    *,
+    rto_status: int,
+    rto_application_id: str | None = None,
+) -> bool:
+    """Persist Vahan scrape progress: optional application id + integer ``rto_status`` (1=Screen 2, 2=Screen 3d)."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            app = (rto_application_id or "").strip() or None
+            if app:
+                cur.execute(
+                    """
+                    UPDATE rto_queue
+                    SET rto_application_id = %s,
+                        rto_status = %s,
+                        updated_at = NOW()
+                    WHERE rto_queue_id = %s
+                    """,
+                    (app, int(rto_status), int(rto_queue_id)),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE rto_queue
+                    SET rto_status = %s,
+                        updated_at = NOW()
+                    WHERE rto_queue_id = %s
+                    """,
+                    (int(rto_status), int(rto_queue_id)),
+                )
+            conn.commit()
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def mark_batch_row_completed(
     rto_queue_id: int,
     sales_id: int,
@@ -433,7 +473,7 @@ def mark_batch_row_completed(
                 """
                 UPDATE rto_queue
                 SET status = 'Completed',
-                    rto_application_id = %s,
+                    rto_application_id = COALESCE(%s, rto_application_id),
                     rto_payment_amount = %s,
                     uploaded_at = NOW(),
                     finished_at = NOW(),
@@ -450,11 +490,10 @@ def mark_batch_row_completed(
             cur.execute(
                 """
                 UPDATE sales_master
-                SET vahan_application_id = %s,
-                    rto_charges = %s
+                SET rto_charges = %s
                 WHERE sales_id = %s
                 """,
-                (rto_application_id, rto_payment_amount, sales_id),
+                (rto_payment_amount, sales_id),
             )
             conn.commit()
     finally:
@@ -680,6 +719,7 @@ def requeue_completed_row(rto_queue_id: int) -> bool:
                 SET status = 'Queued',
                     in_queue = true,
                     rto_application_id = NULL,
+                    rto_status = NULL,
                     leased_until = NULL,
                     locked_by_login_id = NULL,
                     processing_session_id = NULL,

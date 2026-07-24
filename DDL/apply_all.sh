@@ -193,6 +193,10 @@ run alter/37c_add_sales_staging_insurance_addon.sql
 run alter/37d_form_insurance_view_insurance_addon.sql
 run alter/37e_tni_dealer_insurance_addon_rim.sql
 
+# Vahan HSRP (Dealer Registration Pendency) holding
+run 38_vahan_hsrp_holding.sql
+run alter/38a_vahan_hsrp_holding.sql
+
 # drop legacy ai_reader_queue (last — no dependents)
 run alter/01z_drop_ai_reader_queue.sql
 run alter/01a_ai_reader_queue_add_classification.sql

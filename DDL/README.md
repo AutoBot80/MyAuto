@@ -109,6 +109,8 @@ One-off changes (e.g. new columns) go in **`DDL/alter/`**. Run against an existi
 - `37e_tni_dealer_insurance_addon_rim.sql` — prod patch: TNI **ND Cover, Rim Safeguard** preset + dealers **100005–100009** + staging sync.
 - `37c_add_sales_staging_insurance_addon.sql` — **`add_sales_staging.insurance_addon`** FK.
 - `37d_form_insurance_view_insurance_addon.sql` — **`form_insurance_view`** exposes **`insurance_addon`**.
+- `38_vahan_hsrp_holding.sql` / `alter/38a_vahan_hsrp_holding.sql` — **`vahan_hsrp_holding`**: append-only Dealer Registration Pendency Excel rows per dealer; used to update **`vehicle_master.plate_num`** by chassis match.
+- `39a_rto_queue_rto_status_drop_sales_vahan_application_id.sql` — **`rto_queue.rto_status`** (integer); copy leftover **`sales_master.vahan_application_id`** into **`rto_queue.rto_application_id`**; drop **`sales_master.vahan_application_id`**.
 - `18a_challan_master_add_order_invoice_totals.sql` — **`challan_master`**: **`order_number`**, **`invoice_number`**, **`total_ex_showroom_price`**, **`total_discount`**.
 - `18b_vehicle_inventory_master_add_discount.sql` — **`vehicle_inventory_master`**: **`discount`**.
 - `19a_challan_staging_batch_status.sql` — legacy **`challan_staging`**: **`challan_batch_id`**, **`last_error`**, **`inventory_line_id`**.

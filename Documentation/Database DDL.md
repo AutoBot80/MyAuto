@@ -1,7 +1,7 @@
 # Database DDL
 ## auto_ai (PostgreSQL)
 
-**Version:** 3.0 (domain-indexed, codebase sync) · **Last Updated:** June 2026 · **BRD:** [brd/README.md](brd/README.md)
+**Version:** 3.0 (domain-indexed, codebase sync) · **Last Updated:** July 2026 · **BRD:** [brd/README.md](brd/README.md)
 
 This document lists the current database tables and their columns, grouped by product domain. **Executable DDL scripts** are in the **`DDL/`** folder (e.g. `DDL/01_ai_reader_queue.sql`). Keep both this doc and the `DDL/` scripts updated when adding, removing, or altering tables.
 
@@ -14,7 +14,7 @@ This document lists the current database tables and their columns, grouped by pr
 | **DMS** | Same masters + staging; DMS fill via `form_dms.py` (§9b) — no `form_dms_view` |
 | **Insurance and CPA** | `insurance_master` (**`insurance_type`** Main/CPA), `form_insurance_view` (§9c), **`form_cpa_insurance_view`** (§9d) |
 | **Print / Queue RTO** | `rto_queue`, `service_reminders_queue`, `rc_status_sms_queue` |
-| **Vahan** | `form_vahan_view` (§9a); scrape columns on `sales_master`, `rto_queue` |
+| **Vahan** | `form_vahan_view` (§9a); **`vahan_hsrp_holding`** (§9e); scrape columns on `sales_master`, `rto_queue`; plate via `vehicle_master.plate_num` |
 | **Subdealer Challans** | `vehicle_inventory_master`, `challan_*` staging and committed |
 | **Admin Saathi** | `admin_dealer_access_ref`, `process_failure_log`, `ocr_run_log` |
 
@@ -93,7 +93,7 @@ This document lists the current database tables and their columns, grouped by pr
 | `engine` | `varchar(64)` | YES |  | Engine number |
 | `chassis` | `varchar(64)` | YES |  | Chassis number |
 | `battery` | `varchar(64)` | YES |  | Battery number |
-| `plate_num` | `varchar(32)` | YES |  | Plate number |
+| `plate_num` | `varchar(32)` | YES |  | Registration / plate number; filled from Vahan HSRP Excel (**`vahan_hsrp_holding`**) via chassis match |
 | `model` | `varchar(64)` | YES |  | Vehicle model |
 | `colour` | `varchar(64)` | YES |  | Vehicle colour |
 | `raw_frame_num` | `varchar(32)` | YES |  | Raw frame/chassis from Submit Info / detail sheet (Fill DMS merge does not overwrite) |
@@ -135,8 +135,7 @@ This document lists the current database tables and their columns, grouped by pr
 | `order_number` | `varchar(128)` | YES |  | DMS **Order#** — scraped during the **order** stage of the DMS run (`update_sales_master_from_dms_scrape`; `DDL/alter/05h_…`) |
 | `invoice_number` | `varchar(128)` | YES |  | DMS **Invoice#** — scraped during the **invoice** stage (`05h_…`) |
 | `enquiry_number` | `varchar(128)` | YES |  | DMS **Enquiry#** — scraped during the **enquiry** stage (`05i_…`) |
-| `vahan_application_id` | `varchar(128)` | YES |  | Filled by **Vahan** / RTO queue processing when the application id is scraped — **not** by DMS (`DDL/alter/05f_…`) |
-| `rto_charges` | `numeric(12,2)` | YES |  | Filled by **Vahan** / RTO queue processing when fees are scraped — **not** by DMS (`05f_…`) |
+| `rto_charges` | `numeric(12,2)` | YES |  | Filled by **Vahan** / RTO queue processing when fees are scraped — **not** by DMS (`05f_…`); application number lives on **`rto_queue.rto_application_id`** only (**`DDL/alter/39a_…`**) |
 
 **Primary key:** `sales_master_pkey` on (`sales_id`)
 
@@ -323,10 +322,11 @@ This document lists the current database tables and their columns, grouped by pr
 | `insurance_id` | `integer` | YES |  | FK → `insurance_master(insurance_id)` |
 | `customer_mobile` | `varchar(16)` | YES |  | Primary or alternate Vahan OTP mobile |
 | `locked_by_login_id` | `varchar(128)` | YES |  | Operator who claimed row (**`DDL/alter/32a_rto_queue_locked_by_login_id.sql`**) |
-| `rto_application_id` | `varchar(128)` | YES |  | Vahan application number (filled by automation) |
+| `rto_application_id` | `varchar(128)` | YES |  | Vahan application number (filled by automation; Screen 2 scrape writes immediately) |
 | `rto_application_date` | `date` | YES |  | Date row added / application filed |
 | `rto_payment_id` | `varchar(64)` | YES |  | Transaction ID when paid |
 | `rto_payment_amount` | `numeric(12,2)` | YES |  | RTO fees / payment amount |
+| `rto_status` | `integer` | YES |  | Scrape/resume progress: **NULL/0** = fresh (Screens 1–6); **1** after Screen 2 → retry opens pending work then resumes at **Screen 3b** (Vehicle Details on workbench, skip 3a Home/Entry); **2** after Screen 3d → Screen 4; **3** after Screen 5 → Screen 6. Failed retries preserve the value; **Requeue Completed** clears it (**`DDL/alter/39a_…`**, **`fill_rto_service`**) |
 | `status` | `varchar(32)` | NO | `'Queued'` | e.g. Queued, Pending, In Progress, Completed, Failed, Forms Missing, Manually Completed |
 | `in_queue` | `boolean` | NO | `true` | When true, row is eligible for Fill Vahan Site batch claim |
 | `processing_session_id` | `varchar(128)` | YES |  | Dealer batch/session id that claimed the row |
@@ -389,6 +389,43 @@ This document lists the current database tables and their columns, grouped by pr
 **Joins:** `rto_queue` → `sales_master` (INNER) → `dealer_ref` (LEFT on `sales_master.dealer_id` — supplies `rto_name` for `dealer_rto`) → `customer_master` (INNER), `vehicle_master` (INNER); `insurance_master` (LEFT on `rto_queue.insurance_id`).
 
 **DDL:** `DDL/alter/10e_form_vahan_view.sql` (also embedded at end of `DDL/alter/24a_rto_queue_schema_redesign.sql` for upgrades).
+
+### 9e) `vahan_hsrp_holding`
+
+**Purpose:** Append-only holding table for rows from the Vahan **Dealer Registration Pendency** Excel report (HSRP). Dealer-scoped; operator truncates periodically (e.g. every six months). After each download, matching **`vehicle_master.plate_num`** is updated from **`registration_no`** when chassis matches and the value is not blank/`NEW`.
+
+**Grain:** One row per Excel data line per download (no uniqueness — append forever).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---:|---|---|
+| `holding_id` | `bigint` | NO | `nextval` | Primary key |
+| `dealer_id` | `integer` | NO |  | FK → `dealer_ref(dealer_id)` |
+| `download_date` | `date` | NO |  | Calendar date of Excel download (`ddmmyyyy` in filename) |
+| `downloaded_at` | `timestamptz` | NO | `now()` | Insert timestamp |
+| `source_filename` | `varchar(255)` | YES |  | e.g. `vahan_hsrp_19072026.xls` |
+| `srl_no` | `varchar(32)` | YES |  | Excel Srl.No. |
+| `office_name` | `varchar(128)` | YES |  | |
+| `application_no` | `varchar(64)` | YES |  | |
+| `registration_no` | `varchar(32)` | YES |  | Plate; may be blank or `NEW` |
+| `chassis_no` | `varchar(64)` | YES |  | Match key → `vehicle_master.chassis` / `raw_frame_num` |
+| `owner_name` | `varchar(256)` | YES |  | |
+| `purpose` | `varchar(128)` | YES |  | |
+| `model_name` | `varchar(128)` | YES |  | |
+| `hypothecation` | `varchar(128)` | YES |  | Excel “Hypothecated” |
+| `status` | `varchar(64)` | YES |  | |
+| `pending_at` | `varchar(128)` | YES |  | |
+| `pending_since` | `varchar(64)` | YES |  | |
+| `dealer_regn_no` | `varchar(64)` | YES |  | |
+| `vehicle_class_type` | `varchar(64)` | YES |  | |
+| `ownership_type` | `varchar(64)` | YES |  | |
+| `fuel_type` | `varchar(64)` | YES |  | |
+| `purchase_category` | `varchar(64)` | YES |  | |
+
+**Indexes:** `(dealer_id, download_date)`; partial `(dealer_id, UPPER(BTRIM(chassis_no)))` where chassis non-blank.
+
+**Artifacts:** Excel + automation log under `ocr_output/{dealer_id}/hsrp/`.
+
+**DDL:** `DDL/38_vahan_hsrp_holding.sql`, upgrade `DDL/alter/38a_vahan_hsrp_holding.sql`. Service: `vahan_hsrp_report_service`.
 
 ---
 
@@ -774,6 +811,7 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | `rto_queue` | RTO Queue page, batch claim, OTP mobile, **`locked_by_login_id`**, rc_status_sms_queue |
 | *(DMS fill row)* | **`form_dms.py`** (inline SQL) + future **`add_sales_staging.payload_json`**; `DMS_Form_Values.txt` under `ocr_output` |
 | `form_vahan_view` | Vahan field inspection and `Vahan_Form_Values.txt` generation |
+| `vahan_hsrp_holding` | Vahan HSRP Excel append; drives **`vehicle_master.plate_num`** by chassis — **`DDL/38_*.sql`**, **`vahan_hsrp_report_service`** |
 | `form_insurance_view` | Hero/MISP insurance fill and `Insurance_Form_Values.txt` generation |
 | `rc_status_sms_queue` | RC status SMS sending |
 | `bulk_loads` | Bulk ingest, queue publish/lease, dashboard, retry prep, action-taken tracking |
@@ -956,6 +994,8 @@ Older databases may still have **`challan_staging`** (**`DDL/19_challan_staging.
 | 3.06 | Jun 2026 | **`dealer_ref.dms_siebel_portal`** (**ASC**/**HMCL**/NULL; **100003** seeded **ASC**); per-dealer Hero Connect Siebel app (**`edealerasc`** vs **`edealerHMCL`**) for DMS automation — **`DDL/alter/36a_dealer_ref_dms_siebel_portal.sql`**, **`hero_dms_portal_service`**, **`/settings/site-urls`**, **`/sidecar/dms/resolve`** |
 | 3.07 | Jul 2026 | **`insurance_addon_ref`** (per-portal-insurer MISP add-on presets); **`dealer_ref.insurance_addon`** + **`add_sales_staging.insurance_addon`** FK; **`form_insurance_view.insurance_addon`** — **`DDL/37a_insurance_addon_ref.sql`**, **`DDL/seed_insurance_addon_ref.sql`**, **`DDL/alter/37b_*.sql`**, **`DDL/alter/37c_*.sql`**, **`DDL/alter/37d_*.sql`**, **`fill_hero_insurance_service`**, Admin + Add Sales UI |
 | 3.08 | Jul 2026 | TNI **`insurance_addon_ref`** presets (**ND Cover, Rim Safeguard** + ND Cover); dealers **100005–100009** default Rim — **`DDL/alter/37e_tni_dealer_insurance_addon_rim.sql`**, **`seed_insurance_addon_ref.sql`** |
+| 3.09 | Jul 2026 | **`vahan_hsrp_holding`** — append-only Vahan Dealer Registration Pendency Excel rows per dealer; load updates **`vehicle_master.plate_num`** by chassis (skip blank/`NEW`); artifacts under **`ocr_output/{dealer_id}/hsrp/`** — **`DDL/38_vahan_hsrp_holding.sql`**, **`DDL/alter/38a_vahan_hsrp_holding.sql`**, **`vahan_hsrp_report_service`** |
+| 3.10 | Jul 2026 | **`rto_queue.rto_status`** (integer scrape progress: 1=Screen 2, 2=Screen 3d); drop **`sales_master.vahan_application_id`** — canonical app id is **`rto_queue.rto_application_id`** only — **`DDL/alter/39a_rto_queue_rto_status_drop_sales_vahan_application_id.sql`**, **`fill_rto_service`**, **`rto_payment_details`**, **`vehicle_search`** |
 ---
 
 ## Admin Saathi (logs)

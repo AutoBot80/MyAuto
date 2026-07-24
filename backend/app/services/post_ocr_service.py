@@ -26,7 +26,9 @@ PDF_RASTER_DPI_MAX = 200
 PDF_RASTER_DPI_MIN = 72
 
 
-def _pdf_first_page_to_jpeg_bytes(pdf_path: Path, dpi: int = PDF_RASTER_DPI_MAX) -> bytes | None:
+def _pdf_first_page_to_jpeg_bytes(
+    pdf_path: Path, dpi: int = PDF_RASTER_DPI_MAX, *, grayscale: bool = False
+) -> bytes | None:
     """Rasterize first PDF page to JPEG bytes."""
     import fitz
     from PIL import Image
@@ -38,6 +40,8 @@ def _pdf_first_page_to_jpeg_bytes(pdf_path: Path, dpi: int = PDF_RASTER_DPI_MAX)
         page = doc[0]
         pix = page.get_pixmap(dpi=dpi)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        if grayscale:
+            img = img.convert("L").convert("RGB")
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=92, optimize=True)
         return buf.getvalue()
@@ -107,15 +111,20 @@ def _png_to_jpeg_bytes_under_max(data: bytes, max_bytes: int) -> bytes:
     return _jpeg_bytes_under_max(buf.getvalue(), max_bytes)
 
 
-def _pdf_file_under_max_bytes(pdf_path: Path, max_bytes: int) -> bytes:
+def _pdf_file_under_max_bytes(
+    pdf_path: Path, max_bytes: int, *, grayscale: bool = False
+) -> bytes:
     import fitz
 
     doc = fitz.open(str(pdf_path))
+    b = b""
+    page_count = 0
     try:
+        page_count = doc.page_count
         buf = io.BytesIO()
         doc.save(buf, garbage=4, deflate=True, clean=True)
         b = buf.getvalue()
-        if len(b) <= max_bytes:
+        if len(b) <= max_bytes and not (grayscale and page_count > 1):
             return b
     finally:
         doc.close()
@@ -123,7 +132,7 @@ def _pdf_file_under_max_bytes(pdf_path: Path, max_bytes: int) -> bytes:
     dpi = PDF_RASTER_DPI_MAX
     best = b
     while dpi >= PDF_RASTER_DPI_MIN:
-        jb = _pdf_first_page_to_jpeg_bytes(pdf_path, dpi=dpi)
+        jb = _pdf_first_page_to_jpeg_bytes(pdf_path, dpi=dpi, grayscale=grayscale)
         if jb is None:
             break
         jb2 = _jpeg_bytes_under_max(jb, max_bytes)
@@ -141,6 +150,16 @@ def _pdf_file_under_max_bytes(pdf_path: Path, max_bytes: int) -> bytes:
             max_bytes,
         )
     return best
+
+
+def compress_pdf_for_upload(
+    pdf_path: Path,
+    max_bytes: int,
+    *,
+    grayscale: bool = False,
+) -> bytes:
+    """Shrink a PDF for Vahan upload: deflate first, then grayscale page-1 raster if needed."""
+    return _pdf_file_under_max_bytes(pdf_path, max_bytes, grayscale=grayscale)
 
 
 def _compress_file_to_max_bytes(src: Path, max_bytes: int) -> tuple[bytes, str]:

@@ -15,6 +15,7 @@ import logging
 import re
 import time
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 from playwright.sync_api import Locator, Page, TimeoutError as PwTimeout
@@ -27,9 +28,73 @@ from app.config import (
     get_uploads_dir,
 )
 from app.services.handle_browser_opening import get_or_open_site_page
+from app.services.hero_dms_shared_utilities import _ts_ist_iso
 from app.services.utility_functions import normalize_nominee_relationship_value
 
 logger = logging.getLogger(__name__)
+
+# Integer progress on ``rto_queue.rto_status`` after successful Vahan scrapes.
+RTO_STATUS_AFTER_SCREEN2 = 1  # Application No scraped (Inward / Generated Application dialog)
+RTO_STATUS_AFTER_SCREEN3D = 2  # Save and File Movement scrape checkpoint
+RTO_STATUS_AFTER_SCREEN5 = 3  # Document uploads complete (before payment / Screen 6)
+
+_PENDING_APPLICATIONS_LABEL_RE = re.compile(r"Pending\s*Applications?", re.I)
+_GET_PENDING_WORK_LABEL_RE = re.compile(r"Get\s*Pending\s*Work", re.I)
+_RESUME_ROW_ACTION_PREFERRED_RE = re.compile(
+    r"^(Entry|Verify|Edit|Dealer-Document-Upload|Dealer\s*Document\s*Upload)$",
+    re.I,
+)
+_APPROVE_ACTION_RE = re.compile(r"^\s*Approve\s*$", re.I)
+_VERIFY_ACTION_RE = re.compile(r"^\s*Verify\s*$", re.I)
+_ENTRY_ACTION_RE = re.compile(r"^\s*Entry\s*$", re.I)
+_DEALER_DOC_UPLOAD_ACTION_RE = re.compile(
+    r"^\s*(?:Dealer-Document-Upload|Dealer\s*Document\s*Upload)\s*$",
+    re.I,
+)
+
+
+def _resume_row_action_priority(rto_status: int | None) -> tuple[re.Pattern[str], ...]:
+    """Action button preference on pending-work grid.
+
+    Status 2 (post 3d): **Verify** when still on workbench; **Dealer Document Upload** when File
+    Movement already completed and the grid action advanced.
+    """
+    status = int(rto_status or 0)
+    if status == RTO_STATUS_AFTER_SCREEN3D:
+        return (_VERIFY_ACTION_RE, _DEALER_DOC_UPLOAD_ACTION_RE, _ENTRY_ACTION_RE)
+    if status == RTO_STATUS_AFTER_SCREEN2:
+        return (_ENTRY_ACTION_RE, _VERIFY_ACTION_RE)
+    return (_ENTRY_ACTION_RE, _VERIFY_ACTION_RE)
+
+
+def _screen4_skip_verify_on_resume(*, use_resume_nav: bool, rto_status: int | None) -> bool:
+    """True when **Verify** was already clicked on the pending grid (``rto_status=2`` resume)."""
+    return use_resume_nav and int(rto_status or 0) == RTO_STATUS_AFTER_SCREEN3D
+
+
+def _resolve_skip_from_rto_status(rto_status: int | None) -> int:
+    """Map ``rto_queue.rto_status`` to the Vahan screen to start at (0 = full SOP)."""
+    if rto_status is None:
+        return 0
+    try:
+        status = int(rto_status)
+    except (TypeError, ValueError):
+        return 0
+    if status <= 0:
+        return 0
+    if status == RTO_STATUS_AFTER_SCREEN2:
+        return 3
+    if status == RTO_STATUS_AFTER_SCREEN3D:
+        return 4
+    if status == RTO_STATUS_AFTER_SCREEN5:
+        return 6
+    return 0
+
+
+def _screen3_resume_at_3b(*, use_resume_nav: bool, rto_status: int | None) -> bool:
+    """True when DB resume should open pending work then start Screen 3 at 3b (not 3a)."""
+    return use_resume_nav and int(rto_status or 0) == RTO_STATUS_AFTER_SCREEN2
+
 
 # --- Testing / build: edit here only (not .env). Use 0 / False / "" for production full SOP. ---
 # ``RTO_FILL_SKIP_TO_SCREEN``: 0 = run all screens; 1–6 = start at that screen (skips dealer-home reset and earlier).
@@ -46,6 +111,24 @@ RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD = False
 # Optional seed for ``data["rto_application_id"]`` when the queue row has no app id (logging / return merge only).
 RTO_FILL_TEST_APPLICATION_ID = ""
 
+# Screen 3c — run-only overrides (reset to defaults before production / next sale).
+# Insurance From: when True, use yesterday (local date) instead of ``policy_from`` from DB.
+RTO_FILL_INSURANCE_FROM_USE_YESTERDAY = False
+# Exact Vahan dropdown label when DB ``insurer`` fuzzy-match picks the wrong company.
+# Live portal option (Bagaj): ``Bajaj General Insurance Co. Ltd.``
+RTO_FILL_INSURER_PORTAL_LABEL = "Bajaj General Insurance Co. Ltd."
+# Re-pick Insurance Company when the visible label does not match the portal label / DB insurer.
+RTO_FILL_FORCE_INSURER_RESELECT = True
+# When set (not None), overrides ``insurance_master.idv`` for this run.
+RTO_FILL_IDV_OVERRIDE: int | None = None
+# Execution log verbosity — ``False`` (default): compact trace (~25–40 lines on success;
+# failure dumps ~10–15 lines). ``True``: full tab probes, scroll confirmations, page-state dumps.
+RTO_FILL_LOG_VERBOSE = False
+# Screen 3: at most **one** compact page dump per run (first failure); skips repeat dumps on 3c/3d.
+RTO_FILL_SCREEN3_ONE_DUMP = True
+# Screen 3c insurance/nominee field inventory → companion ``*_3c_inventory.txt`` (off — dump already captured).
+RTO_FILL_SCREEN3_INSURANCE_FIELD_DUMP = False
+
 # Screen 5 — dealer document upload form (``formDocumentUpload:*`` in RTO dumps, e.g. ``9650693610_RTO.txt``):
 # Sub Category PF wrapper + native ``select`` … ``subCatgId_input``; file input ``selectAndUploadFile_input``;
 # **Upload Document** span; right chevron ``nextBtn``; **File Movement** ``fileFlowId``.
@@ -53,18 +136,25 @@ _SCREEN5_PF_SUBCAT_WRAPPER = '[id="formDocumentUpload:subCatgId"]'
 _SCREEN5_FILE_INPUT = '[id="formDocumentUpload:selectAndUploadFile_input"]'
 _SCREEN5_NEXT_BTN = '[id="formDocumentUpload:nextBtn"]'
 _SCREEN5_FILE_MOVEMENT_BTN = '[id="formDocumentUpload:fileFlowId"]'
+# Pause after each document-upload chevron so the next row renders (portal carousel).
+_SCREEN5_NEXT_CHEVRON_SETTLE_MS = 300
+# Pause after **Upload Document** so the portal commits the file before the next chevron.
+_SCREEN5_POST_UPLOAD_SETTLE_MS = 300
+# After navigation to Documents Upload, wait for carousel before Sub Category (portal ~1s render).
+_SCREEN5_UPLOAD_FORM_SETTLE_MS = 1000
+_SCREEN5_DOCUMENT_COUNTER_RE = re.compile(r"Document\s*\(\s*\d+", re.I)
 # When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and this is **False**, Screen 5 begins with this many **next** chevrons (align before Form 20). Set **0** when skipping straight to Owner Undertaking.
 RTO_FILL_SCREEN5_START_WITH_NEXT_N = 0
 # When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and **True**, Screen 5 runs **only** Owner Undertaking: Sub Category → **Owner Undertaking Form** → file → Upload Document → next → File Movement (skips Form 20…Aadhaar). Ignored if SKIP_TO_FILE_MOVEMENT_ONLY.
 RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY = False
 # When ``RTO_FILL_SKIP_TO_SCREEN >= 5`` and **True**, Screen 5 **only** scrolls and clicks **File Movement** (``formDocumentUpload:fileFlowId``) + dialogs — no uploads. Takes precedence over OWNER_UNDERTAKING_ONLY.
 RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY = False
-# After the 7th queued upload the portal can sit on intermediate rows (e.g. **Affidavit**) — extra **next** clicks before Owner Undertaking (0 = off if using START_WITH_NEXT_N only).
+# Legacy: unused by title-driven carousel (Owner Undertaking is found by Document title).
 RTO_FILL_SCREEN5_NEXT_BEFORE_OWNER_UNDERTAKING = 0
-# Native ``<option>`` text varies (``Form 20`` vs ``FORM 20``) — match with regex per queue key.
+# Native / overlay ``<option>`` text varies (``Form 20`` vs ``FORM 20``) — match with regex per queue key.
 _SCREEN5_SUBCAT_REGEX_BY_DOC_KEY: dict[str, re.Pattern] = {
     "FORM 20": re.compile(r"Form\s*20\b", re.I),
-    "FORM 21": re.compile(r"Form\s*21\b", re.I),
+    "FORM 21": re.compile(r"Form\s*21\b|Sale\s*Certificate", re.I),
     "FORM 22": re.compile(r"Form\s*22\b", re.I),
     "INSURANCE CERTIFICATE": re.compile(r"INSURANCE\s*CERTIFICATE|Insurance\s*Certificate", re.I),
     "INVOICE ORIGINAL": re.compile(r"INVOICE\s*ORIGINAL|Invoice\s*Original|GST\s*Retail", re.I),
@@ -76,6 +166,35 @@ _SCREEN5_SUBCAT_REGEX_BY_DOC_KEY: dict[str, re.Pattern] = {
         re.I,
     ),
 }
+# Portal Document field title → doc_key (most-specific first). None = portal-only skip slot.
+# Special keys: ``AADHAAR`` → front then back; ``AADHAAR_BACK`` → back only (Proof of address).
+_SCREEN5_PORTAL_TITLE_TO_DOC_KEY: list[tuple[re.Pattern[str], str | None]] = [
+    (re.compile(r"Proof\s*of\s*[Aa]ddress|Proof\s*of\s*[Aa]d[d]?haar", re.I), "AADHAAR_BACK"),
+    (re.compile(r"Owner\s+Undertaking|OWNER\s+UNDERTAKING", re.I), "OWNER UNDERTAKING FORM"),
+    (re.compile(r"INSURANCE\s*CERTIFICATE|Insurance\s*Certificate", re.I), "INSURANCE CERTIFICATE"),
+    (re.compile(r"INVOICE\s*ORIGINAL|Invoice\s*Original|GST\s*Retail", re.I), "INVOICE ORIGINAL"),
+    (re.compile(r"Form\s*20\b|FORM\s*20\b", re.I), "FORM 20"),
+    (re.compile(r"Form\s*21\b|FORM\s*21\b|Sale\s*Certificate", re.I), "FORM 21"),
+    (re.compile(r"Form\s*22\b|FORM\s*22\b", re.I), "FORM 22"),
+    (re.compile(r"AADHAAR\s*CARD|Aadhaar\s*Card", re.I), "AADHAAR"),
+    (re.compile(r"Affidavit|Parking|AFFADEVIT", re.I), None),
+]
+# Short filter strings for Sub Category overlay search box.
+_SCREEN5_SUBCAT_FILTER_HINT: dict[str, str] = {
+    "FORM 20": "Form 20",
+    "FORM 21": "Form 21",
+    "FORM 22": "Form 22",
+    "INSURANCE CERTIFICATE": "Insurance",
+    "INVOICE ORIGINAL": "Invoice",
+    "AADHAAR_FRONT": "Aadhaar",
+    "AADHAAR_BACK": "address",
+    "OWNER UNDERTAKING FORM": "Undertaking",
+}
+# Vahan document upload size limit (~400 KB); target slightly under for headroom.
+VAHAN_UPLOAD_MAX_BYTES = 384 * 1024
+_SCREEN5_DOCUMENT_OF_TOTAL_RE = re.compile(
+    r"Document\s*\(\s*(\d+)\s*of\s*(\d+)\s*\)", re.I
+)
 
 # Screen 3 — locators aligned with RTO trace page dumps (``ocr_output/.../*_RTO.txt``): sub-tab strip
 # ``ul.ui-tabs-nav`` / ``a text='Hypothecation/Insurance Information'``, panel ``workbench_tabview:veh_info_tab``,
@@ -134,7 +253,8 @@ _SCREEN3_INSURANCE_COMPANY_NATIVE: tuple[str, ...] = (
     "select[id*='insuranceCompany'], select[name*='insuranceCompany']",
 )
 _SCREEN3_INSURANCE_COMPANY_WRAPPER_ID = "workbench_tabview:ins_cd"
-_INSURANCE_PERIOD_ONE_YEAR_LABEL = "1 Year"
+_INSURANCE_PERIOD_YEARS = 5
+_INSURANCE_PERIOD_LABEL = "5 Year"
 _POLICY_NO_BLANK_ALERT_RE = re.compile(r"Policy\s*No\s*Can'?t\s*be\s*Blank", re.I)
 _SCREEN3_POLICY_NO_INPUT: tuple[str, ...] = (
     '[id="workbench_tabview:policy_no"]',
@@ -146,6 +266,14 @@ _SCREEN3_INSURANCE_FROM_INPUT: tuple[str, ...] = (
     '[id="workbench_tabview:insurance_from"]',
     '[id="workbench_tabview:insuranceFrom"]',
     "input[id*='insuranceFrom'], input[name*='insuranceFrom']",
+)
+_SCREEN3_INSURANCE_UPTO_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:ins_upto_input"]',
+    '[id="workbench_tabview:ins_to_input"]',
+    '[id="workbench_tabview:insurance_to"]',
+    '[id="workbench_tabview:insuranceTo"]',
+    '[id="workbench_tabview:insurance_upto"]',
+    "input[id*='ins_upto'], input[id*='insUpto'], input[id*='insuranceTo'], input[name*='insuranceTo']",
 )
 _SCREEN3_INSURANCE_PERIOD_PF_WRAPPERS: tuple[str, ...] = ('[id="workbench_tabview:ins_year"]',)
 _SCREEN3_INSURANCE_PERIOD_NATIVE: tuple[str, ...] = (
@@ -180,7 +308,11 @@ _SCREEN3_HYP_CHECKBOX_SELECTORS: tuple[str, ...] = (
 )
 _SCREEN3_NOMINEE_NAME_INPUT: tuple[str, ...] = ('[id="workbench_tabview:nominationname1"]',)
 _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS: tuple[str, ...] = ('[id="workbench_tabview:vm_rel1"]',)
-_SCREEN3_NOMINATION_DATE_INPUT = '[id="workbench_tabview:nominationdate1_input"]'
+_SCREEN3_NOMINATION_DATE_INPUT: tuple[str, ...] = (
+    '[id="workbench_tabview:nominationdate1_input"]',
+    '[id="workbench_tabview:nominationDate1_input"]',
+    "input[id*='nominationdate'], input[id*='nominationDate']",
+)
 _SCREEN3_HYP_TYPE_PF_WRAPPERS: tuple[str, ...] = (
     '[id="workbench_tabview:hpa_hp_type"]',
 )
@@ -233,6 +365,9 @@ _rto_action_log: contextvars.ContextVar["RtoActionLog | None"] = contextvars.Con
 _current_screen: contextvars.ContextVar[str] = contextvars.ContextVar(
     "rto_current_screen", default=""
 )
+_screen3_dump_captured: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "rto_screen3_dump_captured", default=False
+)
 
 
 # India Standard Time (no DST) — fixed offset avoids Windows ``tzdata`` dependency for ``zoneinfo``.
@@ -240,32 +375,72 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 
 
 class RtoActionLog:
-    """Per-run action log under ``ocr_output/{dealer_id}/[{subfolder}/]{mobile}_RTO.txt``.
+    """Per-run action log under ``ocr_output/{dealer_id}/[{subfolder}/]{mobile}_RTO_{stamp}.txt``.
 
     *subfolder* is taken from sales ``file_location`` when present (see ``_rto_action_log_path``).
-    Each ``fill_rto_row`` run **overwrites** the file (no carry-over from prior runs).
-    Timestamps use **Asia/Kolkata (IST)**.
+    Each ``fill_rto_row`` run creates a **new** timestamped file (same pattern as ``Playwright_DMS_*.txt``).
+    Trace lines use ISO IST timestamps (``+05:30``), matching Fill DMS / Print RTO queue logs.
     """
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.inventory_path = path.with_name(f"{path.stem}_3c_inventory.txt")
         self._started = False
+        self._inventory_started = False
 
-    def line(self, message: str) -> None:
-        ts = datetime.now(_IST).strftime("%Y-%m-%d %H:%M:%S IST")
+    def write_run_header(self, header_lines: list[str]) -> None:
+        """Write the run preamble once (``started_ist``, queue ids, etc.) before trace lines."""
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            mode = "w" if not self._started else "a"
+            with self.path.open("w", encoding="utf-8") as f:
+                f.write(
+                    "Vahan RTO Fill — execution log (this run only; IST / Asia/Kolkata timestamps)\n\n"
+                )
+                for line in header_lines:
+                    f.write(f"{line}\n")
+                f.write("\n--- trace ---\n\n")
             self._started = True
-            with self.path.open(mode, encoding="utf-8") as f:
-                f.write(f"[{ts}] {message}\n")
+        except OSError as e:
+            logger.warning("fill_rto: RTO log header write failed %s: %s", self.path, e)
+
+    def line(self, message: str) -> None:
+        ts = _ts_ist_iso()
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            if not self._started:
+                self.write_run_header([f"started_ist={ts}"])
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(f"{ts} {message}\n")
         except OSError as e:
             logger.warning("fill_rto: RTO log write failed %s: %s", self.path, e)
+
+    def inventory_line(self, message: str) -> None:
+        """Append to the companion Screen 3c field-inventory file (same folder as ``self.path``)."""
+        ts = _ts_ist_iso()
+        try:
+            self.inventory_path.parent.mkdir(parents=True, exist_ok=True)
+            if not self._inventory_started:
+                with self.inventory_path.open("w", encoding="utf-8") as f:
+                    f.write(
+                        "Vahan RTO Fill — Screen 3c insurance field inventory "
+                        "(companion to main RTO log; IST timestamps)\n\n"
+                    )
+                    f.write(f"main_log={self.path.name}\n")
+                    f.write(f"started_ist={ts}\n\n--- inventory ---\n\n")
+                self._inventory_started = True
+            with self.inventory_path.open("a", encoding="utf-8") as f:
+                f.write(f"{ts} {message}\n")
+        except OSError as e:
+            logger.warning(
+                "fill_rto: RTO inventory log write failed %s: %s", self.inventory_path, e
+            )
 
 
 def _set_screen(label: str) -> None:
     """Set the current screen label that prefixes all subsequent log lines."""
     _current_screen.set(label)
+    if label == "Screen 3":
+        _screen3_dump_captured.set(False)
 
 
 def _rto_log(msg: str) -> None:
@@ -274,6 +449,40 @@ def _rto_log(msg: str) -> None:
         screen = _current_screen.get()
         prefix = f"[{screen}] " if screen else ""
         log.line(f"{prefix}{msg}")
+
+
+def _rto_inventory_log(msg: str) -> None:
+    """Write to the companion ``*_3c_inventory.txt`` file (not the main RTO trace)."""
+    log = _rto_action_log.get()
+    if log is not None:
+        screen = _current_screen.get()
+        prefix = f"[{screen}] " if screen else ""
+        log.inventory_line(f"{prefix}{msg}")
+
+
+def _rto_log_verbose(msg: str) -> None:
+    """Trace line only when ``RTO_FILL_LOG_VERBOSE`` is True."""
+    if RTO_FILL_LOG_VERBOSE:
+        _rto_log(msg)
+
+
+def _rto_log_path_display(path: Path, *, dealer_id: int | None = None) -> str:
+    """Prefer ``ocr_output/…``-relative paths in RTO logs (avoid repeating long absolutes)."""
+    try:
+        resolved = path.resolve()
+        if dealer_id is not None:
+            base = get_ocr_output_dir(dealer_id).resolve()
+            try:
+                return str(resolved.relative_to(base))
+            except ValueError:
+                pass
+        parts = resolved.parts
+        if "ocr_output" in parts:
+            idx = parts.index("ocr_output")
+            return str(Path(*parts[idx + 1 :]))
+        return str(resolved)
+    except Exception:
+        return str(path)
 
 
 def _mobile_digits_for_filename(mobile: str | None) -> str:
@@ -285,16 +494,23 @@ def _mobile_digits_for_filename(mobile: str | None) -> str:
     return "unknown_mobile"
 
 
+def _rto_execution_log_filename(mob_fn: str) -> str:
+    """Per-run trace file: ``{mobile}_RTO_{ddmmyyyy}_{hhmmss}.txt`` (IST), like ``Playwright_DMS_*.txt``."""
+    stamp = datetime.now(_IST).strftime("%d%m%Y_%H%M%S")
+    return f"{mob_fn}_RTO_{stamp}.txt"
+
+
 def _rto_action_log_path(dealer_id: int, row: dict, mob_fn: str) -> Path:
-    """``ocr_output/{dealer_id}/[{subfolder}/]{mobile}_RTO.txt``.
+    """``ocr_output/{dealer_id}/[{subfolder}/]{mobile}_RTO_{ddmmyyyy}_{hhmmss}.txt``.
 
     *subfolder* is ``row['subfolder']`` from the RTO batch query
     (``COALESCE(sm.file_location, cm.file_location)``). Matches the per-sale folder under uploads
     (e.g. ``{mobile}_{ddmmyy}``). If missing or path cannot be resolved safely, falls back to
-    ``ocr_output/{dealer_id}/{mobile}_RTO.txt`` (previous behavior).
+    ``ocr_output/{dealer_id}/{mobile}_RTO_{stamp}.txt``.
     """
+    log_name = _rto_execution_log_filename(mob_fn)
     base = get_ocr_output_dir(dealer_id)
-    default = base / f"{mob_fn}_RTO.txt"
+    default = base / log_name
     raw = (row.get("subfolder") or "").strip()
     if not raw:
         return default
@@ -322,7 +538,7 @@ def _rto_action_log_path(dealer_id: int, row: dict, mob_fn: str) -> Path:
     parts = [x for x in rel.parts if x and x not in (".", "..")]
     if not parts:
         return default
-    return base.joinpath(*parts) / f"{mob_fn}_RTO.txt"
+    return base.joinpath(*parts) / log_name
 
 
 # Fast UI timing: **200ms** per attempt; **2s** total budget when looping (retries / polls).
@@ -333,6 +549,15 @@ _DEFAULT_TIMEOUT_MS = _LOOP_BUDGET_MS
 _LONG_TIMEOUT_MS = 10_000
 # Delay after each discrete UI action (s) — not a Playwright timeout.
 _ACTION_WAIT_S = 0.2
+# Screen 3c/3d: shorter settle (many micro-steps on Hypothecation/Insurance tab).
+_SCREEN3_ACTION_WAIT_S = 0.05
+_SCREEN3_LOOP_BUDGET_MS = 700
+_SCREEN3_ACTION_TIMEOUT_MS = 450
+_SCREEN3_PERIOD_DIALOG_POLL_S = 1.5
+_SCREEN3_INS_UPTO_ENABLE_BUDGET_MS = 1200
+_SCREEN3_ENTRY_DETAILS_WAIT_S = 0.5
+# Insurance Company PF overlay is slow/intermittent at 450ms — keep 2s for this field only.
+_SCREEN3_INSURANCE_COMPANY_TIMEOUT_MS = 2_000
 # ``_dump_page_state``: cap for mixed interactive list; **all** ``<select>`` are also logged separately.
 _DUMP_PAGE_STATE_GENERAL_CAP = 150
 _DUMP_PAGE_STATE_OPTION_PREVIEW = 32
@@ -430,6 +655,71 @@ def _fmt_date(d: date | datetime | str | None) -> str:
     if isinstance(d, datetime):
         d = d.date()
     return f"{d.day:02d}-{_VAHAN_MONTH_EN[d.month - 1]}-{d.year}"
+
+
+def _parse_vahan_date(d: date | datetime | str | None) -> date | None:
+    """Parse queue / workbench dates into ``date`` for insurance upto math."""
+    if d is None:
+        return None
+    if isinstance(d, datetime):
+        return d.date()
+    if isinstance(d, date):
+        return d
+    s = str(d).strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d-%b-%Y", "%d-%B-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _insurance_upto_from_from_date(from_d: date, *, years: int = _INSURANCE_PERIOD_YEARS) -> str:
+    """Vahan **Insurance upto**: from date + ``years`` − 1 day (default 5-year cover)."""
+    try:
+        anniversary = from_d.replace(year=from_d.year + years)
+    except ValueError:
+        anniversary = from_d.replace(year=from_d.year + years, day=28)
+    return _fmt_date(anniversary - timedelta(days=1))
+
+
+def _resolve_policy_upto_str(data: dict) -> str:
+    """Best policy end date for Screen 3c — DB ``policy_to`` or computed from ``policy_from``."""
+    explicit = (data.get("policy_to_str") or "").strip()
+    if explicit:
+        return explicit
+    from_d = _parse_vahan_date(data.get("policy_from_str"))
+    if from_d is None:
+        from_d = _parse_vahan_date(data.get("policy_from"))
+    if from_d is None:
+        return ""
+    return _insurance_upto_from_from_date(from_d)
+
+
+def _normalize_idv_for_vahan(value: object) -> str:
+    """Vahan IDV must be a whole number string (no decimals or grouping commas)."""
+    if value is None or isinstance(value, bool):
+        return ""
+    if isinstance(value, Decimal):
+        return str(int(value))
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value))
+    s = str(value).strip().replace(",", "")
+    if not s:
+        return ""
+    if "." in s:
+        whole, frac = s.split(".", 1)
+        if frac.strip("0") == "":
+            return whole.lstrip("0") or "0"
+    try:
+        return str(int(float(s)))
+    except ValueError:
+        digits = re.sub(r"\D", "", s)
+        return digits.lstrip("0") or ("0" if digits else "")
 
 
 def _init_cap_place_name(s: str) -> str:
@@ -1059,17 +1349,197 @@ def build_view_customer_sale_files_print_jobs(
 # ---------------------------------------------------------------------------
 
 def _pause() -> None:
-    time.sleep(_ACTION_WAIT_S)
+    if _current_screen.get() == "Screen 3":
+        time.sleep(_SCREEN3_ACTION_WAIT_S)
+    else:
+        time.sleep(_ACTION_WAIT_S)
+
+
+def _screen3_timeout_ms(default: int | None = None) -> int:
+    """Playwright action timeout — ~450ms on Screen 3, else ``_DEFAULT_TIMEOUT_MS``."""
+    if _current_screen.get() == "Screen 3":
+        return _SCREEN3_ACTION_TIMEOUT_MS
+    return _DEFAULT_TIMEOUT_MS if default is None else default
+
+
+def _progress_overlay_visible(page: Page) -> bool:
+    """True when a PrimeFaces / blockUI loading overlay is visible (quick DOM check)."""
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                    const sels = ['.ui-blockui', '.blockUI', '.loading-overlay', '.ui-dialog-loading'];
+                    for (const sel of sels) {
+                        for (const el of document.querySelectorAll(sel)) {
+                            const st = window.getComputedStyle(el);
+                            const r = el.getBoundingClientRect();
+                            if (st.display !== 'none' && st.visibility !== 'hidden'
+                                && r.width >= 2 && r.height >= 2) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def _dump_page_state_target_hint(context: str) -> str:
+    """Best-effort field label from ``TIMEOUT fill/click: …`` context strings."""
+    m = re.search(r"TIMEOUT (?:fill|click):\s*(.+?)(?:\s+selector=|\s*$)", context, re.I)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"(?:not found|blank alert|pending application):\s*(.+?)(?:\s*$)", context, re.I)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _dump_page_state_compact(page: Page, context: str) -> None:
+    """Short failure snapshot: url, active sub-tab, overlays/dialogs, target-field hints."""
+    _rto_log(f"=== PAGE STATE DUMP ({context}) ===")
+    try:
+        _rto_log(f"url: {(page.url or '')[:300]}")
+    except Exception:
+        _rto_log("url: (could not read)")
+
+    target_hint = _dump_page_state_target_hint(context)
+    if target_hint:
+        _rto_log(f"target: {target_hint!r}")
+
+    _JS_COMPACT_SNAPSHOT = """(targetHint) => {
+        const out = { activeSubtab: '', dialogs: [], overlays: [], fields: [] };
+        const tab = document.querySelector(
+            'ul.ui-tabs-nav li.ui-state-active a, ul.ui-tabs-nav li.ui-tabs-selected a'
+        );
+        if (tab) out.activeSubtab = (tab.textContent || '').trim().substring(0, 100);
+
+        document.querySelectorAll('.ui-dialog, [role="dialog"]').forEach((el) => {
+            if (out.dialogs.length >= 3) return;
+            const r = el.getBoundingClientRect();
+            const st = window.getComputedStyle(el);
+            if (r.width < 2 || st.display === 'none' || st.visibility === 'hidden') return;
+            out.dialogs.push({
+                id: (el.id || '').substring(0, 80),
+                txt: (el.innerText || '').trim().substring(0, 140).replace(/\\s+/g, ' ')
+            });
+        });
+
+        document.querySelectorAll(
+            '.ui-widget-overlay, .ui-dialog-mask, #msgDialog_modal, .ui-blockui, .blockUI'
+        ).forEach((el) => {
+            if (out.overlays.length >= 5) return;
+            const st = window.getComputedStyle(el);
+            if (st.display === 'none' || st.visibility === 'hidden') return;
+            const r = el.getBoundingClientRect();
+            if (r.width < 2 && r.height < 2) return;
+            out.overlays.push((el.id || el.className || '').substring(0, 80));
+        });
+
+        const hint = String(targetHint || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const hintTokens = hint ? hint.split(/\\s+/).filter(t => t.length > 2) : [];
+
+        function fieldMatches(el) {
+            if (!hintTokens.length) return false;
+            const id = (el.id || '').toLowerCase();
+            const name = (el.getAttribute('name') || '').toLowerCase();
+            const blob = id + ' ' + name;
+            return hintTokens.some(t => blob.includes(t));
+        }
+
+        document.querySelectorAll('input[id], select[id], textarea[id]').forEach((el) => {
+            if (out.fields.length >= 10) return;
+            const id = el.id || '';
+            if (!id) return;
+            const r = el.getBoundingClientRect();
+            const st = window.getComputedStyle(el);
+            const vis = r.width >= 2 && r.height >= 2 && st.display !== 'none' && st.visibility !== 'hidden';
+            const match = fieldMatches(el);
+            if (!match && out.fields.length >= 6 && !/nomination|hpa|hypo|insur|tax|policy/i.test(id)) return;
+            if (!match && hintTokens.length && out.fields.length >= 8) return;
+            out.fields.push({
+                tag: el.tagName,
+                id: id.substring(0, 120),
+                vis,
+                val: (el.value || '').substring(0, 48),
+                disabled: !!el.disabled,
+                match
+            });
+        });
+
+        out.selectCount = document.querySelectorAll('select').length;
+        return out;
+    }"""
+
+    for fi, frame in enumerate(page.frames):
+        try:
+            snap = frame.evaluate(_JS_COMPACT_SNAPSHOT, target_hint)
+            ftag = f"frame[{fi}] {frame.name or 'main'}"
+            if snap.get("activeSubtab"):
+                _rto_log(f"  [{ftag}] active_subtab={snap['activeSubtab']!r}")
+            dialogs = snap.get("dialogs") or []
+            if dialogs:
+                for d in dialogs:
+                    _rto_log(
+                        f"  [{ftag}] dialog id={d.get('id', '')!r} "
+                        f"text={d.get('txt', '')!r}"
+                    )
+            overlays = snap.get("overlays") or []
+            if overlays:
+                _rto_log(f"  [{ftag}] overlays: {overlays!r}")
+            fields = snap.get("fields") or []
+            if fields:
+                _rto_log(f"  [{ftag}] fields ({len(fields)}):")
+                for f in fields:
+                    parts = [
+                        f.get("tag", ""),
+                        f"id={f.get('id', '')!r}",
+                        f"vis={f.get('vis')}",
+                        f"disabled={f.get('disabled')}",
+                    ]
+                    if f.get("val"):
+                        parts.append(f"value={f.get('val')!r}")
+                    if f.get("match"):
+                        parts.append("target_match")
+                    _rto_log(f"    {' '.join(parts)}")
+            sel_n = snap.get("selectCount")
+            if sel_n is not None:
+                _rto_log(
+                    f"  [{ftag}] select_count={sel_n} "
+                    f"(set RTO_FILL_LOG_VERBOSE=True for full option dump)"
+                )
+        except Exception as e:
+            _rto_log(f"  [frame[{fi}]] compact snapshot error: {e}")
+
+    _rto_log("=== END PAGE STATE DUMP ===")
 
 
 def _dump_page_state(page: Page, context: str) -> None:
-    """Dump frames, **all** ``<select>`` (with option previews), and mixed visible controls into the RTO log.
+    """Dump page state into the RTO log — compact by default; full dump when ``RTO_FILL_LOG_VERBOSE``."""
+    screen = _current_screen.get()
+    if (
+        not RTO_FILL_LOG_VERBOSE
+        and RTO_FILL_SCREEN3_ONE_DUMP
+        and screen == "Screen 3"
+        and _screen3_dump_captured.get()
+    ):
+        _rto_log(f"skip page dump (one per Screen 3 run): {context}")
+        return
 
-    The legacy **150** cap applied in **DOM order**, so late controls (e.g. Tax Mode under Vehicle Details)
-    never appeared. We now (1) list **every** ``select`` with options / ``inVehTab`` / visibility, and
-    (2) build the mixed list with **visible selects first**, then other controls, up to
-    ``_DUMP_PAGE_STATE_GENERAL_CAP``.
-    """
+    if not RTO_FILL_LOG_VERBOSE:
+        _dump_page_state_compact(page, context)
+    else:
+        _dump_page_state_full(page, context)
+
+    if screen == "Screen 3" and RTO_FILL_SCREEN3_ONE_DUMP:
+        _screen3_dump_captured.set(True)
+
+
+def _dump_page_state_full(page: Page, context: str) -> None:
+    """Full page-state dump (verbose mode only)."""
     _rto_log(f"=== PAGE STATE DUMP ({context}) ===")
     try:
         _rto_log(f"url: {(page.url or '')[:300]}")
@@ -1333,7 +1803,15 @@ def _click(page: Page, selector: str, *, timeout: int = _DEFAULT_TIMEOUT_MS, lab
         _rto_log(f"click: {label}")
 
 
-def _fill(page: Page, selector: str, value: object, *, timeout: int = _DEFAULT_TIMEOUT_MS, label: str = "") -> None:
+def _fill(
+    page: Page,
+    selector: str,
+    value: object,
+    *,
+    timeout: int = _DEFAULT_TIMEOUT_MS,
+    label: str = "",
+    dump_on_failure: bool = True,
+) -> None:
     """Clear and fill a text field. Coerces ``value`` to ``str`` (queue rows often pass mobile/pin as int)."""
     if value is None:
         return
@@ -1347,7 +1825,8 @@ def _fill(page: Page, selector: str, value: object, *, timeout: int = _DEFAULT_T
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT fill: {label} selector={selector} value={text[:40]}")
-        _dump_page_state(page, f"TIMEOUT fill: {label}")
+        if dump_on_failure:
+            _dump_page_state(page, f"TIMEOUT fill: {label}")
         raise
     logger.debug("fill_rto: filled %s = %s (%s)", selector, text[:40], label)
     if label:
@@ -1633,6 +2112,7 @@ def _select_pf_dropdown(
     label: str = "",
     option_label_regex: re.Pattern | None = None,
     use_native_select: bool = True,
+    dump_on_failure: bool = True,
 ) -> None:
     """Select an item from a PrimeFaces ``ui-selectonemenu`` by visible text.
 
@@ -1659,10 +2139,10 @@ def _select_pf_dropdown(
             try:
                 if native_sel.count() > 0:
                     if option_label_regex is not None:
-                        native_sel.select_option(label=option_label_regex, timeout=_DEFAULT_TIMEOUT_MS)
+                        native_sel.select_option(label=option_label_regex, timeout=timeout)
                         log_val = f"regex:{option_label_regex.pattern}"
                     else:
-                        native_sel.select_option(label=value, timeout=_DEFAULT_TIMEOUT_MS)
+                        native_sel.select_option(label=value, timeout=timeout)
                         log_val = value
                     logger.debug("fill_rto: native select %s = %s", wrapper_selector, log_val)
                     if label:
@@ -1681,7 +2161,7 @@ def _select_pf_dropdown(
         else:
             panel_sel = "div.ui-selectonemenu-panel"
         items_panel = page.locator(panel_sel).first
-        items_panel.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+        items_panel.wait_for(state="visible", timeout=timeout)
 
         if option_label_regex is not None:
             item = items_panel.locator("li.ui-selectonemenu-item").filter(has_text=option_label_regex)
@@ -1691,12 +2171,13 @@ def _select_pf_dropdown(
             )
             if item.count() == 0:
                 item = items_panel.locator("li.ui-selectonemenu-item").filter(has_text=value)
-        item.first.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
-        item.first.click(timeout=_DEFAULT_TIMEOUT_MS)
+        item.first.scroll_into_view_if_needed(timeout=timeout)
+        item.first.click(timeout=timeout)
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT pf-dropdown: {label} selector={wrapper_selector} value={value!r}")
-        _dump_page_state(page, f"TIMEOUT pf-dropdown: {label}")
+        if dump_on_failure:
+            _dump_page_state(page, f"TIMEOUT pf-dropdown: {label}")
         raise
     logger.debug("fill_rto: pf-dropdown %s = %s (%s)", wrapper_selector, value, label)
     if label:
@@ -1707,14 +2188,26 @@ def _select_pf_dropdown(
 
 def _dismiss_dialog(page: Page, button_text: str = "OK", *, timeout: int = _DEFAULT_TIMEOUT_MS) -> None:
     """Click a dialog/popup button by its text."""
+    if _dismiss_dialog_if_present(page, button_text, timeout_ms=timeout):
+        return
+    logger.debug("fill_rto: no dialog with '%s' found (timeout), continuing", button_text)
+
+
+def _dismiss_dialog_if_present(
+    page: Page, button_text: str = "OK", *, timeout_ms: int = _FIRST_TRY_MS
+) -> bool:
+    """Click dialog button when visible; return False without long wait when absent."""
     btn = page.get_by_role("button", name=re.compile(button_text, re.IGNORECASE)).first
     try:
-        btn.wait_for(state="visible", timeout=timeout)
-        btn.click()
+        btn.wait_for(state="visible", timeout=timeout_ms)
+        btn.click(timeout=timeout_ms)
         logger.debug("fill_rto: dismissed dialog with '%s'", button_text)
         _rto_log(f"dialog: {button_text}")
+        return True
     except PwTimeout:
-        logger.debug("fill_rto: no dialog with '%s' found (timeout), continuing", button_text)
+        return False
+    except Exception:
+        return False
 
 
 def _find_visible_otp_dialog(page: Page):
@@ -1931,6 +2424,38 @@ def _poll_generated_application_dialog(page: Page, max_ms: int = 15_000):
     return None
 
 
+def _persist_rto_queue_progress(
+    data: dict,
+    *,
+    rto_status: int,
+    rto_application_id: str | None = None,
+) -> None:
+    """Write scrape progress to ``rto_queue`` (``rto_application_id`` / ``rto_status``)."""
+    rqid = data.get("rto_queue_id")
+    if rqid is None:
+        _rto_log("WARNING: cannot persist rto_queue progress — rto_queue_id missing")
+        return
+    from app.repositories import rto_payment_details as rto_repo
+
+    app = (rto_application_id or "").strip() or None
+    try:
+        ok = rto_repo.update_application_progress(
+            int(rqid),
+            rto_status=int(rto_status),
+            rto_application_id=app,
+        )
+        if ok:
+            _rto_log(
+                f"persisted: rto_queue_id={rqid} rto_status={rto_status}"
+                + (f" rto_application_id={app!r}" if app else "")
+            )
+        else:
+            _rto_log(f"WARNING: rto_queue progress update affected 0 rows (rto_queue_id={rqid})")
+    except Exception as e:
+        _rto_log(f"WARNING: rto_queue progress persist failed: {e!s}")
+        logger.warning("fill_rto: persist rto_queue progress failed: %s", e)
+
+
 def _scrape_application_id_from_dialog_text(text: str) -> str:
     """Parse Vahan application number from dialog body (e.g. ``Application No. :RJ26041148051328``)."""
     raw = (text or "").replace("\xa0", " ")
@@ -1961,6 +2486,193 @@ def _scrape_application_id_from_dialog_text(text: str) -> str:
         return m.group(1).strip().upper()
     found = re.findall(r"\b[A-Z]{2}\d{10,20}\b", raw)
     return found[0].upper() if found else ""
+
+
+_SCREEN3_VALIDATION_DIALOG_SKIP_LINES = frozenset(
+    {"alert!", "close", "ok", "yes", "no", "cancel", "information", "warning"}
+)
+
+# Vahan nominee relation dropdown uses **Spouse** (not Wife/Husband).
+_VAHAN_NOMINEE_RELATION_PORTAL_LABEL: dict[str, str] = {
+    "Wife": "Spouse",
+    "Husband": "Spouse",
+}
+
+
+def _vahan_nominee_relation_portal_label(rel_norm: str) -> str:
+    """Map DB/OCR relation to the Vahan portal dropdown label."""
+    canon = (rel_norm or "").strip()
+    if not canon:
+        return ""
+    return _VAHAN_NOMINEE_RELATION_PORTAL_LABEL.get(canon, canon)
+
+
+def _screen_3_extract_validation_error_messages(text: str) -> list[str]:
+    """Human-readable validation lines from Vahan **Alert!** dialogs after Save and File Movement."""
+    errors: list[str] = []
+    for ln in (text or "").splitlines():
+        s = ln.strip()
+        if not s or s.lower() in _SCREEN3_VALIDATION_DIALOG_SKIP_LINES:
+            continue
+        if re.search(
+            r"invalid|blank|can't|cannot|required|please enter|not set|missing",
+            s,
+            re.I,
+        ):
+            errors.append(s)
+    return errors
+
+
+def _screen_3_dialog_is_validation_alert(text: str) -> bool:
+    """True when post-save dialog is a Vahan validation **Alert** (not a success / app-no dialog)."""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if _scrape_application_id_from_dialog_text(raw):
+        return False
+    if re.match(r"^\s*Alert!?(\s|$)", raw, re.I):
+        return True
+    if _screen_3_extract_validation_error_messages(raw):
+        return True
+    upper = raw.upper()
+    return any(
+        p in upper
+        for p in (
+            "INVALID RELATION",
+            "BLANK INSURANCE",
+            "CAN'T BE BLANK",
+            "CANNOT BE BLANK",
+            "INVALID INSURANCE PERIOD",
+        )
+    )
+
+
+def _find_first_attached_selector(
+    page: Page, selectors: tuple[str, ...], *, timeout_ms: int = _FIRST_TRY_MS
+) -> str | None:
+    """Return the first selector whose locator is attached (quick scan — no long wait per miss)."""
+    for sel in selectors:
+        try:
+            page.locator(sel).first.wait_for(state="attached", timeout=timeout_ms)
+            return sel
+        except Exception:
+            continue
+    return None
+
+
+def _screen_3_fail_3c_required_field(page: Page, field: str, detail: str = "") -> None:
+    """Raise when a required Screen 3c field could not be set — do not proceed to Save and File Movement."""
+    _dump_page_state(page, f"Screen 3c required field: {field}")
+    msg = f"Screen 3c required field not set: {field}"
+    if detail:
+        msg = f"{msg} — {detail}"
+    raise RuntimeError(msg)
+
+
+def _screen_3_fail_save_and_file_movement(dialog_text: str) -> None:
+    """Raise when Save and File Movement failed (validation) or produced no proceed dialog."""
+    errors = _screen_3_extract_validation_error_messages(dialog_text)
+    if errors or _screen_3_dialog_is_validation_alert(dialog_text):
+        detail = "; ".join(errors) if errors else (dialog_text or "validation alert").strip()[:300]
+        raise RuntimeError(f"Screen 3d Save and File Movement failed: {detail}")
+    raise RuntimeError(
+        "Screen 3d Save and File Movement produced no confirmation dialog"
+    )
+
+
+def _screen_3d_dialog_is_proceed_signal(dialog_text: str) -> bool:
+    """True when post-Yes dialog is not a validation alert (Entry Details / numbers / info = proceed)."""
+    raw = (dialog_text or "").strip()
+    if not raw:
+        return False
+    if _screen_3_dialog_is_validation_alert(raw):
+        return False
+    if _screen_3_extract_validation_error_messages(raw):
+        return False
+    return True
+
+
+def _screen_3d_is_entry_details_dialog_text(dialog_text: str) -> bool:
+    """True for Vahan **Entry Details** summary (Sale Amount / category / Are You Sure?)."""
+    raw = (dialog_text or "").strip()
+    if not raw:
+        return False
+    if re.search(r"Entry\s*Details", raw, re.I):
+        return True
+    if re.search(r"Sale\s*Amount", raw, re.I) and re.search(
+        r"Vehicle\s*(Category|Class|Type)", raw, re.I
+    ):
+        return True
+    return False
+
+
+def _screen_3_find_entry_details_dialog(page: Page) -> Locator | None:
+    """Visible **Entry Details** confirm dialog after Save and File Movement."""
+    patterns = (
+        r"Entry\s*Details",
+        r"Sale\s*Amount",
+    )
+    for pat in patterns:
+        try:
+            loc = page.locator(".ui-dialog:visible, [role='dialog']:visible").filter(
+                has_text=re.compile(pat, re.I)
+            )
+            if loc.count() > 0 and loc.first.is_visible(timeout=_FIRST_TRY_MS):
+                return loc.first
+        except Exception:
+            continue
+    return None
+
+
+def _screen_3d_confirm_entry_details_if_present(page: Page) -> tuple[str, bool]:
+    """If Entry Details is open: capture text, click **Are You Sure?**.
+
+    Returns ``(dialog_text, confirmed)`` — ``confirmed`` is True when the button was clicked.
+    """
+    dlg = _screen_3_find_entry_details_dialog(page)
+    if dlg is None:
+        # Dialog can lag ~500ms after the first Yes — poll up to ~1.5s total.
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline and dlg is None:
+            time.sleep(0.12)
+            dlg = _screen_3_find_entry_details_dialog(page)
+    if dlg is None:
+        return "", False
+    dialog_text = ""
+    try:
+        dialog_text = (dlg.inner_text(timeout=700) or "").strip()
+    except Exception:
+        try:
+            dialog_text = (
+                dlg.locator(".ui-dialog-content").first.inner_text(timeout=500) or ""
+            ).strip()
+        except Exception:
+            dialog_text = ""
+    if dialog_text:
+        _rto_log(f"Screen 3d: Entry Details dialog: {dialog_text[:400]!r}")
+    clicked = False
+    # Prefer the floppy-disk confirm inside this dialog (not a bare Yes elsewhere).
+    for name_re in (
+        re.compile(r"Are\s+You\s+Sure\??", re.I),
+        re.compile(r"^\s*Yes\s*$", re.I),
+    ):
+        try:
+            btn = dlg.get_by_role("button", name=name_re).first
+            btn.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            btn.click(timeout=_SCREEN3_ACTION_TIMEOUT_MS)
+            clicked = True
+            _rto_log("Screen 3d: Entry Details — Are You Sure? clicked")
+            break
+        except Exception:
+            continue
+    if not clicked:
+        # Page-level fallback (button sometimes outside dialog role tree).
+        if _dismiss_dialog_if_present(page, r"Are\s+You\s+Sure\??", timeout_ms=_SCREEN3_ACTION_TIMEOUT_MS):
+            clicked = True
+            _rto_log("Screen 3d: Entry Details — Are You Sure? (page fallback)")
+    if clicked:
+        _wait_for_progress_close_loop(page)
+    return dialog_text, clicked
 
 
 def _generated_application_dialog_full_text(dlg: Locator) -> str:
@@ -2047,6 +2759,11 @@ def _handle_inward_partial_save_followup(page: Page, data: dict) -> None:
         scraped = _dismiss_generated_application_no_dialog(page)
         if scraped:
             data["rto_application_id"] = scraped
+            _persist_rto_queue_progress(
+                data,
+                rto_status=RTO_STATUS_AFTER_SCREEN2,
+                rto_application_id=scraped,
+            )
         return
 
     _rto_log("Inward save: OTP dialog detected — use app to enter OTP or change mobile")
@@ -2104,6 +2821,11 @@ def _handle_inward_partial_save_followup(page: Page, data: dict) -> None:
                 scraped = _dismiss_generated_application_no_dialog(page)
                 if scraped:
                     data["rto_application_id"] = scraped
+                    _persist_rto_queue_progress(
+                        data,
+                        rto_status=RTO_STATUS_AFTER_SCREEN2,
+                        rto_application_id=scraped,
+                    )
                 _dismiss_dialog(page, "Yes")
                 _pause()
                 _dismiss_dialog(page, "Close", timeout=_DEFAULT_TIMEOUT_MS)
@@ -2156,21 +2878,28 @@ def _wait_for_progress_close(page: Page, timeout_ms: int = _LONG_TIMEOUT_MS) -> 
     _pause()
 
 
-def _wait_for_progress_close_loop(page: Page) -> None:
-    """Block UI gone: ``_FIRST_TRY_MS`` slices until hidden or ``_LOOP_BUDGET_MS`` total."""
+def _wait_for_progress_close_loop(page: Page, *, budget_ms: int | None = None) -> None:
+    """Block UI gone: quick exit when no overlay; else ``_FIRST_TRY_MS`` slices until budget."""
+    if not _progress_overlay_visible(page):
+        return
+    budget = budget_ms if budget_ms is not None else (
+        _SCREEN3_LOOP_BUDGET_MS if _current_screen.get() == "Screen 3" else _LOOP_BUDGET_MS
+    )
     overlay = page.locator(".ui-blockui, .blockUI, .loading-overlay, .ui-dialog-loading").first
     t0 = time.monotonic()
     while True:
         elapsed_ms = (time.monotonic() - t0) * 1000
-        if elapsed_ms >= _LOOP_BUDGET_MS:
+        if elapsed_ms >= budget:
             break
-        slice_ms = int(min(_FIRST_TRY_MS, _LOOP_BUDGET_MS - elapsed_ms))
+        slice_ms = int(min(_FIRST_TRY_MS, budget - elapsed_ms))
         if slice_ms < 1:
             break
         try:
             overlay.wait_for(state="hidden", timeout=max(slice_ms, 1))
             break
         except PwTimeout:
+            if not _progress_overlay_visible(page):
+                break
             continue
     _pause()
 
@@ -2282,7 +3011,7 @@ def _workbench_pf_menu_label_has_value(page: Page, label_id: str) -> bool:
     """True if a PrimeFaces ``selectOneMenu`` label is not the empty / ``--SELECT--`` placeholder."""
     try:
         lab = page.locator(f'[id="{label_id}"]').first
-        t = (lab.inner_text(timeout=3000) or "").strip()
+        t = (lab.inner_text(timeout=_screen3_timeout_ms()) or "").strip()
         if not t:
             return False
         u = t.upper()
@@ -2296,6 +3025,14 @@ def _workbench_pf_menu_label_has_value(page: Page, label_id: str) -> bool:
 def _workbench_correspondence_state_is_set(page: Page) -> bool:
     """True if correspondence *State* already shows a value (Vahan often pre-fills; do not overwrite)."""
     return _workbench_pf_menu_label_has_value(page, "workbench_tabview:tf_c_state_label")
+
+
+def _vahan_on_workbench(page: Page) -> bool:
+    """True when the attached tab is on the Vahan workbench form (post-Entry / resume path)."""
+    try:
+        return bool(re.search(r"workbench\.xhtml", page.url or "", re.I))
+    except Exception:
+        return False
 
 
 def _ensure_vahan_dealer_home_for_screen1(page: Page) -> None:
@@ -2335,7 +3072,7 @@ def _ensure_vahan_dealer_home_for_screen1(page: Page) -> None:
             loc.wait_for(state="visible", timeout=wait_ms)
             loc.click(timeout=_DEFAULT_TIMEOUT_MS)
             clicked = True
-            _rto_log(f"ensure dealer home: clicked Home ({sel})")
+            _rto_log_verbose(f"ensure dealer home: clicked Home ({sel})")
             break
         except Exception as exc:
             logger.debug("fill_rto: Home selector %s: %s", sel, exc)
@@ -2353,7 +3090,7 @@ def _ensure_vahan_dealer_home_for_screen1(page: Page) -> None:
 
     try:
         page.goto(VAHAN_DEALER_HOME_URL, wait_until="domcontentloaded", timeout=20_000)
-        _rto_log(f"ensure dealer home: navigated to {VAHAN_DEALER_HOME_URL}")
+        _rto_log_verbose(f"ensure dealer home: navigated to {VAHAN_DEALER_HOME_URL}")
         _pause()
         _wait_for_progress_close(page)
         page.locator("div#officeList").first.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
@@ -2361,6 +3098,421 @@ def _ensure_vahan_dealer_home_for_screen1(page: Page) -> None:
     except Exception as exc:
         _rto_log(f"ensure dealer home: could not reach Screen 1 — {exc!s}")
         logger.warning("fill_rto: ensure dealer home failed: %s", exc)
+
+
+def _resume_select_pending_applications_radio(page: Page) -> None:
+    """Select **Pending Applications** on dealer home (Get Pending Work panel)."""
+    rx = _PENDING_APPLICATIONS_LABEL_RE
+    tried: list[str] = []
+    for label, click_fn in (
+        (
+            "get_by_label",
+            lambda: page.get_by_label(rx).first.click(timeout=_DEFAULT_TIMEOUT_MS),
+        ),
+        (
+            "label filter",
+            lambda: page.locator("label").filter(has_text=rx).first.click(timeout=_DEFAULT_TIMEOUT_MS),
+        ),
+        (
+            "ui-radiobutton-label",
+            lambda: page.locator("span.ui-radiobutton-label").filter(has_text=rx).first.click(
+                timeout=_DEFAULT_TIMEOUT_MS
+            ),
+        ),
+        (
+            "radio near text",
+            lambda: page.locator("input[type='radio']").locator(
+                "xpath=ancestor::*[contains(normalize-space(.), 'Pending')][1]"
+            ).first.click(timeout=_DEFAULT_TIMEOUT_MS),
+        ),
+    ):
+        try:
+            click_fn()
+            _rto_log_verbose(f"Resume: Pending Applications selected ({label})")
+            _pause()
+            return
+        except Exception as exc:
+            tried.append(f"{label}: {exc!s}")
+    _rto_log(f"WARNING: Pending Applications radio — tried {tried!r}")
+    raise RuntimeError("Resume: Pending Applications radio not found on dealer home")
+
+
+def _resume_pending_grid_nav_succeeded(page: Page) -> bool:
+    """True when a pending-grid action opened workbench or the dealer document upload form."""
+    if _vahan_on_workbench(page):
+        return True
+    if _screen_4_on_documents_upload_page(page):
+        return True
+    try:
+        return bool(re.search(r"workbench\.xhtml", page.url or "", re.I))
+    except Exception:
+        return False
+
+
+def _resume_documents_upload_open_for_app(page: Page, application_id: str) -> bool:
+    """True when the tab is already on Documents Upload for ``application_id``."""
+    if not _screen_4_on_documents_upload_page(page):
+        return False
+    app = (application_id or "").strip()
+    if not app:
+        return True
+    try:
+        body = (page.locator("body").inner_text(timeout=2000) or "").replace(" ", "").upper()
+        return app.replace(" ", "").upper() in body
+    except Exception:
+        return False
+
+
+def _resume_click_get_pending_work(page: Page) -> None:
+    """Click **Get Pending Work** after Pending Applications is selected."""
+    for label, click_fn in (
+        (
+            "role button",
+            lambda: page.get_by_role("button", name=_GET_PENDING_WORK_LABEL_RE).first.click(
+                timeout=_DEFAULT_TIMEOUT_MS
+            ),
+        ),
+        (
+            "input submit",
+            lambda: page.locator("input[type='submit'], input[type='button']").filter(
+                has_text=_GET_PENDING_WORK_LABEL_RE
+            ).first.click(timeout=_DEFAULT_TIMEOUT_MS),
+        ),
+        (
+            "button filter",
+            lambda: page.locator("button, a").filter(has_text=_GET_PENDING_WORK_LABEL_RE).first.click(
+                timeout=_DEFAULT_TIMEOUT_MS
+            ),
+        ),
+    ):
+        try:
+            click_fn()
+            _rto_log_verbose(f"Resume: Get Pending Work clicked ({label})")
+            _pause()
+            _wait_for_progress_close(page)
+            return
+        except Exception:
+            continue
+    raise RuntimeError("Resume: Get Pending Work button not found on dealer home")
+
+
+def _resume_current_paginator_page_label(page: Page) -> str:
+    """Best-effort active paginator page number (defaults to ``1``)."""
+    try:
+        active = page.locator(".ui-paginator-page.ui-state-active").first
+        if active.count() > 0:
+            txt = (active.inner_text(timeout=1000) or "").strip()
+            if txt.isdigit():
+                return txt
+    except Exception:
+        pass
+    return "1"
+
+
+def _resume_advance_paginator(page: Page, pages_tried: set[str]) -> bool:
+    """Open the next unvisited numbered paginator page, or click next / Next-200."""
+    try:
+        pages = page.locator(".ui-paginator-page")
+        count = pages.count()
+        for idx in range(count):
+            el = pages.nth(idx)
+            label = (el.inner_text(timeout=800) or "").strip()
+            if not label.isdigit() or label in pages_tried:
+                continue
+            cls = el.get_attribute("class") or ""
+            if "ui-state-disabled" in cls:
+                continue
+            el.click(timeout=_DEFAULT_TIMEOUT_MS)
+            _rto_log_verbose(f"Resume: paginator → page {label}")
+            _wait_for_progress_close(page)
+            time.sleep(0.25)
+            return True
+    except Exception as exc:
+        _rto_log(f"Resume: numbered paginator advance failed: {exc!s}")
+
+    for sel in (
+        ".ui-paginator-next:not(.ui-state-disabled)",
+        "a.ui-paginator-next:not(.ui-state-disabled)",
+        "button:has-text('Next-200')",
+        "a:has-text('Next-200')",
+        ".ui-paginator-last:not(.ui-state-disabled)",
+    ):
+        try:
+            nxt = page.locator(sel).first
+            if nxt.count() == 0:
+                continue
+            cls = nxt.get_attribute("class") or ""
+            if "ui-state-disabled" in cls:
+                continue
+            nxt.click(timeout=_DEFAULT_TIMEOUT_MS)
+            _rto_log_verbose(f"Resume: paginator advanced via {sel}")
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _resume_wait_pending_grid_settled(page: Page) -> None:
+    """Wait for pending-work datatable rows after Get Pending Work or paginator click."""
+    _wait_for_progress_close(page)
+    time.sleep(0.35)
+    for sel in (".ui-datatable-data tr", "tbody tr", "table[role='grid'] tr"):
+        try:
+            page.locator(sel).first.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+            return
+        except Exception:
+            continue
+
+
+def _resume_find_application_row(page: Page, application_id: str) -> Locator | None:
+    """Locate pending-work row containing ``application_id`` (Application No column or row text)."""
+    app = (application_id or "").strip()
+    if not app:
+        return None
+    app_re = re.compile(re.escape(app), re.I)
+    row_selectors = (
+        ".ui-datatable-data tr",
+        "tbody tr",
+        "table[role='grid'] tr",
+        "tr",
+    )
+    for sel in row_selectors:
+        try:
+            rows = page.locator(sel).filter(has_text=app_re)
+            n = rows.count()
+            for idx in range(n):
+                row = rows.nth(idx)
+                try:
+                    if row.locator("th").count() > 0:
+                        continue
+                except Exception:
+                    pass
+                try:
+                    if row.is_visible(timeout=500):
+                        return row
+                except Exception:
+                    continue
+        except Exception:
+            continue
+
+    # JS fallback — normalized match when Playwright filter misses nested cell text.
+    try:
+        row_idx = page.evaluate(
+            """(appId) => {
+                const norm = (s) => (s || '').replace(/\\s+/g, '').toUpperCase();
+                const target = norm(appId);
+                const rows = document.querySelectorAll(
+                    '.ui-datatable-data tr, tbody tr, table[role="grid"] tr'
+                );
+                let dataIdx = -1;
+                for (const row of rows) {
+                    if (row.querySelector('th')) continue;
+                    const text = norm(row.innerText || row.textContent || '');
+                    if (!text) continue;
+                    dataIdx += 1;
+                    if (text.includes(target)) return dataIdx;
+                }
+                return -1;
+            }""",
+            app,
+        )
+        if isinstance(row_idx, int) and row_idx >= 0:
+            for sel in (".ui-datatable-data tr", "tbody tr"):
+                try:
+                    all_rows = page.locator(sel)
+                    n = all_rows.count()
+                    seen = 0
+                    for i in range(n):
+                        row = all_rows.nth(i)
+                        if row.locator("th").count() > 0:
+                            continue
+                        if seen == row_idx:
+                            return row
+                        seen += 1
+                except Exception:
+                    continue
+    except Exception as exc:
+        logger.debug("fill_rto: resume JS row scan: %s", exc)
+    return None
+
+
+def _resume_click_row_action(
+    page: Page,
+    row,
+    *,
+    action_priority: tuple[re.Pattern[str], ...] | None = None,
+) -> None:
+    """Click the best Action control on a pending-work grid row (Verify / Entry / …)."""
+    buttons = row.locator("button, a, input[type='button'], input[type='submit']")
+    count = buttons.count()
+    priority = action_priority or (_ENTRY_ACTION_RE, _VERIFY_ACTION_RE)
+    preferred_idx: int | None = None
+    fallback_idx: int | None = None
+    for want in priority:
+        for idx in range(count):
+            btn = buttons.nth(idx)
+            try:
+                txt = (btn.inner_text(timeout=1000) or btn.get_attribute("value") or "").strip()
+            except Exception:
+                txt = ""
+            if not txt or _APPROVE_ACTION_RE.match(txt):
+                continue
+            if want.match(txt):
+                preferred_idx = idx
+                break
+        if preferred_idx is not None:
+            break
+    if preferred_idx is None:
+        for idx in range(count):
+            btn = buttons.nth(idx)
+            try:
+                txt = (btn.inner_text(timeout=1000) or btn.get_attribute("value") or "").strip()
+            except Exception:
+                txt = ""
+            if not txt or _APPROVE_ACTION_RE.match(txt):
+                continue
+            if _RESUME_ROW_ACTION_PREFERRED_RE.match(txt):
+                preferred_idx = idx
+                break
+            if fallback_idx is None:
+                fallback_idx = idx
+    pick = preferred_idx if preferred_idx is not None else fallback_idx
+    if pick is None:
+        raise RuntimeError("Resume: no non-Approve action button on matching pending-work row")
+    btn = buttons.nth(pick)
+    txt = (btn.inner_text(timeout=1000) or btn.get_attribute("value") or "").strip()
+    btn.click(timeout=_DEFAULT_TIMEOUT_MS)
+    _rto_log(f"Resume: clicked row action {txt!r}")
+
+
+def _resume_open_application_row(
+    page: Page,
+    application_id: str,
+    *,
+    rto_status: int | None,
+    cur_page: str = "1",
+    target: Locator | None = None,
+) -> bool:
+    """Click Verify / Entry on a located row. True when workbench opens (even if post-click wait errors)."""
+    app = (application_id or "").strip()
+    row = target if target is not None else _resume_find_application_row(page, app)
+    if row is None:
+        return False
+    clicked = False
+    try:
+        row.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+        _resume_click_row_action(
+            page, row, action_priority=_resume_row_action_priority(rto_status)
+        )
+        clicked = True
+    except Exception as exc:
+        _rto_log(f"WARNING: row action on page {cur_page}: {exc!s}")
+    _pause()
+    _wait_for_progress_close_loop(page)
+    time.sleep(0.5)
+    if _resume_pending_grid_nav_succeeded(page):
+        try:
+            url = (page.url or "")[:220]
+            _rto_log(f"Resume: opened {app!r} on page {cur_page} — workbench url={url}")
+        except Exception:
+            _rto_log(f"Resume: opened {app!r} on page {cur_page} — workbench loaded")
+        return True
+    if clicked:
+        _rto_log(f"WARNING: row action clicked but workbench not detected for {app!r}")
+    return False
+
+
+def _resume_paginate_and_open_application(
+    page: Page,
+    application_id: str,
+    *,
+    rto_status: int | None = None,
+) -> None:
+    """Scan pending-work pages for ``application_id`` and open via row Action (Verify / Entry)."""
+    app = (application_id or "").strip()
+    if not app:
+        raise RuntimeError("Resume: application_id is required to open pending work")
+
+    if _resume_documents_upload_open_for_app(page, app):
+        _rto_log(f"Resume: {app!r} — already on Documents Upload page")
+        return
+
+    pages_tried: set[str] = set()
+    max_attempts = 25
+
+    _resume_wait_pending_grid_settled(page)
+
+    for attempt in range(1, max_attempts + 1):
+        cur_page = _resume_current_paginator_page_label(page)
+        pages_tried.add(cur_page)
+        _rto_log(
+            f"Resume: scan pending grid page {cur_page} (attempt {attempt}) for {app!r}"
+        )
+
+        target = _resume_find_application_row(page, app)
+        if target is not None:
+            if _resume_open_application_row(
+                page,
+                app,
+                rto_status=rto_status,
+                cur_page=cur_page,
+                target=target,
+            ):
+                return
+
+        if _resume_pending_grid_nav_succeeded(page):
+            _rto_log(f"Resume: {app!r} — workbench already open after grid action")
+            return
+
+        if not _resume_advance_paginator(page, pages_tried):
+            break
+        _resume_wait_pending_grid_settled(page)
+
+    if _resume_pending_grid_nav_succeeded(page):
+        _rto_log(f"Resume: {app!r} — workbench open (Verify/Entry succeeded during scan)")
+        return
+
+    _rto_log(
+        f"Resume: {app!r} not in grid after pages {sorted(pages_tried, key=int)!r}"
+    )
+    _dump_page_state(page, f"pending application not found: {app}")
+    raise RuntimeError(
+        f"Resume: application {app!r} not found in pending-work grid "
+        f"(pages tried: {sorted(pages_tried, key=int)})"
+    )
+
+
+def _resume_open_application_from_pending_grid(
+    page: Page,
+    office: str,
+    application_id: str,
+    *,
+    rto_status: int | None = None,
+) -> None:
+    """Resume path: office → Pending Applications → Get Pending Work → paginate → Verify/Entry."""
+    _set_screen("Resume")
+    logger.info(
+        "fill_rto: resume pending grid office=%s application_id=%s rto_status=%s",
+        office,
+        application_id,
+        rto_status,
+    )
+    _rto_log(
+        f"Resume: pending grid office={office!r} app={application_id!r} "
+        f"rto_status={rto_status!r}"
+    )
+
+    _select_pf_dropdown(
+        page,
+        "div#officeList",
+        office,
+        label="Select Assigned Office",
+    )
+    _pause()
+
+    _resume_select_pending_applications_radio(page)
+    _resume_click_get_pending_work(page)
+    _resume_paginate_and_open_application(page, application_id, rto_status=rto_status)
 
 
 def _screen_1(page: Page, office: str) -> None:
@@ -2432,6 +3584,8 @@ def _screen_3_click_entry(page: Page, data: dict, *, skip_home: bool) -> None:
 
 def _screen_3_pf_subtab_probe_log(page: Page, label_pattern: str) -> None:
     """Log DOM hints for a sub-tab (ids/classes) to the RTO file for selector tuning."""
+    if not RTO_FILL_LOG_VERBOSE:
+        return
     rx = re.compile(label_pattern, re.I)
     try:
         # Prefer workbench sub-tab row (matches RTO dumps: ``ul.ui-tabs-nav`` / ``li`` / ``a``).
@@ -2507,7 +3661,7 @@ def _screen_3_scroll_to_tax_mode(page: Page) -> None:
             "(el) => el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight)"
         )
         _pause()
-        _rto_log("Screen 3: scrolled Vehicle Details tab panel toward bottom (Tax Mode region)")
+        _rto_log_verbose("Screen 3: scrolled Vehicle Details tab panel toward bottom (Tax Mode region)")
     except Exception as e:
         _rto_log(f"Screen 3: tab panel scroll skipped ({e!s})")
 
@@ -2517,7 +3671,7 @@ def _screen_3_scroll_to_tax_mode(page: Page) -> None:
         loc.wait_for(state="attached", timeout=3000)
         loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
         _pause()
-        _rto_log(f"Screen 3: scrolled to Tax Mode (fast tableTaxMode:0 {fast_sel!r})")
+        _rto_log_verbose(f"Screen 3: scrolled to Tax Mode (fast tableTaxMode:0 {fast_sel!r})")
         return
     except Exception:
         pass
@@ -2532,7 +3686,7 @@ def _screen_3_scroll_to_tax_mode(page: Page) -> None:
             loc.wait_for(state="attached", timeout=3000)
             loc.evaluate("el => el.scrollIntoView({ block: 'center', inline: 'nearest' })")
             _pause()
-            _rto_log(f"Screen 3: scrolled to Tax Mode ({sel!r})")
+            _rto_log_verbose(f"Screen 3: scrolled to Tax Mode ({sel!r})")
             return
         except Exception:
             continue
@@ -2745,6 +3899,8 @@ def _screen_3_select_tax_mode_one_time(page: Page) -> bool:
 
 def _screen_3_log_tax_mode_wiring_snapshot(page: Page) -> None:
     """Log Tax Mode control ids / selected labels (RTO.txt) so selectors can be wired for a fast path."""
+    if not RTO_FILL_LOG_VERBOSE:
+        return
     try:
         snap = page.evaluate(
             """() => {
@@ -2897,7 +4053,78 @@ def _screen_3_any_modal_dialog_visible(page: Page) -> bool:
             return True
     except Exception:
         pass
+    try:
+        if page.locator("#msgDialog:visible, [id*='msgDialog']:visible").count() > 0:
+            return True
+    except Exception:
+        pass
     return False
+
+
+def _screen_3_find_insurance_period_followup_dialog(page: Page) -> Locator | None:
+    """Visible dialog after **Insurance Period** change — exclude OTP / owner-verify modals."""
+    if _find_visible_otp_dialog(page) is not None:
+        return None
+    patterns = (
+        r"Insurance|insurance|Period|period|Policy|policy|valid|upto|Upto|Information|Message|Alert",
+    )
+    for pat in patterns:
+        try:
+            loc = page.locator(".ui-dialog:visible, [role='dialog']:visible").filter(
+                has_text=re.compile(pat, re.I)
+            )
+            if loc.count() > 0 and loc.first.is_visible(timeout=250):
+                return loc.first
+        except Exception:
+            continue
+    try:
+        generic = page.locator(
+            "#msgDialog:visible, .ui-dialog:visible, [role='dialog']:visible"
+        ).first
+        if generic.is_visible(timeout=250):
+            return generic
+    except Exception:
+        pass
+    return None
+
+
+def _screen_3_dismiss_post_insurance_period_dialog(page: Page) -> bool:
+    """Dismiss occasional Vahan popup after **Insurance Period** change."""
+    _wait_for_progress_close_loop(page)
+    time.sleep(0.35)  # AJAX follow-up modal can lag after period select.
+    dismissed = False
+    deadline = time.monotonic() + _SCREEN3_PERIOD_DIALOG_POLL_S
+    while time.monotonic() < deadline:
+        if not _screen_3_any_modal_dialog_visible(page):
+            time.sleep(0.12)
+            continue
+        dlg = _screen_3_find_insurance_period_followup_dialog(page)
+        if dlg is None:
+            # Generic visible dialog (wording varies by build).
+            try:
+                dlg = page.locator(".ui-dialog:visible, [role='dialog']:visible").first
+                if not dlg.is_visible(timeout=_FIRST_TRY_MS):
+                    time.sleep(0.1)
+                    continue
+            except Exception:
+                time.sleep(0.1)
+                continue
+        try:
+            snippet = (dlg.inner_text(timeout=800) or "").strip().replace("\n", " ")[:400]
+            if snippet:
+                _rto_log(f"Screen 3c: Insurance Period popup: {snippet!r}")
+        except Exception:
+            pass
+        if _screen_3_click_dialog_dismiss_any(
+            dlg, page, log_prefix="Screen 3c Insurance Period popup"
+        ):
+            dismissed = True
+            _wait_for_progress_close_loop(page)
+            continue
+        break
+    if dismissed:
+        _rto_log("Screen 3c: Insurance Period popup dismissed")
+    return dismissed
 
 
 def _screen_3_post_save_vehicle_details_dialogs(page: Page, data: dict | None) -> str:
@@ -3021,7 +4248,7 @@ def _screen_3_scroll_subtab_bar_into_view(page: Page) -> None:
         nav.wait_for(state="attached", timeout=_DEFAULT_TIMEOUT_MS)
         nav.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
         _pause()
-        _rto_log("Screen 3: scrolled to sub-tab bar")
+        _rto_log_verbose("Screen 3: scrolled to sub-tab bar")
     except Exception as e:
         _rto_log(f"WARNING: scroll to sub-tab bar: {e!s}")
 
@@ -3083,9 +4310,209 @@ _JS_POPUP_PREFLIGHT_SNAPSHOT = """() => {
     return { dialogs: dialogs, overlays: overlays, dialogButtons: dialogButtons, extraPopupLike: extra };
 }"""
 
+_JS_INSURANCE_TAB_FIELD_SNAPSHOT = """() => {
+    const RE = /ins|policy|nomination|nominee|idv|series|vm_rel|hpa|hypo|insur|ins_year|ins_cd|isHypo|nomineeradio/i;
+    const clip = (s, n) => String(s || '').replace(/\\s+/g, ' ').trim().substring(0, n);
+
+    function visible(el) {
+        const r = el.getBoundingClientRect();
+        const st = window.getComputedStyle(el);
+        return r.width >= 2 && r.height >= 2 && st.display !== 'none' && st.visibility !== 'hidden';
+    }
+
+    function labelFor(el) {
+        const id = el.id || '';
+        if (id) {
+            const lab = document.querySelector(`label[for="${CSS.escape(id)}"]`);
+            if (lab) return clip(lab.innerText, 80);
+        }
+        const pfLab = document.getElementById(`${id}_label`);
+        if (pfLab) return clip(pfLab.innerText, 80);
+        const wrap = el.closest('.ui-selectonemenu, .ui-chkbox, .ui-radiobutton, .ui-calendar');
+        if (wrap && wrap.id) {
+            const wl = document.getElementById(`${wrap.id}_label`);
+            if (wl) return clip(wl.innerText, 80);
+        }
+        return '';
+    }
+
+    function parentPfId(el) {
+        const w = el.closest('[id].ui-selectonemenu, [id].ui-chkbox, [id].ui-radiobutton, [id].ui-calendar');
+        return w && w.id ? w.id.substring(0, 120) : '';
+    }
+
+    function selectMeta(el) {
+        if (el.tagName !== 'SELECT') return null;
+        const opts = Array.from(el.options || []);
+        const si = el.selectedIndex;
+        const sel = si >= 0 && opts[si] ? opts[si] : null;
+        return {
+            selectedIndex: si,
+            selectedLabel: sel ? clip(sel.textContent, 80) : '',
+            selectedValue: sel ? clip(sel.value, 48) : '',
+            optionCount: opts.length,
+            optionsPreview: opts.slice(0, 8).map((o, i) => ({
+                i,
+                t: clip(o.textContent, 72),
+                v: clip(o.value, 40)
+            }))
+        };
+    }
+
+    const fields = [];
+    document.querySelectorAll(
+        'input[id], select[id], textarea[id], button[id], a[id], span[id].ui-button, div[id].ui-selectonemenu'
+    ).forEach((el) => {
+        const id = el.id || '';
+        if (!id || !RE.test(id)) return;
+        const sm = selectMeta(el);
+        fields.push({
+            tag: el.tagName,
+            id: id.substring(0, 120),
+            name: clip(el.getAttribute('name'), 80),
+            type: clip(el.getAttribute('type') || (el.tagName === 'SELECT' ? 'select' : ''), 32),
+            role: clip(el.getAttribute('role'), 40),
+            cls: clip(el.className, 100),
+            placeholder: clip(el.getAttribute('placeholder'), 60),
+            title: clip(el.getAttribute('title'), 60),
+            ariaLabel: clip(el.getAttribute('aria-label'), 60),
+            visible: visible(el),
+            disabled: !!el.disabled,
+            readOnly: !!el.readOnly,
+            checked: el.type === 'checkbox' || el.type === 'radio' ? !!el.checked : null,
+            hasDatepicker: el.classList ? el.classList.contains('hasDatepicker') : false,
+            value: clip(el.value, 48),
+            text: clip(el.innerText, 80),
+            label: labelFor(el),
+            parentPf: parentPfId(el),
+            select: sm,
+            outerHTML: clip(el.outerHTML, 260)
+        });
+    });
+
+    const pfLabels = [];
+    document.querySelectorAll('[id$="_label"], label.ui-outputlabel, span.ui-outputlabel').forEach((el) => {
+        const id = el.id || '';
+        const blob = (id + ' ' + (el.getAttribute('for') || '') + ' ' + (el.innerText || '')).toLowerCase();
+        if (!RE.test(blob)) return;
+        pfLabels.push({
+            tag: el.tagName,
+            id: id.substring(0, 120),
+            forId: clip(el.getAttribute('for'), 120),
+            text: clip(el.innerText, 100),
+            cls: clip(el.className, 80),
+            outerHTML: clip(el.outerHTML, 200)
+        });
+    });
+
+    const dialogs = [];
+    document.querySelectorAll('.ui-dialog, [role="dialog"]').forEach((el) => {
+        if (dialogs.length >= 4) return;
+        if (!visible(el)) return;
+        dialogs.push({
+            id: clip(el.id, 80),
+            title: clip(el.querySelector('.ui-dialog-title')?.innerText, 80),
+            text: clip(el.innerText, 160),
+            outerHTML: clip(el.outerHTML, 320)
+        });
+    });
+
+    const tab = document.querySelector(
+        'ul.ui-tabs-nav li.ui-state-active a, ul.ui-tabs-nav li.ui-tabs-selected a'
+    );
+    return {
+        activeSubtab: tab ? clip(tab.textContent, 100) : '',
+        fieldCount: fields.length,
+        fields,
+        pfLabels: pfLabels.slice(0, 50),
+        dialogs
+    };
+}"""
+
+
+def _screen_3_log_insurance_inventory_row(prefix: str, row: dict) -> None:
+    """Format one insurance-tab inventory element for RTO.txt."""
+    parts = [
+        f"{prefix}{row.get('tag')} id={row.get('id')!r}",
+        f"type={row.get('type')!r}" if row.get("type") else None,
+        f"name={row.get('name')!r}" if row.get("name") else None,
+        f"visible={row.get('visible')}",
+        f"disabled={row.get('disabled')}",
+        f"readOnly={row.get('readOnly')}" if row.get("readOnly") else None,
+        f"checked={row.get('checked')}" if row.get("checked") is not None else None,
+        f"hasDatepicker={row.get('hasDatepicker')}" if row.get("hasDatepicker") else None,
+        f"value={row.get('value')!r}" if row.get("value") else None,
+        f"text={row.get('text')!r}" if row.get("text") else None,
+        f"label={row.get('label')!r}" if row.get("label") else None,
+        f"parentPf={row.get('parentPf')!r}" if row.get("parentPf") else None,
+        f"cls={row.get('cls')!r}" if row.get("cls") else None,
+        f"placeholder={row.get('placeholder')!r}" if row.get("placeholder") else None,
+        f"aria-label={row.get('ariaLabel')!r}" if row.get("ariaLabel") else None,
+    ]
+    _rto_inventory_log(" ".join(p for p in parts if p))
+    sm = row.get("select")
+    if isinstance(sm, dict) and sm:
+        _rto_inventory_log(
+            f"{prefix}  select: idx={sm.get('selectedIndex')} "
+            f"label={sm.get('selectedLabel')!r} value={sm.get('selectedValue')!r} "
+            f"options={sm.get('optionCount')}"
+        )
+        for opt in sm.get("optionsPreview") or []:
+            _rto_inventory_log(
+                f"{prefix}    opt[{opt.get('i')}] text={opt.get('t')!r} value={opt.get('v')!r}"
+            )
+    html = (row.get("outerHTML") or "").strip()
+    if html:
+        _rto_inventory_log(f"{prefix}  html: {html}")
+
+
+def _screen_3_dump_insurance_tab_field_inventory(page: Page, *, phase: str) -> None:
+    """Log insurance/nominee/hypo field ids in every frame → companion ``*_3c_inventory.txt``."""
+    if not RTO_FILL_SCREEN3_INSURANCE_FIELD_DUMP:
+        return
+    log = _rto_action_log.get()
+    if log is not None:
+        inv_display = _rto_log_path_display(log.inventory_path, dealer_id=None)
+        _rto_log(f"Screen 3c field inventory ({phase}) → {inv_display}")
+    _rto_inventory_log(f"=== Screen 3c insurance field inventory ({phase}) ===")
+    try:
+        _rto_inventory_log(f"page url: {(page.url or '')[:300]}")
+    except Exception:
+        pass
+    try:
+        for fi, frame in enumerate(page.frames):
+            try:
+                fn = frame.name or "main"
+                fu = (frame.url or "")[:200]
+                snap = frame.evaluate(_JS_INSURANCE_TAB_FIELD_SNAPSHOT)
+            except Exception as e:
+                _rto_inventory_log(f"  frame[{fi}] inventory error: {e!s}")
+                continue
+            _rto_inventory_log(f"  frame[{fi}] {fn!r} url={fu}")
+            _rto_inventory_log(
+                f"    active_subtab={snap.get('activeSubtab')!r} "
+                f"fields={snap.get('fieldCount')} dialogs={len(snap.get('dialogs') or [])}"
+            )
+            for dlg in snap.get("dialogs") or []:
+                _rto_inventory_log(
+                    f"    DIALOG id={dlg.get('id')!r} title={dlg.get('title')!r} "
+                    f"text={dlg.get('text')!r}"
+                )
+                if dlg.get("outerHTML"):
+                    _rto_inventory_log(f"      html: {dlg.get('outerHTML')}")
+            for row in snap.get("fields") or []:
+                _screen_3_log_insurance_inventory_row("    FIELD ", row)
+            for row in snap.get("pfLabels") or []:
+                _screen_3_log_insurance_inventory_row("    LABEL ", row)
+    except Exception as e:
+        _rto_inventory_log(f"Screen 3c insurance field inventory error: {e!s}")
+    _rto_inventory_log(f"=== End Screen 3c insurance field inventory ({phase}) ===")
+
 
 def _screen_3_dump_frames_and_popup_candidates(page: Page) -> None:
     """Before Hypothecation sub-tab: log every frame plus dialog / overlay / Ok-button inventory (RTO.txt)."""
+    if not RTO_FILL_LOG_VERBOSE:
+        return
     _rto_log("=== Pre–Hypothecation sub-tab: frames + popup-like DOM (for Ok / modal selectors) ===")
     try:
         _rto_log(f"page url: {(page.url or '')[:500]}")
@@ -3391,8 +4818,9 @@ def _screen_3_pf_dropdown_chain(
                 value,
                 label=label,
                 option_label_regex=option_label_regex,
-                timeout=_DEFAULT_TIMEOUT_MS,
+                timeout=_screen3_timeout_ms(),
                 use_native_select=use_native_select,
+                dump_on_failure=False,
             )
             if wrapper_id:
                 _close_pf_selectonemenu_overlay(page, wrapper_id)
@@ -3414,27 +4842,31 @@ def _screen_3_native_select_chain(
         return False
     for sel in selectors:
         try:
-            _select(page, sel, value, label=label, timeout=_DEFAULT_TIMEOUT_MS)
+            _select(page, sel, value, label=label, timeout=_screen3_timeout_ms())
             return True
         except Exception:
             continue
     return False
 
 
-def _fill_first_matching(page: Page, selectors: tuple[str, ...], value: object, *, label: str) -> bool:
+def _fill_first_matching(
+    page: Page, selectors: tuple[str, ...], value: object, *, label: str, dump_on_failure: bool = True
+) -> bool:
     if value is None:
         return True
     text = str(value).strip()
     if text == "":
         return True
-    for sel in selectors:
+    sel = _find_first_attached_selector(page, selectors, timeout_ms=_FIRST_TRY_MS)
+    if sel:
         try:
-            _fill(page, sel, text, label=label, timeout=_DEFAULT_TIMEOUT_MS)
+            _fill(page, sel, text, label=label, timeout=_screen3_timeout_ms(), dump_on_failure=False)
             return True
         except Exception:
-            continue
+            pass
     _rto_log(f"WARNING: {label} not filled (no matching field)")
-    _dump_page_state(page, f"field not filled: {label}")
+    if dump_on_failure:
+        _dump_page_state(page, f"field not filled: {label}")
     return False
 
 
@@ -3452,10 +4884,11 @@ def _screen_3_is_select_placeholder_label(t: str) -> bool:
 
 def _screen_3_native_select_has_non_placeholder_value(page: Page, selectors: tuple[str, ...]) -> bool:
     """True if the first matching ``select`` shows a non-placeholder selected option."""
+    probe_ms = _screen3_timeout_ms()
     for sel in selectors:
         try:
             loc = page.locator(sel).first
-            loc.wait_for(state="attached", timeout=2000)
+            loc.wait_for(state="attached", timeout=probe_ms)
             txt = (
                 loc.evaluate(
                     "el => { const o = el.options[el.selectedIndex]; "
@@ -3482,23 +4915,165 @@ def _screen_3_insurance_type_already_set(page: Page) -> bool:
     return _screen_3_native_select_has_non_placeholder_value(page, _SCREEN3_INSURANCE_TYPE_NATIVE)
 
 
-def _screen_3_insurance_company_already_set(page: Page) -> bool:
-    """Vahan may pre-fill **Insurance Company** — do not overwrite."""
+def _screen_3_read_insurance_company_label(page: Page) -> str:
+    """Visible **Insurance Company** label or native ``select`` selected option text."""
     label_ids = (
         "workbench_tabview:insurance_company_label",
         "workbench_tabview:insuranceCompany_label",
         "workbench_tabview:ins_cd_label",
     )
-    if any(_workbench_pf_menu_label_has_value(page, lid) for lid in label_ids):
-        return True
-    return _screen_3_native_select_has_non_placeholder_value(page, _SCREEN3_INSURANCE_COMPANY_NATIVE)
+    probe_ms = _SCREEN3_INSURANCE_COMPANY_TIMEOUT_MS
+    for lid in label_ids:
+        try:
+            t = (page.locator(f'[id="{lid}"]').first.inner_text(timeout=probe_ms) or "").strip()
+            if t and not _screen_3_is_select_placeholder_label(t):
+                return t
+        except Exception:
+            continue
+    for sel in _SCREEN3_INSURANCE_COMPANY_NATIVE:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="attached", timeout=probe_ms)
+            txt = loc.evaluate(
+                """el => {
+                    const o = el.options[el.selectedIndex];
+                    return o ? (o.textContent || '').trim() : '';
+                }"""
+            )
+            if txt and not _screen_3_is_select_placeholder_label(str(txt)):
+                return str(txt).strip()
+        except Exception:
+            continue
+    return ""
 
 
-def _screen_3_insurance_period_already_set(page: Page) -> bool:
-    """Vahan may pre-fill **Insurance Period (in year)** — do not overwrite."""
-    if _workbench_pf_menu_label_has_value(page, "workbench_tabview:ins_year_label"):
+def _screen_3_insurance_company_already_set(page: Page) -> bool:
+    """Vahan may pre-fill **Insurance Company** — do not overwrite."""
+    return bool(_screen_3_read_insurance_company_label(page))
+
+
+def _screen_3_insurer_search_phrases(insurer: str) -> list[str]:
+    """Filter phrases for the PF Insurance Company overlay (most specific first)."""
+    ins = (insurer or "").strip()
+    phrases: list[str] = []
+    if re.search(r"bajaj", ins, re.I) and re.search(r"general|allianz", ins, re.I):
+        phrases.extend(["Bajaj General", "Bajaj"])
+    tokens = _screen_3_insurer_filter_tokens(ins)
+    if len(tokens) >= 2:
+        phrases.append(" ".join(tokens[:2]))
+    phrases.extend(tokens)
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in phrases:
+        key = p.lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
+def _screen_3_insurer_norm_key(text: str) -> str:
+    """Normalize insurer / option text for equality checks (drop punctuation / Co Ltd noise)."""
+    s = re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+    for noise in ("limited", "ltd", "company", "co", "pvt", "private"):
+        s = s.replace(noise, "")
+    return s
+
+
+def _screen_3_insurer_option_is_finance_not_insurer(option_text: str) -> bool:
+    """True for bank/financier rows that must not match a general-insurance company target."""
+    opt = (option_text or "").lower()
+    if re.search(r"\b(fin|finance|financier|bank|auto\s*fin)\b", opt):
+        if "insurance" not in opt and "general" not in opt:
+            return True
+    return False
+
+
+def _screen_3_read_insurance_from_value(page: Page) -> str:
+    """Read visible **Insurance from** after Vahan pre-fill or our fill."""
+    for sel in _SCREEN3_INSURANCE_FROM_INPUT:
+        try:
+            val = (page.locator(sel).first.input_value(timeout=1000) or "").strip()
+            if val:
+                return val
+        except Exception:
+            continue
+    return ""
+
+
+def _screen_3_idv_has_decimal_format(page: Page) -> bool:
+    """True when IDV field shows a decimal fraction (Vahan rejects ``90000.00``)."""
+    for sel in _SCREEN3_IDV_INPUT:
+        try:
+            val = (page.locator(sel).first.input_value(timeout=1000) or "").strip()
+            if val and "." in val:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _fill_idv_integer(page: Page, selectors: tuple[str, ...], value: object, *, label: str) -> bool:
+    """Fill IDV as an integer string via JS (avoids PrimeFaces ``.00`` validation errors)."""
+    text = _normalize_idv_for_vahan(value)
+    if not text:
         return True
-    return _screen_3_native_select_has_non_placeholder_value(page, _SCREEN3_INSURANCE_PERIOD_NATIVE)
+    t_ms = _screen3_timeout_ms()
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=t_ms)
+            loc.scroll_into_view_if_needed(timeout=t_ms)
+            loc.evaluate(
+                """(el, v) => {
+                    el.value = v;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                text,
+            )
+            _pause()
+            _rto_log(f"fill: {label} = {text}")
+            return True
+        except Exception:
+            continue
+    return _fill_first_matching(page, selectors, text, label=label)
+
+
+def _screen_3_read_insurance_period_label(page: Page) -> str:
+    """Visible PF label or native ``select`` text for **Insurance Period (in year)**."""
+    try:
+        t = (
+            page.locator('[id="workbench_tabview:ins_year_label"]').first.inner_text(
+                timeout=_screen3_timeout_ms()
+            )
+            or ""
+        ).strip()
+        if t and not _screen_3_is_select_placeholder_label(t):
+            return t
+    except Exception:
+        pass
+    for sel in _SCREEN3_INSURANCE_PERIOD_NATIVE:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="attached", timeout=_screen3_timeout_ms())
+            txt = loc.evaluate(
+                "el => { const o = el.options[el.selectedIndex]; "
+                "return o ? (o.textContent || '').trim() : ''; }"
+            )
+            if txt and not _screen_3_is_select_placeholder_label(str(txt)):
+                return str(txt).strip()
+        except Exception:
+            continue
+    return ""
+
+
+def _screen_3_insurance_period_is_target(page: Page) -> bool:
+    """True when Insurance Period is already **5 Year** (do not overwrite)."""
+    label = _screen_3_read_insurance_period_label(page)
+    if not label:
+        return False
+    return bool(re.search(r"5\s*Year", label, re.I))
 
 
 def _screen_3_insurer_filter_tokens(insurer: str) -> list[str]:
@@ -3517,63 +5092,116 @@ def _screen_3_insurer_filter_tokens(insurer: str) -> list[str]:
 
 
 def _screen_3_insurer_option_matches(insurer: str, option_text: str) -> bool:
-    """Fuzzy match DB insurer label to Vahan portal option text."""
+    """Match DB / portal insurer label to a Vahan option — reject bank/financer lookalikes."""
     opt = (option_text or "").strip()
     if not opt or _screen_3_is_select_placeholder_label(opt):
         return False
+    ins = (insurer or "").strip()
+    if not ins:
+        return False
+    if _screen_3_insurer_option_is_finance_not_insurer(opt):
+        return False
+
+    ins_key = _screen_3_insurer_norm_key(ins)
+    opt_key = _screen_3_insurer_norm_key(opt)
+    if ins_key and opt_key and (ins_key == opt_key or ins_key in opt_key or opt_key in ins_key):
+        return True
+
+    ins_lower = ins.lower()
+    opt_lower = opt.lower()
+    wants_general = "general" in ins_lower or "allianz" in ins_lower
+    if "bajaj" in ins_lower and wants_general:
+        if re.search(r"bajaj\s+general", opt, re.I):
+            return True
+        return False
+
     tokens = _screen_3_insurer_filter_tokens(insurer)
-    if tokens and all(t.lower() in opt.lower() for t in tokens[: min(2, len(tokens))]):
-        return True
-    ins_lower = insurer.lower()
-    if "bajaj" in ins_lower and re.search(r"bajaj.*general", opt, re.I):
-        return True
-    norm_ins = re.sub(r"[^a-z0-9]", "", ins_lower)
-    norm_opt = re.sub(r"[^a-z0-9]", "", opt.lower())
-    if norm_ins and len(norm_ins) >= 8 and norm_ins[:10] in norm_opt:
+    # Require at least two distinctive tokens — a lone "Bajaj" must not match AUTO FIN.
+    if len(tokens) >= 2 and all(t.lower() in opt_lower for t in tokens[:2]):
+        if wants_general and "general" not in opt_lower and "insurance" not in opt_lower:
+            return False
         return True
     return False
 
 
 def _screen_3_select_insurance_company_overlay(page: Page, insurer: str) -> bool:
-    """Pick **Insurance Company** via ``ins_cd`` PF overlay + filter (359 options)."""
+    """Pick **Insurance Company** via ``ins_cd`` PF filter + one matching ``li`` click."""
     wid = _SCREEN3_INSURANCE_COMPANY_WRAPPER_ID
+    t_ms = _SCREEN3_INSURANCE_COMPANY_TIMEOUT_MS
     wrap = page.locator(f'[id="{wid}"]').first
     try:
-        wrap.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-        wrap.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
-        wrap.click(timeout=_FIRST_TRY_MS)
+        wrap.wait_for(state="visible", timeout=t_ms)
+        wrap.scroll_into_view_if_needed(timeout=t_ms)
+        wrap.click(timeout=t_ms)
         _pause()
         panel = page.locator(f'[id="{wid}_panel"]').first
-        panel.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+        panel.wait_for(state="visible", timeout=t_ms)
     except Exception:
         return False
 
-    for tok in _screen_3_insurer_filter_tokens(insurer):
+    phrases = _screen_3_insurer_search_phrases(insurer)
+    for tok in phrases:
         try:
             fin = panel.locator("input.ui-selectonemenu-filter").first
-            fin.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            fin.wait_for(state="visible", timeout=t_ms)
             fin.fill("")
             fin.fill(tok)
             _pause()
-            break
+            time.sleep(0.15)  # filtered list can lag behind keystrokes
         except Exception:
             continue
 
-    try:
-        items = panel.locator("li.ui-selectonemenu-item")
-        n = min(items.count(), 80)
-        for i in range(n):
-            el = items.nth(i)
-            txt = (el.inner_text(timeout=800) or "").strip()
-            if _screen_3_insurer_option_matches(insurer, txt):
-                el.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
-                el.click(timeout=_FIRST_TRY_MS)
-                _rto_log(f"pf-dropdown (overlay): Insurance Company = {txt}")
-                _pause()
-                _close_pf_selectonemenu_overlay(page, wid)
-                return True
-    except Exception:
-        pass
+        # Prefer exact / Bajaj General regex click — no 80×800ms inner_text scan.
+        try:
+            if re.search(r"bajaj", insurer, re.I) and re.search(
+                r"general|allianz", insurer, re.I
+            ):
+                item = panel.locator("li.ui-selectonemenu-item").filter(
+                    has_text=re.compile(r"Bajaj\s+General\s+Insurance", re.I)
+                ).first
+                item.wait_for(state="visible", timeout=t_ms)
+                txt = (item.inner_text(timeout=t_ms) or "").strip()
+                if _screen_3_insurer_option_matches(insurer, txt):
+                    item.click(timeout=t_ms)
+                    _rto_log(f"pf-dropdown (overlay): Insurance Company = {txt}")
+                    _pause()
+                    _close_pf_selectonemenu_overlay(page, wid)
+                    return True
+        except Exception:
+            pass
+
+        try:
+            # Exact label (escaped) among filtered rows.
+            esc = re.escape(insurer.strip())
+            item = panel.locator("li.ui-selectonemenu-item").filter(
+                has_text=re.compile(rf"^\s*{esc}\s*$", re.I)
+            ).first
+            item.wait_for(state="visible", timeout=t_ms)
+            txt = (item.inner_text(timeout=t_ms) or "").strip()
+            item.click(timeout=t_ms)
+            _rto_log(f"pf-dropdown (overlay): Insurance Company = {txt}")
+            _pause()
+            _close_pf_selectonemenu_overlay(page, wid)
+            return True
+        except Exception:
+            pass
+
+        # Small filtered list only (after filter, usually ≤10).
+        try:
+            items = panel.locator("li.ui-selectonemenu-item:visible")
+            n = min(items.count(), 12)
+            for i in range(n):
+                el = items.nth(i)
+                txt = (el.inner_text(timeout=t_ms) or "").strip()
+                if _screen_3_insurer_option_matches(insurer, txt):
+                    el.click(timeout=t_ms)
+                    _rto_log(f"pf-dropdown (overlay): Insurance Company = {txt}")
+                    _pause()
+                    _close_pf_selectonemenu_overlay(page, wid)
+                    return True
+        except Exception:
+            continue
+
     try:
         _close_pf_selectonemenu_overlay(page, wid)
     except Exception:
@@ -3582,17 +5210,31 @@ def _screen_3_select_insurance_company_overlay(page: Page, insurer: str) -> bool
 
 
 def _screen_3_select_insurance_company_native_fuzzy(page: Page, insurer: str) -> bool:
-    """Native ``ins_cd_input`` — pick first option whose text fuzzy-matches ``insurer``."""
+    """Native ``ins_cd_input`` — prefer exact/normalized match; never bank/financer rows."""
+    t_ms = _SCREEN3_INSURANCE_COMPANY_TIMEOUT_MS
+    target_key = _screen_3_insurer_norm_key(insurer)
     for sel in _SCREEN3_INSURANCE_COMPANY_NATIVE:
         try:
             loc = page.locator(sel).first
-            loc.wait_for(state="attached", timeout=2000)
+            loc.wait_for(state="attached", timeout=t_ms)
             options: list[str] = loc.evaluate(
                 "el => [...el.options].map(o => (o.textContent || '').trim()).filter(Boolean)"
             )
+            # Pass 1: exact / normalized equality.
+            for opt in options:
+                if _screen_3_is_select_placeholder_label(opt):
+                    continue
+                if _screen_3_insurer_option_is_finance_not_insurer(opt):
+                    continue
+                if target_key and _screen_3_insurer_norm_key(opt) == target_key:
+                    loc.select_option(label=opt, timeout=t_ms)
+                    _rto_log(f"pf-dropdown (native exact): Insurance Company = {opt}")
+                    _pause()
+                    return True
+            # Pass 2: fuzzy rules (rejects AUTO FIN when target is Bajaj General).
             for opt in options:
                 if _screen_3_insurer_option_matches(insurer, opt):
-                    loc.select_option(label=opt, timeout=_DEFAULT_TIMEOUT_MS)
+                    loc.select_option(label=opt, timeout=t_ms)
                     _rto_log(f"pf-dropdown (native fuzzy): Insurance Company = {opt}")
                     _pause()
                     return True
@@ -3601,20 +5243,34 @@ def _screen_3_select_insurance_company_native_fuzzy(page: Page, insurer: str) ->
     return False
 
 
+def _screen_3_insurance_company_label_ok(page: Page, insurer: str) -> bool:
+    """True when visible PF Insurance Company label matches the target."""
+    current = _screen_3_read_insurance_company_label(page)
+    return bool(current) and _screen_3_insurer_option_matches(insurer, current)
+
+
 def _screen_3_select_insurance_company(page: Page, insurer: str) -> bool:
-    """Set **Insurance Company** — overlay filter first, then native fuzzy match."""
+    """Set **Insurance Company** — overlay filter first (correct + fast), then native."""
     if _screen_3_select_insurance_company_overlay(page, insurer):
-        return True
+        if _screen_3_insurance_company_label_ok(page, insurer):
+            return True
+        _rto_log(
+            "NOTE: Insurance Company overlay click did not update visible label — try native"
+        )
     if _screen_3_select_insurance_company_native_fuzzy(page, insurer):
-        return True
-    return False
+        # Native alone often leaves PF label stale — open/close overlay or re-click if needed.
+        if _screen_3_insurance_company_label_ok(page, insurer):
+            return True
+        if _screen_3_select_insurance_company_overlay(page, insurer):
+            return _screen_3_insurance_company_label_ok(page, insurer)
+    return _screen_3_insurance_company_label_ok(page, insurer)
 
 
 def _screen_3_pf_label_matches(page: Page, label_id: str, expected: str) -> bool:
     """True when visible PF label shows a non-placeholder value matching ``expected``."""
     try:
         lab = page.locator(f'[id="{label_id}"]').first
-        t = (lab.inner_text(timeout=2000) or "").strip()
+        t = (lab.inner_text(timeout=_screen3_timeout_ms()) or "").strip()
         if _screen_3_is_select_placeholder_label(t):
             return False
         exp = (expected or "").strip()
@@ -3623,6 +5279,124 @@ def _screen_3_pf_label_matches(page: Page, label_id: str, expected: str) -> bool
         return exp.lower() in t.lower() or t.lower() in exp.lower()
     except Exception:
         return False
+
+
+def _screen_3_nominee_relation_option_regex(rel_norm: str) -> re.Pattern[str]:
+    """Case-insensitive match for Vahan nominee relation options (incl. Spouse for Wife/Husband)."""
+    portal = _vahan_nominee_relation_portal_label(rel_norm)
+    canon = (rel_norm or "").strip()
+    if portal == "Spouse" and canon in ("Wife", "Husband"):
+        return re.compile(r"Spouse", re.I)
+    if not portal:
+        return re.compile(r"^$")
+    return re.compile(re.escape(portal), re.I)
+
+
+def _screen_3_select_nominee_relation_from_options(page: Page, rel_norm: str) -> bool:
+    """Scan native ``vm_rel1_input`` options and pick the best relation label match."""
+    from app.services.utility_functions import fuzzy_best_option_label
+
+    portal = _vahan_nominee_relation_portal_label(rel_norm)
+    targets = [portal, (rel_norm or "").strip()]
+    targets = [t for i, t in enumerate(targets) if t and t not in targets[:i]]
+
+    sel = 'select[id="workbench_tabview:vm_rel1_input"]'
+    try:
+        loc = page.locator(sel).first
+        loc.wait_for(state="attached", timeout=_LOOP_BUDGET_MS)
+        options: list[dict] = loc.evaluate(
+            """el => Array.from(el.options).map((o, i) => ({
+                i,
+                t: (o.textContent || '').trim(),
+                v: (o.value || '').trim()
+            }))"""
+        )
+        pick_idx: int | None = None
+        for target in targets:
+            tl_target = target.lower()
+            for o in options:
+                t = (o.get("t") or "").strip()
+                if _screen_3_is_select_placeholder_label(t):
+                    continue
+                tl = t.lower()
+                if tl == tl_target or tl_target in tl or tl in tl_target:
+                    pick_idx = int(o["i"])
+                    break
+            if pick_idx is not None:
+                break
+        if pick_idx is None:
+            labels = [
+                (o.get("t") or "").strip()
+                for o in options
+                if not _screen_3_is_select_placeholder_label((o.get("t") or ""))
+            ]
+            for target in targets:
+                matched = fuzzy_best_option_label(target, labels, min_score=0.5)
+                if matched:
+                    for o in options:
+                        if (o.get("t") or "").strip() == matched:
+                            pick_idx = int(o["i"])
+                            break
+                if pick_idx is not None:
+                    break
+        if pick_idx is not None:
+            loc.select_option(index=pick_idx, force=True)
+            _pause()
+            picked = (options[pick_idx].get("t") or portal or rel_norm).strip()
+            _rto_log(f"select: Relation with nominee = {picked!r} (native index)")
+            return True
+    except Exception as exc:
+        logger.debug("fill_rto: nominee relation native scan: %s", exc)
+    return False
+
+
+def _screen_3_nominee_relation_label_ok(page: Page, label_id: str, rel_norm: str) -> bool:
+    """Verify visible PF label — accept **Spouse** when DB has Wife/Husband."""
+    portal = _vahan_nominee_relation_portal_label(rel_norm)
+    if _screen_3_pf_label_matches(page, label_id, portal):
+        return True
+    if portal == "Spouse":
+        return _screen_3_pf_label_matches(page, label_id, "Spouse")
+    return _screen_3_pf_label_matches(page, label_id, rel_norm)
+
+
+def _screen_3_select_nominee_relation(page: Page, rel_norm: str) -> bool:
+    """Nominee relation — overlay click + visible label verify (native-only does not update PF UI)."""
+    canon = (rel_norm or "").strip()
+    if not canon:
+        return False
+    portal = _vahan_nominee_relation_portal_label(canon)
+    if portal != canon:
+        _rto_log(f"nominee relation portal label: {canon!r} → {portal!r}")
+    label_id = "workbench_tabview:vm_rel1_label"
+    wrapper_id = "workbench_tabview:vm_rel1"
+    rx = _screen_3_nominee_relation_option_regex(canon)
+    pick_label = portal or canon
+    for attempt in range(2):
+        ok = _screen_3_pf_dropdown_chain(
+            page,
+            _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS,
+            pick_label,
+            label="Relation with nominee",
+            option_label_regex=rx,
+            use_native_select=False,
+        )
+        if not ok:
+            ok = _screen_3_select_nominee_relation_from_options(page, canon)
+        if ok and _screen_3_nominee_relation_label_ok(page, label_id, canon):
+            _close_pf_selectonemenu_overlay(page, wrapper_id)
+            return True
+        if attempt == 0:
+            _rto_log(
+                "NOTE: Relation with nominee attempt 1 — visible label not verified, retry overlay"
+            )
+    if _screen_3_nominee_relation_label_ok(page, label_id, canon):
+        return True
+    _rto_log(
+        f"WARNING: Relation with nominee not verified on visible label "
+        f"(db={canon!r} portal={portal!r})"
+    )
+    return False
 
 
 def _screen_3_select_financier_location_dropdown(
@@ -3685,10 +5459,11 @@ def _screen_3_series_type_is_state_series(page: Page) -> bool:
         "workbench_tabview:reg_series_type_label",
         "workbench_tabview:vh_series_type_label",
     )
+    probe_ms = _screen3_timeout_ms()
     for lid in label_ids:
         try:
             lab = page.locator(f'[id="{lid}"]').first
-            t = (lab.inner_text(timeout=2000) or "").strip()
+            t = (lab.inner_text(timeout=probe_ms) or "").strip()
             if t and _SERIES_TYPE_STATE_SERIES_LABEL_RE.search(t):
                 return True
         except Exception:
@@ -3696,7 +5471,7 @@ def _screen_3_series_type_is_state_series(page: Page) -> bool:
     for sel in _SCREEN3_SERIES_TYPE_NATIVE:
         try:
             loc = page.locator(sel).first
-            loc.wait_for(state="attached", timeout=2000)
+            loc.wait_for(state="attached", timeout=probe_ms)
             txt = (
                 loc.evaluate(
                     "el => { const o = el.options[el.selectedIndex]; "
@@ -3713,10 +5488,11 @@ def _screen_3_series_type_is_state_series(page: Page) -> bool:
 
 def _screen_3_input_already_has_value(page: Page, selectors: tuple[str, ...]) -> bool:
     """True if the first matching control already has non-empty value (input or display)."""
+    probe_ms = _screen3_timeout_ms()
     for sel in selectors:
         try:
             loc = page.locator(sel).first
-            loc.wait_for(state="attached", timeout=2000)
+            loc.wait_for(state="attached", timeout=probe_ms)
             v = (
                 loc.evaluate(
                     "el => (el.value || el.getAttribute('value') || el.textContent || '').trim()"
@@ -3727,6 +5503,193 @@ def _screen_3_input_already_has_value(page: Page, selectors: tuple[str, ...]) ->
                 return True
         except Exception:
             continue
+    return False
+
+
+def _screen_3_idv_field_is_blank_or_zero(page: Page) -> bool:
+    """True when IDV is missing, zero, or decimal (needs (re)fill)."""
+    for sel in _SCREEN3_IDV_INPUT:
+        try:
+            val = (page.locator(sel).first.input_value(timeout=1000) or "").strip()
+            if not val:
+                return True
+            normalized = val.replace(",", "").strip()
+            if normalized in ("0", "0.0", "0.00", "0.000"):
+                return True
+            if "." in normalized:
+                whole, frac = normalized.split(".", 1)
+                if whole.strip("0") == "" or frac.strip("0") == "":
+                    return True
+            return False
+        except Exception:
+            continue
+    return True
+
+
+def _screen_3_read_insurance_upto_value(page: Page) -> str:
+    """Read visible **Insurance upto** field value."""
+    for sel in _SCREEN3_INSURANCE_UPTO_INPUT:
+        try:
+            val = (page.locator(sel).first.input_value(timeout=1000) or "").strip()
+            if val:
+                return val
+        except Exception:
+            continue
+    return ""
+
+
+def _screen_3_insurance_upto_needs_fill(page: Page, expected: str) -> bool:
+    """True when **Insurance upto** is blank or does not match the expected date."""
+    exp = (expected or "").strip()
+    if not exp:
+        return False
+    current = _screen_3_read_insurance_upto_value(page)
+    if not current:
+        return True
+    exp_d = _parse_vahan_date(exp)
+    cur_d = _parse_vahan_date(current)
+    if exp_d and cur_d:
+        return exp_d != cur_d
+    return current.strip().lower() != exp.strip().lower()
+
+
+def _screen_3_insurance_upto_input_enabled(page: Page) -> bool:
+    """True when ``ins_upto_input`` is attached and not disabled (after Insurance Period AJAX)."""
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                    const el = document.getElementById('workbench_tabview:ins_upto_input');
+                    if (!el) return false;
+                    if (el.disabled) return false;
+                    if ((el.className || '').includes('ui-state-disabled')) return false;
+                    return true;
+                }"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def _screen_3_wait_insurance_upto_enabled(
+    page: Page, *, budget_ms: int = _SCREEN3_INS_UPTO_ENABLE_BUDGET_MS
+) -> bool:
+    """Poll until Insurance Upto is enabled after Period = 5 Year (short budget)."""
+    if _screen_3_insurance_upto_input_enabled(page):
+        return True
+    t0 = time.monotonic()
+    while (time.monotonic() - t0) * 1000 < budget_ms:
+        _wait_for_progress_close_loop(page, budget_ms=_FIRST_TRY_MS)
+        if _screen_3_insurance_upto_input_enabled(page):
+            return True
+        time.sleep(_FIRST_TRY_MS / 1000.0)
+    return _screen_3_insurance_upto_input_enabled(page)
+
+
+def _screen_3_fill_insurance_upto_date(page: Page, date_str: str) -> bool:
+    """Fill **Insurance upto** — wait until enabled, then JS set + verify once."""
+    if not (date_str or "").strip():
+        return False
+    if not _screen_3_wait_insurance_upto_enabled(page):
+        _rto_log("WARNING: Insurance Upto still disabled after Insurance Period")
+        return False
+    sel = _find_first_attached_selector(page, _SCREEN3_INSURANCE_UPTO_INPUT, timeout_ms=_FIRST_TRY_MS)
+    if not sel:
+        _rto_log("WARNING: Insurance Upto input not found in DOM")
+        return False
+    try:
+        page.locator(sel).first.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+        _pause()
+        _screen_3_fill_datepicker_js(
+            page, sel, date_str, label="Insurance Upto", dump_on_failure=False
+        )
+    except PwTimeout:
+        return False
+    except Exception:
+        return False
+    if not _screen_3_insurance_upto_needs_fill(page, date_str):
+        return True
+    current = _screen_3_read_insurance_upto_value(page)
+    _rto_log(
+        f"WARNING: Insurance Upto not verified after fill "
+        f"(expected {date_str!r}, current={current!r})"
+    )
+    return False
+
+
+def _screen_3_read_nomination_date_value(page: Page) -> str:
+    """Read visible **Nomination Date** field value."""
+    for sel in _SCREEN3_NOMINATION_DATE_INPUT:
+        try:
+            val = (page.locator(sel).first.input_value(timeout=500) or "").strip()
+            if val:
+                return val
+        except Exception:
+            continue
+    return ""
+
+
+def _screen_3_nomination_date_needs_fill(page: Page, expected: str) -> bool:
+    """True when nomination date is blank.
+
+    Accepts either the expected billing/invoice date **or today's date** (Vahan often
+    defaults nomination date to today).
+    """
+    current = _screen_3_read_nomination_date_value(page)
+    if not current:
+        return True
+    cur_d = _parse_vahan_date(current)
+    if cur_d is None:
+        return True
+    today = date.today()
+    if cur_d == today:
+        return False
+    exp = (expected or "").strip()
+    if not exp:
+        return False
+    exp_d = _parse_vahan_date(exp)
+    if exp_d and cur_d == exp_d:
+        return False
+    return True
+
+
+def _screen_3_fill_nomination_date(page: Page, date_str: str) -> bool:
+    """Fill **Nomination Date** — prefer billing date; accept today on verify."""
+    if not (date_str or "").strip():
+        date_str = _fmt_date(date.today())
+    if not _screen_3_nomination_date_needs_fill(page, date_str):
+        current = _screen_3_read_nomination_date_value(page)
+        _rto_log(f"skip: Nomination Date already set ({current!r})")
+        return True
+    sel = _find_first_attached_selector(page, _SCREEN3_NOMINATION_DATE_INPUT, timeout_ms=_FIRST_TRY_MS)
+    if not sel:
+        _rto_log("WARNING: Nomination Date input not found in DOM")
+        return False
+    # Prefer today when billing date is older — matches portal default / operator expectation.
+    candidates = [_fmt_date(date.today()), date_str]
+    seen: set[str] = set()
+    for candidate in candidates:
+        c = (candidate or "").strip()
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        try:
+            page.locator(sel).first.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            _pause()
+            _screen_3_fill_datepicker_js(
+                page, sel, c, label="Nomination Date", dump_on_failure=False
+            )
+        except PwTimeout:
+            continue
+        except Exception:
+            continue
+        if not _screen_3_nomination_date_needs_fill(page, date_str):
+            return True
+    current = _screen_3_read_nomination_date_value(page)
+    _rto_log(
+        f"WARNING: Nomination Date not verified after fill "
+        f"(expected billing={date_str!r} or today, current={current!r})"
+    )
     return False
 
 
@@ -3747,6 +5710,25 @@ def _rto_log_json_chunks(label: str, payload: object, *, max_chunk: int = 6500) 
 
 def _screen_3_log_hypothecation_nominee_wiring(page: Page) -> None:
     """Log stable ids + hpa contents for **Is Hypothecated**, nominee, financier wiring (RTO.txt)."""
+    if not RTO_FILL_LOG_VERBOSE:
+        try:
+            snap = page.evaluate(
+                """() => {
+                    const inp = document.getElementById("workbench_tabview:isHypo_input");
+                    const hpa = document.getElementById("workbench_tabview:hpa");
+                    return {
+                        isHypoChecked: inp ? !!inp.checked : null,
+                        hpaControlCount: hpa
+                            ? hpa.querySelectorAll("input, select, textarea").length
+                            : 0,
+                        nomineeTable: !!document.getElementById("workbench_tabview:nomineeradiobtn1"),
+                    };
+                }"""
+            )
+            _rto_log(f"hypo wiring (compact): {snap!r}")
+        except Exception as e:
+            _rto_log(f"hypo wiring (compact) failed: {e!s}")
+        return
     _rto_log("=== Hypothecation / nominee wiring snapshot (element ids for automation) ===")
     _rto_log(
         "direct: isHypo wrapper="
@@ -3816,7 +5798,7 @@ def _screen_3_wait_hypothecation_ajax_panel(page: Page) -> None:
         page.locator('[id="workbench_tabview:hpa_fncr_name"]').first.wait_for(
             state="visible", timeout=_LOOP_BUDGET_MS
         )
-        _rto_log("hpa: financier name input visible")
+        _rto_log_verbose("hpa: financier name input visible")
     except Exception:
         _rto_log("NOTE: hpa financier name input not visible after AJAX wait")
 
@@ -3882,36 +5864,51 @@ def _screen_3_set_vehicle_hypothecated_checkbox(page: Page, *, has_financier: bo
         _wait_for_progress_close_loop(page)
 
 
-def _screen_3_fill_datepicker_js(page: Page, sel: str, date_str: str, *, label: str) -> None:
+def _screen_3_fill_datepicker_js(
+    page: Page, sel: str, date_str: str, *, label: str, dump_on_failure: bool = True
+) -> None:
     """Fill a ``hasDatepicker`` field via JS — mirrors ``_fill_workbench_purchase_date``."""
     if not date_str:
         return
     loc = page.locator(sel).first
+    attach_ms = _SCREEN3_LOOP_BUDGET_MS if _current_screen.get() == "Screen 3" else _LOOP_BUDGET_MS
     try:
-        loc.wait_for(state="attached", timeout=_LOOP_BUDGET_MS)
+        loc.wait_for(state="attached", timeout=attach_ms)
         loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
 
         try:
             loc.evaluate(
                 """(el, v) => {
+                    el.focus();
                     el.value = v;
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                    try {
+                        if (window.jQuery && typeof jQuery.fn.datepicker === 'function') {
+                            const $el = jQuery(el);
+                            if ($el.hasClass('hasDatepicker') || $el.data('datepicker')) {
+                                $el.datepicker('setDate', v);
+                                $el.datepicker('hide');
+                            }
+                        }
+                    } catch (e) {}
                 }""",
                 date_str,
             )
         except Exception:
             try:
-                loc.fill(date_str, timeout=_LOOP_BUDGET_MS)
+                loc.fill(date_str, timeout=_screen3_timeout_ms())
             except Exception:
-                loc.fill(date_str, timeout=_LOOP_BUDGET_MS, force=True)
+                loc.fill(date_str, timeout=_screen3_timeout_ms(), force=True)
 
         _pause()
         _close_workbench_datepicker_if_open(page)
     except PwTimeout:
         _assert_vahan_session_alive(page)
         _rto_log(f"TIMEOUT fill: {label} selector={sel} value={date_str[:40]}")
-        _dump_page_state(page, f"TIMEOUT fill: {label}")
+        if dump_on_failure:
+            _dump_page_state(page, f"TIMEOUT fill: {label}")
         raise
     logger.debug("fill_rto: filled %s = %s", label, date_str[:40])
     _rto_log(f"fill: {label} = {date_str[:80]}{'…' if len(date_str) > 80 else ''}")
@@ -4057,12 +6054,13 @@ def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
         return
     _pause()
     _wait_for_progress_close_loop(page)
+    _screen_3_dump_insurance_tab_field_inventory(page, phase="after nominee Yes")
 
     # Wait for nominee name input to appear (AJAX loads the panel after Yes click)
     nm_loc = page.locator(_SCREEN3_NOMINEE_NAME_INPUT[0]).first
     try:
         nm_loc.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
-        _rto_log("nominee: name input visible after Yes click")
+        _rto_log_verbose("nominee: name input visible after Yes click")
     except Exception:
         _rto_log("NOTE: nominee name input not visible, trying scroll")
         try:
@@ -4075,40 +6073,68 @@ def _screen_3c_nominee_add_details(page: Page, data: dict) -> None:
         _fill_first_matching(page, _SCREEN3_NOMINEE_NAME_INPUT, nm_raw, label="Nominee Name")
 
     if rel_norm:
-        if not _screen_3_pf_dropdown_chain(
-            page,
-            _SCREEN3_NOMINEE_RELATION_PF_WRAPPERS,
-            rel_norm,
-            label="Relation with nominee",
-            option_label_regex=re.compile(rf"^\s*{re.escape(rel_norm)}\s*$", re.I),
-        ):
-            _screen_3_native_select_chain(
+        try:
+            rel_loc = page.locator(_SCREEN3_NOMINEE_RELATION_PF_WRAPPERS[0]).first
+            rel_loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            _pause()
+        except Exception:
+            pass
+        if not _screen_3_select_nominee_relation(page, rel_norm):
+            portal = _vahan_nominee_relation_portal_label(rel_norm)
+            _screen_3_fail_3c_required_field(
                 page,
-                ('select[id="workbench_tabview:vm_rel1_input"]',),
-                rel_norm,
-                label="Relation with nominee (native)",
+                "Relation with nominee",
+                f"db={rel_norm!r} portal={portal!r}",
             )
-        _close_pf_selectonemenu_overlay(page, "workbench_tabview:vm_rel1")
 
-    # Nomination Date — invoice date in DD-Mon-YYYY (same datepicker pattern)
+    # Nomination Date — billing/invoice preferred; today is also accepted (Vahan default).
     nom_date = (data.get("invoice_date_str") or data.get("billing_date_str") or "").strip()
-    if nom_date:
-        _screen_3_fill_datepicker_js(
-            page, _SCREEN3_NOMINATION_DATE_INPUT, nom_date, label="Nomination Date"
-        )
+    if want_nominee:
+        if not nom_date:
+            nom_date = _fmt_date(date.today())
+        if not _screen_3_fill_nomination_date(page, nom_date):
+            current = _screen_3_read_nomination_date_value(page)
+            _screen_3_fail_3c_required_field(
+                page,
+                "Nomination Date",
+                f"expected billing={nom_date!r} or today, current={current!r}",
+            )
+        # Nomination date can open Are you sure / residual info popups — dismiss quickly.
+        for btn in ("Yes", "OK", "Ok", "Close"):
+            _dismiss_dialog_if_present(page, btn, timeout_ms=_FIRST_TRY_MS)
+
+
+def _apply_rto_fill_screen3c_run_overrides(data: dict) -> None:
+    """Apply module-level Screen 3c run-only overrides into ``data`` (dev/testing)."""
+    if RTO_FILL_INSURANCE_FROM_USE_YESTERDAY:
+        data["policy_from_str"] = _fmt_date(date.today() - timedelta(days=1))
+        data["force_policy_from"] = True
+        _rto_log(f"override: Insurance From = yesterday ({data['policy_from_str']})")
+    portal = (RTO_FILL_INSURER_PORTAL_LABEL or "").strip()
+    if portal:
+        data["insurer_portal_label"] = portal
+        data["force_insurer_reselect"] = True
+        _rto_log(f"override: Insurance Company portal label = {portal!r}")
+    elif RTO_FILL_FORCE_INSURER_RESELECT:
+        data["force_insurer_reselect"] = True
+    if RTO_FILL_IDV_OVERRIDE is not None:
+        data["idv"] = int(RTO_FILL_IDV_OVERRIDE)
+        data["force_idv"] = True
+        _rto_log(f"override: IDV = {data['idv']}")
 
 
 def _screen_3c_insurance_information(page: Page, data: dict) -> None:
     """3c: On Hypothecation/Insurance tab — insurance fields, Series Type (STATE SERIES), IDV."""
     _rto_log("--- Screen 3c: Insurance (Hypothecation/Insurance Information tab) ---")
+    _screen_3_dump_insurance_tab_field_inventory(page, phase="3c start")
     for scroll_sel in (
         _SCREEN3_INSURANCE_TYPE_PF_WRAPPERS[0],
         _SCREEN3_INSURANCE_TYPE_NATIVE[0],
     ):
         try:
             loc = page.locator(scroll_sel).first
-            loc.wait_for(state="attached", timeout=3000)
-            loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+            loc.wait_for(state="attached", timeout=_FIRST_TRY_MS)
+            loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
             _pause()
             break
         except Exception:
@@ -4129,18 +6155,31 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
                         "input[id*='insuranceType']",
                         "THIRD PARTY",
                         label="Insurance Type typeahead",
-                        timeout=_DEFAULT_TIMEOUT_MS,
+                        timeout=_screen3_timeout_ms(),
                     )
                 except PwTimeout:
                     _rto_log("WARNING: Insurance Type not set (THIRD PARTY)")
 
-    insurer = (data.get("insurer") or "").strip()
-    if insurer:
-        if _screen_3_insurance_company_already_set(page):
-            _rto_log("skip: Insurance Company already set on form (Vahan pre-fill)")
-        elif not _screen_3_select_insurance_company(page, insurer):
-            _rto_log("WARNING: Insurance Company not set")
-            _dump_page_state(page, "dropdown not set: Insurance Company")
+    insurer_target = (data.get("insurer_portal_label") or data.get("insurer") or "").strip()
+    force_insurer = bool(data.get("force_insurer_reselect"))
+    if insurer_target:
+        current_insurer = _screen_3_read_insurance_company_label(page)
+        already_ok = (
+            current_insurer
+            and _screen_3_insurer_option_matches(insurer_target, current_insurer)
+        )
+        if force_insurer or not already_ok:
+            if current_insurer and not already_ok:
+                _rto_log(
+                    f"Insurance Company re-select: visible={current_insurer!r} "
+                    f"→ target={insurer_target!r}"
+                )
+            if not _screen_3_select_insurance_company(page, insurer_target):
+                _screen_3_fail_3c_required_field(
+                    page, "Insurance Company", f"target={insurer_target!r}"
+                )
+        else:
+            _rto_log(f"skip: Insurance Company already correct ({current_insurer!r})")
     elif _screen_3_insurance_company_already_set(page):
         _rto_log("skip: Insurance Company already set on form (Vahan pre-fill; no insurer in queue data)")
 
@@ -4152,43 +6191,68 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
         )
 
     policy_from = (data.get("policy_from_str") or "").strip()
+    force_policy_from = bool(data.get("force_policy_from"))
     if policy_from:
-        if _screen_3_input_already_has_value(page, _SCREEN3_INSURANCE_FROM_INPUT):
-            _rto_log("skip: Insurance From already set on form (Vahan pre-fill)")
-        else:
+        if force_policy_from or not _screen_3_input_already_has_value(page, _SCREEN3_INSURANCE_FROM_INPUT):
             try:
                 _screen_3_fill_datepicker_js(
                     page, _SCREEN3_INSURANCE_FROM_INPUT[0], policy_from, label="Insurance From"
                 )
             except PwTimeout:
                 _rto_log("WARNING: Insurance From not filled (datepicker)")
+        else:
+            _rto_log("skip: Insurance From already set on form (Vahan pre-fill)")
 
-    if _screen_3_insurance_period_already_set(page):
-        _rto_log("skip: Insurance Period (in year) already set on form (Vahan pre-fill)")
+    if _screen_3_insurance_period_is_target(page):
+        _rto_log(f"skip: Insurance Period already set ({_INSURANCE_PERIOD_LABEL})")
+        _screen_3_dismiss_post_insurance_period_dialog(page)
     else:
-        if not _screen_3_pf_dropdown_chain(
+        period_set = False
+        # Native first — faster than PF overlay on Screen 3c.
+        if _screen_3_native_select_chain(
             page,
-            _SCREEN3_INSURANCE_PERIOD_PF_WRAPPERS,
-            _INSURANCE_PERIOD_ONE_YEAR_LABEL,
+            _SCREEN3_INSURANCE_PERIOD_NATIVE,
+            _INSURANCE_PERIOD_LABEL,
             label="Insurance Period (in year)",
         ):
-            if not _screen_3_native_select_chain(
-                page,
-                _SCREEN3_INSURANCE_PERIOD_NATIVE,
-                _INSURANCE_PERIOD_ONE_YEAR_LABEL,
-                label="Insurance Period (in year)",
-            ):
-                _rto_log(f"WARNING: Insurance Period not set ({_INSURANCE_PERIOD_ONE_YEAR_LABEL})")
-                _dump_page_state(page, "dropdown not set: Insurance Period")
-        else:
+            period_set = True
+        elif _screen_3_pf_dropdown_chain(
+            page,
+            _SCREEN3_INSURANCE_PERIOD_PF_WRAPPERS,
+            _INSURANCE_PERIOD_LABEL,
+            label="Insurance Period (in year)",
+        ):
+            period_set = True
             _close_pf_selectonemenu_overlay(page, "workbench_tabview:ins_year")
+        else:
+            _rto_log(f"WARNING: Insurance Period not set ({_INSURANCE_PERIOD_LABEL})")
+            _dump_page_state(page, "dropdown not set: Insurance Period")
+        _wait_for_progress_close_loop(page)
+        _screen_3_dismiss_post_insurance_period_dialog(page)
+        if not period_set:
+            pass  # still try upto if Vahan enabled it from a partial set
+
+    policy_upto = _resolve_policy_upto_str(data)
+    if not policy_upto:
+        from_display = _screen_3_read_insurance_from_value(page)
+        from_d = _parse_vahan_date(from_display)
+        if from_d:
+            policy_upto = _insurance_upto_from_from_date(from_d)
+    if policy_upto:
+        if _screen_3_insurance_upto_needs_fill(page, policy_upto):
+            if not _screen_3_fill_insurance_upto_date(page, policy_upto):
+                _screen_3_fail_3c_required_field(
+                    page, "Insurance Upto", f"expected {policy_upto!r}"
+                )
+        else:
+            _rto_log(f"skip: Insurance Upto already set on form ({policy_upto!r})")
 
     # Series Type (*Please Select Series Type*) → **STATE SERIES** (skip if already STATE SERIES).
     for scroll_sel in (_SCREEN3_SERIES_TYPE_PF_WRAPPERS[0], _SCREEN3_SERIES_TYPE_NATIVE[0]):
         try:
             s_loc = page.locator(scroll_sel).first
-            s_loc.wait_for(state="attached", timeout=2500)
-            s_loc.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
+            s_loc.wait_for(state="attached", timeout=_FIRST_TRY_MS)
+            s_loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
             _pause()
             break
         except Exception:
@@ -4208,9 +6272,9 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
             for sel in _SCREEN3_SERIES_TYPE_NATIVE:
                 try:
                     nloc = page.locator(sel).first
-                    nloc.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+                    nloc.wait_for(state="visible", timeout=_screen3_timeout_ms())
                     nloc.select_option(
-                        label=_SERIES_TYPE_STATE_SERIES_LABEL_RE, timeout=_DEFAULT_TIMEOUT_MS
+                        label=_SERIES_TYPE_STATE_SERIES_LABEL_RE, timeout=_screen3_timeout_ms()
                     )
                     ser_ok = True
                     _rto_log(f"select: Series Type = STATE SERIES ({sel!r})")
@@ -4229,10 +6293,18 @@ def _screen_3c_insurance_information(page: Page, data: dict) -> None:
                 except PwTimeout:
                     _rto_log("WARNING: Series Type not set (STATE SERIES)")
 
-    idv_v = data.get("idv")
-    idv_s = "" if idv_v is None else str(idv_v).strip()
+    idv_s = _normalize_idv_for_vahan(data.get("idv"))
     if idv_s:
-        _fill_first_matching(page, _SCREEN3_IDV_INPUT, idv_s, label="Insurance Declared Value")
+        needs_idv = bool(data.get("force_idv")) or _screen_3_idv_field_is_blank_or_zero(page)
+        if needs_idv:
+            if data.get("force_idv"):
+                _rto_log(f"IDV override fill: {idv_s}")
+            if not _fill_idv_integer(page, _SCREEN3_IDV_INPUT, idv_s, label="Insurance Declared Value"):
+                _rto_log("WARNING: Insurance Declared Value not filled")
+        else:
+            _rto_log("skip: Insurance Declared Value already set on form (Vahan pre-fill)")
+    elif _screen_3_idv_field_is_blank_or_zero(page):
+        _rto_log("WARNING: Insurance Declared Value is blank/zero but idv missing in queue/insurance data")
 
     financier = (data.get("financier") or "").strip()
     _screen_3_set_vehicle_hypothecated_checkbox(page, has_financier=bool(financier))
@@ -4277,28 +6349,36 @@ def _screen_3_click_save_file_movement(page: Page) -> None:
     raise PwTimeout(msg)
 
 
-def _screen_3_scrape_generated_application_id(page: Page) -> str:
-    """Read application number from success dialog (e.g. *Application generated successfully*)."""
+def _screen_3_scrape_generated_application_id(page: Page) -> tuple[str, str]:
+    """Read application number from post-save dialog; returns ``(application_id, dialog_text)``.
+
+    Short wait (~700ms) — missing id is OK when dialog is a non-validation proceed signal.
+    """
     application_id = ""
+    dialog_text = ""
+    scrape_timeout_ms = max(_SCREEN3_ACTION_TIMEOUT_MS, 700)
     dlg = _screen_3_find_visible_application_info_dialog(page)
     if dlg is not None:
         try:
-            text = dlg.inner_text(timeout=6000) or ""
+            text = dlg.inner_text(timeout=scrape_timeout_ms) or ""
+            dialog_text = text
             application_id = _scrape_application_id_from_dialog_text(text)
             if application_id:
                 logger.info("fill_rto: scraped application_id=%s", application_id)
                 _rto_log(f"scraped: rto_application_id = {application_id} (visible ui-dialog)")
-                return application_id
+                return application_id, dialog_text
             _rto_log(f"Screen 3d: application dialog snippet (unparsed): {text[:900]!r}")
+            return application_id, dialog_text
         except Exception as e:
             logger.debug("fill_rto: scrape from application dialog: %s", e)
     try:
-        dialog_text = page.locator(
+        dialog_text_loc = page.locator(
             ".ui-dialog-content:visible, .ui-dialog:visible, .ui-messages-info, .ui-growl-message, "
             "[class*='dialog'] [class*='message'], [class*='success']"
         ).first
-        dialog_text.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-        text = dialog_text.inner_text()
+        dialog_text_loc.wait_for(state="visible", timeout=scrape_timeout_ms)
+        text = dialog_text_loc.inner_text()
+        dialog_text = text or dialog_text
         application_id = _scrape_application_id_from_dialog_text(text)
         if not application_id:
             match = re.search(
@@ -4323,52 +6403,113 @@ def _screen_3_scrape_generated_application_id(page: Page) -> str:
             _rto_log(f"scraped: rto_application_id = {application_id}")
         elif text:
             _rto_log(f"Screen 3d: scrape fallback dialog snippet: {text[:900]!r}")
+            if _screen_3_dialog_is_validation_alert(text):
+                errs = _screen_3_extract_validation_error_messages(text)
+                if errs:
+                    _rto_log(f"Screen 3d: validation errors in dialog: {errs!r}")
     except PwTimeout:
         logger.warning("fill_rto: could not scrape application number from popup")
         _rto_log("WARNING: could not scrape application number from popup")
-        _dump_page_state(page, "scrape application number failed")
-    return application_id
+        # No dump here — caller may still proceed on a numbers-only dialog already read, or fail cleanly.
+    return application_id, dialog_text
 
 
 def _screen_3d_hypothecation_save_confirm_scrape(page: Page, data: dict) -> str:
-    """3d: Save and File Movement; Yes / Yes; scrape app no.; OK. (Hypothecation / nominee filled in 3c.)"""
-    _rto_log("--- Screen 3d: Save and File Movement, confirmation popups, scrape app no. ---")
+    """3d: Save → Yes → Entry Details → Generated Application No (scrape + Ok) → ``rto_status=2``."""
+    _rto_log("--- Screen 3d: Save and File Movement, confirmation popups ---")
 
     _screen_3_click_save_file_movement(page)
     _wait_for_progress_close_loop(page)
-    _dismiss_dialog(page, "Yes")
-    _pause()
+    # First confirm is a plain **Yes** — do not match **Are You Sure?** (Entry Details).
+    if _dismiss_dialog_if_present(page, r"^\s*Yes\s*$"):
+        _rto_log("Screen 3d: confirmation — Yes (Are you sure)")
+        _wait_for_progress_close_loop(page)
+
+    # Entry Details modal can lag ~500ms after the first Yes.
+    time.sleep(_SCREEN3_ENTRY_DETAILS_WAIT_S)
+    entry_text, entry_confirmed = _screen_3d_confirm_entry_details_if_present(page)
+
+    if _screen_3_dialog_is_validation_alert(entry_text) or _screen_3_extract_validation_error_messages(
+        entry_text
+    ):
+        _screen_3_fail_save_and_file_movement(entry_text)
+
     _wait_for_progress_close_loop(page)
-    _dismiss_dialog(page, "Yes")
-    _rto_log("Screen 3: confirmation popups — Yes, Yes (incl. Are you sure)")
-    _pause()
-    _wait_for_progress_close_loop(page)
 
-    application_id = _screen_3_scrape_generated_application_id(page)
-    _dismiss_dialog(page, "OK", timeout=_DEFAULT_TIMEOUT_MS)
-    _pause()
+    # Third popup: **Generated Application No** — scrape id, click Ok, persist ``rto_status=2``.
+    scraped_id = (_dismiss_generated_application_no_dialog(page) or "").strip()
+    if not scraped_id:
+        application_id, dialog_text = _screen_3_scrape_generated_application_id(page)
+        scraped_id = (application_id or "").strip()
+        combined_text = (dialog_text or entry_text or "").strip()
+        if scraped_id:
+            _dismiss_dialog_if_present(page, "Ok", timeout_ms=_SCREEN3_INSURANCE_COMPANY_TIMEOUT_MS)
+            _dismiss_dialog_if_present(page, "OK", timeout_ms=300)
+            _wait_for_progress_close_loop(page)
+        elif _screen_3_dialog_is_validation_alert(combined_text) or _screen_3_extract_validation_error_messages(
+            combined_text
+        ):
+            _screen_3_fail_save_and_file_movement(combined_text)
 
-    wb_app = (data.get("rto_application_id") or "").strip()
-    if not (str(application_id or "").strip()) and wb_app:
-        application_id = wb_app
-        _rto_log(f"Screen 3: using application id from workbench: {application_id!r}")
+    existing_id = (data.get("rto_application_id") or "").strip()
+    if scraped_id:
+        data["rto_application_id"] = scraped_id
+        _persist_rto_queue_progress(
+            data,
+            rto_status=RTO_STATUS_AFTER_SCREEN3D,
+            rto_application_id=scraped_id,
+        )
+        _rto_log(f"Screen 3d: Generated Application No — rto_status={RTO_STATUS_AFTER_SCREEN3D}, id={scraped_id}")
+        return scraped_id
 
-    return application_id
+    # Fallback: Entry Details confirmed but no Generated Application dialog (older builds).
+    if (
+        entry_confirmed
+        or entry_text
+        or _screen_3d_is_entry_details_dialog_text(entry_text)
+        or _screen_3d_dialog_is_proceed_signal(entry_text)
+    ):
+        _rto_log(
+            "Screen 3d: proceed without scraped application id "
+            f"(dialog snippet={(entry_text or '')[:200]!r})"
+        )
+        _persist_rto_queue_progress(
+            data,
+            rto_status=RTO_STATUS_AFTER_SCREEN3D,
+            rto_application_id=existing_id or None,
+        )
+        return existing_id
+
+    _rto_log("Screen 3d: no proceed dialog after Save and File Movement — treating as failure")
+    _screen_3_fail_save_and_file_movement(entry_text)
+    return ""  # unreachable
 
 
-def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = False) -> str:
+def _screen_3(
+    page: Page,
+    data: dict,
+    *,
+    skip_home: bool,
+    skip_entry: bool = False,
+    resume_at_3b: bool = False,
+) -> str:
     """Screen 3: optional Home → Entry, Tax mode, Insurance, Hypothecation, Save. Returns application_id.
 
     ``skip_home``: when True (skip point at screen 3, or ``RTO_FILL_SCREEN3_SKIP_HOME``), do not click Home.
     ``skip_entry``: when True (only valid with ``skip_home``), do not click Entry—already on the post-Entry form;
     activate **Vehicle Details** sub-tab only.
+    ``resume_at_3b``: when True (DB resume after pending-work nav), skip 3a and start at Vehicle Details tab.
     """
     _set_screen("Screen 3")
     logger.info("fill_rto: Screen 3 — insurer=%s", data.get("insurer", "")[:20])
     _rto_log("--- Screen 3: Home, Entry, tax, insurance, hypothecation, application no ---")
 
-    # 3a: Home (unless skip point) → Entry on pending-work grid (unless skip_entry).
-    if skip_home:
+    start_at_3b = resume_at_3b or (_vahan_on_workbench(page) and skip_home)
+
+    # 3a: Home (unless skip point) → Entry on pending-work grid (unless skip_entry / workbench resume).
+    if start_at_3b:
+        _rto_log("Screen 3 resume: workbench — start at Vehicle Details (3b), skip 3a Home/Entry")
+    elif skip_home:
         if skip_entry:
             _rto_log("Screen 3: skip Home + skip Entry — Vehicle Details sub-tab only (already on form)")
         else:
@@ -4382,7 +6523,7 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
         except Exception:
             pass
 
-    if not skip_entry:
+    if not skip_entry and not start_at_3b:
         _screen_3_click_entry(page, data, skip_home=skip_home)
 
     # 3a2: Sub-tab **Vehicle Details** (post-Entry form uses PF tabs; Tax Mode at bottom of this tab).
@@ -4414,43 +6555,310 @@ def _screen_3(page: Page, data: dict, *, skip_home: bool, skip_entry: bool = Fal
     return _screen_3d_hypothecation_save_confirm_scrape(page, data)
 
 
-def _screen_4_file_movement_dialogs(page: Page) -> None:
-    """After **File Movement**: first popup — type ``None`` in the input, **Save**; second popup — **Save** only."""
-    _pause()
-    try:
-        dlg = page.locator(".ui-dialog:visible, [role='dialog']:visible").first
-        dlg.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
-    except PwTimeout:
-        _rto_log("WARNING: File Movement — first dialog not visible within budget")
-        _dump_page_state(page, "File Movement first dialog missing")
-        return
+def _screen_4_office_remarks_needs_none(value: str) -> bool:
+    """True when Office Remarks is empty or still the portal placeholder — fill **NONE**."""
+    v = (value or "").strip()
+    if not v:
+        return True
+    return bool(re.match(r"^(OFFICE\s*REMARK\s*\?|NONE|None)$", v, re.I))
 
-    filled = False
-    for sel in ("input[type='text']", "textarea", "input:not([type='hidden'])"):
+
+def _screen_4_find_file_movement_dialog(page: Page, *, quick: bool = False) -> Locator | None:
+    """Visible **File Movement** modal after Save-Options → File Movement."""
+    deadline = time.monotonic() + (0.35 if quick else 3.0)
+    while time.monotonic() < deadline:
+        try:
+            loc = page.locator(".ui-dialog:visible, [role='dialog']:visible").filter(
+                has_text=re.compile(r"File\s*Movement", re.I)
+            )
+            if loc.count() > 0 and loc.first.is_visible(timeout=400):
+                return loc.first
+        except Exception:
+            pass
+        if quick:
+            break
+        time.sleep(0.12)
+    return None
+
+
+def _screen_4_file_movement_dialog_visible(page: Page) -> bool:
+    return _screen_4_find_file_movement_dialog(page, quick=True) is not None
+
+
+def _screen_4_wait_file_movement_dialog_closed(
+    page: Page, *, budget_ms: int = 10_000
+) -> bool:
+    """Poll until the File Movement modal is gone."""
+    t0 = time.monotonic()
+    while (time.monotonic() - t0) * 1000 < budget_ms:
+        if not _screen_4_file_movement_dialog_visible(page):
+            return True
+        _wait_for_progress_close_loop(page, budget_ms=_FIRST_TRY_MS)
+        time.sleep(0.2)
+    return not _screen_4_file_movement_dialog_visible(page)
+
+
+def _screen_4_fill_file_movement_office_remarks(dlg: Locator) -> None:
+    """Fill **Office Remarks** with ``NONE`` when empty or placeholder."""
+    for sel in ("textarea", "input[type='text']"):
         try:
             inp = dlg.locator(sel).first
             inp.wait_for(state="visible", timeout=_FIRST_TRY_MS)
-            inp.fill("None")
-            _rto_log("fill: File Movement dialog — input = None")
-            filled = True
-            break
+            current = (inp.input_value() or "").strip()
+            if not current:
+                try:
+                    current = (
+                        inp.evaluate("el => (el.value || el.textContent || '').trim()") or ""
+                    ).strip()
+                except Exception:
+                    current = ""
+            if not _screen_4_office_remarks_needs_none(current):
+                _rto_log(f"skip: Office Remarks already set ({current[:80]!r})")
+                return
+            inp.fill("NONE")
+            _rto_log("fill: File Movement — Office Remarks = NONE")
+            return
         except Exception:
             continue
-    if not filled:
+    _rto_log("WARNING: File Movement — Office Remarks input not found in dialog")
+
+
+def _screen_4_click_file_movement_dialog_save(dlg: Locator, page: Page) -> bool:
+    """Click **Save** inside the File Movement modal only (never page-level Save-Options).
+
+    Vahan puts Save in dialog **content** as ``<a class="ui-commandlink ui-button">Save</a>``,
+    not in ``.ui-dialog-buttonpane``.
+    """
+    save_re = re.compile(r"^\s*Save\s*$", re.I)
+
+    def _try_click_save_on_dialog(dialog: Locator) -> bool:
+        attempts: tuple[tuple[str, Locator], ...] = (
+            (
+                "content ui-commandlink Save",
+                dialog.locator(
+                    ".ui-dialog-content a.ui-commandlink.ui-button, "
+                    ".ui-dialog-content a.ui-button"
+                ).filter(has_text=save_re).first,
+            ),
+            (
+                "dialog a.ui-button Save",
+                dialog.locator("a.ui-commandlink.ui-button, a.ui-button").filter(has_text=save_re).first,
+            ),
+            (
+                "buttonpane exact Save",
+                dialog.locator(
+                    ".ui-dialog-buttonpane button, .ui-dialog-buttonpane .ui-button, "
+                    ".ui-dialog-buttonpane a.ui-button, "
+                    ".ui-dialog-buttonpane input[type='button'], "
+                    ".ui-dialog-buttonpane input[type='submit']"
+                ).filter(has_text=save_re).first,
+            ),
+            (
+                "ui-button-text Save",
+                dialog.locator(".ui-button-text").filter(has_text=save_re).first.locator(
+                    "xpath=ancestor::button[1] | ancestor::a[1]"
+                ),
+            ),
+        )
+        for label, btn in attempts:
+            try:
+                btn.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
+                btn.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+                btn.click(timeout=_DEFAULT_TIMEOUT_MS)
+                _rto_log(f"dialog: File Movement — Save ({label})")
+                return True
+            except Exception:
+                continue
+        return False
+
+    if _try_click_save_on_dialog(dlg):
+        return True
+
+    for fi, frame in enumerate(page.frames):
         try:
-            page.locator(".ui-dialog:visible input[type='text']").first.fill("None")
-            _rto_log("fill: File Movement dialog — input = None (page-scoped fallback)")
-        except Exception as e:
-            _rto_log(f"WARNING: File Movement dialog — could not fill None: {e!s}")
+            fm = frame.locator(".ui-dialog:visible, [role='dialog']:visible").filter(
+                has_text=re.compile(r"File\s*Movement", re.I)
+            ).first
+            if fm.count() == 0 or not fm.is_visible(timeout=300):
+                continue
+            if _try_click_save_on_dialog(fm):
+                _rto_log(f"dialog: File Movement — Save (frame[{fi}])")
+                return True
+        except Exception:
+            continue
+
+    for fi, frame in enumerate(page.frames):
+        try:
+            clicked = bool(
+                frame.evaluate(
+                    """() => {
+                        const dlg = [...document.querySelectorAll('.ui-dialog, [role="dialog"]')]
+                            .find(d => /File\\s*Movement/i.test(d.innerText || ''));
+                        if (!dlg) return false;
+                        const candidates = dlg.querySelectorAll(
+                            'a.ui-commandlink.ui-button, a.ui-button, button, input[type="button"], input[type="submit"]'
+                        );
+                        for (const b of candidates) {
+                            const t = (b.innerText || b.textContent || b.value || '').trim();
+                            if (/^Save$/i.test(t)) {
+                                b.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }"""
+                )
+            )
+            if clicked:
+                _rto_log(f"dialog: File Movement — Save (JS frame[{fi}])")
+                return True
+        except Exception:
+            continue
+
+    _rto_log("WARNING: File Movement — Save button not clicked inside dialog")
+    return False
+
+
+def _screen_4_dismiss_post_save_yes_dialog(page: Page) -> None:
+    """After File Movement **Save**: dismiss confirmation **Yes** when the portal asks to proceed."""
+    yes_re = re.compile(r"^\s*Yes\s*$", re.I)
+    deadline = time.monotonic() + 2.5
+    while time.monotonic() < deadline:
+        try:
+            dlg = page.locator(".ui-dialog:visible, [role='dialog']:visible").first
+            if dlg.is_visible(timeout=_FIRST_TRY_MS):
+                btn = dlg.locator(
+                    ".ui-dialog-buttonpane button, .ui-dialog-buttonpane .ui-button, button"
+                ).filter(has_text=yes_re).first
+                if btn.count() > 0 and btn.is_visible(timeout=_FIRST_TRY_MS):
+                    btn.click(timeout=_DEFAULT_TIMEOUT_MS)
+                    _rto_log("dialog: File Movement post-Save — Yes (in dialog)")
+                    _wait_for_progress_close_loop(page)
+                    return
+        except Exception:
+            pass
+        if _dismiss_dialog_if_present(page, r"^\s*Yes\s*$", timeout_ms=_FIRST_TRY_MS):
+            _rto_log("dialog: File Movement post-Save — Yes")
+            _wait_for_progress_close_loop(page)
+            return
+        time.sleep(0.12)
+
+
+def _screen_4_dismiss_followup_save_dialog(page: Page) -> None:
+    """Optional second Save confirmation — scoped to a visible dialog, not Save-Options."""
+    try:
+        dialogs = page.locator(".ui-dialog:visible, [role='dialog']:visible")
+        if dialogs.count() == 0:
+            return
+        dlg = dialogs.first
+        text = (dlg.inner_text(timeout=1000) or "")
+        if re.search(r"File\s*Movement", text, re.I):
+            return
+        save_re = re.compile(r"^\s*Save\s*$", re.I)
+        btn = dlg.locator(
+            ".ui-dialog-buttonpane button, .ui-dialog-buttonpane .ui-button, button"
+        ).filter(has_text=save_re).first
+        btn.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+        btn.click(timeout=_DEFAULT_TIMEOUT_MS)
+        _rto_log("dialog: File Movement follow-up — Save")
+        _wait_for_progress_close_loop(page)
+    except Exception:
+        pass
+
+
+def _screen_4_file_movement_dialogs(page: Page) -> None:
+    """After **File Movement**: Office Remarks ``NONE`` → **Save** → **Yes** → wait until modal closes."""
+    _pause()
+    _wait_for_progress_close_loop(page)
+    dlg = _screen_4_find_file_movement_dialog(page)
+    if dlg is None:
+        try:
+            dlg = page.locator(".ui-dialog:visible, [role='dialog']:visible").first
+            dlg.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+            snippet = (dlg.inner_text(timeout=1000) or "")[:200]
+            if not re.search(r"File\s*Movement", snippet, re.I):
+                _rto_log(f"WARNING: visible dialog is not File Movement: {snippet!r}")
+        except PwTimeout:
+            _rto_log("WARNING: File Movement — dialog not visible within budget")
+            _dump_page_state(page, "File Movement first dialog missing")
+            return
+
+    _screen_4_fill_file_movement_office_remarks(dlg)
+    _pause()
+
+    if not _screen_4_click_file_movement_dialog_save(dlg, page):
+        raise RuntimeError("File Movement — could not click Save inside dialog")
 
     _pause()
-    _dismiss_dialog(page, "Save", timeout=_LOOP_BUDGET_MS)
+    _wait_for_progress_close_loop(page)
+    _screen_4_dismiss_post_save_yes_dialog(page)
     _pause()
     _wait_for_progress_close_loop(page)
 
-    _dismiss_dialog(page, "Save", timeout=_LOOP_BUDGET_MS)
+    if not _screen_4_wait_file_movement_dialog_closed(page):
+        dlg_retry = _screen_4_find_file_movement_dialog(page, quick=True)
+        if dlg_retry is not None:
+            _rto_log("WARNING: File Movement still open — retry Save")
+            if not _screen_4_click_file_movement_dialog_save(dlg_retry, page):
+                raise RuntimeError("File Movement — could not click Save inside dialog (retry)")
+            _pause()
+            _wait_for_progress_close_loop(page)
+            _screen_4_dismiss_post_save_yes_dialog(page)
+            _pause()
+            _wait_for_progress_close_loop(page)
+        if not _screen_4_wait_file_movement_dialog_closed(page):
+            _dump_page_state(page, "File Movement dialog still open after Save")
+            raise RuntimeError("File Movement dialog still open after Save")
+
+    _screen_4_dismiss_followup_save_dialog(page)
     _pause()
     _wait_for_progress_close_loop(page)
+
+
+def _screen_4_documents_upload_url(url: str) -> bool:
+    """True when the browser is on Vahan **Documents Upload** (Screen 5 entry)."""
+    u = (url or "").lower()
+    return "form_documents_upload" in u or "documentupload" in u
+
+
+def _screen_5_upload_form_markers_visible(page: Page) -> bool:
+    """True when Sub Category, chevron, and document counter are visible."""
+    try:
+        page.locator(_SCREEN5_PF_SUBCAT_WRAPPER).first.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+        page.locator(_SCREEN5_NEXT_BTN).first.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+        page.get_by_text(_SCREEN5_DOCUMENT_COUNTER_RE).first.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+        return True
+    except Exception:
+        return False
+
+
+def _screen_5_wait_for_upload_form_ready(page: Page, *, budget_ms: int = 5000) -> bool:
+    """Poll until the document-upload carousel is interactive, then settle."""
+    t0 = time.monotonic()
+    while (time.monotonic() - t0) * 1000 < budget_ms:
+        _wait_for_progress_close(page)
+        if _screen_5_upload_form_markers_visible(page):
+            time.sleep(_SCREEN5_UPLOAD_FORM_SETTLE_MS / 1000.0)
+            _rto_log("Screen 5: upload form ready")
+            return True
+        time.sleep(0.15)
+    if _screen_5_upload_form_markers_visible(page):
+        time.sleep(_SCREEN5_UPLOAD_FORM_SETTLE_MS / 1000.0)
+        _rto_log("Screen 5: upload form ready (final probe)")
+        return True
+    _rto_log("WARNING: upload form not ready within budget")
+    return False
+
+
+def _screen_4_on_documents_upload_page(page: Page) -> bool:
+    """True when the dealer document upload form is loaded and interactive."""
+    try:
+        on_url = _screen_4_documents_upload_url(page.url or "")
+    except Exception:
+        on_url = False
+    if not on_url and not _screen_5_upload_form_markers_visible(page):
+        return False
+    return _screen_5_wait_for_upload_form_ready(page)
 
 
 def _screen_4_click_first(
@@ -4484,16 +6892,23 @@ def _screen_4_click_first(
     raise RuntimeError(f"{label} button not found on page (tried {len(selectors)} selectors)")
 
 
-def _screen_4(page: Page) -> None:
+def _screen_4(page: Page, *, skip_verify: bool = False) -> None:
     """Screen 4: Verify → … → Save-Options → File Movement → (None + Save) → (Save) → Dealer Document Upload tab → progress wheel."""
     _set_screen("Screen 4")
     logger.info("fill_rto: Screen 4 — Verify & Document Upload nav")
     _rto_log("--- Screen 4: Verify, Save Options / File Movement, Dealer Document Upload ---")
 
+    if _screen_4_on_documents_upload_page(page):
+        _rto_log("SKIP: Screen 4 — already on Documents Upload page")
+        _pause()
+        _wait_for_progress_close_loop(page)
+        return
+
     if not RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD:
-        # 4a: Scroll down and click **Verify** (skip if flag set or button absent)
-        if RTO_FILL_SCREEN4_SKIP_VERIFY:
-            _rto_log("SKIP: Verify (RTO_FILL_SCREEN4_SKIP_VERIFY=True)")
+        # 4a: Scroll down and click **Verify** (skip if flag set or already clicked from pending grid)
+        if skip_verify or RTO_FILL_SCREEN4_SKIP_VERIFY:
+            reason = "pending-grid Verify" if skip_verify else "RTO_FILL_SCREEN4_SKIP_VERIFY=True"
+            _rto_log(f"SKIP: Verify ({reason})")
         else:
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             _pause()
@@ -4559,26 +6974,36 @@ def _screen_4(page: Page) -> None:
             "(RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD=True) — start at Dealer Document Upload"
         )
 
-    # 4d: **Dealer Document Upload** — on ``home.xhtml`` pending-work grid it is a **button** in the Action
-    #     column (text ``Dealer-Document-Upload`` with hyphens; id like ``workDetails:0:j_idt273``).  On
-    #     ``workbench.xhtml`` it may be a top tab.  Scroll to bottom first — the grid action is below the fold.
-    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    _pause()
-    _screen_4_click_first(
-        page,
-        (
-            "button:has-text('Dealer-Document-Upload')",
-            "button[id^='workDetails:'][id$=':j_idt273']",
-            "a:has-text('Dealer-Document-Upload')",
-            "a:has-text('Dealer Document Upload')",
-            "li[role='tab']:has-text('Dealer Doc') a",
-            "button:has-text('Dealer Document Upload')",
-            "input[value*='Dealer Document Upload']",
-            "input[value*='Dealer-Document-Upload']",
-            "[role='tab']:has-text('Dealer Document')",
-        ),
-        label="Dealer Document Upload",
-    )
+    if _screen_4_file_movement_dialog_visible(page):
+        _rto_log("WARNING: File Movement still open before Dealer Document Upload — retry dialog Save")
+        _screen_4_file_movement_dialogs(page)
+
+    # 4d: **Dealer Document Upload** — or skip when File Movement already opened the upload page.
+    if _screen_4_on_documents_upload_page(page):
+        _rto_log(
+            "SKIP: Dealer Document Upload — already on Documents Upload page "
+            f"({(page.url or '')[:120]})"
+        )
+    else:
+        # column (text ``Dealer-Document-Upload`` with hyphens; id like ``workDetails:0:j_idt273``).  On
+        # ``workbench.xhtml`` it may be a top tab.  Scroll to bottom first — the grid action is below the fold.
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        _pause()
+        _screen_4_click_first(
+            page,
+            (
+                "button:has-text('Dealer-Document-Upload')",
+                "button[id^='workDetails:'][id$=':j_idt273']",
+                "a:has-text('Dealer-Document-Upload')",
+                "a:has-text('Dealer Document Upload')",
+                "li[role='tab']:has-text('Dealer Doc') a",
+                "button:has-text('Dealer Document Upload')",
+                "input[value*='Dealer Document Upload']",
+                "input[value*='Dealer-Document-Upload']",
+                "[role='tab']:has-text('Dealer Document')",
+            ),
+            label="Dealer Document Upload",
+        )
 
     # Progress wheel — closes by itself
     _pause()
@@ -4595,98 +7020,215 @@ def _screen_5_escape_overlays(page: Page) -> None:
         _pause()
 
 
-def _screen_5_click_next_n(page: Page, n: int, *, reason: str) -> None:
+def _screen_5_read_document_slot(page: Page) -> tuple[str, int, int]:
+    """Return ``(document_title, index, total)`` from the Documents Upload carousel."""
+    title = ""
+    index = 1
+    total = 20
+    try:
+        snap = page.evaluate(
+            """() => {
+                const clip = (s) => String(s || '').replace(/\\s+/g, ' ').trim();
+                const body = clip(document.body.innerText || '');
+                let index = 1, total = 20, title = '';
+                const m = body.match(/Document\\s*\\(\\s*(\\d+)\\s*of\\s*(\\d+)\\s*\\)/i);
+                if (m) {
+                    index = parseInt(m[1], 10);
+                    total = parseInt(m[2], 10);
+                }
+                const prefer = (v) => {
+                    const t = clip(v);
+                    if (!t || /^-+\\s*SELECT/i.test(t) || t.length > 80) return false;
+                    return /FORM\\s*\\d+|INSURANCE|INVOICE|AADHAAR|AADHAR|UNDERTAKING|AFFIDAVIT|AFFADEVIT|PARKING|SALE\\s*CERTIFICATE|PROOF\\s*OF\\s*ADDRESS/i.test(t);
+                };
+                for (const el of document.querySelectorAll('input, textarea')) {
+                    if (prefer(el.value)) { title = clip(el.value); break; }
+                }
+                if (!title) {
+                    for (const el of document.querySelectorAll(
+                        '[id*="doc"], [id*="Doc"], [id*="document"], [id*="Document"]'
+                    )) {
+                        const v = el.value != null ? el.value : (el.innerText || el.textContent);
+                        if (prefer(v)) { title = clip(v); break; }
+                    }
+                }
+                if (!title && m) {
+                    // Text after "Document (N of M)" often includes the slot name on the next line.
+                    const after = body.slice(body.indexOf(m[0]) + m[0].length, body.indexOf(m[0]) + m[0].length + 120);
+                    const line = clip(after).split(/Sub\\s*Category|Upload\\s*Document|Owner\\s*Details/i)[0];
+                    if (prefer(line)) title = clip(line);
+                }
+                return { title, index, total };
+            }"""
+        )
+        title = ((snap or {}).get("title") or "").strip()
+        index = int((snap or {}).get("index") or 1)
+        total = int((snap or {}).get("total") or 20)
+    except Exception as exc:
+        _rto_log(f"WARNING: read Document slot failed: {exc!s}")
+    return title, index, total
+
+
+def _screen_5_doc_key_for_portal_title(
+    title: str, *, uploaded: set[str]
+) -> str | None:
+    """Map portal Document title to our ``doc_key``. ``None`` = skip (portal-only / unknown)."""
+    t = (title or "").strip()
+    if not t:
+        return None
+    for rx, key in _SCREEN5_PORTAL_TITLE_TO_DOC_KEY:
+        if not rx.search(t):
+            continue
+        if key is None:
+            return None
+        if key == "AADHAAR_BACK":
+            if "AADHAAR_BACK" not in uploaded:
+                return "AADHAAR_BACK"
+            return None
+        if key == "AADHAAR":
+            if "AADHAAR_FRONT" not in uploaded:
+                return "AADHAAR_FRONT"
+            if "AADHAAR_BACK" not in uploaded:
+                return "AADHAAR_BACK"
+            return None
+        return key
+    return None
+
+
+def _screen_5_click_next_once(
+    page: Page, *, settle_ms: int = _SCREEN5_NEXT_CHEVRON_SETTLE_MS
+) -> bool:
+    """Click document-upload right chevron once; wait for progress and carousel settle."""
+    try:
+        nxt = page.locator(_SCREEN5_NEXT_BTN).first
+        nxt.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
+        nxt.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+        nxt.click(timeout=_FIRST_TRY_MS)
+        _pause()
+        _wait_for_progress_close(page)
+        if settle_ms > 0:
+            time.sleep(settle_ms / 1000.0)
+        return True
+    except Exception as exc:
+        _rto_log(f"WARNING: nextBtn failed: {exc!s}")
+        return False
+
+
+def _screen_5_click_next_n(
+    page: Page,
+    n: int,
+    *,
+    reason: str,
+    settle_ms: int = _SCREEN5_NEXT_CHEVRON_SETTLE_MS,
+) -> None:
     """Click **next** (right chevron) ``n`` times — used to skip portal-only document rows."""
     if n <= 0:
         return
     _rto_log(f"nextBtn ×{n} — {reason}")
     for i in range(n):
-        try:
-            nxt = page.locator(_SCREEN5_NEXT_BTN).first
-            nxt.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
-            nxt.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
-            nxt.click(timeout=_FIRST_TRY_MS)
-            _rto_log(f"nextBtn click {i + 1}/{n}")
-            _pause()
-            _wait_for_progress_close(page)
-        except Exception as e:
-            _rto_log(f"WARNING: nextBtn {i + 1}/{n} failed: {e!s}")
+        if not _screen_5_click_next_once(page, settle_ms=settle_ms):
+            _rto_log(f"WARNING: nextBtn {i + 1}/{n} failed")
             break
+        _rto_log(f"nextBtn click {i + 1}/{n}")
     _screen_5_escape_overlays(page)
 
 
-def _screen_5_select_owner_undertaking_overlay(page: Page) -> None:
-    """Pick **Owner Undertaking Form** in the Sub Category PF menu (search box + ``li`` list — not reliable via native ``<select>``)."""
+def _screen_5_subcategory_is_disabled(class_attr: str) -> bool:
+    """True when Vahan locked Sub Category (document already uploaded for this carousel slot)."""
+    return "ui-state-disabled" in (class_attr or "")
+
+
+def _screen_5_slot_already_uploaded(page: Page) -> bool:
+    """True when the current document slot already has a file on the portal."""
+    try:
+        wrap = page.locator(_SCREEN5_PF_SUBCAT_WRAPPER).first
+        wrap.wait_for(state="attached", timeout=_FIRST_TRY_MS)
+        if _screen_5_subcategory_is_disabled(wrap.get_attribute("class") or ""):
+            return True
+    except Exception:
+        pass
+    try:
+        file_input = page.locator(_SCREEN5_FILE_INPUT).first
+        file_input.wait_for(state="attached", timeout=_FIRST_TRY_MS)
+        if not file_input.is_enabled(timeout=_FIRST_TRY_MS):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _screen_5_select_subcategory_overlay(page: Page, doc_key: str) -> None:
+    """Pick Sub Category via PrimeFaces overlay + filter (native ``<select>`` is unreliable here)."""
     wid = "formDocumentUpload:subCatgId"
+    opt_re = _SCREEN5_SUBCAT_REGEX_BY_DOC_KEY.get(doc_key)
+    if opt_re is None:
+        opt_re = re.compile(re.escape(doc_key).replace(r"\ ", r"\s+"), re.I)
+    filter_hint = _SCREEN5_SUBCAT_FILTER_HINT.get(doc_key, doc_key.split()[0] if doc_key else "")
+
+    _screen_5_escape_overlays(page)
     wrap = page.locator(f'[id="{wid}"]').first
     wrap.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
     wrap.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+    wrap_cls = wrap.get_attribute("class") or ""
+    if _screen_5_subcategory_is_disabled(wrap_cls):
+        raise RuntimeError(f"Sub Category disabled for {doc_key} (document already on portal)")
     wrap.click(timeout=_FIRST_TRY_MS)
     _pause()
     panel = page.locator(f'[id="{wid}_panel"]').first
     panel.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
 
-    try:
-        fin = panel.locator("input.ui-selectonemenu-filter").first
-        fin.wait_for(state="visible", timeout=_FIRST_TRY_MS)
-        fin.fill("")
-        fin.fill("Undertaking")
-        _pause()
-    except Exception:
-        pass
+    if filter_hint:
+        try:
+            fin = panel.locator("input.ui-selectonemenu-filter").first
+            fin.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            fin.fill("")
+            fin.fill(filter_hint)
+            _pause()
+        except Exception:
+            pass
 
-    opt_re = re.compile(r"Owner\s+Undertaking\s+Form", re.I)
-    item = panel.locator("li.ui-selectonemenu-item").filter(has_text=opt_re).last
+    item = panel.locator("li.ui-selectonemenu-item").filter(has_text=opt_re).first
     try:
         item.wait_for(state="visible", timeout=_LOOP_BUDGET_MS)
         item.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
         item.click(timeout=_FIRST_TRY_MS)
     except Exception:
-        # Last substantive option in the list (screenshot: last row is Owner Undertaking Form).
         items = panel.locator("li.ui-selectonemenu-item")
         n = items.count()
         clicked = False
-        for idx in range(n - 1, -1, -1):
+        for idx in range(n):
             el = items.nth(idx)
             txt = (el.inner_text(timeout=800) or "").strip()
-            if not txt:
+            if not txt or re.match(r"^[\s\-]*SELECT[\s\-]*$", txt, re.I):
                 continue
-            if re.match(r"^[\s\-]*SELECT[\s\-]*$", txt, re.I):
-                continue
-            if "undertaking" in txt.lower() and "form" in txt.lower():
+            if opt_re.search(txt):
                 el.click(timeout=_FIRST_TRY_MS)
                 clicked = True
-                _rto_log(f"pf-dropdown: Owner Undertaking — fallback click row text={txt[:80]!r}")
+                _rto_log(f"pf-dropdown: Sub Category ({doc_key}) — fallback text={txt[:80]!r}")
                 break
         if not clicked:
-            raise
+            _screen_5_escape_overlays(page)
+            raise RuntimeError(f"Sub Category option not found for {doc_key}")
 
-    _rto_log("pf-dropdown: Sub Category (OWNER UNDERTAKING FORM) = Owner Undertaking Form")
+    _rto_log(f"pf-dropdown: Sub Category ({doc_key}) = overlay filter={filter_hint!r}")
     _pause()
 
 
-def _screen_5_select_subcategory(page: Page, doc_key: str, sub_category_text: str) -> None:
-    """PrimeFaces **Sub Category** on document upload: ``formDocumentUpload:subCatgId`` (see RTO dumps)."""
-    if doc_key == "OWNER UNDERTAKING FORM":
-        _screen_5_select_owner_undertaking_overlay(page)
-        return
+def _screen_5_select_subcategory(page: Page, doc_key: str, sub_category_text: str = "") -> None:
+    """PrimeFaces **Sub Category** on document upload: ``formDocumentUpload:subCatgId``."""
+    del sub_category_text  # title-driven path uses doc_key regex / filter hint only
+    _screen_5_select_subcategory_overlay(page, doc_key)
 
-    rx = _SCREEN5_SUBCAT_REGEX_BY_DOC_KEY.get(doc_key)
-    if rx is None:
-        rx = re.compile(re.escape(sub_category_text).replace(r"\ ", r"\s+"), re.I)
-    _select_pf_dropdown(
-        page,
-        _SCREEN5_PF_SUBCAT_WRAPPER,
-        "",
-        label=f"Sub Category ({doc_key})",
-        option_label_regex=rx,
-        use_native_select=True,
-        timeout=_DEFAULT_TIMEOUT_MS,
-    )
+
+def _screen_5_post_upload_settle() -> None:
+    """Let Vahan commit the uploaded file before carousel navigation."""
+    if _SCREEN5_POST_UPLOAD_SETTLE_MS > 0:
+        time.sleep(_SCREEN5_POST_UPLOAD_SETTLE_MS / 1000.0)
 
 
 def _screen_5_click_upload_document_trigger(page: Page) -> None:
     """After choosing a file, Vahan often requires **Upload Document** (span with ui-button)."""
+    clicked = False
     for sel in (
         "span.ui-button:has-text('Upload Document')",
         "button:has-text('Upload Document')",
@@ -4699,87 +7241,159 @@ def _screen_5_click_upload_document_trigger(page: Page) -> None:
             loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
             loc.click(timeout=_FIRST_TRY_MS)
             _rto_log(f"click: Upload Document ({sel})")
-            _pause()
-            _wait_for_progress_close(page)
-            return
+            clicked = True
+            break
         except Exception:
             continue
-    try:
-        page.get_by_role("button", name=re.compile(r"^\s*\+?\s*Upload\s+Documents?\s*$", re.I)).first.click(
-            timeout=_LOOP_BUDGET_MS
-        )
-        _rto_log("click: Upload Documents (get_by_role)")
+    if not clicked:
+        try:
+            page.get_by_role(
+                "button", name=re.compile(r"^\s*\+?\s*Upload\s+Documents?\s*$", re.I)
+            ).first.click(timeout=_LOOP_BUDGET_MS)
+            _rto_log("click: Upload Documents (get_by_role)")
+            clicked = True
+        except Exception:
+            _rto_log(
+                "WARNING: Upload Document control not clicked — continuing "
+                "(portal may submit on file input alone)"
+            )
+    if clicked:
         _pause()
         _wait_for_progress_close(page)
-    except Exception:
-        _rto_log(
-            "WARNING: Upload Document control not clicked — continuing "
-            "(portal may submit on file input alone)"
-        )
+        _screen_5_post_upload_settle()
 
 
-def _screen_5_click_file_movement_after_uploads(page: Page) -> None:
-    """Click **File Movement** at bottom of document upload page (``formDocumentUpload:fileFlowId`` in RTO logs)."""
+def _screen_5_click_file_movement_trigger(page: Page) -> None:
+    """Click **File Movement** on document upload; require visible control and opening modal."""
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     _pause()
     _wait_for_progress_close_loop(page)
-    btn = page.locator(_SCREEN5_FILE_MOVEMENT_BTN).first
-    btn.wait_for(state="attached", timeout=_LOOP_BUDGET_MS)
-    btn.scroll_into_view_if_needed(timeout=_DEFAULT_TIMEOUT_MS)
-    _pause()
-    try:
-        btn.click(timeout=_LOOP_BUDGET_MS)
-    except Exception:
-        btn.click(timeout=_LOOP_BUDGET_MS, force=True)
-    _rto_log(f"click: File Movement ({_SCREEN5_FILE_MOVEMENT_BTN})")
+    selectors = (
+        _SCREEN5_FILE_MOVEMENT_BTN,
+        f"{_SCREEN5_FILE_MOVEMENT_BTN} a",
+        f"{_SCREEN5_FILE_MOVEMENT_BTN} button",
+        f"{_SCREEN5_FILE_MOVEMENT_BTN} span.ui-button",
+        "a:has-text('File Movement')",
+        "button:has-text('File Movement')",
+    )
+    clicked = False
+    last_err: Exception | None = None
+    for sel in selectors:
+        try:
+            loc = page.locator(sel).first
+            loc.wait_for(state="visible", timeout=_FIRST_TRY_MS)
+            loc.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
+            loc.click(timeout=_FIRST_TRY_MS)
+            _rto_log(f"click: File Movement ({sel})")
+            clicked = True
+            break
+        except Exception as exc:
+            last_err = exc
+            continue
+    if not clicked:
+        _dump_page_state(page, "Screen 5 File Movement button missing")
+        detail = f": {last_err!s}" if last_err else ""
+        raise RuntimeError(f"Screen 5 File Movement button not found or not clickable{detail}")
     _pause()
     _wait_for_progress_close_loop(page)
+    deadline = time.monotonic() + 4.0
+    while time.monotonic() < deadline:
+        if _screen_4_find_file_movement_dialog(page, quick=True) is not None:
+            return
+        time.sleep(0.15)
+    _dump_page_state(page, "Screen 5 File Movement dialog missing")
+    raise RuntimeError("Screen 5 File Movement — dialog did not open after click")
 
 
-def _screen_5_dismiss_file_movement_followup_dialogs(page: Page) -> None:
-    """Popups after **File Movement** on document upload: **Yes** → **Ok** → **OK** (Application ID dialog)."""
-    _dismiss_dialog(page, "Yes")
+def _screen_5_finish_file_movement(page: Page) -> None:
+    """After all uploads: File Movement trigger → remarks/Save (Screen 4 modal) → follow-up dialogs."""
+    _screen_5_click_file_movement_trigger(page)
+    _screen_4_file_movement_dialogs(page)
+    if _screen_4_file_movement_dialog_visible(page):
+        _dump_page_state(page, "Screen 5 File Movement still open after Save")
+        raise RuntimeError("Screen 5 File Movement — dialog still open after Save")
+    for label in ("Yes", "Ok", "OK"):
+        if _dismiss_dialog_if_present(page, label, timeout_ms=_FIRST_TRY_MS):
+            _pause()
+            _wait_for_progress_close_loop(page)
+    _rto_log("Screen 5: File Movement complete")
+
+
+def _screen_5_prepare_upload_file(doc_key: str, source: Path) -> Path:
+    """Return path to upload; compress insurance PDFs to Vahan size limit when needed."""
+    if doc_key != "INSURANCE CERTIFICATE" or source.suffix.lower() != ".pdf":
+        return source
+    try:
+        original_size = source.stat().st_size
+    except OSError:
+        return source
+    if original_size <= VAHAN_UPLOAD_MAX_BYTES:
+        try:
+            import fitz
+
+            with fitz.open(str(source)) as doc:
+                if doc.page_count <= 1:
+                    return source
+        except Exception:
+            return source
+    from app.services.post_ocr_service import compress_pdf_for_upload
+
+    dest = source.parent / f"{source.stem}_vahan_upload.pdf"
+    try:
+        data = compress_pdf_for_upload(source, VAHAN_UPLOAD_MAX_BYTES, grayscale=True)
+        dest.write_bytes(data)
+        _rto_log(
+            f"Screen 5: insurance compressed {original_size}B → {len(data)}B ({dest.name})"
+        )
+        return dest
+    except Exception as exc:
+        _rto_log(f"WARNING: insurance compress failed — using original: {exc!s}")
+        return source
+
+
+def _screen_5_upload_one(page: Page, doc_key: str, file_path: Path) -> None:
+    """Select Sub Category, attach file, click Upload Document for one carousel slot."""
+    logger.info("fill_rto: uploading %s (%s)", doc_key, file_path.name)
+    upload_path = _screen_5_prepare_upload_file(doc_key, file_path)
+    _screen_5_escape_overlays(page)
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     _pause()
-    _dismiss_dialog(page, "Ok", timeout=_DEFAULT_TIMEOUT_MS)
+    _screen_5_select_subcategory(page, doc_key)
     _pause()
-    _dismiss_dialog(page, "OK", timeout=_LOOP_BUDGET_MS)
-    _pause()
+    _upload_file(
+        page,
+        upload_path,
+        file_input_selector=_SCREEN5_FILE_INPUT,
+        wait_progress_after=False,
+    )
+    _screen_5_click_upload_document_trigger(page)
+    if _screen_5_click_next_once(page):
+        _rto_log(f"chevron next after upload: {doc_key} ({_SCREEN5_NEXT_BTN})")
+    else:
+        logger.warning("fill_rto: nextBtn not found for %s", doc_key)
+        _rto_log(f"WARNING: nextBtn not found for {doc_key}")
 
 
 def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
-    """Screen 5: Upload documents per sub-category (``formDocumentUpload`` form)."""
+    """Screen 5: title-driven carousel — upload when Document title matches a pending file."""
     _set_screen("Screen 5")
     logger.info("fill_rto: Screen 5 — uploading %d document categories", len(docs))
-    _rto_log("--- Screen 5: Document uploads by sub-category ---")
+    _rto_log("--- Screen 5: Document uploads by portal title ---")
+    _screen_5_wait_for_upload_form_ready(page)
 
     if int(RTO_FILL_SKIP_TO_SCREEN) >= 5 and RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY:
         _rto_log(
             "SKIP: Screen 5 — File Movement only "
             f"(scroll bottom → {_SCREEN5_FILE_MOVEMENT_BTN} → Yes / Ok / OK Application ID)"
         )
-        _screen_5_click_file_movement_after_uploads(page)
-        _screen_5_dismiss_file_movement_followup_dialogs(page)
+        _screen_5_finish_file_movement(page)
         return
 
-    _full_upload_sequence: list[tuple[str, str | None]] = [
-        ("FORM 20", "FORM 20"),
-        ("FORM 21", "FORM 21"),
-        ("FORM 22", "FORM 22"),
-        ("INSURANCE CERTIFICATE", "INSURANCE CERTIFICATE"),
-        ("INVOICE ORIGINAL", "INVOICE ORIGINAL"),
-        ("AADHAAR_FRONT", "AADHAAR CARD"),
-        ("AADHAAR_BACK", "AADHAAR CARD"),
-        ("OWNER UNDERTAKING FORM", "OWNER UNDERTAKING FORM"),
-    ]
-
     if int(RTO_FILL_SKIP_TO_SCREEN) >= 5 and RTO_FILL_SCREEN5_SKIP_TO_OWNER_UNDERTAKING_ONLY:
-        upload_sequence = [("OWNER UNDERTAKING FORM", "OWNER UNDERTAKING FORM")]
-        _rto_log(
-            "SKIP: Screen 5 — OWNER UNDERTAKING FORM only "
-            "(Sub Category → Owner Undertaking Form → upload → next; then File Movement)"
-        )
+        required = {"OWNER UNDERTAKING FORM"} if docs.get("OWNER UNDERTAKING FORM") else set()
+        _rto_log("SKIP: Screen 5 — OWNER UNDERTAKING FORM only (title-driven carousel)")
     else:
-        upload_sequence = _full_upload_sequence
+        required = {k for k, v in docs.items() if v is not None}
         if (
             int(RTO_FILL_SKIP_TO_SCREEN) >= 5
             and int(RTO_FILL_SCREEN5_START_WITH_NEXT_N or 0) > 0
@@ -4787,63 +7401,82 @@ def _screen_5(page: Page, docs: dict[str, Path | None]) -> None:
             _screen_5_click_next_n(
                 page,
                 int(RTO_FILL_SCREEN5_START_WITH_NEXT_N),
-                reason="skip to Screen 5 — nextBtn first to align document row before Sub Category (Form 20)",
+                reason="skip to Screen 5 — nextBtn first (dev align)",
             )
 
-    for doc_key, sub_category_text in upload_sequence:
-        file_path = docs.get(doc_key)
-        if not file_path:
-            logger.warning("fill_rto: no file found for %s, skipping upload", doc_key)
-            _rto_log(f"skip upload (missing file): {doc_key}")
+    if not required:
+        _rto_log("WARNING: Screen 5 — no document files to upload")
+        _screen_5_finish_file_movement(page)
+        return
+
+    uploaded: set[str] = set()
+    stalls = 0
+    _, _, total_slots = _screen_5_read_document_slot(page)
+    max_stalls = max(int(total_slots or 0), 20)
+
+    while required - uploaded:
+        title, index, total = _screen_5_read_document_slot(page)
+        if total > 0:
+            max_stalls = max(total, max_stalls)
+        doc_key = _screen_5_doc_key_for_portal_title(title, uploaded=uploaded)
+        _rto_log(
+            f'Screen 5: Document({index} of {total})={title!r} → {doc_key!r} '
+            f"(pending={sorted(required - uploaded)})"
+        )
+
+        if doc_key and doc_key in required and doc_key not in uploaded:
+            if _screen_5_slot_already_uploaded(page):
+                _rto_log(f"Screen 5: skip upload (already on portal): {doc_key}")
+                uploaded.add(doc_key)
+                stalls = 0
+                if not _screen_5_click_next_once(page):
+                    _rto_log("WARNING: Screen 5 carousel — nextBtn failed after already-uploaded slot")
+                    break
+                continue
+            file_path = docs.get(doc_key)
+            if not file_path:
+                _rto_log(f"skip upload (missing file): {doc_key}")
+                uploaded.add(doc_key)  # avoid infinite retry
+                stalls = 0
+                continue
+            try:
+                _screen_5_upload_one(page, doc_key, file_path)
+                uploaded.add(doc_key)
+                stalls = 0
+            except Exception as exc:
+                if _screen_5_slot_already_uploaded(page) or "already on portal" in str(exc):
+                    _rto_log(f"Screen 5: already on portal: {doc_key}")
+                    uploaded.add(doc_key)
+                    stalls = 0
+                    if not _screen_5_click_next_once(page):
+                        break
+                    continue
+                _rto_log(f"WARNING: upload failed for {doc_key}: {exc!s}")
+                _screen_5_escape_overlays(page)
+                if not _screen_5_click_next_once(page):
+                    break
+                stalls += 1
+                if stalls >= max_stalls:
+                    break
             continue
 
-        logger.info("fill_rto: uploading %s -> %s (%s)", doc_key, sub_category_text, file_path.name)
-
-        _screen_5_escape_overlays(page)
-
-        # After Aadhaar back, the portal may land on optional rows (e.g. Affidavit, "8 of 17") — opening Sub
-        # Category there traps the flow. Advance past those rows with the right chevron, then fill Owner Undertaking.
-        if (
-            doc_key == "OWNER UNDERTAKING FORM"
-            and int(RTO_FILL_SCREEN5_NEXT_BEFORE_OWNER_UNDERTAKING or 0) > 0
-        ):
-            _screen_5_click_next_n(
-                page,
-                int(RTO_FILL_SCREEN5_NEXT_BEFORE_OWNER_UNDERTAKING),
-                reason="skip portal-only slots before Owner Undertaking (avoid Sub Category on Affidavit etc.)",
+        if not _screen_5_click_next_once(page):
+            _rto_log("WARNING: Screen 5 carousel — nextBtn failed; stopping")
+            break
+        stalls += 1
+        if stalls >= max_stalls:
+            _rto_log(
+                f"WARNING: Screen 5 carousel stalled after {stalls} nexts "
+                f"(still missing {sorted(required - uploaded)})"
             )
+            break
 
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        _pause()
-
-        assert sub_category_text is not None
-        _screen_5_escape_overlays(page)
-        _screen_5_select_subcategory(page, doc_key, sub_category_text)
-        _pause()
-
-        _upload_file(
-            page,
-            file_path,
-            file_input_selector=_SCREEN5_FILE_INPUT,
-            wait_progress_after=False,
-        )
-        _screen_5_click_upload_document_trigger(page)
-
-        try:
-            nxt = page.locator(_SCREEN5_NEXT_BTN).first
-            nxt.wait_for(state="visible", timeout=_DEFAULT_TIMEOUT_MS)
-            nxt.scroll_into_view_if_needed(timeout=_FIRST_TRY_MS)
-            nxt.click(timeout=_FIRST_TRY_MS)
-            _rto_log(f"chevron next after upload: {doc_key} ({_SCREEN5_NEXT_BTN})")
-            _pause()
-            _wait_for_progress_close(page)
-        except PwTimeout:
-            logger.warning("fill_rto: nextBtn not found for %s", doc_key)
-            _rto_log(f"WARNING: nextBtn not found for {doc_key}")
+    missing = sorted(required - uploaded)
+    if missing:
+        raise RuntimeError(f"Screen 5 incomplete — missing uploads: {missing}")
 
     _pause()
-    _screen_5_click_file_movement_after_uploads(page)
-    _screen_5_dismiss_file_movement_followup_dialogs(page)
+    _screen_5_finish_file_movement(page)
 
 
 def _screen_6(page: Page) -> float | None:
@@ -4961,34 +7594,56 @@ def fill_rto_row(row: dict) -> dict:
         "billing_date_str": _billing_fmt,
         "invoice_date_str": _billing_fmt,
         "policy_from_str": _fmt_date(row.get("policy_from")),
+        "policy_to_str": _fmt_date(row.get("policy_to")),
+        "policy_from": row.get("policy_from"),
+        "policy_to": row.get("policy_to"),
         "nominee_name": (row.get("nominee_name") or "").strip(),
         "nominee_relationship": (row.get("nominee_relationship") or "").strip(),
+        "rto_application_id": (row.get("rto_application_id") or "").strip(),
+        "rto_status": row.get("rto_status"),
     }
 
     mob_fn = _mobile_digits_for_filename(data.get("mobile"))
     log_path = _rto_action_log_path(dealer_id, row, mob_fn)
+    log_display = _rto_log_path_display(log_path, dealer_id=dealer_id)
     rlog = RtoActionLog(log_path)
+    inventory_display = _rto_log_path_display(rlog.inventory_path, dealer_id=dealer_id)
+    started_ist = _ts_ist_iso()
+    rlog.write_run_header(
+        [
+            f"started_ist={started_ist}",
+            f"rto_queue_id={rto_queue_id}",
+            f"sales_id={row.get('sales_id')}",
+            f"dealer_id={dealer_id}",
+            f"customer_mobile={data.get('mobile')!r}",
+            f"rto_status={data.get('rto_status')!r}",
+            f"rto_application_id={data.get('rto_application_id')!r}",
+            f"log_file={log_display}",
+            f"inventory_log_file={inventory_display}",
+        ]
+    )
     token = _rto_action_log.set(rlog)
     screen_token = _current_screen.set("Setup")
     try:
         _rto_log(
             f"fill_rto_row start rto_queue_id={rto_queue_id} sales_id={row.get('sales_id')} "
-            f"dealer_id={dealer_id} log_file={log_path}"
+            f"dealer_id={dealer_id}"
         )
+        _apply_rto_fill_screen3c_run_overrides(data)
 
         office = _transform_dealer_rto(row.get("dealer_rto") or "")
 
         # --- Resolve document files (log: uploads root, searched folder, one summary line) ---
         subfolder = row.get("subfolder") or ""
         uploads_root = get_uploads_dir(dealer_id)
-        _rto_log(f"uploads root (dealer): {uploads_root.resolve()}")
+        _rto_log_verbose(f"uploads root (dealer): {uploads_root.resolve()}")
         if subfolder:
             sale_dir = uploads_root / subfolder
-            _rto_log(f"searched folder (absolute): {sale_dir.resolve()}")
+            _rto_log(f"documents folder: {subfolder!r}")
         else:
             sale_dir = None
             _rto_log(
-                f"searched folder: (none — file_location empty for sales_id={row.get('sales_id')})"
+                f"documents folder: (none — file_location empty for sales_id={row.get('sales_id')})"
             )
 
         docs = (
@@ -5022,11 +7677,33 @@ def fill_rto_row(row: dict) -> dict:
 
         page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
 
-        skip_from = max(0, min(6, int(RTO_FILL_SKIP_TO_SCREEN)))
         if RTO_FILL_TEST_APPLICATION_ID and not str(data.get("rto_application_id") or "").strip():
             data["rto_application_id"] = RTO_FILL_TEST_APPLICATION_ID
 
-        if skip_from > 0:
+        db_skip = _resolve_skip_from_rto_status(data.get("rto_status"))
+        dev_skip = max(0, min(6, int(RTO_FILL_SKIP_TO_SCREEN)))
+        use_resume_nav = False
+        if dev_skip > 0:
+            skip_from = dev_skip
+        else:
+            skip_from = db_skip
+            use_resume_nav = db_skip >= 3
+
+        screen3_resume_at_3b = _screen3_resume_at_3b(
+            use_resume_nav=use_resume_nav,
+            rto_status=data.get("rto_status"),
+        )
+        screen4_skip_verify = _screen4_skip_verify_on_resume(
+            use_resume_nav=use_resume_nav,
+            rto_status=data.get("rto_status"),
+        ) or RTO_FILL_SCREEN4_SKIP_VERIFY
+
+        if use_resume_nav and not str(data.get("rto_application_id") or "").strip():
+            raise RuntimeError(
+                "Cannot resume RTO fill: rto_status>=1 but rto_application_id is missing on rto_queue row"
+            )
+
+        if dev_skip > 0:
             extra = ""
             if skip_from == 3:
                 extra = " Screen 3: skip Home + Entry → Vehicle Details sub-tab first."
@@ -5034,9 +7711,9 @@ def fill_rto_row(row: dict) -> dict:
                 if RTO_FILL_SCREEN4_SKIP_TO_DEALER_DOC_UPLOAD:
                     s4_hint = "start at Dealer Document Upload tab only"
                 elif RTO_FILL_SCREEN4_SKIP_VERIFY:
-                    s4_hint = "Save-Options → File Movement → None+Save → Save → Dealer Document Upload"
+                    s4_hint = "Save-Options → File Movement → NONE+Save → Yes → Dealer Document Upload"
                 else:
-                    s4_hint = "Verify → Save-Options → File Movement → None+Save → Save → Dealer Document Upload"
+                    s4_hint = "Verify → Save-Options → File Movement → NONE+Save → Yes → Dealer Document Upload"
                 extra = f" Screen 4: {s4_hint}."
             elif skip_from == 5:
                 if RTO_FILL_SCREEN5_SKIP_TO_FILE_MOVEMENT_ONLY:
@@ -5050,16 +7727,44 @@ def fill_rto_row(row: dict) -> dict:
                     )
                 else:
                     extra = (
-                        f" Screen 5: nextBtn ×{int(RTO_FILL_SCREEN5_START_WITH_NEXT_N or 0)} first (when >0), "
-                        "then Sub Category **Form 20** → … → undertaking; File Movement at end."
+                        " Screen 5: title-driven carousel (Document title → upload / next); "
+                        f"optional nextBtn ×{int(RTO_FILL_SCREEN5_START_WITH_NEXT_N or 0)} first (when >0)."
                     )
             _rto_log(
                 f"TEMP SKIP: RTO_FILL_SKIP_TO_SCREEN={skip_from} — start at Screen {skip_from} "
                 f"(skipped: dealer-home reset + screens 1..{skip_from - 1}){extra}"
             )
             logger.warning("fill_rto_row: RTO_FILL_SKIP_TO_SCREEN=%s (dev/testing)", skip_from)
+        elif db_skip > 0:
+            _rto_log(
+                f"RESUME: rto_status={data.get('rto_status')} skip_from={skip_from} "
+                f"rto_application_id={data.get('rto_application_id')!r} "
+                f"(skipped screens 1..{skip_from - 1}; pending-work grid open when skip_from>=3)"
+            )
+            if screen3_resume_at_3b:
+                _rto_log(
+                    "Screen 3 resume: start at 3b (Vehicle Details tab), skip 3a Home/Entry"
+                )
+            if screen4_skip_verify and db_skip >= 4:
+                _rto_log(
+                    "Screen 4 resume: pending grid Verify already clicked — Save Options → File Movement → Yes"
+                )
+            logger.info(
+                "fill_rto_row: resume rto_status=%s skip_from=%s app=%s",
+                data.get("rto_status"),
+                skip_from,
+                data.get("rto_application_id"),
+            )
 
-        if skip_from <= 0:
+        if use_resume_nav:
+            _ensure_vahan_dealer_home_for_screen1(page)
+            _resume_open_application_from_pending_grid(
+                page,
+                office,
+                str(data.get("rto_application_id") or "").strip(),
+                rto_status=data.get("rto_status"),
+            )
+        elif skip_from <= 0:
             _ensure_vahan_dealer_home_for_screen1(page)
 
         if skip_from <= 1:
@@ -5069,22 +7774,31 @@ def fill_rto_row(row: dict) -> dict:
 
         application_id = ""
         if skip_from <= 3:
-            screen3_skip_home = (skip_from == 3) or RTO_FILL_SCREEN3_SKIP_HOME
-            screen3_skip_entry = screen3_skip_home and (
-                (skip_from == 3) or RTO_FILL_SCREEN3_SKIP_ENTRY
+            screen3_skip_home = (
+                screen3_resume_at_3b or (skip_from == 3) or RTO_FILL_SCREEN3_SKIP_HOME
+            )
+            screen3_skip_entry = screen3_resume_at_3b or (
+                screen3_skip_home and ((skip_from == 3) or RTO_FILL_SCREEN3_SKIP_ENTRY)
             )
             application_id = _screen_3(
-                page, data, skip_home=screen3_skip_home, skip_entry=screen3_skip_entry
+                page,
+                data,
+                skip_home=screen3_skip_home,
+                skip_entry=screen3_skip_entry,
+                resume_at_3b=screen3_resume_at_3b,
             )
-            if not (str(application_id or "").strip()):
-                application_id = str(data.get("rto_application_id") or "").strip()
+            if not str(application_id or "").strip():
+                raise RuntimeError(
+                    "Screen 3 did not yield an application number after Save and File Movement"
+                )
         else:
             application_id = str(data.get("rto_application_id") or "").strip()
 
         if skip_from <= 4:
-            _screen_4(page)
+            _screen_4(page, skip_verify=screen4_skip_verify)
         if skip_from <= 5:
             _screen_5(page, docs)
+            _persist_rto_queue_progress(data, rto_status=RTO_STATUS_AFTER_SCREEN5)
         total_payable = None
         if skip_from <= 6:
             total_payable = _screen_6(page)

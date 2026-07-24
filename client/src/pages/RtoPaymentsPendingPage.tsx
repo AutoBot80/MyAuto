@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { formatVahanWarmError, warmVahanBrowserLocal } from "../api/fillForms";
+import { formatVahanWarmError, getVahanHsrpReportLocal, warmVahanBrowserLocal } from "../api/fillForms";
 import {
   getRtoBatchStatus,
   getRtoFormsStatus,
@@ -61,6 +61,8 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
   const [actionQueueId, setActionQueueId] = useState<number | null>(null);
   const [vahanReadyForBatch, setVahanReadyForBatch] = useState(false);
   const [vahanWarmMessage, setVahanWarmMessage] = useState<string | null>(null);
+  const [hsrpRunning, setHsrpRunning] = useState(false);
+  const [hsrpMessage, setHsrpMessage] = useState<string | null>(null);
   const [otpInput, setOtpInput] = useState("");
   const [otpUiMode, setOtpUiMode] = useState<"otp" | "mobile">("otp");
   const [mobileChangeInput, setMobileChangeInput] = useState("");
@@ -210,6 +212,39 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
       setVahanWarmMessage(prevWarmMsg);
       setBatchError(formatVahanWarmError(err));
       fetchBatchStatus();
+    }
+  };
+
+  const handleHsrpReport = async () => {
+    setBatchError(null);
+    setHsrpMessage(null);
+    setHsrpRunning(true);
+    try {
+      const res = await getVahanHsrpReportLocal({ dealer_id: dealerId ?? DEALER_ID });
+      if (res.needs_login) {
+        setHsrpMessage(
+          res.message ??
+            "Vahan opened. Log in on the automated browser window, then press Pull HSRP Report again."
+        );
+        return;
+      }
+      if (!res.success) {
+        setBatchError(res.error ?? "HSRP report failed");
+        return;
+      }
+      const parts = [
+        res.message || "HSRP report done",
+        res.rows_loaded != null ? `rows=${res.rows_loaded}` : null,
+        res.plates_updated != null ? `plates=${res.plates_updated}` : null,
+      ].filter(Boolean);
+      setHsrpMessage(parts.join(" · "));
+      if (res.error) {
+        setBatchError(res.error);
+      }
+    } catch (err) {
+      setBatchError(formatVahanWarmError(err));
+    } finally {
+      setHsrpRunning(false);
     }
   };
 
@@ -522,10 +557,30 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
             <div className="rto-batch-toolbar-actions">
               <button
                 type="button"
+                className="app-button"
+                onClick={() => void handleHsrpReport()}
+                disabled={
+                  hsrpRunning ||
+                  startingBatch ||
+                  batchStatus?.state === "running" ||
+                  batchStatus?.state === "starting" ||
+                  !isElectron()
+                }
+                title={
+                  isElectron()
+                    ? "Pull HSRP report from Vahan, load holding table, update vehicle plate numbers"
+                    : "Available only in the Electron dealer app"
+                }
+              >
+                {hsrpRunning ? "Pulling HSRP…" : "Pull HSRP Report"}
+              </button>
+              <button
+                type="button"
                 className="app-button app-button--primary"
                 onClick={handleStartBatch}
                 disabled={
                   startingBatch ||
+                  hsrpRunning ||
                   batchStatus?.state === "running" ||
                   batchStatus?.state === "starting"
                 }
@@ -544,9 +599,9 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                     : "Fill Vahan Site"}
               </button>
               <span className="rto-batch-toolbar-note">
-                {vahanWarmMessage ? (
+                {vahanWarmMessage || hsrpMessage ? (
                   <span className="rto-batch-vahan-warm-msg" role="status">
-                    {vahanWarmMessage}
+                    {hsrpMessage ?? vahanWarmMessage}
                   </span>
               ) : (
                 <>
@@ -556,6 +611,7 @@ export function RtoPaymentsPendingPage({ dealerId }: RtoPaymentsPendingPageProps
                     <span className="rto-batch-dev-hint">
                       {" "}
                       Dev: uses local uploads folder on the API host (no cloud download).
+                      HSRP report requires Electron.
                     </span>
                   ) : null}
                 </>

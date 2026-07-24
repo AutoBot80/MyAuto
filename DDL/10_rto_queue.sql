@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS rto_queue (
   rto_application_date  DATE,
   rto_payment_id        VARCHAR(64),
   rto_payment_amount    NUMERIC(12,2),
+  rto_status            INTEGER,
   status                VARCHAR(32) NOT NULL DEFAULT 'Queued',
   processing_session_id VARCHAR(128),
   worker_id             VARCHAR(128),

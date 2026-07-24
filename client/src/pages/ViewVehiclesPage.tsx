@@ -10,13 +10,13 @@ interface ViewVehiclesPageProps {
 const VEHICLE_MASTER_FIELDS: { key: string; label: string }[] = [
   { key: "chassis", label: "CHASSIS" },
   { key: "engine", label: "Engine" },
+  { key: "plate_num", label: "Plate Number" },
   { key: "battery", label: "Battery" },
   { key: "key_num", label: "Key" },
   { key: "model", label: "Model" },
   { key: "colour", label: "Colour" },
   { key: "year_of_mfg", label: "YEAR OF MFG" },
   { key: "place_of_registeration", label: "Place of registration" },
-  { key: "plate_num", label: "Plate Number" },
 ];
 
 const SALES_MASTER_FIELDS: { key: string; label: string }[] = [
@@ -212,6 +212,7 @@ function MatchBlock({ m, index }: { m: VehicleSearchMatch; index: number }) {
 export function ViewVehiclesPage({ dealerId = DEALER_ID }: ViewVehiclesPageProps) {
   const [chassis, setChassis] = useState("");
   const [engine, setEngine] = useState("");
+  const [plateNum, setPlateNum] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [matches, setMatches] = useState<VehicleSearchMatch[]>([]);
@@ -221,8 +222,11 @@ export function ViewVehiclesPage({ dealerId = DEALER_ID }: ViewVehiclesPageProps
   const handleSearch = async () => {
     const c = chassis.trim();
     const e = engine.trim();
-    if (!c && !e) {
-      setError("Enter chassis and/or engine (use * for wildcards; 4–6 digits alone match as a suffix).");
+    const p = plateNum.trim();
+    if (!c && !e && !p) {
+      setError(
+        "Enter chassis, engine, and/or plate number (use * for wildcards; 4–6 digits alone match as a suffix)."
+      );
       return;
     }
     setError(null);
@@ -231,7 +235,12 @@ export function ViewVehiclesPage({ dealerId = DEALER_ID }: ViewVehiclesPageProps
     setSearched(true);
     setMatches([]);
     try {
-      const res = await searchVehicles({ chassis: c || null, engine: e || null, dealer_id: dealerId });
+      const res = await searchVehicles({
+        chassis: c || null,
+        engine: e || null,
+        plate_num: p || null,
+        dealer_id: dealerId,
+      });
       setMatches(res.matches);
       if (!res.found && res.message) setMessage(res.message);
     } catch (err) {
@@ -265,6 +274,18 @@ export function ViewVehiclesPage({ dealerId = DEALER_ID }: ViewVehiclesPageProps
             placeholder="e.g. *12345 or partial"
             value={engine}
             onChange={(e) => setEngine(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+          />
+        </div>
+        <div className="view-vehicles-search-field">
+          <label htmlFor="vv-plate">Plate Number</label>
+          <input
+            id="vv-plate"
+            type="text"
+            autoComplete="off"
+            placeholder="e.g. RJ05BE6471"
+            value={plateNum}
+            onChange={(e) => setPlateNum(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
           />
         </div>

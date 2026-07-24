@@ -13,6 +13,7 @@ These endpoints let the sidecar call the cloud API for all DB operations:
   - ``/sidecar/cpa/commit``  → persist CPA certificate # (staging ``cpa_policy_num`` + ``insurance_master``)
   - ``/sidecar/vahan/claim-batch`` → claim RTO queue rows for batch processing
   - ``/sidecar/vahan/row-result``  → report per-row result (completed/failed/pending)
+  - ``/sidecar/vahan/hsrp-report`` → accept HSRP Excel from dealer PC; append ``vahan_hsrp_holding`` + update ``vehicle_master.plate_num``
   - ``/sidecar/upload-artifacts`` → multipart upload into uploads, ocr, or challans tree (syncs to S3)
   - ``/sidecar/push-sale-bundle`` → single ZIP body for Print/Queue RTO push (avoids multipart WAF)
   - ``/sidecar/subdealer-challan/*`` → resolve / per-line prepare / order-context / order-checkpoint / finalize (no local ``DATABASE_URL``)
@@ -260,6 +261,15 @@ class VahanRowResultRequest(BaseModel):
 
 class VahanRowResultResponse(BaseModel):
     ok: bool
+
+
+class VahanHsrpReportResponse(BaseModel):
+    success: bool = False
+    error: str | None = None
+    message: str | None = None
+    saved_path: str | None = None
+    rows_loaded: int = 0
+    plates_updated: int = 0
 
 
 class SidecarFailureLogRequest(BaseModel):
@@ -1038,6 +1048,60 @@ async def vahan_row_result(
         raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
 
     return VahanRowResultResponse(ok=True)
+
+
+@router.post("/vahan/hsrp-report", response_model=VahanHsrpReportResponse)
+async def vahan_hsrp_report(
+    dealer_id: int = Form(),
+    file: UploadFile = File(),
+    principal: Principal = Depends(get_principal),
+) -> VahanHsrpReportResponse:
+    """Accept HSRP Excel from the dealer sidecar; save under ``ocr_output/{dealer}/hsrp/``, load holding, update plates.
+
+    Sidecar has no ``DATABASE_URL`` — Playwright downloads locally, then POSTs the file here.
+    """
+    from app.services.vahan_hsrp_report_service import load_hsrp_excel_to_holding
+
+    did = resolve_dealer_id(principal, dealer_id)
+    raw_name = (file.filename or "").strip() or "vahan_hsrp.xls"
+    safe_name = Path(raw_name.replace("\\", "/")).name
+    if ".." in safe_name or not safe_name:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not safe_name.lower().endswith((".xls", ".xlsx")):
+        raise HTTPException(status_code=400, detail="Expected an .xls / .xlsx Excel file")
+
+    out_dir = get_ocr_output_dir(int(did)) / "hsrp"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / safe_name
+    body = await file.read()
+    if not body:
+        raise HTTPException(status_code=400, detail="Empty file")
+    dest.write_bytes(body)
+    try:
+        sync_ocr_file_to_s3(int(did), dest)
+    except Exception:
+        logger.exception("vahan_hsrp_report: S3 sync skipped for %s", dest)
+
+    load = load_hsrp_excel_to_holding(int(did), dest)
+    if load.get("error"):
+        return VahanHsrpReportResponse(
+            success=False,
+            error=str(load["error"]),
+            saved_path=str(dest),
+            rows_loaded=int(load.get("rows_loaded") or 0),
+            plates_updated=int(load.get("plates_updated") or 0),
+            message=f"File saved to {dest} but DB load/apply failed",
+        )
+    return VahanHsrpReportResponse(
+        success=True,
+        saved_path=str(dest),
+        rows_loaded=int(load.get("rows_loaded") or 0),
+        plates_updated=int(load.get("plates_updated") or 0),
+        message=(
+            f"Loaded {load.get('rows_loaded') or 0} rows; "
+            f"updated {load.get('plates_updated') or 0} plate_num"
+        ),
+    )
 
 
 @router.post("/failure-log", response_model=SidecarFailureLogResponse)

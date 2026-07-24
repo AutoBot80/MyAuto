@@ -1,8 +1,8 @@
 # High Level Design (HLD)
 ## Auto Dealer Management System
 
-**Version:** 3.0  
-**Last Updated:** June 2026  
+**Version:** 3.1  
+**Last Updated:** July 2026  
 **BRD:** [brd/README.md](brd/README.md)
 
 ---
@@ -187,9 +187,10 @@ My Auto.AI/
 | `fill_rto_service` | Workbench row fill |
 | `rto_payment_service` | Batch loop, dealer lock |
 | `rto_otp_bridge` | Operator OTP/mobile bridge |
+| `vahan_hsrp_report_service` | Dealer Registration Pendency Excel (sidecar: local download → cloud `hsrp-report`) → `vahan_hsrp_holding` → `vehicle_master.plate_num` |
 | Sidecar | `fill_vahan_batch`, `upload_rto_queue_forms` |
 
-**View:** `form_vahan_view`. **Table:** `rto_queue` (status lifecycle, `in_queue`).
+**View:** `form_vahan_view`. **Tables:** `rto_queue` (status lifecycle, `in_queue`); **`vahan_hsrp_holding`** (append-only HSRP Excel). Artifacts: `ocr_output/{dealer_id}/hsrp/`.
 
 ---
 
@@ -227,6 +228,7 @@ My Auto.AI/
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.1 | Jul 2026 | Vahan HSRP report service → holding table + plate_num; `ocr_output/.../hsrp/` |
 | 3.0 | Jun 2026 | Full codebase refresh: auth, sidecar, Add Sales tabs, RTO lifecycle, admin, CPA, Electron |
 | 2.0 | Jun 2026 | Domain section restructure |
 | 1.173 | May 2026 | Last monolithic HLD |

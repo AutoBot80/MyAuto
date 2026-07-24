@@ -1,8 +1,8 @@
 # Low Level Design (LLD)
 ## Auto Dealer Management System
 
-**Version:** 3.0  
-**Last Updated:** June 2026  
+**Version:** 3.1  
+**Last Updated:** July 2026  
 **BRD:** [brd/README.md](brd/README.md)  
 **Siebel/Insurance deep notes:** [low-level-design-v1.24-archive.md](low-level-design-v1.24-archive.md)
 
@@ -342,6 +342,7 @@ Client: `utils/printQueueRtoFlow.ts`
 | `fill_vahan_batch` | Local batch |
 | `/sidecar/vahan/claim-batch` | Claim rows |
 | `/sidecar/vahan/row-result` | Outcome + scrape |
+| `vahan_hsrp_report` | Local Excel download → `POST /sidecar/vahan/hsrp-report` (holding + plate_num) |
 | `upload_rto_queue_forms` | Category uploads |
 
 ### 8.3 Services
@@ -352,8 +353,12 @@ Client: `utils/printQueueRtoFlow.ts`
 | `rto_payment_service` | Batch loop, dealer advisory lock |
 | `rto_otp_bridge` | OTP/mobile operator bridge |
 | `form_vahan.py` | Read `form_vahan_view` |
+| `vahan_hsrp_report_service.get_vahan_hsrp_report` | Report → Excel under `ocr_output/{dealer_id}/hsrp/`; append `vahan_hsrp_holding`; update `vehicle_master.plate_num` by chassis |
+| `vahan_hsrp_report_service.load_hsrp_excel_to_holding` | Parse `.xls` (xlrd) → INSERT holding → plate UPDATE |
 
 Workbench selectors: `workbench_tabview:*`, `hpa_*`, `nomineeradiobtn1:*`. Log dump on terminal failure only — archive §2.4f.
+
+HSRP flow never `goto`/reloads the Vahan tab (single-session guard). Login gate is report-specific (any post-login shell), not RTO `officeList`.
 
 ---
 
@@ -394,7 +399,7 @@ See **Database DDL.md** (v3.0). Key objects by domain:
 | Dealer Saathi | `customer_master`, `vehicle_master`, `sales_master`, `add_sales_staging`, `bulk_loads`, `ai_reader_queue` |
 | Insurance | `insurance_master`, `form_insurance_view`, `form_cpa_insurance_view` |
 | Print/RTO | `rto_queue`, `service_reminders_queue`, `rc_status_sms_queue` |
-| Vahan | `form_vahan_view` |
+| Vahan | `form_vahan_view`, **`vahan_hsrp_holding`** |
 | Subdealer | `challan_*`, `vehicle_inventory_master` |
 | Admin | `process_failure_log`, `ocr_run_log` |
 
@@ -411,6 +416,7 @@ DMS fill: `form_dms.py` — **`form_dms_view` dropped**.
 | POST | `/sidecar/cpa/resolve`, `commit` |
 | POST | `/sidecar/staging/processing-state` |
 | POST | `/sidecar/vahan/claim-batch`, `row-result` |
+| POST | `/sidecar/vahan/hsrp-report` |
 | POST | `/sidecar/failure-log` |
 | POST | `/sidecar/upload-artifacts` |
 | POST | `/sidecar/push-sale-bundle`, `sync-sale-folder-s3` |
@@ -423,6 +429,7 @@ DMS fill: `form_dms.py` — **`form_dms_view` dropped**.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.1 | Jul 2026 | `vahan_hsrp_report_service`: HSRP Excel → `vahan_hsrp_holding` → `vehicle_master.plate_num`; `ocr_output/.../hsrp/`; sidecar job + `POST /sidecar/vahan/hsrp-report`; **DDL 3.09** |
 | 3.0 | Jun 2026 | Full codebase sync: ~130 routes, sidecar jobs, auth, Add Sales tabs, RTO lifecycle, admin, CPA insurance_type |
 | 2.0 | Jun 2026 | Domain restructure |
 | 1.24 | Apr 2026 | Monolithic LLD (archived) |

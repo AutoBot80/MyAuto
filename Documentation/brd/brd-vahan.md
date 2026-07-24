@@ -1,7 +1,7 @@
 # BRD — Vahan
 
-**Version:** 2.0  
-**Last Updated:** June 2026  
+**Version:** 2.2  
+**Last Updated:** July 2026  
 **Parent:** [README.md](README.md)
 
 Vahan **workbench** automation: dealer-scoped batch, operator OTP/mobile assist, forms upload, scrape-back to queue and sale.
@@ -19,6 +19,7 @@ Vahan **workbench** automation: dealer-scoped batch, operator OTP/mobile assist,
 | V-BR-5 | `in_queue=true` rows eligible for batch claim |
 | V-BR-6 | Traces: `{mobile}_RTO.txt`, `Vahan_Form_Values.txt` |
 | V-BR-7 | Tab reuse / warm-browser (**BR-12**) |
+| V-BR-8 | HSRP / Dealer Registration Pendency Excel → append **`vahan_hsrp_holding`**; set **`vehicle_master.plate_num`** from Registration No when Chassis No matches and plate is not blank/`NEW`; files under `ocr_output/{dealer_id}/hsrp/` |
 
 ---
 
@@ -96,7 +97,20 @@ Operator may set **`rto_queue.customer_mobile`** for Vahan OTP when different fr
 
 ---
 
-## 7. APIs (summary)
+## 7. HSRP / Dealer Registration Pendency report
+
+| Step | Behavior |
+|------|----------|
+| Download | Playwright: Report → Dealer Registration Pendency → Get Details → Yes → Download File → Excel |
+| Save | `ocr_output/{dealer_id}/hsrp/vahan_hsrp_ddmmyyyy.xls` (same-day overwrite) |
+| Holding | Append all Excel rows to **`vahan_hsrp_holding`** (dealer-scoped; manual truncate) |
+| Plate apply | Update **`vehicle_master.plate_num`** where chassis matches and Registration No is not null/blank/`NEW` |
+
+Service: `get_vahan_hsrp_report` / `load_hsrp_excel_to_holding` in `vahan_hsrp_report_service`. Local test: `Testing Wrappers/test_vahan_hsrp_report.py`.
+
+---
+
+## 8. APIs (summary)
 
 | Method | Path |
 |--------|------|
@@ -108,11 +122,15 @@ Operator may set **`rto_queue.customer_mobile`** for Vahan OTP when different fr
 
 Legacy `POST /fill-forms/vahan` fill — **not implemented**; use process-batch.
 
+**Electron / sidecar:** job ``vahan_hsrp_report`` downloads Excel on the dealer PC, then ``POST /sidecar/vahan/hsrp-report`` loads holding + plate_num (no local ``DATABASE_URL``). RTO Queue UI: **Download HSRP Report**.
+
 ---
 
-## 8. Document control
+## 9. Document control
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.2 | Jul 2026 | Sidecar ``vahan_hsrp_report`` + ``POST /sidecar/vahan/hsrp-report``; RTO Queue **Download HSRP Report** |
+| 2.1 | Jul 2026 | V-BR-8 HSRP Excel → `vahan_hsrp_holding` + `vehicle_master.plate_num`; `ocr_output/.../hsrp/` |
 | 2.0 | Jun 2026 | Full status model, OTP/mobile, forms missing, in_queue, sidecar batch, requeue/mark-done |
 | 1.0 | Jun 2026 | Initial domain split |
