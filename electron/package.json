@@ -1,6 +1,6 @@
 {
   "name": "dealersaathi-desktop",
-  "version": "1.0.1",
+  "version": "1.0.9",
   "private": true,
   "description": "Dealer Saathi Electron shell (React + job-based Python sidecar)",
   "main": "dist/main/index.js",
